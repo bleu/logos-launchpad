@@ -1,0 +1,59 @@
+# Planned repository layout
+
+This is the target layout, not a list of existing code. Later implementation copies reviewed public source snapshots directly. Keep working PoC boundaries before changing names or extracting shared code. See [architecture and interfaces](system.md) for component diagrams and the [product brief](../product/prd.md) for use cases.
+
+## Code ownership
+
+Ownership here means responsibility for behavior and review. Named maintainers and `CODEOWNERS` rules are not configured. Assign them before implementation pull requests; no branch protection is implied.
+
+| Planned path or component | Owns | Must not own |
+| --- | --- | --- |
+| `crates/curve-math/` | Checked constant-product arithmetic | Accounts, namespace policy, launch allocations |
+| `crates/pool/` | Neutral curve reserves, swaps, custody and pool lifecycle | Creator allocations, LBP lifecycle |
+| `crates/curve-core/` | Curve wire and account state, namespace validation, factory custody and authorization | Product UI, curve factory allocation policy or a selected cross-factory namespace schema |
+| `crates/factory-core/` | Curve factory supply, allocation, creator authorization and staged settlement | Reimplementation of curve pricing or LBP factory policy |
+| `crates/private-flow-core/` | Existing private helper and its on-chain validation | The complete SDK privacy or recovery contract |
+| Future `crates/lbp-pool/` | LBP clock weights, state, trading, custody, creator-borne collateral fees, current-treasury fee collection and lifecycle | Curve semantics hidden behind a generic pool interface |
+| Future `crates/lbp-factory/` | LBP creation validation, sale-to-namespace binding and LBP sale policy | Curve allocations, creator settlement rules or unreviewed LBP permissions |
+| `packages/weighted-math/` | Standalone math kernel, harness, fixtures, proof material, fuzz target and parity workspace | Custody, authorities or product flow |
+| `methods/guest/` | Thin dispatch entry points and guest-specific build profiles | A second copy of handler logic |
+| `crates/launchpad-client/` | Quotes, authoritative reads, transaction construction and supported staged private or recovery flows | QML state, direct indexer HTTP calls or duplicated pricing rules |
+| `cli/` | Argument parsing, command output and SDK calls | Independent protocol logic |
+| Future shared core module, C ABI and generated module adapter | Planned stable non-UI SDK boundary, backend module read API and generated app-facing glue from a module `.lidl` contract | Separate pricing or transaction rules, user-key custody or an on-chain program IDL |
+| Future admin QML app | Namespace administration and indexed namespace monitoring only | Creator or participant operations |
+| Future configured-sales QML app | Creator and participant listings, sale configuration, quotes, supported trades, indexed history and recovery | Namespace administration or direct indexer HTTP calls |
+
+The LBP's live-rate and anytime current-treasury collection design is accepted internally. Its RFP departures have external status `To be reviewed by Logos team` in [ADR 0016](../adr/0016-lbp-live-fees.md).
+
+Pure math is below state machines; program handlers add platform accounts and calls; thin guests dispatch handlers. Clients build invocations against these contracts. CLI and product interfaces call shared client/core logic. QML apps request indexed listings, history and monitoring through the planned shared-core backend module read API, not direct indexer HTTP calls. The indexed read boundary can use a different backend module only after implementation review; this layout does not select one. Shared utilities need matching behavior and error contracts before extraction. Separate mechanisms can share tools without sharing state models.
+
+Weighted math keeps an independent workspace under `packages/weighted-math/`. The production LBP consumes its `crates/weighted-math-core/` library by Cargo path. Root workspace configuration must exclude nested workspaces as needed. Keep lockfiles and toolchain pins for each build context; do not assume that a root `cargo test --workspace` covers nested math, guest or fuzz workspaces.
+
+## Artifacts
+
+| Artifact | Producer/owner | Consumer | Required check |
+| --- | --- | --- | --- |
+| On-chain source IDLs in `idl-src/` | Program interface owner | On-chain program IDL generator | Handler and interface review |
+| Generated on-chain program IDLs in `idl/` | Existing source-IDL generation path | SDK, CLI and bindings | `verify/check-idl.sh` regeneration and drift check |
+| Guest binaries and program identities | Separate `methods/guest/` build | Deployment and client configuration | Pinned guest build and identity consistency |
+| Weighted kernel library | Math package | LBP program and test harness | Math tests, input qualification and guest parity |
+| Client library and CLI binary | `launchpad-client` and `cli` | Developers and operators | Include their tests, not only pure/core crates |
+| Module `.lidl` contract | Shared core module interface owner | Module adapter generator | Module interface and compatibility review |
+| Generated module adapter and C ABI scaffolding | Planned shared core module build | Basecamp module API integration | ABI, build and package smoke checks after compatibility verification |
+| Planned shared core `.lgx` | Planned non-UI shared core module packaging | Admin and configured-sales apps | Build/install/call smoke check after compatibility verification |
+| Planned admin `.lgx` | Admin QML mini-app | Namespace administrators | Namespace-administration flow tests |
+| Planned configured-sales `.lgx` | Configured-sales QML mini-app | Creators and participants | Creator and participant flow tests |
+
+Any planned generated interface must be reproducible. Do not edit generated output to fix drift. Do not commit deployment keys. No module `.lidl` contract, generated module adapter or working C ABI integration exists yet, and their compatibility is unverified. On-chain program IDLs remain separate transaction-interface artifacts. The Basecamp QML runtime bridge is a platform runtime concern, not generated C ABI glue. The planned shared core module and the two QML mini-apps can produce three `.lgx` packages, but only the QML packages are mini-apps. Weighted math is a Rust library, not another `.lgx` application.
+
+## Where checks live
+
+Package-local tests cover local arithmetic, state and API behavior. Root `verify/` scripts cover cross-package builds, dependency pins, on-chain program IDL drift and integration. Root `.github/workflows/` calls those checks with explicit toolchains and working directories. Copied workflows under the math subtree will not run there automatically.
+
+Retain useful pin and on-chain program IDL checks plus the math harness when source code is copied. Host and guest builds, client/CLI tests, on-chain program IDL drift, pins and weighted-math integration need explicit commands or jobs. Guest parity, fuzzing and platform/package tests also need explicit jobs or commands; record checks that are not run by default.
+
+The reviewed curve E2E script has stale `unlock` and `--unlock-policy` usage and can reset localnet/wallet state. Repair its CLI contract and use isolated disposable test state before running it. Ignored tests, unavailable tools and missing proof/package evidence must remain visible failures or gaps, never implicit passes.
+
+## Review rules
+
+A public interface change needs matching on-chain source IDL or module `.lidl` contract, generated output, client behavior and compatibility review. A math change needs updated numerical evidence and a review of its input envelope. A lifecycle change needs authorization, accounting and settlement tests. A packaging change must prove that its module can be installed and called. The [verification ADR](../adr/0022-verification-boundaries.md) defines the evidence limits.
