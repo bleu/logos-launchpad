@@ -1,0 +1,17 @@
+# Separate workspace: the RISC0 guest build and its host runner. It has distinct
+# dependencies and build tooling. Math host checks do not compile RISC0 crates.
+#
+# Build/run (needs `rzup install`, see zkvm/README.md):
+#   cd zkvm && cargo run --release
+[workspace]
+resolver = "2"
+members = ["host", "methods"]
+
+[workspace.package]
+edition = "2021"
+license = "MIT"
+
+[profile.release]
+# Match the root workspace: financial math panics on overflow, never wraps.
+# The guest is its own workspace (methods/guest) with the same setting.
+overflow-checks = true

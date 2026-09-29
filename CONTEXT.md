@@ -1,6 +1,6 @@
 # Context
 
-This is the shared language for both launchpads. The repository currently contains decisions, not an implemented production workspace. [ADRs](docs/adr/README.md) state which decisions are accepted or still open. For plain-English explanations of technical shorthand, see the [glossary](docs/glossary.md); the terms here and ADR decisions remain canonical.
+This is the shared language for both launchpads. The repository contains an imported PoC baseline and design decisions. The baseline does not implement the full production specification. [ADRs](docs/adr/README.md) state which decisions are accepted or still open. For plain-English explanations of technical shorthand, see the [glossary](docs/glossary.md); the terms here and ADR decisions remain canonical.
 
 ## Domain terms
 

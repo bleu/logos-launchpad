@@ -1,0 +1,53 @@
+# `methods/` is excluded so the risc0 guest crate builds under its own
+# toolchain and its own `[profile.release]`. `lgs build` compiles it separately.
+[workspace]
+resolver = "3"
+members = [
+    "crates/curve-core",
+    "crates/curve-math",
+    "crates/factory-core",
+    "crates/launchpad-client",
+    "crates/pool",
+    "crates/private-flow-core",
+    "cli",
+]
+exclude = ["methods", "methods/guest", "packages/weighted-math"]
+
+[workspace.dependencies]
+lee = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", rev = "a58fbce2ff48c58b7bb5001b1a27e64b9596ee3a" }
+# No `host` feature here. `crates/curve-core` inherits this entry, and workspace
+# inheritance resolves against curve-core's own workspace even when the excluded
+# guest crate is the one depending on it — so `host` would pull ml-kem and
+# getrandom into the riscv32 build. LEZ declares it the same way for the same
+# reason; on the host side `lee` already enables it.
+lee_core = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", rev = "a58fbce2ff48c58b7bb5001b1a27e64b9596ee3a" }
+wallet = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", rev = "a58fbce2ff48c58b7bb5001b1a27e64b9596ee3a" }
+common = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", rev = "a58fbce2ff48c58b7bb5001b1a27e64b9596ee3a" }
+sequencer_service_rpc = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", rev = "a58fbce2ff48c58b7bb5001b1a27e64b9596ee3a", default-features = false, features = ["client"] }
+clock_core = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", rev = "a58fbce2ff48c58b7bb5001b1a27e64b9596ee3a" }
+associated_token_account_core = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", rev = "a58fbce2ff48c58b7bb5001b1a27e64b9596ee3a" }
+token_core = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", rev = "a58fbce2ff48c58b7bb5001b1a27e64b9596ee3a" }
+programs = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", rev = "a58fbce2ff48c58b7bb5001b1a27e64b9596ee3a", features = ["artifacts"] }
+
+curve-math = { path = "crates/curve-math" }
+pool = { path = "crates/pool" }
+curve-core = { path = "crates/curve-core" }
+factory-core = { path = "crates/factory-core" }
+launchpad-client = { path = "crates/launchpad-client" }
+private-flow-core = { path = "crates/private-flow-core" }
+
+anyhow = "1"
+borsh = { version = "1.8", features = ["derive"] }
+clap = { version = "4", features = ["derive"] }
+hex = "0.4"
+risc0-zkvm = { version = "3.0.5", default-features = false, features = ["std"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+
+[workspace.lints.clippy]
+all = { level = "deny", priority = -1 }
+
+# Keep arithmetic failures observable in release-mode property tests.
+[profile.release]
+overflow-checks = true

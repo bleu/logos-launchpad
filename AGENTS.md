@@ -2,7 +2,7 @@
 
 Read [CONTEXT.md](CONTEXT.md) and the relevant [ADRs](docs/adr/README.md) before work. Use their domain terms. Keep pending decisions distinct from accepted ones, and accepted designs distinct from implemented behavior.
 
-This repository is currently documentation-only. Do not scaffold replacements for working PoC code. Later imports copy code directly from reviewed source snapshots and retain required licenses and copyright notices. Do not copy private tracker metadata from a PoC. Public documentation must not cite private tickets.
+This repository contains an imported PoC baseline and design documentation. The root curve crates, CLI, methods and on-chain program IDLs retain their existing behavior. The LBP, shared core and QML apps remain future work. Do not scaffold replacements for working PoC code. Preserve required third-party licenses and copyright notices. Do not copy private tracker metadata from a PoC. Public documentation must not cite private tickets.
 
 Keep mechanism-specific pricing, state and lifecycle code separate. Share helpers only when behavior matches. Weighted math is an independent, unaudited package. GUI and CLI code must not duplicate protocol logic.
 

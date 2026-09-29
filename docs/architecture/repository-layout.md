@@ -1,12 +1,12 @@
-# Planned repository layout
+# Repository baseline and planned layout
 
-This is the target layout, not a list of existing code. Later implementation copies reviewed public source snapshots directly. Keep working PoC boundaries before changing names or extracting shared code. See [architecture and interfaces](system.md) for component diagrams and the [product brief](../product/prd.md) for use cases.
+The repository contains an imported PoC baseline and future product design. The root curve crates, `cli/`, `methods/`, `idl-src/` and `idl/` retain their existing behavior. Weighted math is an independent nested workspace at `packages/weighted-math/`. These imports do not implement the full production specification. The LBP, shared core and QML apps are separate future work. Keep working PoC boundaries before changing names or extracting shared code. See [architecture and interfaces](system.md) for component diagrams, the [product brief](../product/prd.md) for use cases and the [workspace guide](workspace-guide.md) for commands.
 
 ## Code ownership
 
-Ownership here means responsibility for behavior and review. Named maintainers and `CODEOWNERS` rules are not configured. Assign them before implementation pull requests; no branch protection is implied.
+Ownership here means responsibility for behavior and review. Named maintainers and `CODEOWNERS` rules are not configured. They are optional and do not block implementation pull requests or imply branch protection.
 
-| Planned path or component | Owns | Must not own |
+| Path or future component | Owns | Must not own |
 | --- | --- | --- |
 | `crates/curve-math/` | Checked constant-product arithmetic | Accounts, namespace policy, launch allocations |
 | `crates/pool/` | Neutral curve reserves, swaps, custody and pool lifecycle | Creator allocations, LBP lifecycle |
@@ -27,7 +27,7 @@ The LBP's live-rate and anytime current-treasury collection design is accepted i
 
 Pure math is below state machines; program handlers add platform accounts and calls; thin guests dispatch handlers. Clients build invocations against these contracts. CLI and product interfaces call shared client/core logic. QML apps request indexed listings, history and monitoring through the planned shared-core backend module read API, not direct indexer HTTP calls. The indexed read boundary can use a different backend module only after implementation review; this layout does not select one. Shared utilities need matching behavior and error contracts before extraction. Separate mechanisms can share tools without sharing state models.
 
-Weighted math keeps an independent workspace under `packages/weighted-math/`. The production LBP consumes its `crates/weighted-math-core/` library by Cargo path. Root workspace configuration must exclude nested workspaces as needed. Keep lockfiles and toolchain pins for each build context; do not assume that a root `cargo test --workspace` covers nested math, guest or fuzz workspaces.
+Weighted math is an imported independent workspace under `packages/weighted-math/`. A future LBP can consume its `crates/weighted-math-core/` library by Cargo path. Root workspace configuration must exclude nested workspaces as needed. Keep lockfiles and toolchain pins for each build context; do not assume that a root `cargo test --workspace` covers nested math, guest or fuzz workspaces. See the [workspace guide](workspace-guide.md) for commands.
 
 ## Artifacts
 

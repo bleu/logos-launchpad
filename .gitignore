@@ -1,0 +1,5 @@
+target/
+.scaffold/
+*.bin
+.claude/skills/
+.cursor/rules/
