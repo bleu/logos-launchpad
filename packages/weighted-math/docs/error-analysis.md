@@ -1,9 +1,6 @@
 # Pow pipeline error analysis
 
-The kernel computes `pow(base, y) = exp(y · ln base)` at `LN_SCALE = 62`
-fractional bits and rounds once at the end. This is the ulp accounting
-behind the `POW_PAD_ULPS = 2` directional pad in `pow.rs`; the harness
-sweep (ADR 0003) confirms it case by case.
+The kernel computes `pow(base, y) = exp(y · ln base)` at `LN_SCALE = 62` fractional bits and rounds once at the end. This is the ulp accounting behind the `POW_PAD_ULPS = 2` directional pad in `pow.rs`; the harness sweep ([ADR 0011](../../../docs/adr/0011-weighted-precision.md)) confirms it case by case.
 
 All bounds below are at `LN_SCALE`, where `ulp = 2^-62`.
 

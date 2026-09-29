@@ -81,19 +81,9 @@ Static division counts, from the code (all confirmed by the measured deltas):
 - `calc_in_given_out`: 4 — exponent, `ratio_down`, the pow division, and
   the `(1-p)/p` inversion.
 
-The largest *block* is different from the largest instruction: the 20-term
-exp Horner loop costs ~4.1k cycles (about half of `pow`), at roughly 210
-cycles per 128-bit multiply-shift-add step. If the cycle budget ever needs
-trimming, exp term count is the first knob; ADR 0004 chose 20 terms for
-error-bound headroom, not cost.
+The largest *block* is different from the largest instruction: the 20-term exp Horner loop costs ~4.1k cycles (about half of `pow`), at roughly 210 cycles per 128-bit multiply-shift-add step. If the cycle budget ever needs trimming, exp term count is the first knob; [ADR 0012](../../../docs/adr/0012-weighted-series.md) chose 20 terms for error-bound headroom, not cost.
 
-For contrast, a Balancer-style `LogExpMath.pow` runs a couple dozen
-divisions per call (range-reduction ladders plus per-term series divisions).
-At ~2.5k cycles each that is ~60k cycles of division alone, roughly 5x our
-entire buy path. Keeping the kernel at one division per pow is where the
-cycle budget was won; this replaces the pre-implementation estimate from the
-integer-width decision (ADR 0008, "single-digit thousands of cycles per pow")
-with measured numbers of the same order.
+A Balancer-style `LogExpMath.pow` uses a couple dozen divisions per call. At about 2.5k cycles each, that would cost about 60k cycles for division alone, roughly five times the measured buy path. The measurements support the integer-width choice in [ADR 0010](../../../docs/adr/0010-weighted-integer-arithmetic.md).
 
 ## Caveats
 

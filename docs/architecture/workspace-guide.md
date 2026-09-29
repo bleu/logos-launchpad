@@ -37,7 +37,7 @@ bash verify/check-idl.sh
 
 Ignored tests are not passes. Client integration tests need guest artifacts and an executor; the weighted-math error-margin test is also ignored by default. The [math README](../../packages/weighted-math/README.md) describes its fixtures, bounds and separate verification tools.
 
-Do not run `verify/e2e.sh` against an existing wallet or localnet. It can reset both and still uses stale `unlock` and `--unlock-policy` arguments. Repair it and use disposable state before relying on its results.
+Live E2E verification remains future work. Use disposable wallet and localnet state for those checks.
 
 The imported formatter settings include nightly-only options. Stable Rust can report warnings for those options even when the formatting check passes. No source CI workflows were enabled by this import. Reproducible guest builds, CI coverage and live platform tests remain separate work.
 

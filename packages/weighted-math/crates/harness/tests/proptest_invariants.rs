@@ -1,4 +1,4 @@
-//! Oracle-free property tests (ADR 0001): what holds by logic across the
+//! Oracle-free property tests (ADR 0014): what holds by logic across the
 //! whole domain, with danger zones oversampled. CI has no Python, so there
 //! is no answer key for random inputs — accuracy stays with the fixtures.
 //!
@@ -13,7 +13,7 @@ use weighted_math_core::{pow, weighted};
 const MAX_EXPONENT: i128 = 99 * (1i128 << SCALE);
 
 // ---------------------------------------------------------------------------
-// Generators (danger zones oversampled, ADR 0001)
+// Generators (danger zones oversampled, ADR 0014)
 // ---------------------------------------------------------------------------
 
 /// LBP-style normalised weight pair: ratio spans exactly 1/99 ..= 99.
@@ -236,7 +236,7 @@ proptest! {
     }
 
     /// The curve value `b_in^w_in * b_out^w_out` never decreases across an
-    /// exact-in trade (ADR 0007) — the end-to-end fund-safety statement,
+    /// exact-in trade (ADR 0014) — the end-to-end fund-safety statement,
     /// judged by an exact bigint referee. Equality is allowed (zero-fee
     /// math holds the curve constant).
     #[test]
@@ -250,7 +250,7 @@ proptest! {
         );
     }
 
-    /// Same statement for exact-out. Guards the ADR 0006 inversion, where
+    /// Same statement for exact-out. Guards the ADR 0013 inversion, where
     /// every rounding direction flips once.
     #[test]
     fn invariant_never_decreases_exact_out(

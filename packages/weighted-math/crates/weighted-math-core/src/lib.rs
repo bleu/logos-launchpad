@@ -2,7 +2,7 @@
 //!
 //! Correct to a proven error bound against an mpmath oracle (see
 //! `crates/harness`), one division per `pow` for the RISC0 zkVM. Design
-//! overview is in the package README; decisions are in `docs/adr/`.
+//! overview is in the package README; decisions are in the repository-root `docs/adr/`.
 //!
 //! `#![no_std]`, no dependencies: compiles unchanged as a RISC0 guest.
 #![no_std]

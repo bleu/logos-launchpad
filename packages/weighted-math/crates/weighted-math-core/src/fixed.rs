@@ -6,14 +6,14 @@
 //!
 //! `Repr` is signed because `ln` results are negative. The wrappers below
 //! are defined on nonnegative operands only (asserted); balances stay raw
-//! `u128` (ADR 0002).
+//! `u128` (ADR 0010).
 
 use crate::wide;
 
 /// Binary scale: the fixed-point value `x` represents `x / 2^SCALE`.
 ///
-/// Sweepable against the oracle with no fixture regeneration (ADR 0001);
-/// 52 was chosen by the sweep (ADR 0003).
+/// Sweepable against the oracle with no fixture regeneration (ADR 0014);
+/// 52 was chosen by the sweep (ADR 0011).
 pub const SCALE: u32 = 52;
 
 /// Backing integer representation for a fixed-point value.

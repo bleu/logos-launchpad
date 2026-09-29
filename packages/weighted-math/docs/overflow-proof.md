@@ -198,15 +198,12 @@ Step 10 is the exact-out mirror of the payout multiply.
 
 ## The 128 x 128 -> 256 step
 
-The design brief calls for "one localized 128 x 128 -> 256 intermediate".
-Since ADR 0006 added the exact-out path, the accurate statement is one
-full-width widened multiply per swap path, both landing at the very end of
-their pipeline:
+The design brief calls for "one localized 128 x 128 -> 256 intermediate". Since [ADR 0013](../../../docs/adr/0013-weighted-exact-output.md) added the exact-out path, the accurate statement is one full-width widened multiply per swap path, both landing at the very end of their pipeline:
 
 - `calc_out_given_in` step 8: `balance_out * omp62`, up to
   `2^128 * 2^62 = 2^190`. This is the step the brief names.
 - `calc_in_given_out` step 10: `balance_in * r62`, up to
-  `2^128 * 2^124 = 2^252`, its ADR 0006 mirror.
+  `2^128 * 2^124 = 2^252`, its [ADR 0013](../../../docs/adr/0013-weighted-exact-output.md) mirror.
 
 `mul_wide` has two other call sites, widened for uniformity and sweep
 headroom rather than out of full-width necessity: the pow argument product

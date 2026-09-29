@@ -52,7 +52,7 @@ Package-local tests cover local arithmetic, state and API behavior. Root `verify
 
 Retain useful pin and on-chain program IDL checks plus the math harness when source code is copied. Host and guest builds, client/CLI tests, on-chain program IDL drift, pins and weighted-math integration need explicit commands or jobs. Guest parity, fuzzing and platform/package tests also need explicit jobs or commands; record checks that are not run by default.
 
-The reviewed curve E2E script has stale `unlock` and `--unlock-policy` usage and can reset localnet/wallet state. Repair its CLI contract and use isolated disposable test state before running it. Ignored tests, unavailable tools and missing proof/package evidence must remain visible failures or gaps, never implicit passes.
+Live E2E verification remains future work and must use isolated disposable wallet and localnet state. Ignored tests, unavailable tools and missing proof/package evidence must remain visible failures or gaps, never implicit passes.
 
 ## Review rules
 
