@@ -48,3 +48,7 @@ This is the planned product view. The QML apps and shared core are future work. 
 - [Plain-English glossary](docs/glossary.md)
 - [Architecture decisions](docs/adr/README.md)
 - [Agent instructions](AGENTS.md)
+
+## License
+
+Project code is licensed under [MIT](LICENSE). Third-party dependencies retain their own licenses.

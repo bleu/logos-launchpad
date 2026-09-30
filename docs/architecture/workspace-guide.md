@@ -43,4 +43,4 @@ The imported formatter settings include nightly-only options. Stable Rust can re
 
 ## Licenses
 
-The curve packages retain the root MIT and Apache-2.0 license files. Weighted math retains its own MIT license and the Balancer comparator notices in `packages/weighted-math/crates/harness/balancer-ref/`. Third-party dependencies keep their own licenses.
+The curve packages use the root [MIT license](../../LICENSE). Weighted math retains its own MIT license and the Balancer comparator notices in `packages/weighted-math/crates/harness/balancer-ref/`. Third-party dependencies keep their own licenses.
