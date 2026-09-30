@@ -25,8 +25,7 @@ This is the shared language for both launchpads. The repository contains an impo
 | Creator | Sale authority holder responsible for creation and permitted lifecycle actions. This role is separate from namespace administration. |
 | Participant | Person or client using the configured-sales app to trade. |
 | Settlement | Post-close collection of remaining fees and permitted allocation/proceeds transfers. It does not mean active DEX graduation. |
-| Private route | SDK-managed deshield, public trade and re-shield stages. Public pool state and trade effects remain visible. |
-| Recovery | Resuming re-shield of purchased tokens after an interrupted re-shield, within the current approved design. |
+| Private route | SDK-managed deshield, public trade and re-shield within one transaction. Public pool state and trade effects remain visible. |
 | Admin app | Separately packaged Basecamp QML mini-app for namespace administration only. |
 | Configured-sales app | Separately packaged Basecamp QML mini-app for creator and participant flows within a configured namespace. |
 | Shared core | Planned non-UI reusable SDK logic exposed through a core module. Its planned C ABI and generated module-adapter integration need compatibility verification and are separate from on-chain program handlers. |
@@ -41,6 +40,6 @@ The curve pool owns neutral pricing and custody rules. The curve factory owns cu
 
 Each factory binds a sale to its creation namespace. Namespace state is logical per-namespace state, not a selected registry or shared physical schema. The administrator manages namespace configuration only. A creator acts through the configured-sales app and does not need administrator approval for every permitted action.
 
-SDK code owns transaction construction, fresh quotes and supported private workflows. CLI and QML call that code. QML reads indexed data through a backend module read API instead of calling the indexer directly. The admin app handles namespace administration only. The configured-sales app contains creator and participant flows. The apps ship separately from the non-UI shared core, and their placement does not change authority roles. The LP-0021 Wallet Provider SDK owns account selection, user approval, signing and submission once developed and integrated; its final API is unavailable, and private deshield, re-shield and recovery support remain unverified. The shared core does not custody user keys. See [ADR 0029](docs/adr/0029-wallet-integration.md).
+SDK code owns transaction construction, fresh quotes and the single-transaction private route. CLI and QML call that code. QML reads indexed data through a backend module read API instead of calling the indexer directly. The admin app handles namespace administration only. The configured-sales app contains creator and participant flows. The apps ship separately from the non-UI shared core, and their placement does not change authority roles. The LP-0021 Wallet Provider SDK owns account selection, user approval, signing and submission once developed and integrated; its final API is unavailable, and support for the combined private transaction remains unverified. The shared core does not custody user keys. See [ADR 0029](docs/adr/0029-wallet-integration.md).
 
 See [planned ownership](docs/architecture/repository-layout.md) for package and artifact responsibilities. Keep the LBP fee RFP departures, curve expiry-validation departure, deferred allocation ceiling, and private LBP/allowlist design visible in the [ADR index](docs/adr/README.md).

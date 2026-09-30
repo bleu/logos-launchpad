@@ -28,7 +28,7 @@ flowchart TB
     Core --> LBP[LBP sales]
 ```
 
-This is the planned product view. The QML apps and shared core are future work. Participants will be able to inspect sales, get quotes, choose slippage limits and view trade history. The SDK design includes a staged private purchase route, while pool state and trade effects remain public. Private curve sells and private LBP buys still need further design.
+This is the planned product view. The QML apps and shared core are future work. Participants will be able to inspect sales, get quotes, choose slippage limits and view trade history. The SDK design combines deshield, purchase and re-shield in one transaction, while pool state and trade effects remain public. Private curve sells and private LBP buys still need further design.
 
 ## RFPs and proposals
 

@@ -16,7 +16,7 @@ The prize requires explicit approval before signing or submission, and before an
 
 ## Consequences
 
-The integration choice is settled; the final API and compatible release remain pending. Verify deshield, re-shield and recovery support against [ADR 0018](0018-private-participation.md) when the SDK is available. LP-0021 alone does not establish support for the full private route.
+The integration choice is settled; the final API and compatible release remain pending. Verify support for the combined deshield, trade and re-shield transaction against [ADR 0018](0018-private-participation.md) when the SDK is available. LP-0021 alone does not establish support for the full private route.
 
 ## Sources
 

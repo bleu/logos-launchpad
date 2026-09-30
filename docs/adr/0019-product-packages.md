@@ -10,7 +10,7 @@ Administrators, creators and participants need different product flows. Operatio
 
 ## Decision
 
-Deliver two separately packaged QML mini-apps: an admin app for namespace administration only, and a configured-sales app for creator operations, participant listings, quotes, supported purchases, history and recovery within a configured namespace. App placement does not grant or merge namespace-administrator, creator or participant rights.
+Deliver two separately packaged QML mini-apps: an admin app for namespace administration only, and a configured-sales app for creator operations, participant listings, quotes, supported purchases and history within a configured namespace. App placement does not grant or merge namespace-administrator, creator or participant rights.
 
 Deliver one separate non-UI shared core module. The core can be packaged as an `.lgx` module, but it is not a mini-app. Three planned `.lgx` packages therefore do not mean three mini-apps.
 

@@ -35,7 +35,7 @@ Read [CONTEXT.md](../../CONTEXT.md) for terms and [repository layout](../archite
 | [0015](0015-fee-accounting.md) | Collateral fees and current-treasury collection | Accepted internally; LBP RFP departures: To be reviewed by Logos team |
 | [0016](0016-lbp-live-fees.md) | Live creator-borne LBP fees and anytime collection | Accepted internally; To be reviewed by Logos team |
 | [0017](0017-quotes-and-slippage.md) | Fresh quotes and explicit slippage limits | Accepted |
-| [0018](0018-private-participation.md) | Three-step SDK private route and recovery scope | Route accepted; private LBP/allowlist details open |
+| [0018](0018-private-participation.md) | SDK-managed single-transaction private route | Route accepted; private LBP/allowlist details open |
 | [0019](0019-product-packages.md) | Two QML mini-apps and a non-UI shared core | Accepted |
 | [0020](0020-settlement-and-graduation.md) | Manual settlement and inactive graduation | Accepted |
 | [0021](0021-modes-and-open-limits.md) | Adopted modes, deferred ceiling and open allowlist | Accepted internally; expiry-validation and ceiling departures: To be reviewed by Logos team; allowlist open |
