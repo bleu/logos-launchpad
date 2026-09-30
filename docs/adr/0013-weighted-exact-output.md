@@ -6,16 +6,22 @@ Date: 2026-09-29
 
 ## Context
 
-The reviewed PoC record keeps exact-output pricing in the base interval `(0,1)`. Its inversion is `(b / (b - a))^y - 1 = (1 - p) / p`, where `p = ((b - a) / b)^y`. It records a downward-padded internal power, a ceiling division for `(1 - p) / p`, and an upward-rounded final widened multiply. The source bounds the division numerator by `2^124` and states that it needs no widening.
+The reviewed PoC keeps power inputs in `(0,1)`. The direct exact-output form would require a base greater than 1. Its inversion instead uses `(b / (b - a))^y - 1 = (1 - p) / p`, where `p = ((b - a) / b)^y` and the power base remains in `(0,1)`.
+
+The source records a downward-rounded base, an upward-rounded exponent, a downward-padded internal power, a ceiling division for `(1 - p) / p`, and an upward-rounded final widened multiply. Each direction overstates the payment. The division numerator is bounded by `2^124` in the historical envelope and needs no widening.
 
 ## Decision
 
-Record the PoC limit `amount_out <= 30%` of the reserve. With exponent at most 99, the cited bound is `p >= 0.7^99 ~= 2^-50.6`, which the source describes as four times the internal pad floor. The cap prevents the denominator in `(1 - p) / p` from collapsing. Payments that do not fit `u128` are outside the stated representability envelope and halt rather than wrap.
+Use the inverted form for exact-output pricing. Do not add a base-greater-than-1 power path. Cap `amount_out` at 30% of the reserve. At exponent 99, the stated bound `p >= 0.7^99 ~= 2^-50.6` keeps the inversion denominator above the internal pad floor.
+
+The 30% cap and payment representability are separate bounds. The cap protects the power and division domain. Even within that cap, a payment can exceed `u128`; the final fit assertion rejects that result and halts rather than wraps.
 
 ## Consequences
 
-The 30% limit is a documented precondition, not a general price-quality guarantee. The cited source also reports direction-only treatment at the 30% and exponent-99 corner because its sensitivity exceeds `u128`. This ADR records that historical baseline without new verification or a claim about program semantics.
+The cap is a precondition for this exact-output path, not a general price-quality guarantee. The retained overflow envelope documents the separate result-fit boundary. The 30% and exponent-99 corner has historical direction-only evidence because its sensitivity exceeds `u128`. This unaudited decision does not establish production LBP behavior.
 
 ## Sources
 
+- [Overflow envelope](../../packages/weighted-math/docs/overflow-proof.md)
+- [Oracle fixtures and regeneration](../../packages/weighted-math/crates/harness/oracle/README.md)
 - [0006-in-given-out-inversion.md](https://github.com/bleu/lez-weighted-math/blob/f99195f4bcc375940171e4ee5373e67592622800/docs/adr/0006-in-given-out-inversion.md)
