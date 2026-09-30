@@ -6,14 +6,18 @@ Decisions use the repository's root ADR series: [integer arithmetic](../../docs/
 
 ## Build and test
 
-Run from this directory:
+Use Rust 1.94 or later. Run from this directory:
 
 ```sh
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 cargo build --workspace --locked
 cargo test --workspace --locked
 ```
 
-The [workspace guide](../../docs/architecture/workspace-guide.md) lists lint, fuzz and guest-parity commands. Fuzzing needs nightly Rust and `cargo-fuzz`; parity needs the RISC0 tools. These separate workspaces are not covered by the command above.
+The test suite includes `measure_error_margins`. All-features checks do not sweep math scales; this package has no scale features.
+
+The [workspace guide](../../docs/architecture/workspace-guide.md) lists fuzz and guest-parity commands. Fuzzing needs nightly Rust and `cargo-fuzz`; parity needs the RISC0 tools. These separate workspaces are not covered by the commands above.
 
 ## Supporting material
 

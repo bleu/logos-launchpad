@@ -2,7 +2,11 @@
 name = "weighted-math-core"
 version = "0.0.0"
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 description = "Fixed-point weighted-pool math kernel (no_std, no RISC0 deps yet)."
 
 [dependencies]
+
+[lints]
+workspace = true

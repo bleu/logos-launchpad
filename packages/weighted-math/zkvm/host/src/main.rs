@@ -8,12 +8,16 @@
 //!
 //! Exit code is nonzero on any parity mismatch.
 
-use anyhow::{bail, Context, Result};
-use risc0_zkvm::{default_executor, ExecutorEnv};
+#![cfg_attr(not(test), warn(unused_crate_dependencies))]
+
+use eyre::{Result, WrapErr, bail};
+use risc0_zkvm::{ExecutorEnv, default_executor};
 use serde::Deserialize;
 use std::path::PathBuf;
-use weighted_math_core::fixed::{Fixed, SCALE};
-use weighted_math_core::{pow, weighted};
+use weighted_math_core::{Fixed, SCALE};
+use weighted_math_core::{
+    calc_in_given_out, calc_out_given_in, exp, expm1, ln, pow, pow_down, pow_up,
+};
 use zkvm_methods::WEIGHTED_MATH_GUEST_ELF;
 
 /// Fixture inputs are dyadic multiples of 2^-40 (harness::S40_BITS).
@@ -82,8 +86,8 @@ fn fixtures_dir() -> PathBuf {
 
 fn load<T: serde::de::DeserializeOwned>(name: &str) -> Result<T> {
     let path = fixtures_dir().join(name);
-    let text = std::fs::read_to_string(&path).with_context(|| format!("reading {path:?}"))?;
-    serde_json::from_str(&text).with_context(|| format!("parsing {path:?}"))
+    let text = std::fs::read_to_string(&path).wrap_err_with(|| format!("reading {path:?}"))?;
+    serde_json::from_str(&text).wrap_err_with(|| format!("parsing {path:?}"))
 }
 
 fn s40(s: &str) -> u128 {
@@ -101,14 +105,14 @@ fn wei(s: &str) -> u128 {
 
 fn host_eval(op: u32, c: &[u128]) -> u128 {
     match op {
-        0 => pow::ln(Fixed(c[0] as i128)).0 as u128,
-        1 => pow::exp(Fixed(c[0] as i128)).0 as u128,
-        2 => pow::expm1(Fixed(c[0] as i128)).0 as u128,
-        3 => pow::pow(Fixed(c[0] as i128), Fixed(c[1] as i128)).0 as u128,
-        4 => pow::pow_up(Fixed(c[0] as i128), Fixed(c[1] as i128)).0 as u128,
-        5 => pow::pow_down(Fixed(c[0] as i128), Fixed(c[1] as i128)).0 as u128,
-        6 => weighted::calc_out_given_in(c[0], c[1], c[2], c[3], c[4]),
-        7 => weighted::calc_in_given_out(c[0], c[1], c[2], c[3], c[4]),
+        0 => ln(Fixed(c[0] as i128)).0 as u128,
+        1 => exp(Fixed(c[0] as i128)).0 as u128,
+        2 => expm1(Fixed(c[0] as i128)).0 as u128,
+        3 => pow(Fixed(c[0] as i128), Fixed(c[1] as i128)).0 as u128,
+        4 => pow_up(Fixed(c[0] as i128), Fixed(c[1] as i128)).0 as u128,
+        5 => pow_down(Fixed(c[0] as i128), Fixed(c[1] as i128)).0 as u128,
+        6 => calc_out_given_in(c[0], c[1], c[2], c[3], c[4]),
+        7 => calc_in_given_out(c[0], c[1], c[2], c[3], c[4]),
         8 => c[0] / c[1],
         9 => c[0],
         _ => unreachable!(),
@@ -139,10 +143,12 @@ fn run_guest(op: u32, cases: &[Vec<u128>]) -> Result<BatchResult> {
     let env = ExecutorEnv::builder()
         .write_slice(&input)
         .build()
-        .context("building ExecutorEnv")?;
+        .map_err(|error| eyre::eyre!(error.into_boxed_dyn_error()))
+        .wrap_err("building ExecutorEnv")?;
     let info = default_executor()
         .execute(env, WEIGHTED_MATH_GUEST_ELF)
-        .with_context(|| format!("executing guest for op {}", OP_NAMES[op as usize]))?;
+        .map_err(|error| eyre::eyre!(error.into_boxed_dyn_error()))
+        .wrap_err_with(|| format!("executing guest for op {}", OP_NAMES[op as usize]))?;
 
     let bytes = &info.journal.bytes;
     if bytes.len() != cases.len() * 24 {

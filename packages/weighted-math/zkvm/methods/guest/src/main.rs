@@ -18,11 +18,15 @@
 //! nor sink the work across the measurement points. Subtract the op-10
 //! baseline to get the pure call cost.
 
+#![cfg_attr(not(test), warn(unused_crate_dependencies))]
+
 use core::hint::black_box;
 
 use risc0_zkvm::guest::env;
-use weighted_math_core::fixed::Fixed;
-use weighted_math_core::{pow, weighted};
+use weighted_math_core::Fixed;
+use weighted_math_core::{
+    calc_in_given_out, calc_out_given_in, exp, expm1, ln, pow, pow_down, pow_up,
+};
 
 fn words_for(op: u32) -> usize {
     match op {
@@ -55,14 +59,14 @@ fn main() {
 
         let start = env::cycle_count();
         let result: u128 = match op {
-            0 => pow::ln(Fixed(a(0) as i128)).0 as u128,
-            1 => pow::exp(Fixed(a(0) as i128)).0 as u128,
-            2 => pow::expm1(Fixed(a(0) as i128)).0 as u128,
-            3 => pow::pow(Fixed(a(0) as i128), Fixed(a(1) as i128)).0 as u128,
-            4 => pow::pow_up(Fixed(a(0) as i128), Fixed(a(1) as i128)).0 as u128,
-            5 => pow::pow_down(Fixed(a(0) as i128), Fixed(a(1) as i128)).0 as u128,
-            6 => weighted::calc_out_given_in(a(0), a(1), a(2), a(3), a(4)),
-            7 => weighted::calc_in_given_out(a(0), a(1), a(2), a(3), a(4)),
+            0 => ln(Fixed(a(0) as i128)).0 as u128,
+            1 => exp(Fixed(a(0) as i128)).0 as u128,
+            2 => expm1(Fixed(a(0) as i128)).0 as u128,
+            3 => pow(Fixed(a(0) as i128), Fixed(a(1) as i128)).0 as u128,
+            4 => pow_up(Fixed(a(0) as i128), Fixed(a(1) as i128)).0 as u128,
+            5 => pow_down(Fixed(a(0) as i128), Fixed(a(1) as i128)).0 as u128,
+            6 => calc_out_given_in(a(0), a(1), a(2), a(3), a(4)),
+            7 => calc_in_given_out(a(0), a(1), a(2), a(3), a(4)),
             8 => a(0) / a(1),
             9 => a(0),
             _ => unreachable!(),

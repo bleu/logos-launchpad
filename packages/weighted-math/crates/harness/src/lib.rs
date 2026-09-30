@@ -6,13 +6,15 @@
 //! allowance on top of the one-ulp representation floor. Re-sweeping the
 //! scale is a one-line change in the kernel; no fixture ever regenerates.
 
+#![cfg_attr(not(test), warn(unused_crate_dependencies))]
+
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use serde::de::DeserializeOwned;
 use serde::Deserialize;
+use serde::de::DeserializeOwned;
 
-pub use weighted_math_core::fixed::{Fixed, ONE, SCALE};
+pub use weighted_math_core::{Fixed, ONE, SCALE};
 
 /// Algorithmic error allowance, in ulps at `SCALE`, on top of the one-ulp
 /// quantization floor. The only knob besides `SCALE` itself.

@@ -13,11 +13,12 @@
 //! 1..=99 (not just w / 100-w), reaching every exponent quantization p/q
 //! with p, q <= 99.
 
+#![cfg_attr(not(test), warn(unused_crate_dependencies))]
 #![no_main]
 
 use arbitrary::Arbitrary;
 use libfuzzer_sys::fuzz_target;
-use weighted_math_core::weighted;
+use weighted_math_core::{calc_in_given_out, calc_out_given_in};
 
 #[derive(Arbitrary, Debug)]
 struct Trade {
@@ -49,7 +50,7 @@ fuzz_target!(|t: Trade| {
             return;
         }
         let amount_out = 1 + t.amount % max_out;
-        let cost = weighted::calc_in_given_out(balance_in, w_in, balance_out, w_out, amount_out);
+        let cost = calc_in_given_out(balance_in, w_in, balance_out, w_out, amount_out);
         assert!(
             harness::invariant_preserved(balance_in, w_in, balance_out, w_out, cost, amount_out),
             "curve decreased: pool undercharged for the trade"
@@ -63,7 +64,7 @@ fuzz_target!(|t: Trade| {
             return;
         }
         let amount_in = 1 + t.amount % max_in;
-        let out = weighted::calc_out_given_in(balance_in, w_in, balance_out, w_out, amount_in);
+        let out = calc_out_given_in(balance_in, w_in, balance_out, w_out, amount_in);
         assert!(
             harness::invariant_preserved(balance_in, w_in, balance_out, w_out, amount_in, out),
             "curve decreased: pool paid too much for the trade"

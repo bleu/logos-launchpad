@@ -32,4 +32,4 @@ covers both with margin. The swap paths keep results at 62 bits and use
 `PAD_62 = 512` (`2^-53`) instead: twice the pipeline bound.
 
 Measured margins per fixture case:
-`cargo test -p harness --test differential -- --ignored --nocapture`.
+`cargo test -p harness --test differential measure_error_margins --locked -- --nocapture`.

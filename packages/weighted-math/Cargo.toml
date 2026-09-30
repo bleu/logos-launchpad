@@ -8,7 +8,8 @@ members = [
 ]
 
 [workspace.package]
-edition = "2021"
+edition = "2024"
+rust-version = "1.94"
 license = "MIT"
 repository = ""
 
@@ -16,3 +17,6 @@ repository = ""
 # release either — this is financial math, we want panics over silent wrap.
 [profile.release]
 overflow-checks = true
+
+[workspace.lints.clippy]
+all = { level = "deny", priority = -1 }

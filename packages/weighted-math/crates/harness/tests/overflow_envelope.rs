@@ -4,10 +4,12 @@
 //! an invariant a wrapped intermediate would break; the `should_panic`
 //! tests prove the envelope asserts fire in release.
 
+#![cfg_attr(not(test), warn(unused_crate_dependencies))]
+
 use proptest::prelude::*;
 
 use harness::{Fixed, ONE, SCALE};
-use weighted_math_core::{pow, weighted};
+use weighted_math_core::{calc_in_given_out, calc_out_given_in, exp, expm1, pow_down, pow_up};
 
 const MAX_EXPONENT: i128 = 99 * ONE.0;
 
@@ -29,8 +31,8 @@ fn exp_saturates_deep_negative() {
         -(64i128 << SCALE) + 1, // just inside the cutoff: still underflows
     ];
     for x in deep {
-        assert_eq!(pow::exp(Fixed(x)).0, 0, "exp({x}) must underflow to 0");
-        assert_eq!(pow::expm1(Fixed(x)).0, -ONE.0, "expm1({x}) must be -1");
+        assert_eq!(exp(Fixed(x)).0, 0, "exp({x}) must underflow to 0");
+        assert_eq!(expm1(Fixed(x)).0, -ONE.0, "expm1({x}) must be -1");
     }
 }
 
@@ -45,8 +47,8 @@ fn pow_at_the_domain_corners() {
         (Fixed(ONE.0 - 1), Fixed(1)),
     ];
     for (base, expo) in corners {
-        let up = pow::pow_up(base, expo);
-        let down = pow::pow_down(base, expo);
+        let up = pow_up(base, expo);
+        let down = pow_down(base, expo);
         assert!(up.0 > 0 && up.0 <= ONE.0);
         assert!(down.0 >= 0 && down.0 <= up.0);
     }
@@ -58,7 +60,7 @@ fn pow_at_the_domain_corners() {
 #[should_panic(expected = "widened product exceeds u128")]
 fn unrepresentable_payment_panics() {
     let b = 1u128 << 100;
-    weighted::calc_in_given_out(b, 1, b, 99, b / 10 * 3);
+    calc_in_given_out(b, 1, b, 99, b / 10 * 3);
 }
 
 // ---------------------------------------------------------------------------
@@ -85,7 +87,7 @@ proptest! {
         (w_in, w_out) in edge_weights(),
     ) {
         let amount_in = u128::MAX - balance_in;
-        let out = weighted::calc_out_given_in(balance_in, w_in, balance_out, w_out, amount_in);
+        let out = calc_out_given_in(balance_in, w_in, balance_out, w_out, amount_in);
         prop_assert!(out <= balance_out);
         if amount_in >= balance_in {
             prop_assert!(out >= balance_out / 256);
@@ -103,8 +105,8 @@ proptest! {
         (w_in, w_out) in edge_weights(),
     ) {
         let amount_in = (balance_in / 1000) * amount_frac;
-        let once = weighted::calc_out_given_in(balance_in, w_in, balance_out, w_out, amount_in);
-        let twice = weighted::calc_out_given_in(balance_in, w_in, 2 * balance_out, w_out, amount_in);
+        let once = calc_out_given_in(balance_in, w_in, balance_out, w_out, amount_in);
+        let twice = calc_out_given_in(balance_in, w_in, 2 * balance_out, w_out, amount_in);
         prop_assert!(twice == 2 * once || twice == 2 * once + 1);
     }
 
@@ -119,8 +121,8 @@ proptest! {
     ) {
         let w_out = 100 - w_in;
         let amount_out = (balance_out / 1000) * out_frac; // <= floor(30%)
-        let once = weighted::calc_in_given_out(balance_in, w_in, balance_out, w_out, amount_out);
-        let twice = weighted::calc_in_given_out(2 * balance_in, w_in, balance_out, w_out, amount_out);
+        let once = calc_in_given_out(balance_in, w_in, balance_out, w_out, amount_out);
+        let twice = calc_in_given_out(2 * balance_in, w_in, balance_out, w_out, amount_out);
         // twice = ceil(2X) and 2*once = 2*ceil(X) differ by at most one.
         prop_assert!(twice == 2 * once || twice + 1 == 2 * once);
     }
@@ -129,8 +131,8 @@ proptest! {
     /// domain) and agree with each other to one ulp.
     #[test]
     fn exp_total_on_nonpositive(x in i128::MIN..=0) {
-        let e = pow::exp(Fixed(x));
-        let m = pow::expm1(Fixed(x));
+        let e = exp(Fixed(x));
+        let m = expm1(Fixed(x));
         prop_assert!((0..=ONE.0).contains(&e.0));
         prop_assert!((-ONE.0..=0).contains(&m.0));
         prop_assert!(((e.0 - ONE.0) - m.0).abs() <= 1);

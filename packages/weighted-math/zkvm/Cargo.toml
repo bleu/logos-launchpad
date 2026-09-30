@@ -8,10 +8,14 @@ resolver = "2"
 members = ["host", "methods"]
 
 [workspace.package]
-edition = "2021"
+edition = "2024"
+rust-version = "1.94"
 license = "MIT"
 
 [profile.release]
 # Match the root workspace: financial math panics on overflow, never wraps.
 # The guest is its own workspace (methods/guest) with the same setting.
 overflow-checks = true
+
+[workspace.lints.clippy]
+all = { level = "deny", priority = -1 }

@@ -5,10 +5,12 @@
 //! The generator-sanity tests at the bottom check the generators themselves,
 //! independently of the kernel.
 
+#![cfg_attr(not(test), warn(unused_crate_dependencies))]
+
 use proptest::prelude::*;
 
-use harness::{invariant_preserved, Fixed, ONE, SCALE};
-use weighted_math_core::{pow, weighted};
+use harness::{Fixed, ONE, SCALE, invariant_preserved};
+use weighted_math_core::{calc_in_given_out, calc_out_given_in, pow_down, pow_up};
 
 const MAX_EXPONENT: i128 = 99 * (1i128 << SCALE);
 
@@ -151,8 +153,8 @@ proptest! {
     /// other; running at all is the no-panic companion to the overflow proof.
     #[test]
     fn pow_bounds_and_rounding((base, expo) in pow_input()) {
-        let up = pow::pow_up(base, expo);
-        let down = pow::pow_down(base, expo);
+        let up = pow_up(base, expo);
+        let down = pow_down(base, expo);
         prop_assert!(up.0 > 0, "pow_up must stay in (0,1]");
         prop_assert!(up.0 <= ONE.0);
         prop_assert!(down.0 >= 0);
@@ -162,12 +164,12 @@ proptest! {
     /// pow is monotone: decreasing in exponent (base < 1), increasing in base.
     #[test]
     fn pow_monotonicity((base, expo) in pow_input(), bump in 1i128..(1i128 << 40)) {
-        let p = pow::pow_down(base, expo);
+        let p = pow_down(base, expo);
         if expo.0 + bump <= MAX_EXPONENT {
-            prop_assert!(pow::pow_down(base, Fixed(expo.0 + bump)).0 <= p.0 + 1);
+            prop_assert!(pow_down(base, Fixed(expo.0 + bump)).0 <= p.0 + 1);
         }
         if base.0 + bump < ONE.0 {
-            prop_assert!(pow::pow_down(Fixed(base.0 + bump), expo).0 + 1 >= p.0);
+            prop_assert!(pow_down(Fixed(base.0 + bump), expo).0 + 1 >= p.0);
         }
     }
 
@@ -205,7 +207,7 @@ proptest! {
     /// enforced envelope.
     #[test]
     fn calc_out_bounded((balance_in, amount_in, balance_out, (w_in, w_out)) in any_swap()) {
-        let out = weighted::calc_out_given_in(balance_in, w_in, balance_out, w_out, amount_in);
+        let out = calc_out_given_in(balance_in, w_in, balance_out, w_out, amount_in);
         prop_assert!(out <= balance_out);
     }
 
@@ -216,8 +218,8 @@ proptest! {
         extra in 1u128..=10u128.pow(18),
     ) {
         prop_assume!(balance_in.checked_add(amount_in).and_then(|t| t.checked_add(extra)).is_some());
-        let out1 = weighted::calc_out_given_in(balance_in, w_in, balance_out, w_out, amount_in);
-        let out2 = weighted::calc_out_given_in(balance_in, w_in, balance_out, w_out, amount_in + extra);
+        let out1 = calc_out_given_in(balance_in, w_in, balance_out, w_out, amount_in);
+        let out2 = calc_out_given_in(balance_in, w_in, balance_out, w_out, amount_in + extra);
         prop_assert!(out2 >= out1);
     }
 
@@ -227,10 +229,10 @@ proptest! {
     fn calc_in_positive_and_monotone(
         (balance_in, amount_out, balance_out, (w_in, w_out)) in exact_out_swap(),
     ) {
-        let cost = weighted::calc_in_given_out(balance_in, w_in, balance_out, w_out, amount_out);
+        let cost = calc_in_given_out(balance_in, w_in, balance_out, w_out, amount_out);
         prop_assert!(cost >= 1, "exact-out trades are never free");
         if amount_out > 1 {
-            let less = weighted::calc_in_given_out(balance_in, w_in, balance_out, w_out, amount_out - 1);
+            let less = calc_in_given_out(balance_in, w_in, balance_out, w_out, amount_out - 1);
             prop_assert!(less <= cost);
         }
     }
@@ -243,7 +245,7 @@ proptest! {
     fn invariant_never_decreases_exact_in(
         (balance_in, amount_in, balance_out, (w_in, w_out)) in any_swap(),
     ) {
-        let out = weighted::calc_out_given_in(balance_in, w_in, balance_out, w_out, amount_in);
+        let out = calc_out_given_in(balance_in, w_in, balance_out, w_out, amount_in);
         prop_assert!(
             invariant_preserved(balance_in, w_in, balance_out, w_out, amount_in, out),
             "curve decreased: pool paid too much for the trade"
@@ -256,7 +258,7 @@ proptest! {
     fn invariant_never_decreases_exact_out(
         (balance_in, amount_out, balance_out, (w_in, w_out)) in exact_out_swap(),
     ) {
-        let cost = weighted::calc_in_given_out(balance_in, w_in, balance_out, w_out, amount_out);
+        let cost = calc_in_given_out(balance_in, w_in, balance_out, w_out, amount_out);
         prop_assert!(
             invariant_preserved(balance_in, w_in, balance_out, w_out, cost, amount_out),
             "curve decreased: pool undercharged for the trade"

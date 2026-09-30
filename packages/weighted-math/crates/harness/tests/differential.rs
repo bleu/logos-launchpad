@@ -3,8 +3,12 @@
 //! self-validation (Balancer's captured outputs, fixture sanity) proving
 //! the machinery independently of the kernel.
 
+#![cfg_attr(not(test), warn(unused_crate_dependencies))]
+
 use harness::*;
-use weighted_math_core::{fixed, pow, weighted};
+use weighted_math_core::{
+    calc_in_given_out, calc_out_given_in, exp, expm1, ln, pow, pow_down, pow_up,
+};
 
 fn assert_band(band: Band, what: &str, context: &dyn std::fmt::Debug) {
     match band {
@@ -113,13 +117,13 @@ fn kernel_pow_gate() {
         let expo = s40_to_fixed(&c.exponent_s40);
         let (t_floor, t_ceil) = q_to_scale_bounds(&c.pow_exact_q128, 128);
 
-        let up = pow::pow_up(base, expo);
+        let up = pow_up(base, expo);
         assert_band(
             check_directional(t_floor, t_ceil, up.0, Direction::Up, bound_ulps()),
             "pow_up",
             c,
         );
-        let down = pow::pow_down(base, expo);
+        let down = pow_down(base, expo);
         assert_band(
             check_directional(t_floor, t_ceil, down.0, Direction::Down, bound_ulps()),
             "pow_down",
@@ -141,7 +145,7 @@ fn kernel_ln_exp_diagnostics() {
     for c in &fixture.ln {
         let x = s40_to_fixed(&c.x_s40);
         let (t_floor, t_ceil) = q_to_scale_bounds(&c.neg_ln_q116, 116);
-        let actual = pow::ln(x);
+        let actual = ln(x);
         assert!(actual.0 <= 0, "ln of x <= 1 must be <= 0 in {c:?}");
         assert_band(
             check_two_sided(t_floor, t_ceil, -actual.0, bound_ulps()),
@@ -152,7 +156,7 @@ fn kernel_ln_exp_diagnostics() {
     for c in &fixture.exp {
         let x = Fixed(-s40_to_fixed(&c.neg_x_s40).0);
         let (t_floor, t_ceil) = q_to_scale_bounds(&c.exp_q128, 128);
-        let actual = pow::exp(x);
+        let actual = exp(x);
         assert_band(
             check_two_sided(t_floor, t_ceil, actual.0, bound_ulps()),
             "exp",
@@ -160,7 +164,7 @@ fn kernel_ln_exp_diagnostics() {
         );
 
         let (m_floor, m_ceil) = q_to_scale_bounds(&c.neg_expm1_q128, 128);
-        let em1 = pow::expm1(x);
+        let em1 = expm1(x);
         assert!(em1.0 <= 0, "expm1 of x <= 0 must be <= 0 in {c:?}");
         assert_band(
             check_two_sided(m_floor, m_ceil, -em1.0, bound_ulps()),
@@ -183,8 +187,8 @@ fn kernel_arith_wrappers() {
 
         // mul: down = floor(a*b / 2^SCALE), up = ceil
         let product = mul_wide(au, bu);
-        let down = fixed::Fixed::mul_down(a, b).0 as u128;
-        let up = fixed::Fixed::mul_up(a, b).0 as u128;
+        let down = Fixed::mul_down(a, b).0 as u128;
+        let up = Fixed::mul_up(a, b).0 as u128;
         assert!(
             wide_le(shl_wide(down, SCALE), product) && wide_lt(product, shl_wide(down + 1, SCALE)),
             "mul_down not the floor in {c:?}"
@@ -202,8 +206,8 @@ fn kernel_arith_wrappers() {
         // div: down = floor(a * 2^SCALE / b), up = ceil (skip b == 0)
         if bu != 0 {
             let numerator = shl_wide(au, SCALE);
-            let qd = fixed::Fixed::div_down(a, b).0 as u128;
-            let qu = fixed::Fixed::div_up(a, b).0 as u128;
+            let qd = Fixed::div_down(a, b).0 as u128;
+            let qu = Fixed::div_up(a, b).0 as u128;
             assert!(
                 wide_le(mul_wide(qd, bu), numerator) && wide_lt(numerator, mul_wide(qd + 1, bu)),
                 "div_down not the floor in {c:?}"
@@ -220,7 +224,7 @@ fn kernel_arith_wrappers() {
         }
 
         // complement: exact ONE - x, saturating at zero.
-        let comp = fixed::Fixed::complement(a).0 as u128;
+        let comp = Fixed::complement(a).0 as u128;
         assert_eq!(comp, one.saturating_sub(au), "complement wrong in {c:?}");
     }
 }
@@ -236,7 +240,7 @@ fn kernel_in_given_out_gate() {
         "danger zone must lead the file"
     );
     for c in &cases {
-        let amount_in = weighted::calc_in_given_out(
+        let amount_in = calc_in_given_out(
             parse_u128(&c.balance_in),
             parse_u128(&c.weight_in),
             parse_u128(&c.balance_out),
@@ -280,11 +284,8 @@ fn wide_shr_or_max(sens_pow: u128, ulps: u128) -> u128 {
     }
 }
 
-/// Not a gate: reports the worst pow/payout errors at the compiled SCALE,
-/// for the scale sweep and the error-bound writeup. Run explicitly:
-/// `cargo test -p harness --test differential -- --ignored --nocapture`
+/// Reports the worst pow/payout errors at the compiled SCALE.
 #[test]
-#[ignore]
 fn measure_error_margins() {
     let cases: Vec<PowCase> = load_fixture("pow.json");
     // (zone, worst raw offset below truth, above truth, worst up/down err)
@@ -295,11 +296,11 @@ fn measure_error_margins() {
         let base = s40_to_fixed(&c.base_s40);
         let expo = s40_to_fixed(&c.exponent_s40);
         let (t_floor, t_ceil) = q_to_scale_bounds(&c.pow_exact_q128, 128);
-        let raw = pow::pow(base, expo).0;
+        let raw = pow(base, expo).0;
         worst_low = worst_low.max(t_floor - raw);
         worst_high = worst_high.max(raw - t_ceil);
-        worst_up = worst_up.max(pow::pow_up(base, expo).0 - t_ceil);
-        worst_down = worst_down.max(t_floor - pow::pow_down(base, expo).0);
+        worst_up = worst_up.max(pow_up(base, expo).0 - t_ceil);
+        worst_down = worst_down.max(t_floor - pow_down(base, expo).0);
     }
     println!(
         "SCALE={SCALE} raw_below={worst_low} raw_above={worst_high} \
@@ -310,7 +311,7 @@ fn measure_error_margins() {
     let swaps: Vec<OutGivenInCase> = load_fixture("out_given_in.json");
     let mut worst_rel_num = 0u128; // shortfall as multiple of balance_out ulps
     for c in &swaps {
-        let tokens_out = weighted::calc_out_given_in(
+        let tokens_out = calc_out_given_in(
             parse_u128(&c.balance_in),
             parse_u128(&c.weight_in),
             parse_u128(&c.balance_out),
@@ -337,7 +338,7 @@ fn kernel_out_given_in_gate() {
         "danger zone must lead the file"
     );
     for c in &cases {
-        let tokens_out = weighted::calc_out_given_in(
+        let tokens_out = calc_out_given_in(
             parse_u128(&c.balance_in),
             parse_u128(&c.weight_in),
             parse_u128(&c.balance_out),

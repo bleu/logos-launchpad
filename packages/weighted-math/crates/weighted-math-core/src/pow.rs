@@ -239,12 +239,20 @@ pub fn pow(base: Fixed, exponent: Fixed) -> Fixed {
 }
 
 /// `base^exponent` rounded down (never overstates the result).
+///
+/// # Panics
+///
+/// If `base` is outside `(0, 1]` or `exponent` is outside `(0, 99]`.
 pub fn pow_down(base: Fixed, exponent: Fixed) -> Fixed {
     Fixed((pow_raw(base, exponent) - POW_PAD_ULPS).max(0))
 }
 
 /// `base^exponent` rounded up (never understates the result). Never zero:
 /// the true result is positive, so the padded floor is at least one ulp.
+///
+/// # Panics
+///
+/// If `base` is outside `(0, 1]` or `exponent` is outside `(0, 99]`.
 pub fn pow_up(base: Fixed, exponent: Fixed) -> Fixed {
     Fixed((pow_raw(base, exponent) + POW_PAD_ULPS).min(ONE.0))
 }

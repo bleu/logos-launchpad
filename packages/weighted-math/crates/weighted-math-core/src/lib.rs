@@ -1,13 +1,15 @@
-//! Fixed-point weighted-pool math kernel (Balancer-style LBP).
+//! Unaudited weighted pricing for LBP pools, tested against mpmath fixtures.
 //!
-//! Correct to a proven error bound against an mpmath oracle (see
-//! `crates/harness`), one division per `pow` for the RISC0 zkVM. Design
-//! overview is in the package README; decisions are in the repository-root `docs/adr/`.
-//!
-//! `#![no_std]`, no dependencies: compiles unchanged as a RISC0 guest.
+//! This `no_std` arithmetic kernel has no dependencies. Domain violations
+//! use documented panics instead of typed errors to keep that boundary.
 #![no_std]
+#![cfg_attr(not(test), warn(unused_crate_dependencies))]
 
-pub mod fixed;
-pub mod pow;
-pub mod weighted;
+mod fixed;
+mod pow;
+mod weighted;
 pub(crate) mod wide;
+
+pub use fixed::{Fixed, ONE, Repr, SCALE};
+pub use pow::{exp, expm1, ln, pow, pow_down, pow_up};
+pub use weighted::{calc_in_given_out, calc_out_given_in};

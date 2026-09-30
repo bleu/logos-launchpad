@@ -2,6 +2,7 @@
 name = "zkvm-methods"
 version = "0.0.0"
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 description = "Embeds the compiled weighted-math RISC0 guest ELF."
 publish = false
@@ -11,3 +12,6 @@ risc0-build = { version = "3.0.5" }
 
 [package.metadata.risc0]
 methods = ["guest"]
+
+[lints]
+workspace = true

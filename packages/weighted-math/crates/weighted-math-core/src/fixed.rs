@@ -29,6 +29,10 @@ pub const ONE: Fixed = Fixed(1_i128 << SCALE);
 impl Fixed {
     /// `floor(self · rhs / 2^SCALE)`. The product is formed at 256 bits;
     /// a result past `Repr` panics, never wraps.
+    ///
+    /// # Panics
+    ///
+    /// If either operand is negative or the result exceeds [`Repr::MAX`].
     pub fn mul_down(self, rhs: Fixed) -> Fixed {
         Fixed(checked_repr(wide::mul_shr(
             nonneg(self),
@@ -38,6 +42,10 @@ impl Fixed {
     }
 
     /// `ceil(self · rhs / 2^SCALE)`.
+    ///
+    /// # Panics
+    ///
+    /// If either operand is negative or the result exceeds [`Repr::MAX`].
     pub fn mul_up(self, rhs: Fixed) -> Fixed {
         Fixed(checked_repr(wide::mul_shr_up(
             nonneg(self),
@@ -46,13 +54,22 @@ impl Fixed {
         )))
     }
 
-    /// `floor(self · 2^SCALE / rhs)` — one division. The numerator must
-    /// fit `u128` (asserted).
+    /// `floor(self · 2^SCALE / rhs)` with one division.
+    ///
+    /// # Panics
+    ///
+    /// If `self` is negative, `rhs <= 0`, the scaled numerator is at least
+    /// `2^127`, or the result exceeds [`Repr::MAX`].
     pub fn div_down(self, rhs: Fixed) -> Fixed {
         Fixed(checked_repr(numerator(self, rhs) / nonneg(rhs)))
     }
 
     /// `ceil(self · 2^SCALE / rhs)`.
+    ///
+    /// # Panics
+    ///
+    /// If `self` is negative, `rhs <= 0`, the scaled numerator is at least
+    /// `2^127`, or the result exceeds [`Repr::MAX`].
     pub fn div_up(self, rhs: Fixed) -> Fixed {
         let d = nonneg(rhs);
         let n = numerator(self, rhs);
@@ -60,6 +77,10 @@ impl Fixed {
     }
 
     /// `ONE - self`, saturating at zero. Exact integer subtraction.
+    ///
+    /// # Panics
+    ///
+    /// If `self` is negative.
     pub fn complement(self) -> Fixed {
         Fixed((ONE.0 - nonneg(self) as i128).max(0))
     }

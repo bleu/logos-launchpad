@@ -32,7 +32,7 @@ const _: () = assert!(
 /// ratio pays zero.
 ///
 /// ```
-/// use weighted_math_core::weighted::calc_out_given_in;
+/// use weighted_math_core::calc_out_given_in;
 ///
 /// // Sell 1000 wei of token A into a 99/1 pool.
 /// let out = calc_out_given_in(
@@ -88,7 +88,7 @@ pub fn calc_out_given_in(
 /// (ADR 0013).
 ///
 /// ```
-/// use weighted_math_core::weighted::calc_in_given_out;
+/// use weighted_math_core::calc_in_given_out;
 ///
 /// // Price an exact-out purchase of 1000 wei of token B.
 /// let amount_in = calc_in_given_out(
