@@ -181,7 +181,6 @@ impl Chain {
     }
 }
 #[test]
-#[ignore = "build methods and set RISC0_DEV_MODE=1"]
 fn fee_accrual_collection_and_withdrawal_preserve_vault_liabilities() {
     for public_mode in [false, true] {
         for sell in [false, true] {
@@ -501,7 +500,6 @@ impl Chain {
     }
 }
 #[test]
-#[ignore = "build methods and set RISC0_DEV_MODE=1"]
 fn private_sale_resumes_creation_and_settlement_with_fresh_payout_holders() {
     for public_mode in [false, true] {
         for (allocation, seed, bought, deadline, collateral_due, remaining_supply) in [

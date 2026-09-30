@@ -1,10 +1,21 @@
 [package]
 name = "launchpad_programs"
 version = "0.1.0"
-edition = "2024"
+edition.workspace = true
+rust-version.workspace = true
 license = "MIT"
 
 [workspace]
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.94"
+
+[workspace.lints.clippy]
+all = { level = "deny", priority = -1 }
+
+[lints]
+workspace = true
 
 [dependencies]
 lee_core = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", rev = "a58fbce2ff48c58b7bb5001b1a27e64b9596ee3a", default-features = false }

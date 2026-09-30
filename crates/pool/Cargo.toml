@@ -1,7 +1,8 @@
 [package]
 name = "pool"
 version = "0.1.0"
-edition = "2024"
+edition.workspace = true
+rust-version.workspace = true
 license = "MIT"
 
 # `curve-math` and `borsh` only. No `lee_core`: the pool state machine must stay
@@ -13,6 +14,5 @@ curve-math.workspace = true
 [dev-dependencies]
 proptest = "1.11.0"
 
-[lints.clippy]
-all = { level = "deny", priority = -1 }
-arithmetic_side_effects = "deny"
+[lints]
+workspace = true

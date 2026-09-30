@@ -1,12 +1,25 @@
 [package]
 name = "launchpad-client"
 version = "0.1.0"
-edition = "2024"
+edition.workspace = true
+rust-version.workspace = true
 license = "MIT"
+
+[features]
+guest-tests = []
+
+[[test]]
+name = "private_authority"
+required-features = ["guest-tests"]
+
+[[test]]
+name = "settlement"
+required-features = ["guest-tests"]
 
 [dependencies]
 associated_token_account_core.workspace = true
-anyhow.workspace = true
+thiserror.workspace = true
+strum.workspace = true
 common.workspace = true
 clock_core.workspace = true
 curve-core.workspace = true

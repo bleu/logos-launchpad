@@ -6,6 +6,11 @@
 //! machine instead of hand-built account fixtures.
 //!
 //! Launch-specific allocation and vocabulary belong to the factory adapter.
+//! Errors remain operation-specific to preserve the guest-facing API. Their hand-written
+//! implementations keep error-derive dependencies out of the guest state machine.
+
+#![cfg_attr(not(test), warn(unused_crate_dependencies))]
+#![deny(clippy::arithmetic_side_effects)]
 
 use borsh::{BorshDeserialize, BorshSerialize};
 
@@ -20,7 +25,6 @@ pub enum CreateError {
     DepletionReserveZero,
 }
 
-// Hand-written: the dependency rules keep `thiserror` out of this crate.
 impl std::fmt::Display for CreateError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {

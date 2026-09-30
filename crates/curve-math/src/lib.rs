@@ -11,6 +11,11 @@
 //!
 //! Creation validates virtual reserves below `2^64`, so the creation-time product
 //! fits `u128`. Each operation remains checked because trade amounts are untrusted.
+//!
+//! Errors use hand-written implementations to keep this arithmetic crate dependency-free.
+
+#![cfg_attr(not(test), warn(unused_crate_dependencies))]
+#![deny(clippy::arithmetic_side_effects)]
 
 /// Why a pricing call could not produce a number.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -22,7 +27,6 @@ pub enum MathError {
     ExceedsVirtualReserves,
 }
 
-// Hand-written: the dependency rules keep `thiserror` out of this crate.
 impl std::fmt::Display for MathError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {

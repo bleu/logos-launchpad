@@ -17,7 +17,6 @@ fn guest(name: &str) -> Program {
 }
 
 #[test]
-#[ignore = "executes RISC0 guests; build methods and set RISC0_DEV_MODE=1"]
 fn private_namespace_action_returns_authority_and_rejects_foreign_nft() {
     let router = guest("private_authority");
     let curve = guest("curve");
@@ -119,7 +118,6 @@ fn private_namespace_action_returns_authority_and_rejects_foreign_nft() {
 }
 
 #[test]
-#[ignore = "executes RISC0 guests; build methods and set RISC0_DEV_MODE=1"]
 fn private_nft_closes_direct_and_factory_pools() {
     for factory_owned in [false, true] {
         let curve = guest("curve");

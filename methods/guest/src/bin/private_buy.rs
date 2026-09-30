@@ -1,5 +1,9 @@
 //! One private transaction: native funding + collateral deshield + buy + re-shield.
 
+#![cfg_attr(not(test), warn(unused_crate_dependencies))]
+
+use {factory_core as _, risc0_zkvm as _};
+
 use associated_token_account_core::Instruction as AtaInstruction;
 use curve_core::Instruction as CurveInstruction;
 use lee_core::program::{

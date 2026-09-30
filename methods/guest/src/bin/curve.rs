@@ -1,5 +1,13 @@
-use curve_core::{Instruction, dispatch::process_instruction};
+//! Curve guest entry point; domain handlers live in `curve-core`.
+
+#![cfg_attr(not(test), warn(unused_crate_dependencies))]
+
+use curve_core::{Instruction, process_instruction};
 use lee_core::program::{ProgramInput, ProgramOutput, read_lee_inputs};
+use {
+    associated_token_account_core as _, authenticated_transfer_core as _, factory_core as _,
+    private_flow_core as _, risc0_zkvm as _, token_core as _,
+};
 
 fn main() {
     let (input, instruction_words) = read_lee_inputs::<Instruction>();

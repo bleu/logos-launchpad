@@ -7,6 +7,11 @@
 //!
 //! This crate contains the account and program loading shared by client lifecycle operations.
 
+#![cfg_attr(not(test), warn(unused_crate_dependencies))]
+
+mod error;
+pub use error::{ClientError, Result};
+
 pub use factory_core::CreationStage;
 
 mod lifecycle;
@@ -14,7 +19,6 @@ pub use lifecycle::{FactorySession, LifecycleReceipt, next_creation_invocation};
 
 use std::{collections::HashMap, path::Path};
 
-use anyhow::{Context, Result, anyhow};
 use associated_token_account_core::{compute_ata_seed, get_associated_token_account_id};
 use common::{HashType, transaction::LeeTransaction};
 use curve_core::{Config, Instruction as CurveInstruction, compute_config_pda, compute_pool_pda};
@@ -41,14 +45,21 @@ use wallet::{AccountIdentity, WalletCore};
 pub fn parse_account_id(raw: &str) -> Result<AccountId> {
     let bare = raw.rsplit('/').next().unwrap_or(raw);
     bare.parse()
-        .map_err(|_| anyhow!("not a valid 32-byte base58 account id: {raw}"))
+        .map_err(|source| ClientError::InvalidAccountId {
+            input: raw.to_owned(),
+            source,
+        })
 }
 
 pub fn load_program(path: &Path) -> Result<Program> {
-    let bytecode =
-        std::fs::read(path).with_context(|| format!("reading guest binary {}", path.display()))?;
-    Program::new(bytecode.into())
-        .map_err(|e| anyhow!("{} is not a valid guest program: {e:?}", path.display()))
+    let bytecode = std::fs::read(path).map_err(|source| ClientError::ReadProgram {
+        path: path.to_owned(),
+        source,
+    })?;
+    Program::new(bytecode.into()).map_err(|source| ClientError::InvalidProgram {
+        path: path.to_owned(),
+        source: Box::new(source),
+    })
 }
 
 /// Inputs for the factory's one-time launch and pool creation operation.
@@ -100,12 +111,10 @@ pub struct PrivateBuyRequest {
 /// Validates values the private router must not accept as no-op funding.
 pub fn validate_private_buy_request(request: PrivateBuyRequest) -> Result<()> {
     if request.gas_reserve == 0 {
-        return Err(anyhow!("private buy requires a non-zero gas reserve"));
+        return Err(ClientError::ZeroPrivateBuyGasReserve);
     }
     if request.amount_out == 0 || request.max_collateral_in == 0 {
-        return Err(anyhow!(
-            "private buy requires non-zero token output and collateral cap"
-        ));
+        return Err(ClientError::ZeroPrivateBuyAmount);
     }
 
     Ok(())
@@ -137,7 +146,7 @@ pub async fn submit_private_buy(
     wallet
         .store_config_changes()
         .await
-        .context("persisting the transient public account key")?;
+        .map_err(|source| ClientError::StoreTransientKey(source.into_boxed_dyn_error()))?;
 
     let (_, token_definition, pool) = factory_pool_addresses(
         namespace,
@@ -160,10 +169,10 @@ pub async fn submit_private_buy(
     ]);
     let source = wallet
         .resolve_private_account(request.from_private)
-        .ok_or_else(|| anyhow!("wallet does not control private collateral source"))?;
+        .ok_or(ClientError::PrivateCollateralSourceUnavailable)?;
     let destination = wallet
         .resolve_private_account(request.to_private)
-        .ok_or_else(|| anyhow!("wallet does not control private token destination"))?;
+        .ok_or(ClientError::PrivateTokenDestinationUnavailable)?;
     let accounts = vec![
         source,
         AccountIdentity::Public(transient_public_account),
@@ -198,7 +207,7 @@ pub async fn submit_private_buy(
         collateral_definition: request.collateral_definition,
     };
     let instruction_data = Program::serialize_instruction(instruction)
-        .context("serializing private buy instruction")?;
+        .map_err(|source| ClientError::EncodePrivateBuy(Box::new(source)))?;
     let (transaction_hash, _) = wallet
         .send_privacy_preserving_tx(
             accounts,
@@ -206,7 +215,7 @@ pub async fn submit_private_buy(
             &ProgramWithDependencies::new(private_buy_program.clone(), dependencies),
         )
         .await
-        .context("submitting atomic private purchase")?;
+        .map_err(|source| ClientError::SubmitPrivateBuy(Box::new(source)))?;
     Ok(PrivateBuyReceipt {
         transaction_hash,
         transient_public_account,
@@ -254,7 +263,9 @@ pub fn quote_buy(
     amount_out: u128,
     now: u64,
 ) -> Result<pool::SwapOutcome> {
-    anyhow::ensure!(pool_account.funded, "pool funding is pending");
+    if !pool_account.funded {
+        return Err(ClientError::PoolFundingPending);
+    }
     let mut pool = pool_account.pool.clone();
     pool.swap_exact_output(
         pool::TokenSide::Token1,
@@ -264,7 +275,7 @@ pub fn quote_buy(
         config.protocol_fee_bps,
         now,
     )
-    .map_err(|error| anyhow!("cannot quote purchase: {error:?}"))
+    .map_err(ClientError::QuoteBuy)
 }
 
 /// Quotes an exact-input sale against a snapshot of the current pool and fee config.
@@ -275,7 +286,9 @@ pub fn quote_sell(
     amount_in: u128,
     now: u64,
 ) -> Result<pool::SwapOutcome> {
-    anyhow::ensure!(pool_account.funded, "pool funding is pending");
+    if !pool_account.funded {
+        return Err(ClientError::PoolFundingPending);
+    }
     let mut pool = pool_account.pool.clone();
     pool.swap_exact_input(
         pool::TokenSide::Token0,
@@ -285,7 +298,7 @@ pub fn quote_sell(
         config.protocol_fee_bps,
         now,
     )
-    .map_err(|error| anyhow!("cannot quote sale: {error:?}"))
+    .map_err(ClientError::QuoteSell)
 }
 
 /// Quotes an exact-input purchase spending collateral against a pool snapshot.
@@ -295,7 +308,9 @@ pub fn quote_buy_with_collateral(
     collateral_in: u128,
     now: u64,
 ) -> Result<pool::SwapOutcome> {
-    anyhow::ensure!(pool_account.funded, "pool funding is pending");
+    if !pool_account.funded {
+        return Err(ClientError::PoolFundingPending);
+    }
     let mut pool = pool_account.pool.clone();
     pool.swap_exact_input(
         pool::TokenSide::Token1,
@@ -305,7 +320,7 @@ pub fn quote_buy_with_collateral(
         config.protocol_fee_bps,
         now,
     )
-    .map_err(|error| anyhow!("cannot quote collateral purchase: {error:?}"))
+    .map_err(ClientError::QuoteBuyWithCollateral)
 }
 
 /// A public program call with all account addresses and required signatures resolved.
@@ -330,8 +345,7 @@ pub fn build_create_sale_invocation(
         request.sale_reserve,
         request.virtual_token_reserve,
         request.virtual_collateral_reserve,
-    )
-    .map_err(|error| anyhow!("invalid factory curve parameters: {error}"))?;
+    )?;
     let (factory, token_definition, pool) = factory_pool_addresses(
         namespace,
         factory_program_id,
@@ -611,8 +625,8 @@ pub async fn load_curve_config(
     let account = wallet
         .get_account_public(config_id)
         .await
-        .context("reading the live curve configuration")?;
-    Config::try_from(&account.data).context("decoding the live curve configuration")
+        .map_err(|source| ClientError::ReadCurveConfig(source.into_boxed_dyn_error()))?;
+    Config::try_from(&account.data).map_err(ClientError::DecodeCurveConfig)
 }
 
 /// Reads the immutable launch policy and current factory lifecycle flags for a launch salt.
@@ -626,8 +640,8 @@ pub async fn load_factory_state(
     let account = wallet
         .get_account_public(factory_id)
         .await
-        .context("reading the factory launch state")?;
-    FactoryState::try_from(&account.data).context("decoding the factory launch state")
+        .map_err(|source| ClientError::ReadFactoryState(source.into_boxed_dyn_error()))?;
+    FactoryState::try_from(&account.data).map_err(ClientError::DecodeFactoryState)
 }
 
 /// Reads the current neutral curve reserves for a factory launch.
@@ -649,8 +663,8 @@ pub async fn load_factory_pool(
     let account = wallet
         .get_account_public(pool_id)
         .await
-        .context("reading the factory curve pool")?;
-    curve_core::PoolAccount::try_from(&account.data).context("decoding the factory curve pool")
+        .map_err(|source| ClientError::ReadFactoryPool(source.into_boxed_dyn_error()))?;
+    curve_core::PoolAccount::try_from(&account.data).map_err(ClientError::DecodeFactoryPool)
 }
 
 /// Signs and submits a public invocation through the configured project wallet.
@@ -663,9 +677,7 @@ pub async fn submit_public_invocation<I: Serialize>(
     invocation: PublicInvocation<I>,
 ) -> Result<HashType> {
     if program.id() != invocation.program_id {
-        return Err(anyhow!(
-            "program binary does not match the invocation program ID"
-        ));
+        return Err(ClientError::InvocationProgramMismatch);
     }
     let signing_keys = invocation
         .signer_accounts
@@ -673,20 +685,19 @@ pub async fn submit_public_invocation<I: Serialize>(
         .map(|account_id| {
             wallet
                 .get_account_public_signing_key(*account_id)
-                .ok_or_else(|| anyhow!("wallet has no public signing key for {account_id}"))
+                .ok_or(ClientError::PublicSigningKeyUnavailable(*account_id))
         })
         .collect::<Result<Vec<_>>>()?;
     let nonces = wallet
         .get_accounts_nonces(invocation.signer_accounts)
         .await
-        .context("querying signer account nonces")?;
+        .map_err(|source| ClientError::ReadSignerNonces(source.into_boxed_dyn_error()))?;
     let message = Message::try_new(
         invocation.program_id,
         invocation.account_ids,
         nonces,
         invocation.instruction,
-    )
-    .context("serializing launchpad instruction")?;
+    )?;
     let witnesses = WitnessSet::for_message(&message, &signing_keys);
     let hash = wallet
         .sequencer_client
@@ -694,7 +705,7 @@ pub async fn submit_public_invocation<I: Serialize>(
             message, witnesses,
         )))
         .await
-        .context("submitting public launchpad transaction")?;
+        .map_err(ClientError::SubmitPublicTransaction)?;
     wait_for_confirmation(wallet, hash).await?;
     Ok(hash)
 }
@@ -747,7 +758,7 @@ pub fn build_create_authority_invocation(
     uri: String,
 ) -> PublicInvocation<token_core::Instruction> {
     PublicInvocation {
-        program_id: curve_core::authority::TOKEN_PROGRAM_ID,
+        program_id: curve_core::TOKEN_PROGRAM_ID,
         account_ids: vec![definition, holder, metadata],
         signer_accounts: vec![definition, holder, metadata],
         instruction: token_core::Instruction::NewDefinitionWithMetadata {
@@ -770,7 +781,7 @@ pub fn build_transfer_authority_invocation(
     recipient: AccountId,
 ) -> PublicInvocation<token_core::Instruction> {
     PublicInvocation {
-        program_id: curve_core::authority::TOKEN_PROGRAM_ID,
+        program_id: curve_core::TOKEN_PROGRAM_ID,
         account_ids: vec![holder, recipient],
         signer_accounts: vec![holder, recipient],
         instruction: token_core::Instruction::Transfer {
@@ -809,24 +820,23 @@ pub fn build_private_authority_instruction<I: PrivateInstruction>(
     action: &PublicInvocation<I>,
     holder: AccountId,
 ) -> Result<private_flow_core::PrivateAuthorityInstruction> {
-    anyhow::ensure!(
-        action.signer_accounts == vec![holder],
-        "private authority action must use its NFT holder as the only signer"
-    );
+    if action.signer_accounts != vec![holder] {
+        return Err(ClientError::InvalidAuthoritySigners);
+    }
     let authority_index = action
         .account_ids
         .iter()
         .position(|id| *id == holder)
-        .context("action does not include the authority holder")?;
-    anyhow::ensure!(
-        action
-            .account_ids
-            .iter()
-            .collect::<std::collections::HashSet<_>>()
-            .len()
-            == action.account_ids.len(),
-        "action accounts must be distinct"
-    );
+        .ok_or(ClientError::AuthorityHolderMissing)?;
+    if action
+        .account_ids
+        .iter()
+        .collect::<std::collections::HashSet<_>>()
+        .len()
+        != action.account_ids.len()
+    {
+        return Err(ClientError::DuplicateActionAccounts);
+    }
     Ok(private_flow_core::PrivateAuthorityInstruction {
         program_id: action.program_id,
         instruction_data: Program::serialize_instruction(
@@ -848,21 +858,19 @@ pub async fn submit_private_authority<I: PrivateInstruction>(
 ) -> Result<PrivateBuyReceipt> {
     let source_identity = wallet
         .resolve_private_account(source)
-        .context("wallet does not control private authority source")?;
+        .ok_or(ClientError::PrivateAuthoritySourceUnavailable)?;
     let (holder, _) = wallet.create_new_account_public(None);
     wallet
         .store_config_changes()
         .await
-        .context("persisting authority holder key")?;
+        .map_err(|source| ClientError::StoreAuthorityKey(source.into_boxed_dyn_error()))?;
     let action = build(holder)?;
-    anyhow::ensure!(
-        action.program_id == action_program.id(),
-        "action program does not match supplied guest"
-    );
-    anyhow::ensure!(
-        !action.account_ids.contains(&source),
-        "private authority source cannot also be an action account"
-    );
+    if action.program_id != action_program.id() {
+        return Err(ClientError::AuthorityProgramMismatch);
+    }
+    if action.account_ids.contains(&source) {
+        return Err(ClientError::AuthoritySourceIsActionAccount);
+    }
     let instruction = build_private_authority_instruction(&action, holder)?;
     let mut identities = vec![source_identity];
     identities.extend(action.account_ids.iter().map(|id| {
@@ -886,7 +894,7 @@ pub async fn submit_private_authority<I: PrivateInstruction>(
             &ProgramWithDependencies::new(router.clone(), dependencies),
         )
         .await
-        .context("submitting atomic private authority action")?;
+        .map_err(|source| ClientError::SubmitPrivateAuthority(Box::new(source)))?;
     confirm_private_accounts(wallet, transaction_hash, &[source], &secrets).await?;
     Ok(PrivateBuyReceipt {
         transaction_hash,
@@ -904,22 +912,24 @@ pub async fn load_authority_identity(
     let account = if private {
         wallet
             .get_account_private(holder)
-            .context("private authority holding is unavailable")?
+            .ok_or(ClientError::PrivateAuthorityHoldingUnavailable)?
     } else {
-        wallet.get_account_public(holder).await?
+        wallet
+            .get_account_public(holder)
+            .await
+            .map_err(|source| ClientError::ReadAuthorityHolding(source.into_boxed_dyn_error()))?
     };
-    anyhow::ensure!(
-        account.program_owner == curve_core::authority::TOKEN_PROGRAM_ID,
-        "authority holding must belong to the token program"
-    );
-    match token_core::TokenHolding::try_from(&account.data)? {
+    if account.program_owner != curve_core::TOKEN_PROGRAM_ID {
+        return Err(ClientError::AuthorityHoldingProgramMismatch);
+    }
+    match token_core::TokenHolding::try_from(&account.data)
+        .map_err(ClientError::DecodeAuthorityHolding)?
+    {
         token_core::TokenHolding::NftMaster {
             definition_id,
             print_balance: 1,
         } => Ok(definition_id),
-        _ => Err(anyhow!(
-            "authority requires an NFT master with one remaining unit"
-        )),
+        _ => Err(ClientError::InvalidAuthorityHolding),
     }
 }
 
@@ -931,13 +941,15 @@ pub async fn transfer_authority(
 ) -> Result<HashType> {
     let from = parse_account_id(source)?;
     let to = parse_account_id(destination)?;
-    anyhow::ensure!(from != to, "authority source and destination must differ");
+    if from == to {
+        return Err(ClientError::SameAuthoritySourceAndDestination);
+    }
     load_authority_identity(wallet, from, source.starts_with("Private/")).await?;
     let identity = |value: &str, id| -> Result<AccountIdentity> {
         if value.starts_with("Private/") {
             wallet
                 .resolve_private_account(id)
-                .context("wallet does not control private holding")
+                .ok_or(ClientError::PrivateHoldingUnavailable)
         } else {
             Ok(AccountIdentity::Public(id))
         }
@@ -952,7 +964,8 @@ pub async fn transfer_authority(
                 })?,
                 &programs::token().into(),
             )
-            .await?;
+            .await
+            .map_err(|source| ClientError::TransferPrivateAuthority(Box::new(source)))?;
         let private_ids: Vec<_> = [(source, from), (destination, to)]
             .into_iter()
             .filter(|(name, _)| name.starts_with("Private/"))
@@ -977,13 +990,8 @@ async fn wait_for_confirmation(wallet: &WalletCore, hash: HashType) -> Result<Le
         wallet.poll_native_token_transfer(hash),
     )
     .await
-    .with_context(|| {
-        format!(
-            "confirmation timed out for transaction {}; synchronize the wallet and resume the same launch",
-            hex::encode(hash)
-        )
-    })?
-    .context("waiting for transaction inclusion")
+    .map_err(|source| ClientError::ConfirmationTimeout { hash, source })?
+    .map_err(|source| ClientError::ConfirmTransaction(source.into_boxed_dyn_error()))
 }
 
 async fn confirm_private_accounts(
@@ -993,12 +1001,12 @@ async fn confirm_private_accounts(
     secrets: &[lee_core::SharedSecretKey],
 ) -> Result<()> {
     let LeeTransaction::PrivacyPreserving(tx) = wait_for_confirmation(wallet, hash).await? else {
-        return Err(anyhow!("expected a private transaction"));
+        return Err(ClientError::ExpectedPrivateTransaction);
     };
-    anyhow::ensure!(
-        ids.len() == secrets.len() && ids.len() == tx.message.encrypted_private_post_states.len(),
-        "private result count mismatch"
-    );
+    if !(ids.len() == secrets.len() && ids.len() == tx.message.encrypted_private_post_states.len())
+    {
+        return Err(ClientError::PrivateResultCountMismatch);
+    }
     for (index, (id, secret)) in ids.iter().zip(secrets).enumerate() {
         let (kind, account) = lee_core::EncryptionScheme::decrypt(
             &tx.message.encrypted_private_post_states[index].ciphertext,
@@ -1006,15 +1014,19 @@ async fn confirm_private_accounts(
             &tx.message.new_commitments[index],
             u32::try_from(index)?,
         )
-        .context("decrypting confirmed private account")?;
+        .ok_or(ClientError::DecryptPrivateAccount)?;
         wallet
             .storage_mut()
             .key_chain_mut()
-            .insert_private_account(*id, kind, account)?;
+            .insert_private_account(*id, kind, account)
+            .map_err(|source| ClientError::UpdatePrivateAccount {
+                account: *id,
+                source: source.into_boxed_dyn_error(),
+            })?;
     }
     wallet
         .store_persistent_data()
-        .context("persisting confirmed private authority state")
+        .map_err(|source| ClientError::StorePrivateState(source.into_boxed_dyn_error()))
 }
 
 /// Builds permissionless collection for a pool in the selected namespace.
@@ -1048,7 +1060,12 @@ pub async fn prepare_fee_collection(
 ) -> Result<AccountId> {
     let config = load_curve_config(namespace, wallet, curve).await?;
     let ata = associated_token_account(config.treasury, collateral);
-    if wallet.get_account_public(ata).await? == lee_core::account::Account::default() {
+    if wallet
+        .get_account_public(ata)
+        .await
+        .map_err(|source| ClientError::ReadTreasuryAccount(source.into_boxed_dyn_error()))?
+        == lee_core::account::Account::default()
+    {
         let program = programs::ata();
         submit_public_invocation(
             wallet,
@@ -1063,7 +1080,7 @@ pub async fn prepare_fee_collection(
             },
         )
         .await
-        .context("initializing treasury collateral ATA")?;
+        .map_err(|source| ClientError::InitializeTreasuryAccount(Box::new(source)))?;
     }
     Ok(config.treasury)
 }
@@ -1078,17 +1095,18 @@ pub async fn collect_pool_fees(
 ) -> Result<Vec<HashType>> {
     let mut hashes = Vec::new();
     for &(pool, collateral) in pools {
-        let account = wallet.get_account_public(pool).await?;
-        anyhow::ensure!(
-            account.program_owner == curve.id(),
-            "pool belongs to another program"
-        );
-        let state =
-            curve_core::PoolAccount::try_from(&account.data).context("decoding collection pool")?;
-        anyhow::ensure!(
-            state.namespace == namespace && state.token1_definition_id == collateral,
-            "pool does not match selected namespace or collateral"
-        );
+        let account = wallet
+            .get_account_public(pool)
+            .await
+            .map_err(|source| ClientError::ReadCollectionPool(source.into_boxed_dyn_error()))?;
+        if account.program_owner != curve.id() {
+            return Err(ClientError::PoolProgramMismatch);
+        }
+        let state = curve_core::PoolAccount::try_from(&account.data)
+            .map_err(ClientError::DecodeCollectionPool)?;
+        if !(state.namespace == namespace && state.token1_definition_id == collateral) {
+            return Err(ClientError::PoolSelectionMismatch);
+        }
         let treasury = prepare_fee_collection(wallet, namespace, curve.id(), collateral).await?;
         hashes.push(
             submit_public_invocation(
@@ -1189,9 +1207,10 @@ mod tests {
                 instruction: Box::new(action.instruction.clone())
             }
         );
-        assert!(
-            super::build_private_authority_instruction(&action, AccountId::new([64; 32])).is_err()
-        );
+        assert!(matches!(
+            super::build_private_authority_instruction(&action, AccountId::new([64; 32])),
+            Err(super::ClientError::InvalidAuthoritySigners)
+        ));
     }
 
     #[test]
@@ -1328,7 +1347,12 @@ mod tests {
         )
         .expect_err("a curve must not reach its asymptote at the sale target");
 
-        assert!(error.to_string().contains("must exceed"));
+        assert!(matches!(
+            error,
+            super::ClientError::FactoryParameters(
+                factory_core::CreateError::VirtualTokenReserveNotAboveSaleReserve
+            )
+        ));
     }
 
     #[test]
@@ -1618,6 +1642,28 @@ mod tests {
         assert_eq!(pool.pool.k, 100_000, "quoting must not mutate the snapshot");
         assert_eq!(pool.pool.real_reserve0, 800);
         assert_eq!(pool.pool.real_reserve1, 100);
+        assert!(matches!(
+            quote_buy(&pool, &config, 801, 1),
+            Err(super::ClientError::QuoteBuy(
+                pool::SwapError::InsufficientRealOutputReserve
+            ))
+        ));
+        assert!(matches!(
+            quote_sell(&pool, &config, 0, 1),
+            Err(super::ClientError::QuoteSell(pool::SwapError::ZeroAmount))
+        ));
+        assert!(matches!(
+            quote_buy_with_collateral(&pool, &config, 0, 1),
+            Err(super::ClientError::QuoteBuyWithCollateral(
+                pool::SwapError::ZeroAmount
+            ))
+        ));
+        let mut pending = pool;
+        pending.funded = false;
+        assert!(matches!(
+            quote_buy(&pending, &config, 1, 1),
+            Err(super::ClientError::PoolFundingPending)
+        ));
     }
 
     #[test]
@@ -1684,6 +1730,9 @@ mod tests {
         })
         .expect_err("zero gas would make the public account unusable");
 
-        assert!(error.to_string().contains("non-zero gas reserve"));
+        assert!(matches!(
+            error,
+            super::ClientError::ZeroPrivateBuyGasReserve
+        ));
     }
 }

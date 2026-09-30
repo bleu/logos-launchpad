@@ -2,13 +2,15 @@
 //! account derivation, quoting, and transaction construction belong in
 //! `launchpad-client`.
 
+#![cfg_attr(not(test), warn(unused_crate_dependencies))]
+
 use std::{
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand, builder::Styles};
+use eyre::{Context, ContextCompat, Result};
 use launchpad_client::{
     BuyRequest, BuyWithCollateralRequest, CreateSaleRequest, PrivateBuyRequest, SellRequest,
     build_buy_invocation, build_buy_with_collateral_invocation,
@@ -20,42 +22,17 @@ use launchpad_client::{
 use serde::Serialize;
 use wallet::WalletCore;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error, strum::IntoStaticStr)]
+#[strum(serialize_all = "snake_case")]
 enum ErrorCategory {
+    #[error("slippage_floor")]
     SlippageFloor,
+    #[error("sale_reserve_overshoot")]
     SaleReserveOvershoot,
+    #[error("collateral_reserve_overshoot")]
     CollateralReserveOvershoot,
+    #[error("general")]
     General,
-}
-
-impl ErrorCategory {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::SlippageFloor => "slippage_floor",
-            Self::SaleReserveOvershoot => "sale_reserve_overshoot",
-            Self::CollateralReserveOvershoot => "collateral_reserve_overshoot",
-            Self::General => "general",
-        }
-    }
-}
-
-#[derive(Debug)]
-struct ClassifiedError {
-    category: ErrorCategory,
-}
-
-impl std::fmt::Display for ClassifiedError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.category.fmt(f)
-    }
-}
-
-impl std::error::Error for ClassifiedError {}
-
-impl std::fmt::Display for ErrorCategory {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str((*self).as_str())
-    }
 }
 
 #[derive(Debug, Parser)]
@@ -365,7 +342,7 @@ async fn main() {
                 serde_json::json!({
                     "status": "error",
                     "error": {
-                        "category": classify_error(&error).as_str(),
+                        "category": error_category(&error).to_string(),
                         "message": error.to_string(),
                     },
                 })
@@ -380,11 +357,15 @@ async fn main() {
 async fn run(json: bool, cli: Cli) -> Result<()> {
     match &cli.command {
         Command::CreateAuthority(args) => {
-            let mut wallet = WalletCore::from_env()?;
+            let mut wallet = WalletCore::from_env()
+                .map_err(|error| eyre::eyre!(error.into_boxed_dyn_error()))?;
             let (definition, _) = wallet.create_new_account_public(None);
             let (holder, _) = wallet.create_new_account_public(None);
             let (metadata, _) = wallet.create_new_account_public(None);
-            wallet.store_config_changes().await?;
+            wallet
+                .store_config_changes()
+                .await
+                .map_err(|error| eyre::eyre!(error.into_boxed_dyn_error()))?;
             let invocation = launchpad_client::build_create_authority_invocation(
                 definition,
                 holder,
@@ -400,7 +381,8 @@ async fn run(json: bool, cli: Cli) -> Result<()> {
             return Ok(());
         }
         Command::TransferAuthority(args) => {
-            let mut wallet = WalletCore::from_env()?;
+            let mut wallet = WalletCore::from_env()
+                .map_err(|error| eyre::eyre!(error.into_boxed_dyn_error()))?;
             let hash =
                 launchpad_client::transfer_authority(&mut wallet, &args.from, &args.to).await?;
             println!(
@@ -413,13 +395,14 @@ async fn run(json: bool, cli: Cli) -> Result<()> {
     }
     let router = cli.authority_router_path.as_deref();
     let namespace = parse_account_id(cli.namespace.as_deref().ok_or_else(|| {
-        anyhow::anyhow!("--namespace is required; use the authority NFT definition ID used to initialize the namespace")
+        eyre::eyre!("--namespace is required; use the authority NFT definition ID used to initialize the namespace")
     })?)?;
     match cli.command {
         Command::CreateSale(args) => create_sale(namespace, json, args, router).await,
         Command::Close(args) => close_factory_pool(namespace, json, args, router).await,
         Command::CollectFees(args) => {
-            let wallet = WalletCore::from_env()?;
+            let wallet = WalletCore::from_env()
+                .map_err(|error| eyre::eyre!(error.into_boxed_dyn_error()))?;
             let curve = load_program(&args.curve_program_path)?;
             let collateral = parse_account_id(&args.collateral_definition)?;
             let pools = args
@@ -449,7 +432,8 @@ async fn run(json: bool, cli: Cli) -> Result<()> {
         Command::CreateAuthority(_) | Command::TransferAuthority(_) => unreachable!(),
         Command::NamespaceInfo(args) => {
             let program = load_program(&args.curve_program_path)?;
-            let wallet = WalletCore::from_env()?;
+            let wallet = WalletCore::from_env()
+                .map_err(|error| eyre::eyre!(error.into_boxed_dyn_error()))?;
             let config = load_curve_config(namespace, &wallet, program.id()).await?;
             println!(
                 "{}",
@@ -459,7 +443,8 @@ async fn run(json: bool, cli: Cli) -> Result<()> {
         }
         Command::RenounceAdmin(args) => {
             let program = load_program(&args.curve_program_path)?;
-            let mut wallet = WalletCore::from_env()?;
+            let mut wallet = WalletCore::from_env()
+                .map_err(|error| eyre::eyre!(error.into_boxed_dyn_error()))?;
             let hash = submit_role(
                 &mut wallet,
                 &program,
@@ -484,25 +469,28 @@ async fn run(json: bool, cli: Cli) -> Result<()> {
     }
 }
 
-fn classify_error(error: &anyhow::Error) -> ErrorCategory {
-    if let Some(classified) = error.downcast_ref::<ClassifiedError>() {
-        return classified.category;
+fn error_category(error: &eyre::Report) -> ErrorCategory {
+    if let Some(category) = error.downcast_ref::<ErrorCategory>() {
+        return *category;
     }
-
-    let message = error.to_string().to_lowercase();
-    if message.contains("slippage") || message.contains("max_amount_in") {
-        ErrorCategory::SlippageFloor
-    } else if message.contains("sale reserve") || message.contains("real_reserve0") {
-        ErrorCategory::SaleReserveOvershoot
-    } else if message.contains("collateral reserve") || message.contains("real_reserve1") {
-        ErrorCategory::CollateralReserveOvershoot
-    } else {
-        ErrorCategory::General
+    let Some(error) = error.downcast_ref::<launchpad_client::ClientError>() else {
+        return ErrorCategory::General;
+    };
+    use launchpad_client::ClientError;
+    use pool::SwapError;
+    match error {
+        ClientError::QuoteBuy(SwapError::SlippageExceeded)
+        | ClientError::QuoteBuyWithCollateral(SwapError::SlippageExceeded)
+        | ClientError::QuoteSell(SwapError::SlippageExceeded) => ErrorCategory::SlippageFloor,
+        ClientError::QuoteBuy(SwapError::InsufficientRealOutputReserve)
+        | ClientError::QuoteBuyWithCollateral(SwapError::InsufficientRealOutputReserve) => {
+            ErrorCategory::SaleReserveOvershoot
+        }
+        ClientError::QuoteSell(SwapError::InsufficientRealOutputReserve) => {
+            ErrorCategory::CollateralReserveOvershoot
+        }
+        _ => ErrorCategory::General,
     }
-}
-
-fn classified(category: ErrorCategory) -> anyhow::Error {
-    ClassifiedError { category }.into()
 }
 
 async fn configure(
@@ -514,7 +502,8 @@ async fn configure(
     let curve_program = load_program(&args.curve_program_path)?;
     let admin = parse_account_id(&args.admin)?;
     let treasury = parse_account_id(&args.treasury)?;
-    let mut wallet = WalletCore::from_env()?;
+    let mut wallet =
+        WalletCore::from_env().map_err(|error| eyre::eyre!(error.into_boxed_dyn_error()))?;
     let current_authority = launchpad_client::load_authority_identity(
         &wallet,
         admin,
@@ -577,7 +566,9 @@ async fn withdraw_factory_proceeds(
     let factory_program = load_program(&args.factory_program_path)?;
     let curve_program = load_program(&args.curve_program_path)?;
     let collateral_definition = parse_account_id(&args.collateral_definition)?;
-    let mut wallet = WalletCore::from_env().context("opening the project wallet")?;
+    let mut wallet = WalletCore::from_env()
+        .map_err(|error| eyre::eyre!(error.into_boxed_dyn_error()))
+        .context("opening the project wallet")?;
     let router = router.map(load_program).transpose()?;
     let receipt = launchpad_client::FactorySession::new(
         &mut wallet,
@@ -596,7 +587,9 @@ async fn price(namespace: lee::AccountId, json: bool, args: PriceArgs) -> Result
     let factory_program = load_program(&args.launch.factory_program_path)?;
     let curve_program = load_program(&args.launch.curve_program_path)?;
     let collateral_definition = parse_account_id(&args.launch.collateral_definition)?;
-    let wallet = WalletCore::from_env().context("opening the project wallet")?;
+    let wallet = WalletCore::from_env()
+        .map_err(|error| eyre::eyre!(error.into_boxed_dyn_error()))
+        .context("opening the project wallet")?;
     let pool = load_factory_pool(
         namespace,
         &wallet,
@@ -618,7 +611,7 @@ async fn price(namespace: lee::AccountId, json: bool, args: PriceArgs) -> Result
             "buy",
             quote_buy_with_collateral(&pool, &config, collateral, now)?,
         ),
-        _ => anyhow::bail!("provide exactly one of --tokens or --collateral"),
+        _ => eyre::bail!("provide exactly one of --tokens or --collateral"),
     };
     let output = PriceQuote {
         namespace: namespace.to_string(),
@@ -651,7 +644,9 @@ async fn sale_snapshot(namespace: lee::AccountId, json: bool, args: LaunchReadAr
     let factory_program = load_program(&args.factory_program_path)?;
     let curve_program = load_program(&args.curve_program_path)?;
     let collateral_definition = parse_account_id(&args.collateral_definition)?;
-    let wallet = WalletCore::from_env().context("opening the project wallet")?;
+    let wallet = WalletCore::from_env()
+        .map_err(|error| eyre::eyre!(error.into_boxed_dyn_error()))
+        .context("opening the project wallet")?;
     let factory = load_factory_state(
         namespace,
         &wallet,
@@ -747,7 +742,9 @@ async fn buy(namespace: lee::AccountId, json: bool, args: BuyArgs) -> Result<()>
     let curve_program = load_program(&args.trade.curve_program_path)?;
     let participant = parse_account_id(&args.trade.participant)?;
     let collateral_definition = parse_account_id(&args.trade.collateral_definition)?;
-    let wallet = WalletCore::from_env().context("opening the project wallet")?;
+    let wallet = WalletCore::from_env()
+        .map_err(|error| eyre::eyre!(error.into_boxed_dyn_error()))
+        .context("opening the project wallet")?;
     let config = load_curve_config(namespace, &wallet, curve_program.id()).await?;
     let pool = load_factory_pool(
         namespace,
@@ -759,7 +756,7 @@ async fn buy(namespace: lee::AccountId, json: bool, args: BuyArgs) -> Result<()>
     )
     .await?;
     if args.tokens > pool.pool.real_reserve0 {
-        return Err(classified(ErrorCategory::SaleReserveOvershoot));
+        return Err(ErrorCategory::SaleReserveOvershoot.into());
     }
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -767,7 +764,7 @@ async fn buy(namespace: lee::AccountId, json: bool, args: BuyArgs) -> Result<()>
         .as_secs();
     let quote = quote_buy(&pool, &config, args.tokens, now)?;
     if quote.amount_in > args.max_collateral {
-        return Err(classified(ErrorCategory::SlippageFloor));
+        return Err(ErrorCategory::SlippageFloor.into());
     }
     let invocation = build_buy_invocation(
         namespace,
@@ -799,7 +796,9 @@ async fn buy_with_collateral(
     let curve_program = load_program(&args.trade.curve_program_path)?;
     let participant = parse_account_id(&args.trade.participant)?;
     let collateral_definition = parse_account_id(&args.trade.collateral_definition)?;
-    let wallet = WalletCore::from_env().context("opening the project wallet")?;
+    let wallet = WalletCore::from_env()
+        .map_err(|error| eyre::eyre!(error.into_boxed_dyn_error()))
+        .context("opening the project wallet")?;
     let config = load_curve_config(namespace, &wallet, curve_program.id()).await?;
     let pool = load_factory_pool(
         namespace,
@@ -816,7 +815,7 @@ async fn buy_with_collateral(
         .as_secs();
     let quote = quote_buy_with_collateral(&pool, &config, args.collateral, now)?;
     if quote.amount_out < args.min_tokens {
-        return Err(classified(ErrorCategory::SlippageFloor));
+        return Err(ErrorCategory::SlippageFloor.into());
     }
     let invocation = build_buy_with_collateral_invocation(
         namespace,
@@ -846,7 +845,9 @@ async fn private_buy(namespace: lee::AccountId, args: PrivateBuyArgs) -> Result<
     let collateral_definition = parse_account_id(&args.collateral_definition)?;
     let from_private = parse_account_id(&args.from_private)?;
     let to_private = parse_account_id(&args.to_private)?;
-    let mut wallet = WalletCore::from_env().context("opening the project wallet")?;
+    let mut wallet = WalletCore::from_env()
+        .map_err(|error| eyre::eyre!(error.into_boxed_dyn_error()))
+        .context("opening the project wallet")?;
     let receipt = submit_private_buy(
         namespace,
         &mut wallet,
@@ -878,7 +879,9 @@ async fn sell(namespace: lee::AccountId, json: bool, args: SellArgs) -> Result<(
     let curve_program = load_program(&args.trade.curve_program_path)?;
     let participant = parse_account_id(&args.trade.participant)?;
     let collateral_definition = parse_account_id(&args.trade.collateral_definition)?;
-    let wallet = WalletCore::from_env().context("opening the project wallet")?;
+    let wallet = WalletCore::from_env()
+        .map_err(|error| eyre::eyre!(error.into_boxed_dyn_error()))
+        .context("opening the project wallet")?;
     let config = load_curve_config(namespace, &wallet, curve_program.id()).await?;
     let pool = load_factory_pool(
         namespace,
@@ -895,10 +898,10 @@ async fn sell(namespace: lee::AccountId, json: bool, args: SellArgs) -> Result<(
         .as_secs();
     let quote = quote_sell(&pool, &config, args.tokens, now)?;
     if quote.amount_out > pool.pool.real_reserve1 {
-        return Err(classified(ErrorCategory::CollateralReserveOvershoot));
+        return Err(ErrorCategory::CollateralReserveOvershoot.into());
     }
     if quote.amount_out < args.min_collateral {
-        return Err(classified(ErrorCategory::SlippageFloor));
+        return Err(ErrorCategory::SlippageFloor.into());
     }
     let invocation = build_sell_invocation(
         namespace,
@@ -963,7 +966,9 @@ async fn close_factory_pool(
         );
         Ok(invocation)
     };
-    let mut wallet = WalletCore::from_env().context("opening the project wallet")?;
+    let mut wallet = WalletCore::from_env()
+        .map_err(|error| eyre::eyre!(error.into_boxed_dyn_error()))
+        .context("opening the project wallet")?;
     let transaction_hash = submit_role(
         &mut wallet,
         &factory_program,
@@ -1009,7 +1014,9 @@ async fn claim_creator_allocation(
         );
         Ok(invocation)
     };
-    let mut wallet = WalletCore::from_env().context("opening the project wallet")?;
+    let mut wallet = WalletCore::from_env()
+        .map_err(|error| eyre::eyre!(error.into_boxed_dyn_error()))
+        .context("opening the project wallet")?;
     let transaction_hash = submit_role(
         &mut wallet,
         &factory_program,
@@ -1056,7 +1063,9 @@ async fn create_sale(
         end_timestamp: args.end_timestamp,
         collateral_definition,
     };
-    let mut wallet = WalletCore::from_env().context("opening the project wallet")?;
+    let mut wallet = WalletCore::from_env()
+        .map_err(|error| eyre::eyre!(error.into_boxed_dyn_error()))
+        .context("opening the project wallet")?;
     let router = router.map(load_program).transpose()?;
     let receipt = launchpad_client::FactorySession::new(
         &mut wallet,
@@ -1107,7 +1116,9 @@ async fn submit_role<I: launchpad_client::PrivateInstruction>(
     dependencies: Vec<lee::program::Program>,
     holder: &str,
     router: Option<&Path>,
-    build: impl FnOnce(lee::AccountId) -> Result<launchpad_client::PublicInvocation<I>>,
+    build: impl FnOnce(
+        lee::AccountId,
+    ) -> launchpad_client::Result<launchpad_client::PublicInvocation<I>>,
 ) -> Result<common::HashType> {
     if holder.starts_with("Private/") {
         let router = load_program(
@@ -1124,7 +1135,7 @@ async fn submit_role<I: launchpad_client::PrivateInstruction>(
         .await?
         .transaction_hash)
     } else {
-        submit_public_invocation(wallet, program, build(parse_account_id(holder)?)?).await
+        Ok(submit_public_invocation(wallet, program, build(parse_account_id(holder)?)?).await?)
     }
 }
 
@@ -1480,16 +1491,93 @@ mod tests {
 
     #[test]
     fn json_error_categories_are_stable() {
-        for (message, expected) in [
-            ("slippage cap exceeded", "slippage_floor"),
-            ("sale reserve exhausted", "sale_reserve_overshoot"),
+        for (category, expected) in [
+            (ErrorCategory::SlippageFloor, "slippage_floor"),
             (
-                "collateral reserve exhausted",
+                ErrorCategory::SaleReserveOvershoot,
+                "sale_reserve_overshoot",
+            ),
+            (
+                ErrorCategory::CollateralReserveOvershoot,
                 "collateral_reserve_overshoot",
             ),
+            (ErrorCategory::General, "general"),
         ] {
-            assert_eq!(classify_error(&anyhow::anyhow!(message)).as_str(), expected);
+            let label: &'static str = category.into();
+            assert_eq!(label, expected);
+            assert_eq!(category.to_string(), expected);
+            assert_eq!(error_category(&eyre::Report::new(category)), category);
         }
+    }
+
+    #[test]
+    fn quote_error_variants_select_categories() {
+        use launchpad_client::ClientError;
+        use pool::SwapError;
+        for (error, category) in [
+            (
+                ClientError::QuoteBuy(SwapError::SlippageExceeded),
+                ErrorCategory::SlippageFloor,
+            ),
+            (
+                ClientError::QuoteSell(SwapError::SlippageExceeded),
+                ErrorCategory::SlippageFloor,
+            ),
+            (
+                ClientError::QuoteBuyWithCollateral(SwapError::SlippageExceeded),
+                ErrorCategory::SlippageFloor,
+            ),
+            (
+                ClientError::QuoteBuy(SwapError::InsufficientRealOutputReserve),
+                ErrorCategory::SaleReserveOvershoot,
+            ),
+            (
+                ClientError::QuoteBuyWithCollateral(SwapError::InsufficientRealOutputReserve),
+                ErrorCategory::SaleReserveOvershoot,
+            ),
+            (
+                ClientError::QuoteSell(SwapError::InsufficientRealOutputReserve),
+                ErrorCategory::CollateralReserveOvershoot,
+            ),
+            (
+                ClientError::QuoteBuy(SwapError::Closed),
+                ErrorCategory::General,
+            ),
+        ] {
+            let report = eyre::Report::new(error).wrap_err("reading a quote");
+            assert_eq!(error_category(&report), category);
+        }
+    }
+
+    #[test]
+    fn error_text_cannot_select_a_category() {
+        for message in [
+            "slippage",
+            "max_amount_in",
+            "sale reserve",
+            "real_reserve0",
+            "collateral reserve",
+            "real_reserve1",
+        ] {
+            assert_eq!(
+                error_category(&eyre::eyre!(message)),
+                ErrorCategory::General
+            );
+            let error = launchpad_client::ClientError::ReadFactoryPool(Box::new(
+                std::io::Error::other(message),
+            ));
+            assert_eq!(
+                error_category(&eyre::Report::new(error)),
+                ErrorCategory::General
+            );
+        }
+        let error = launchpad_client::ClientError::SubmitPrivateBuy(Box::new(
+            wallet::ExecutionFailureKind::InsufficientFundsError,
+        ));
+        assert_eq!(
+            error_category(&eyre::Report::new(error)),
+            ErrorCategory::General
+        );
     }
 
     #[test]

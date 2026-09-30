@@ -1,7 +1,8 @@
 [package]
 name = "launchpad-cli"
 version = "0.1.0"
-edition = "2024"
+edition.workspace = true
+rust-version.workspace = true
 license = "MIT"
 
 [[bin]]
@@ -9,7 +10,9 @@ name = "launchpad"
 path = "src/main.rs"
 
 [dependencies]
-anyhow.workspace = true
+eyre.workspace = true
+thiserror.workspace = true
+strum.workspace = true
 common.workspace = true
 lee.workspace = true
 clap.workspace = true

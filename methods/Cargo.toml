@@ -1,10 +1,21 @@
 [package]
 name = "launchpad_methods"
 version = "0.1.0"
-edition = "2024"
+edition.workspace = true
+rust-version.workspace = true
 license = "MIT"
 
 [workspace]
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.94"
+
+[workspace.lints.clippy]
+all = { level = "deny", priority = -1 }
+
+[lints]
+workspace = true
 
 [build-dependencies]
 risc0-build = "3.0.5"

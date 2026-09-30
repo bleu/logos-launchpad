@@ -9,6 +9,8 @@
 //! returned outcome into account post-states plus typed token-settlement values. The guest/token
 //! adapter turns those settlements into chained calls.
 
+#![cfg_attr(not(test), warn(unused_crate_dependencies))]
+
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
     account::{AccountId, Data},
@@ -17,12 +19,17 @@ use lee_core::{
 use pool::Pool;
 use serde::{Deserialize, Serialize};
 
-pub mod authority;
-pub mod dispatch;
-pub mod pool_create;
-pub mod pool_lifecycle;
-pub mod pool_swap;
-pub mod update_config;
+mod authority;
+mod dispatch;
+mod pool_create;
+mod pool_lifecycle;
+mod pool_swap;
+mod update_config;
+
+pub use authority::{TOKEN_PROGRAM_ID, identity};
+pub use dispatch::{process_instruction, use_public_authorizations};
+pub use pool_create::after_ata_creation;
+pub use pool_swap::validated_config;
 
 #[cfg(test)]
 mod tests;

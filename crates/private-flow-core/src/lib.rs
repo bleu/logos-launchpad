@@ -1,4 +1,7 @@
-//! Wire instruction for the private-buy router guest.
+//! Wire inputs for private purchases and authority-NFT handoffs.
+//! The SDK builds the transaction; guest entry points execute the chained calls.
+
+#![cfg_attr(not(test), warn(unused_crate_dependencies))]
 
 use lee_core::{account::AccountId, program::ProgramId};
 use serde::{Deserialize, Serialize};
@@ -42,7 +45,7 @@ pub fn authority_action(
     let (source, action_accounts) = pre_states
         .split_first()
         .expect("Authority source is required");
-    let identity = curve_core::authority::identity(source);
+    let identity = curve_core::identity(source);
     let transient = action_accounts
         .get(instruction.authority_index)
         .expect("Authority account index is out of bounds");
@@ -60,7 +63,7 @@ pub fn authority_action(
         "Authority source must differ from transient holder"
     );
     let mut funded = transient.clone();
-    funded.account.program_owner = curve_core::authority::TOKEN_PROGRAM_ID;
+    funded.account.program_owner = curve_core::TOKEN_PROGRAM_ID;
     funded.account.data = source.account.data.clone();
     let mut empty_source = source.clone();
     empty_source.account.data = Data::from(&TokenHolding::NftMaster {
@@ -74,7 +77,7 @@ pub fn authority_action(
     };
     let calls = vec![
         ChainedCall::new(
-            curve_core::authority::TOKEN_PROGRAM_ID,
+            curve_core::TOKEN_PROGRAM_ID,
             vec![source.clone(), transient.clone()],
             &transfer,
         ),
@@ -85,7 +88,7 @@ pub fn authority_action(
             pda_seeds: vec![],
         },
         ChainedCall::new(
-            curve_core::authority::TOKEN_PROGRAM_ID,
+            curve_core::TOKEN_PROGRAM_ID,
             vec![funded, empty_source],
             &transfer,
         ),
@@ -111,7 +114,7 @@ mod authority_tests {
             account_id: AccountId::new([32; 32]),
             is_authorized: true,
             account: Account {
-                program_owner: curve_core::authority::TOKEN_PROGRAM_ID,
+                program_owner: curve_core::TOKEN_PROGRAM_ID,
                 data: Data::from(&token_core::TokenHolding::NftMaster {
                     definition_id: namespace,
                     print_balance: 1,
@@ -147,7 +150,7 @@ mod authority_tests {
         let action: curve_core::Instruction =
             risc0_zkvm::serde::from_slice(&calls[1].instruction_data).unwrap();
         let (action_post, _) =
-            curve_core::dispatch::process_instruction(calls[1].pre_states.clone(), action, [7; 8]);
+            curve_core::process_instruction(calls[1].pre_states.clone(), action, [7; 8]);
         lee_core::program::validate_execution(&calls[1].pre_states, &action_post, [7; 8]).unwrap();
         assert_eq!(
             curve_core::Config::try_from(&action_post[0].account().data)

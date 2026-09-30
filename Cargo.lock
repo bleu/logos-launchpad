@@ -1918,6 +1918,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "eyre"
+version = "0.6.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c08309dbcc659c5549a24ddb9b27027640641b282ef5768267c7e675558986a3"
+dependencies = [
+ "autocfg",
+ "indenter",
+ "once_cell",
+]
+
+[[package]]
 name = "factory-core"
 version = "0.1.0"
 dependencies = [
@@ -2868,6 +2879,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4ee796ad498c8d9a1d68e477df8f754ed784ef875de1414ebdaf169f70a6a784"
 
 [[package]]
+name = "indenter"
+version = "0.3.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "964de6e86d545b246d84badc0fef527924ace5134f30641c203ef52ba83f58d5"
+
+[[package]]
 name = "indexmap"
 version = "1.9.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3337,9 +3354,9 @@ dependencies = [
 name = "launchpad-cli"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "clap",
  "common",
+ "eyre",
  "hex",
  "launchpad-client",
  "lee",
@@ -3347,6 +3364,8 @@ dependencies = [
  "programs",
  "serde",
  "serde_json",
+ "strum",
+ "thiserror 2.0.20",
  "tokio",
  "wallet",
 ]
@@ -3355,7 +3374,6 @@ dependencies = [
 name = "launchpad-client"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "associated_token_account_core",
  "clock_core",
  "common",
@@ -3370,6 +3388,8 @@ dependencies = [
  "risc0-zkvm",
  "sequencer_service_rpc",
  "serde",
+ "strum",
+ "thiserror 2.0.20",
  "token_core",
  "tokio",
  "wallet",

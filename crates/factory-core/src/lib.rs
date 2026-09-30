@@ -4,6 +4,10 @@
 //! prepares and funds the curve pool across four resumable, individually atomic stages.
 //! The factory owns the token-definition PDA and exposes no mint or metadata-update
 //! instruction: this is the authority-revocation boundary for the pinned token API.
+//! The existing guest error API keeps hand-written implementations to avoid changing
+//! its dependency boundary; SDK errors use host-side derives.
+
+#![cfg_attr(not(test), warn(unused_crate_dependencies))]
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use curve_core::{DepletionSide, Instruction as CurveInstruction, PoolAccount, compute_pool_pda};
@@ -304,7 +308,7 @@ pub fn create_factory_pool(
     factory_program_id: ProgramId,
     curve_program_id: ProgramId,
 ) -> (Vec<AccountPostState>, Vec<ChainedCall>) {
-    curve_core::pool_swap::validated_config(&config, namespace, curve_program_id);
+    curve_core::validated_config(&config, namespace, curve_program_id);
     assert!(!name.is_empty(), "token name must not be empty");
     assert!(!uri.is_empty(), "token metadata URI must not be empty");
     let supply = total_supply(sale_reserve, dex_seed_reserve, creator_allocation)
@@ -346,7 +350,7 @@ pub fn create_factory_pool(
         "Creator escrow ID does not match PDA"
     );
     assert!(creator.is_authorized, "Creator authorization is missing");
-    curve_core::authority::identity(&creator);
+    curve_core::identity(&creator);
     let now = trusted_time(&clock);
     assert!(
         end_timestamp.is_none_or(|timestamp| timestamp > now),
@@ -387,7 +391,7 @@ pub fn create_factory_pool(
         curve_program_id,
         creator_commitment: compute_creator_commitment(
             namespace,
-            curve_core::authority::identity(&creator),
+            curve_core::identity(&creator),
             launch_salt,
         ),
         creator_escrow_id: creator_escrow.account_id,
@@ -396,7 +400,7 @@ pub fn create_factory_pool(
     };
     let calls = vec![
         ChainedCall::new(
-            curve_core::authority::TOKEN_PROGRAM_ID,
+            curve_core::TOKEN_PROGRAM_ID,
             vec![
                 AccountWithMetadata {
                     is_authorized: true,
@@ -541,10 +545,10 @@ pub fn continue_creation(
             sender.is_authorized = true;
             calls.push(
                 ChainedCall::new(
-                    curve_core::authority::TOKEN_PROGRAM_ID,
+                    curve_core::TOKEN_PROGRAM_ID,
                     vec![
                         sender.clone(),
-                        curve_core::pool_create::after_ata_creation(&factory_token, &definition),
+                        curve_core::after_ata_creation(&factory_token, &definition),
                     ],
                     &token_core::Instruction::Transfer {
                         amount_to_transfer: amount,
@@ -562,7 +566,7 @@ pub fn continue_creation(
                 sender.account.data = Data::from(&holding);
                 calls.push(
                     ChainedCall::new(
-                        curve_core::authority::TOKEN_PROGRAM_ID,
+                        curve_core::TOKEN_PROGRAM_ID,
                         vec![
                             sender,
                             AccountWithMetadata {
@@ -654,7 +658,7 @@ fn validate_creator(
     assert_eq!(
         compute_creator_commitment(
             state.namespace,
-            curve_core::authority::identity(creator),
+            curve_core::identity(creator),
             state.launch_salt
         ),
         state.creator_commitment,
@@ -689,11 +693,11 @@ pub fn claim_creator_allocation(
         "Factory account ID does not match PDA"
     );
     assert!(creator.is_authorized, "Creator authorization is missing");
-    curve_core::authority::identity(&creator);
+    curve_core::identity(&creator);
     assert_eq!(
         compute_creator_commitment(
             state.namespace,
-            curve_core::authority::identity(&creator),
+            curve_core::identity(&creator),
             state.launch_salt
         ),
         state.creator_commitment,
@@ -768,10 +772,7 @@ pub fn claim_creator_allocation(
                         is_authorized: true,
                         ..escrow.clone()
                     },
-                    curve_core::pool_create::after_ata_creation(
-                        &creator_holding,
-                        &token_definition,
-                    ),
+                    curve_core::after_ata_creation(&creator_holding, &token_definition),
                 ],
                 &token_core::Instruction::Transfer {
                     amount_to_transfer: amount,
@@ -820,11 +821,11 @@ pub fn close_factory_pool(
         "Factory account ID does not match PDA"
     );
     assert!(creator.is_authorized, "Creator authorization is missing");
-    curve_core::authority::identity(&creator);
+    curve_core::identity(&creator);
     assert_eq!(
         compute_creator_commitment(
             state.namespace,
-            curve_core::authority::identity(&creator),
+            curve_core::identity(&creator),
             state.launch_salt
         ),
         state.creator_commitment,
@@ -1070,7 +1071,7 @@ fn payout_calls(
     if amount == 0 {
         return vec![];
     }
-    let initialized = curve_core::pool_create::after_ata_creation(&recipient, &definition);
+    let initialized = curve_core::after_ata_creation(&recipient, &definition);
     vec![
         ChainedCall::new(
             ASSOCIATED_TOKEN_ACCOUNT_PROGRAM_ID,
@@ -1210,7 +1211,7 @@ pub fn process_instruction(
             if pre_states.len() == 13 {
                 let state =
                     FactoryState::try_from(&pre_states[0].account.data).expect("valid factory");
-                let config = curve_core::pool_swap::validated_config(
+                let config = curve_core::validated_config(
                     &pre_states[12],
                     state.namespace,
                     state.curve_program_id,
@@ -1271,7 +1272,7 @@ pub fn process_instruction(
     if private {
         for call in &mut calls {
             if call.program_id != ASSOCIATED_TOKEN_ACCOUNT_PROGRAM_ID
-                && call.program_id != curve_core::authority::TOKEN_PROGRAM_ID
+                && call.program_id != curve_core::TOKEN_PROGRAM_ID
             {
                 let instruction: CurveInstruction =
                     risc0_zkvm::serde::from_slice(&call.instruction_data)
@@ -1283,7 +1284,7 @@ pub fn process_instruction(
             }
         }
     } else {
-        curve_core::dispatch::use_public_authorizations(&original, &mut calls, factory_program_id);
+        curve_core::use_public_authorizations(&original, &mut calls, factory_program_id);
     }
     (posts, calls)
 }
@@ -1327,7 +1328,7 @@ mod tests {
         AccountWithMetadata {
             account: if is_authorized {
                 Account {
-                    program_owner: curve_core::authority::TOKEN_PROGRAM_ID,
+                    program_owner: curve_core::TOKEN_PROGRAM_ID,
                     data: Data::from(&TokenHolding::NftMaster {
                         definition_id: account_id,
                         print_balance: 1,
@@ -1424,7 +1425,7 @@ mod tests {
         let (factory, state) = delayed_factory(&original);
         let mut next = original.clone();
         next.account_id = AccountId::new([77; 32]);
-        next.account.program_owner = curve_core::authority::TOKEN_PROGRAM_ID;
+        next.account.program_owner = curve_core::TOKEN_PROGRAM_ID;
         next.account.data = Data::from(&TokenHolding::NftMaster {
             definition_id: original.account_id,
             print_balance: 1,

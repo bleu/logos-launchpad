@@ -14,7 +14,7 @@ This repository contains the imported curve PoC and weighted-math library. They 
 
 Root workspace commands do not include the nested math, guest or fuzz workspaces. Keep their lockfiles separate. The future LBP can depend on `packages/weighted-math/crates/weighted-math-core/` by Cargo path. No LBP package exists yet.
 
-The root `rust-toolchain.toml` selects Rust 1.94.0. Host tests require Cargo and access to the dependencies in the lockfiles. Guest builds and parity also require the RISC0 tools; the curve build uses the `lgs` CLI. Fuzzing needs nightly Rust and `cargo-fuzz`.
+Both host workspaces declare edition 2024 and a minimum Rust version of 1.94. The root `rust-toolchain.toml` selects Rust 1.94.0. Host tests require Cargo and access to the dependencies in the lockfiles. Guest builds and parity also require the RISC0 tools; the curve build uses the `lgs` CLI. Fuzzing needs nightly Rust and `cargo-fuzz`.
 
 ## Host checks
 
@@ -23,23 +23,33 @@ Run from the repository root:
 ```sh
 cargo test --workspace --locked
 cargo fmt --all -- --check
-cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 cargo test --manifest-path packages/weighted-math/Cargo.toml --workspace --locked
 cargo fmt --manifest-path packages/weighted-math/Cargo.toml --all -- --check
-cargo clippy --manifest-path packages/weighted-math/Cargo.toml --workspace --all-targets --locked -- -D warnings
+cargo clippy --manifest-path packages/weighted-math/Cargo.toml --workspace --all-targets --all-features --locked -- -D warnings
 bash verify/check-pins.sh
 bash verify/check-idl.sh
 ```
 
 `check-pins.sh` checks the LEZ revision in the root and guest manifests against `scaffold.toml`. `check-idl.sh` requires `lgs` and checks generated on-chain IDLs against `idl-src/`. These checks do not cover the planned module `.lidl` interface.
 
+## Guest integration tests
+
+Client tests that execute guest programs use the non-default `guest-tests` feature. Build the guest ELFs with `cargo build --manifest-path methods/Cargo.toml --locked`. The `r0vm` executable must be on `PATH`, or `RISC0_SERVER_PATH` must point to it. Then run:
+
+```sh
+RISC0_DEV_MODE=1 cargo test -p launchpad-client --features guest-tests --test private_authority --test settlement --locked
+```
+
+This lane checks private-authority and settlement execution. Missing artifacts are failures when the lane is selected. Host-only tests do not execute it. All-feature clippy compiles these test targets without running their guests.
+
 ## Known limits
 
-Ignored tests are not passes. Client integration tests need guest artifacts and an executor; the weighted-math error-margin test is also ignored by default. The [math README](../../packages/weighted-math/README.md) describes its fixtures, bounds and separate verification tools.
+A passing host suite does not prove guest execution. The math margin test runs with the host suite; the [math README](../../packages/weighted-math/README.md) describes fixtures, bounds and separate verification tools.
 
 Live E2E verification remains future work. Use disposable wallet and localnet state for those checks.
 
-The imported formatter settings include nightly-only options. Stable Rust can report warnings for those options even when the formatting check passes. No source CI workflows were enabled by this import. Reproducible guest builds, CI coverage and live platform tests remain separate work.
+No source CI workflows were enabled by this import. Reproducible guest builds, CI coverage and live platform tests remain separate work.
 
 ## Licenses
 

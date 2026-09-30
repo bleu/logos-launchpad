@@ -39,16 +39,17 @@ impl<'a> FactorySession<'a> {
         let account = self
             .wallet
             .get_account_public(compute_factory_pda(self.namespace, self.factory.id(), salt))
-            .await?;
+            .await
+            .map_err(|source| ClientError::ReadFactoryState(source.into_boxed_dyn_error()))?;
         if account == lee_core::account::Account::default() {
             return Ok(None);
         }
-        anyhow::ensure!(
-            account.program_owner == self.factory.id(),
-            "factory account belongs to another program"
-        );
+        if account.program_owner != self.factory.id() {
+            return Err(ClientError::FactoryProgramMismatch);
+        }
         Ok(Some(
-            FactoryState::try_from(&account.data).context("decoding resumable factory state")?,
+            FactoryState::try_from(&account.data)
+                .map_err(ClientError::DecodeResumableFactoryState)?,
         ))
     }
     async fn submit(
@@ -61,7 +62,7 @@ impl<'a> FactorySession<'a> {
             let result = submit_private_authority(
                 self.wallet,
                 self.router
-                    .context("private authority router is required")?,
+                    .ok_or(ClientError::PrivateAuthorityRouterRequired)?,
                 self.factory,
                 vec![self.curve.clone()],
                 source,
@@ -110,18 +111,19 @@ impl<'a> FactorySession<'a> {
                         request.clone(),
                         state.as_ref(),
                     )?
-                    .context("creation already completed")
+                    .ok_or(ClientError::CreationAlreadyComplete)
                 },
                 &mut receipt,
             )
             .await?;
         }
-        anyhow::ensure!(
-            self.state(request.launch_salt)
-                .await?
-                .is_some_and(|s| s.creation_stage == CreationStage::Active),
-            "creation did not complete; retry with the same launch salt"
-        );
+        if !(self
+            .state(request.launch_salt)
+            .await?
+            .is_some_and(|s| s.creation_stage == CreationStage::Active))
+        {
+            return Err(ClientError::CreationIncomplete);
+        }
         Ok(receipt)
     }
     /// Resume the exact withdrawal/burn/payout sequence without paying a stage twice.
@@ -135,12 +137,12 @@ impl<'a> FactorySession<'a> {
             let state = self
                 .state(salt)
                 .await?
-                .context("factory launch does not exist")?;
-            anyhow::ensure!(
-                state.collateral_definition_id == collateral
-                    && state.curve_program_id == self.curve.id(),
-                "launch does not match the selected collateral or curve"
-            );
+                .ok_or(ClientError::FactoryLaunchMissing)?;
+            if !(state.collateral_definition_id == collateral
+                && state.curve_program_id == self.curve.id())
+            {
+                return Err(ClientError::LaunchSelectionMismatch);
+            }
             if state.settlement_stage == SettlementStage::Complete {
                 return Ok(receipt);
             }
@@ -174,12 +176,13 @@ impl<'a> FactorySession<'a> {
             )
             .await?;
         }
-        anyhow::ensure!(
-            self.state(salt)
-                .await?
-                .is_some_and(|s| s.settlement_stage == SettlementStage::Complete),
-            "settlement did not complete; retry with the same launch salt"
-        );
+        if !(self
+            .state(salt)
+            .await?
+            .is_some_and(|s| s.settlement_stage == SettlementStage::Complete))
+        {
+            return Err(ClientError::SettlementIncomplete);
+        }
         Ok(receipt)
     }
 }
@@ -194,19 +197,19 @@ pub fn next_creation_invocation(
     state: Option<&FactoryState>,
 ) -> Result<Option<PublicInvocation<FactoryInstruction>>> {
     if let Some(state) = state {
-        anyhow::ensure!(
-            state.namespace == namespace
-                && state.launch_salt == request.launch_salt
-                && state.curve_program_id == curve
-                && state.collateral_definition_id == request.collateral_definition
-                && state.sale_reserve == request.sale_reserve
-                && state.dex_seed_reserve == request.dex_seed_reserve
-                && state.creator_allocation == request.creator_allocation
-                && state.virtual_token_reserve == request.virtual_token_reserve
-                && state.virtual_collateral_reserve == request.virtual_collateral_reserve
-                && state.end_timestamp == request.end_timestamp,
-            "existing launch parameters differ; resume with the original parameters"
-        );
+        if !(state.namespace == namespace
+            && state.launch_salt == request.launch_salt
+            && state.curve_program_id == curve
+            && state.collateral_definition_id == request.collateral_definition
+            && state.sale_reserve == request.sale_reserve
+            && state.dex_seed_reserve == request.dex_seed_reserve
+            && state.creator_allocation == request.creator_allocation
+            && state.virtual_token_reserve == request.virtual_token_reserve
+            && state.virtual_collateral_reserve == request.virtual_collateral_reserve
+            && state.end_timestamp == request.end_timestamp)
+        {
+            return Err(ClientError::LaunchParametersMismatch);
+        }
         if state.creation_stage == CreationStage::Active {
             return Ok(None);
         }

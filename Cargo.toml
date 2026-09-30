@@ -13,6 +13,10 @@ members = [
 ]
 exclude = ["methods", "methods/guest", "packages/weighted-math"]
 
+[workspace.package]
+edition = "2024"
+rust-version = "1.94"
+
 [workspace.dependencies]
 lee = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", rev = "a58fbce2ff48c58b7bb5001b1a27e64b9596ee3a" }
 # No `host` feature here. `crates/curve-core` inherits this entry, and workspace
@@ -36,7 +40,9 @@ factory-core = { path = "crates/factory-core" }
 launchpad-client = { path = "crates/launchpad-client" }
 private-flow-core = { path = "crates/private-flow-core" }
 
-anyhow = "1"
+eyre = "0.6"
+thiserror = "2"
+strum = { version = "0.27", features = ["derive"] }
 borsh = { version = "1.8", features = ["derive"] }
 clap = { version = "4", features = ["derive"] }
 hex = "0.4"
