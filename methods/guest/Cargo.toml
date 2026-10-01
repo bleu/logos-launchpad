@@ -1,0 +1,41 @@
+[package]
+name = "launchpad_programs"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license = "MIT"
+
+[workspace]
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.94"
+
+[workspace.lints.clippy]
+all = { level = "deny", priority = -1 }
+
+[lints]
+workspace = true
+
+[dependencies]
+lee_core = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", rev = "a58fbce2ff48c58b7bb5001b1a27e64b9596ee3a", default-features = false }
+risc0-zkvm = { version = "3.0.5", default-features = false, features = ["std"] }
+
+# Declared before it is used. This crate is its own workspace with its own lock, so
+# nothing else proves that `curve-core` and everything under it compile for
+# `riscv32im-risc0-zkvm-elf`. Cargo compiles declared dependencies whether they are
+# referenced or not, which turns a host-feature leak into a build failure in this
+# guest build.
+curve-core = { path = "../../crates/curve-core" }
+factory-core = { path = "../../crates/factory-core" }
+private-flow-core = { path = "../../crates/private-flow-core" }
+associated_token_account_core = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", rev = "a58fbce2ff48c58b7bb5001b1a27e64b9596ee3a", default-features = false }
+authenticated_transfer_core = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", rev = "a58fbce2ff48c58b7bb5001b1a27e64b9596ee3a", default-features = false }
+token_core = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", rev = "a58fbce2ff48c58b7bb5001b1a27e64b9596ee3a", default-features = false }
+
+# Part of program identity: the risc0 image ID is computed over the
+# release-stripped binary, so every build that must reproduce a program id has
+# to use this exact profile. Matches the lez-programs convention.
+[profile.release]
+debug = 0
+strip = "symbols"

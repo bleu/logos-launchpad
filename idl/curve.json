@@ -1,0 +1,508 @@
+{
+  "version": "0.1.0",
+  "name": "curve",
+  "instructions": [
+    {
+      "name": "update_config",
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "authority",
+          "writable": false,
+          "signer": true,
+          "init": false
+        }
+      ],
+      "args": [
+        {
+          "name": "namespace",
+          "type": "account_id"
+        },
+        {
+          "name": "admin",
+          "type": "account_id"
+        },
+        {
+          "name": "protocol_fee_bps",
+          "type": "u32"
+        },
+        {
+          "name": "treasury",
+          "type": "account_id"
+        }
+      ]
+    },
+    {
+      "name": "renounce_admin",
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "authority",
+          "writable": false,
+          "signer": true,
+          "init": false
+        }
+      ],
+      "args": [
+        {
+          "name": "namespace",
+          "type": "account_id"
+        }
+      ]
+    },
+    {
+      "name": "create_pool",
+      "accounts": [
+        {
+          "name": "pool",
+          "writable": true,
+          "signer": false,
+          "init": true
+        },
+        {
+          "name": "owner_authority",
+          "writable": false,
+          "signer": true,
+          "init": false
+        },
+        {
+          "name": "token0_definition",
+          "writable": false,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "token1_definition",
+          "writable": false,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "owner_token0_ata",
+          "writable": true,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "owner_token1_ata",
+          "writable": true,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "pool_token0_ata",
+          "writable": true,
+          "signer": false,
+          "init": true
+        },
+        {
+          "name": "pool_token1_ata",
+          "writable": true,
+          "signer": false,
+          "init": true
+        },
+        {
+          "name": "clock",
+          "writable": false,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "config",
+          "writable": false,
+          "signer": false,
+          "init": false
+        }
+      ],
+      "args": [
+        {
+          "name": "defer_funding",
+          "type": "bool"
+        },
+        {
+          "name": "namespace",
+          "type": "account_id"
+        },
+        {
+          "name": "token0_amount",
+          "type": "u128"
+        },
+        {
+          "name": "token1_amount",
+          "type": "u128"
+        },
+        {
+          "name": "virtual_reserve0",
+          "type": "u128"
+        },
+        {
+          "name": "virtual_reserve1",
+          "type": "u128"
+        },
+        {
+          "name": "close_timestamp",
+          "type": {
+            "option": "u64"
+          }
+        },
+        {
+          "name": "close_on_depletion",
+          "type": {
+            "option": "u8"
+          }
+        },
+        {
+          "name": "owner",
+          "type": "account_id"
+        },
+        {
+          "name": "owner_program_id",
+          "type": {
+            "option": "program_id"
+          }
+        },
+        {
+          "name": "owner_program_seed",
+          "type": {
+            "option": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          }
+        },
+        {
+          "name": "curve_program_id",
+          "type": "program_id"
+        }
+      ]
+    },
+    {
+      "name": "swap_exact_input",
+      "accounts": [
+        {
+          "name": "pool",
+          "writable": true,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "config",
+          "writable": false,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "participant",
+          "writable": false,
+          "signer": true,
+          "init": false
+        },
+        {
+          "name": "participant_token_in_ata",
+          "writable": true,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "pool_token_in_ata",
+          "writable": true,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "pool_token_out_ata",
+          "writable": true,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "participant_token_out_ata",
+          "writable": true,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "clock",
+          "writable": false,
+          "signer": false,
+          "init": false
+        }
+      ],
+      "args": [
+        {
+          "name": "amount_in",
+          "type": "u128"
+        },
+        {
+          "name": "min_amount_out",
+          "type": "u128"
+        },
+        {
+          "name": "token_in",
+          "type": "account_id"
+        }
+      ]
+    },
+    {
+      "name": "swap_exact_output",
+      "accounts": [
+        {
+          "name": "pool",
+          "writable": true,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "config",
+          "writable": false,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "participant",
+          "writable": false,
+          "signer": true,
+          "init": false
+        },
+        {
+          "name": "participant_token_in_ata",
+          "writable": true,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "pool_token_in_ata",
+          "writable": true,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "pool_token_out_ata",
+          "writable": true,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "participant_token_out_ata",
+          "writable": true,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "clock",
+          "writable": false,
+          "signer": false,
+          "init": false
+        }
+      ],
+      "args": [
+        {
+          "name": "amount_out",
+          "type": "u128"
+        },
+        {
+          "name": "max_amount_in",
+          "type": "u128"
+        },
+        {
+          "name": "token_in",
+          "type": "account_id"
+        }
+      ]
+    },
+    {
+      "name": "close_pool",
+      "accounts": [
+        {
+          "name": "pool",
+          "writable": true,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "owner",
+          "writable": false,
+          "signer": true,
+          "init": false
+        },
+        {
+          "name": "clock",
+          "writable": false,
+          "signer": false,
+          "init": false
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "activate_pool",
+      "accounts": [
+        {
+          "name": "pool",
+          "writable": true,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "owner_authority",
+          "writable": false,
+          "signer": true,
+          "init": false
+        },
+        {
+          "name": "token0_definition",
+          "writable": false,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "token1_definition",
+          "writable": false,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "owner_token0_ata",
+          "writable": true,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "owner_token1_ata",
+          "writable": true,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "pool_token0_ata",
+          "writable": true,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "pool_token1_ata",
+          "writable": true,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "clock",
+          "writable": false,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "config",
+          "writable": false,
+          "signer": false,
+          "init": false
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "withdraw_reserves",
+      "accounts": [
+        {
+          "name": "pool",
+          "writable": true,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "owner",
+          "writable": false,
+          "signer": true,
+          "init": false
+        },
+        {
+          "name": "owner_token0_ata",
+          "writable": true,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "owner_token1_ata",
+          "writable": true,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "pool_token0_ata",
+          "writable": true,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "pool_token1_ata",
+          "writable": true,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "clock",
+          "writable": false,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "config",
+          "writable": false,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "treasury_collateral_atas",
+          "writable": true,
+          "signer": false,
+          "init": false,
+          "rest": true
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "collect_fees",
+      "accounts": [
+        {
+          "name": "pool",
+          "writable": true,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "config",
+          "writable": false,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "pool_collateral_ata",
+          "writable": true,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "treasury_collateral_ata",
+          "writable": true,
+          "signer": false,
+          "init": false
+        }
+      ],
+      "args": []
+    }
+  ],
+  "instruction_type": "curve_core::Instruction"
+}

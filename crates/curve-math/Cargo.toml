@@ -1,0 +1,12 @@
+[package]
+name = "curve-math"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license = "MIT"
+
+# Keep the arithmetic dependency-free.
+[dependencies]
+
+[lints]
+workspace = true

@@ -1,0 +1,44 @@
+# Separate workspace: the coverage-guided fuzz target. Kept out of the root
+# workspace because cargo-fuzz needs a nightly toolchain, while the kernel and
+# harness use the package host toolchain. Root host checks do not run this target.
+#
+# Run (needs `rustup toolchain install nightly` and `cargo install cargo-fuzz`):
+#   cargo +nightly fuzz run trade_invariant
+[package]
+name = "weighted-math-fuzz"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license = "MIT"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+arbitrary = { version = "1", features = ["derive"] }
+weighted-math-core = { path = "../crates/weighted-math-core" }
+harness = { path = "../crates/harness" }
+
+[[bin]]
+name = "trade_invariant"
+path = "fuzz_targets/trade_invariant.rs"
+test = false
+doc = false
+
+[profile.release]
+# Match the root workspace: financial math panics on overflow, never wraps.
+overflow-checks = true
+
+[workspace]
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.94"
+
+[workspace.lints.clippy]
+all = { level = "deny", priority = -1 }
+
+[lints]
+workspace = true

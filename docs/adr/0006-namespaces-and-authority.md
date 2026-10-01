@@ -24,6 +24,8 @@ Retain the reviewed curve factory's resumable creation and settlement. Pending c
 
 The singleton/genesis-admin, address-bound and namespace-admin NFT-holder models are superseded. Administration transfer must not bypass isolation or pending-state checks. The reviewed v0.1.4 commit `479adf86f85b664073f359cfd2fd0087489f63a0` is evidence for the selected library API, not a production dependency pin, integration proof or a compatibility claim. LBP implementation still needs separate evidence.
 
+The compatibility check on 2026-09-30 stopped before compilation. The reviewed component has no public getter for the current administrator, which `namespace-info` needs. Integration with the PoC's manual dispatcher also remains unverified. Do not read the component's private byte layout or store a second administrator field. The PoC still uses NFT-based namespace administration and does not yet implement this decision; its platform pins remain unchanged.
+
 ## Sources
 
 - [Reviewed `spel-admin-authority` implementation](https://github.com/mmlado/spel-admin-authority/tree/479adf86f85b664073f359cfd2fd0087489f63a0)

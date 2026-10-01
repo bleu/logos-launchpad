@@ -61,11 +61,10 @@ This page explains technical shorthand used in this repository. [CONTEXT.md](../
 
 | Term | Plain-English meaning |
 | --- | --- |
-| Private route | The planned SDK-managed sequence to deshield assets, make a public trade, then re-shield purchased tokens. |
+| Private route | The planned SDK-managed transaction that deshields assets, makes a public trade and re-shields purchased tokens. |
 | Shielded / deshield / re-shield | Protected private balance state; moving assets to a public account; and moving purchased assets back to protected state. |
-| Fresh single-use public account | A new public account used for one private-route trade stage. |
+| Fresh single-use public account | A new public account used for the trade within one private-route transaction. |
 | Public trade effects | Pool state and trade results visible on the public chain. The route does not make them private. |
-| Recovery | Resuming a purchased-token re-shield after interruption. It does not promise a refund or reversal. |
 | ZK / zero knowledge / zkVM | A proof system that can show a computation was valid without exposing all inputs; a zkVM is a virtual machine that can produce such proofs. RISC Zero is a zkVM project name, but this repository does not select or implement it. |
 | Proving readiness | Evidence that an implementation can meet the proof-related requirements that apply to it. Existing documents make no such production claim. |
 
@@ -80,7 +79,7 @@ This page explains technical shorthand used in this repository. [CONTEXT.md](../
 | Guest entry point / guest build | A thin entry point and build for the constrained program target. It dispatches to handlers. |
 | Cross-program call / platform call | A call from one on-chain program to another program or platform facility. |
 | SDK | Software development kit: reusable client code for quotes, transaction construction and supported private flows. |
-| Wallet integration boundary | The LP-0021 Wallet Provider SDK boundary. Its specification requires account selection, user approval, signing and submission; integration awaits SDK development and its final API is unavailable. Private deshield, re-shield and recovery support remain unverified. See [ADR 0029](adr/0029-wallet-integration.md). |
+| Wallet integration boundary | The LP-0021 Wallet Provider SDK boundary. Its specification requires account selection, user approval, signing and submission; integration awaits SDK development and its final API is unavailable. Support for the combined private transaction remains unverified. See [ADR 0029](adr/0029-wallet-integration.md). |
 | API | Application programming interface: callable functions and data types offered to another part of a program. |
 | ABI / C ABI | Application binary interface: the calling and data-layout rules at a compiled-code boundary. A C ABI is a language-neutral form of that contract. In the planned Rust module build path, it connects the generated module adapter to the shared core. Compatibility is unverified. |
 | Generated module adapter | Planned generated connection code from the QML and Basecamp module API to the shared core. It uses the planned C ABI. It is not a runtime service and is different from the Basecamp QML runtime bridge. |

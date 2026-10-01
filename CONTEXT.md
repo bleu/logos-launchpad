@@ -1,6 +1,6 @@
 # Context
 
-This is the shared language for both launchpads. The repository currently contains decisions, not an implemented production workspace. [ADRs](docs/adr/README.md) state which decisions are accepted or still open. For plain-English explanations of technical shorthand, see the [glossary](docs/glossary.md); the terms here and ADR decisions remain canonical.
+This is the shared language for both launchpads. The repository contains an imported PoC baseline and design decisions. The baseline does not implement the full production specification. [ADRs](docs/adr/README.md) state which decisions are accepted or still open. For plain-English explanations of technical shorthand, see the [glossary](docs/glossary.md); the terms here and ADR decisions remain canonical.
 
 ## Domain terms
 
@@ -25,8 +25,7 @@ This is the shared language for both launchpads. The repository currently contai
 | Creator | Sale authority holder responsible for creation and permitted lifecycle actions. This role is separate from namespace administration. |
 | Participant | Person or client using the configured-sales app to trade. |
 | Settlement | Post-close collection of remaining fees and permitted allocation/proceeds transfers. It does not mean active DEX graduation. |
-| Private route | SDK-managed deshield, public trade and re-shield stages. Public pool state and trade effects remain visible. |
-| Recovery | Resuming re-shield of purchased tokens after an interrupted re-shield, within the current approved design. |
+| Private route | SDK-managed deshield, public trade and re-shield within one transaction. Public pool state and trade effects remain visible. |
 | Admin app | Separately packaged Basecamp QML mini-app for namespace administration only. |
 | Configured-sales app | Separately packaged Basecamp QML mini-app for creator and participant flows within a configured namespace. |
 | Shared core | Planned non-UI reusable SDK logic exposed through a core module. Its planned C ABI and generated module-adapter integration need compatibility verification and are separate from on-chain program handlers. |
@@ -37,10 +36,10 @@ This is the shared language for both launchpads. The repository currently contai
 
 ## Boundaries
 
-The curve pool owns neutral pricing and custody rules. The curve factory owns curve launch policy. The independent LBP factory owns LBP creation validation and namespace binding; the LBP pool owns LBP trading, custody and state rules. A curve sale closes when `D` is exhausted; its optional expiry mode can close at `D` exhaustion or its configured end timestamp. The contract does not validate a minimum duration for optional expiry. This is an accepted internal departure from RFP-015 with external status `To be reviewed by Logos team`; `D` exhaustion still closes immediately. LBP state and lifecycle remain separate from curve state and lifecycle, and an LBP closes at its schedule endpoint. Typed sale creation inputs are immutable; namespace settings such as the fee rate and treasury can remain live.
+The curve pool owns neutral pricing and custody rules. The curve factory owns curve launch policy. The independent LBP factory owns LBP creation validation and namespace binding; the LBP pool owns LBP trading, custody and state rules. A curve sale closes when `D` is exhausted; its optional expiry mode can close at `D` exhaustion or its configured end timestamp. The contract does not validate a minimum duration for optional expiry. This is an accepted internal departure from RFP-015 with external status `To be reviewed by Logos team`; `D` exhaustion still closes immediately. Creators cannot close factory curve sales early. Settlement burns unsold `D` after expiry; `R` and the separate creator allocation keep their post-close rules. LBP state and lifecycle remain separate from curve state and lifecycle, and an LBP closes at its schedule endpoint. Typed sale creation inputs are immutable; namespace settings such as the fee rate and treasury can remain live.
 
 Each factory binds a sale to its creation namespace. Namespace state is logical per-namespace state, not a selected registry or shared physical schema. The administrator manages namespace configuration only. A creator acts through the configured-sales app and does not need administrator approval for every permitted action.
 
-SDK code owns transaction construction, fresh quotes and supported private workflows. CLI and QML call that code. QML reads indexed data through a backend module read API instead of calling the indexer directly. The admin app handles namespace administration only. The configured-sales app contains creator and participant flows. The apps ship separately from the non-UI shared core, and their placement does not change authority roles. The LP-0021 Wallet Provider SDK owns account selection, user approval, signing and submission once developed and integrated; its final API is unavailable, and private deshield, re-shield and recovery support remain unverified. The shared core does not custody user keys. See [ADR 0029](docs/adr/0029-wallet-integration.md).
+SDK code owns transaction construction, fresh quotes and the single-transaction private route. CLI and QML call that code. QML reads indexed data through a backend module read API instead of calling the indexer directly. The admin app handles namespace administration only. The configured-sales app contains creator and participant flows. The apps ship separately from the non-UI shared core, and their placement does not change authority roles. The LP-0021 Wallet Provider SDK owns account selection, user approval, signing and submission once developed and integrated; its final API is unavailable, and support for the combined private transaction remains unverified. The shared core does not custody user keys. See [ADR 0029](docs/adr/0029-wallet-integration.md).
 
 See [planned ownership](docs/architecture/repository-layout.md) for package and artifact responsibilities. Keep the LBP fee RFP departures, curve expiry-validation departure, deferred allocation ceiling, and private LBP/allowlist design visible in the [ADR index](docs/adr/README.md).

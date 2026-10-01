@@ -12,7 +12,7 @@ Curve and LBP creation inputs express different economic rules. One untyped conf
 
 Use separate typed creation inputs for each mechanism. Validate them before creating a sale and keep the accepted sale configuration immutable. Runtime reserves, accrued fees and lifecycle state still change through permitted instructions.
 
-Curve inputs include the purchasable `D` allocation and may include an expiry end timestamp. The contract does not validate a minimum sale duration when expiry is configured. This is an accepted internal departure from RFP-015 with external status `To be reviewed by Logos team`. Supply exhaustion can close a curve sale immediately. Manual-close eligibility and unsold-`D` handling require explicit specification.
+Curve inputs include the purchasable `D` allocation and may include an expiry end timestamp. The contract does not validate a minimum sale duration when expiry is configured. This is an accepted internal departure from RFP-015 with external status `To be reviewed by Logos team`. Supply exhaustion can close a curve sale immediately. Closing and unsold-`D` rules are defined in [ADR 0025](0025-sale-closing.md).
 
 Validate mechanism-specific inputs against their qualified math envelope. This includes applicable weight and amount limits plus dust and oversized-trade guards. Do not invent thresholds before their mechanism specifications establish them. LBP allowlist support remains required, but its proof design is open.
 

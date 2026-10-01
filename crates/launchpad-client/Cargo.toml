@@ -1,0 +1,49 @@
+[package]
+name = "launchpad-client"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license = "MIT"
+
+[features]
+guest-tests = []
+idl-tests = []
+
+[[test]]
+name = "idl_wire"
+required-features = ["idl-tests"]
+
+[[test]]
+name = "private_authority"
+required-features = ["guest-tests"]
+
+[[test]]
+name = "settlement"
+required-features = ["guest-tests"]
+
+[dependencies]
+associated_token_account_core.workspace = true
+thiserror.workspace = true
+strum.workspace = true
+common.workspace = true
+clock_core.workspace = true
+curve-core.workspace = true
+factory-core.workspace = true
+lee.workspace = true
+lee_core.workspace = true
+pool.workspace = true
+private-flow-core.workspace = true
+programs.workspace = true
+sequencer_service_rpc.workspace = true
+serde.workspace = true
+wallet.workspace = true
+token_core.workspace = true
+hex.workspace = true
+tokio = { workspace = true, features = ["time"] }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+risc0-zkvm.workspace = true
+serde_json.workspace = true

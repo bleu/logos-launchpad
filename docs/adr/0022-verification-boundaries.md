@@ -14,7 +14,7 @@ Keep local behavior tests with each package. Put cross-package build, pin, on-ch
 
 Reuse existing pin and on-chain program IDL checks plus numerical harnesses. Repair E2E commands before execution and use isolated disposable state. Report ignored, unavailable and opt-in checks. Verify custody, clock, events, administration, freeze authority and Basecamp packaging on the selected platform.
 
-Before a mechanism accepts creation or trade inputs, verify its qualified math envelope. Evidence must cover its applicable weight and amount limits, dust guards and oversized-trade guards without assuming undocumented thresholds. Also verify rounding, namespace isolation, private-route stages and inactive graduation within their defined scopes.
+Before a mechanism accepts creation or trade inputs, verify its qualified math envelope. Evidence must cover its applicable weight and amount limits, dust guards and oversized-trade guards without assuming undocumented thresholds. Also verify rounding, namespace isolation, single-transaction private-route execution and failure behavior, and inactive graduation within their defined scopes.
 
 ## Consequences
 

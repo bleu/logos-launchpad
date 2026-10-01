@@ -2,9 +2,9 @@
 
 Token sales on the Logos Execution Zone (LEZ), with two ways to set the sale price: a bonding curve and a liquidity bootstrapping pool (LBP).
 
-The goal is to let creators launch sales and participants trade through clear, reusable tools. Independent namespaces give launchpad operators their own administration, fee settings and treasury. A shared core supports both launch mechanisms without making them use the same sale rules.
+The target product lets creators launch sales and participants trade through clear, reusable tools. Independent namespaces give launchpad operators their own administration, fee settings and treasury. A future shared core can support both launch mechanisms without making them use the same sale rules.
 
-This repository currently contains design documentation; the production code and apps are not available yet.
+This repository contains an imported PoC baseline and design documentation. The root curve crates, CLI, methods and on-chain program IDLs retain their existing behavior. This baseline does not implement the full production specification. LBP code, the shared core and QML apps are future work.
 
 ## Two sale mechanisms
 
@@ -28,7 +28,7 @@ flowchart TB
     Core --> LBP[LBP sales]
 ```
 
-This is the planned product view. Participants will be able to inspect sales, get quotes, choose slippage limits and view trade history. The SDK design includes a staged private purchase route, while pool state and trade effects remain public. Private curve sells and private LBP buys still need further design.
+This is the planned product view. The QML apps and shared core are future work. Participants will be able to inspect sales, get quotes, choose slippage limits and view trade history. The SDK design combines deshield, purchase and re-shield in one transaction, while pool state and trade effects remain public. Private curve sells and private LBP buys still need further design.
 
 ## RFPs and proposals
 
@@ -42,8 +42,13 @@ This is the planned product view. Participants will be able to inspect sales, ge
 - [Product goals and use cases](docs/product/prd.md)
 - [Architecture and interfaces](docs/architecture/system.md)
 - [Creation and private-route sequences](docs/architecture/sequence-diagrams/README.md)
-- [Planned repository layout and checks](docs/architecture/repository-layout.md)
+- [Repository baseline and planned layout](docs/architecture/repository-layout.md)
+- [Workspace commands](docs/architecture/workspace-guide.md)
 - [Domain terms](CONTEXT.md)
 - [Plain-English glossary](docs/glossary.md)
 - [Architecture decisions](docs/adr/README.md)
 - [Agent instructions](AGENTS.md)
+
+## License
+
+Project code is licensed under [MIT](LICENSE). Third-party dependencies retain their own licenses.

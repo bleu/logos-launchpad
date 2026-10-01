@@ -10,9 +10,9 @@ The weighted kernel has numerical tests and guest-parity evidence, but it has no
 
 ## Decision
 
-Copy the reviewed weighted-math source into `packages/weighted-math/`, with its own kernel package, harness, fixtures, proof material and guest-parity workspace. Consume the kernel through a local Cargo path dependency. Keep its API free of LEZ accounts and launch policy so other applications can reuse it.
+The imported weighted-math source is an independent workspace in `packages/weighted-math/`, with its own kernel package, harness, fixtures, proof material and guest-parity workspace. A future LBP can consume the kernel through a local Cargo path dependency. Keep its API free of LEZ accounts and launch policy so other applications can reuse it.
 
-Record the source revision in the import pull request and every later change in this repository's history. Keep the math's MIT license and notices.
+The import is clean and has no source history. Bleu owns its code. Keep the math's MIT license and required third-party notices. Archive the old math repository only after the checked import is merged.
 
 ## Consequences
 

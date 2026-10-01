@@ -6,17 +6,17 @@ Date: 2026-09-29
 
 ## Context
 
-Later implementation needs source provenance without importing repository history or private tracker metadata. Copied code must retain its existing required notices.
+The imported PoC baseline needs a clean source import without repository history or private tracker metadata. Imported code must retain its required third-party notices.
 
 ## Decision
 
-Copy code directly from reviewed source snapshots. The import pull request must identify each source repository, revision and local change. Do not merge, squash, subtree-import or preserve source ancestry.
+Copy code directly from reviewed source snapshots in a clean import without source history. Do not merge, squash, subtree-import or preserve source ancestry. Bleu owns its code.
 
-Keep the required licenses, copyright notices and modification notices already present in copied code. The import pull request provides source provenance; no separate license audit or review is required. This record does not assert ownership of third-party rights.
+Keep the required third-party licenses, copyright notices and modification notices already present in copied code. This ADR does not assert ownership of third-party rights.
 
 ## Consequences
 
-The maintained repository records its own history. Source repositories remain public references. This ADR does not copy code or establish a production dependency.
+The maintained repository records its own history. Source repositories remain public historical references. The imported baseline does not prove production readiness.
 
 ## Sources
 
