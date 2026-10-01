@@ -1,12 +1,14 @@
 # Private purchase
 
-This is the planned SDK-managed purchase route. Deshield, trade and re-shield execute in one transaction. The imported curve-buy guest provides baseline code for this flow; provider integration and end-to-end failure behavior remain unverified. Private curve sells, private LBP buys and allowlist proofs still need specifications. Public pool state and trade effects remain visible.
+This is the required SDK-managed purchase route, not a verified implementation. Deshield, public purchase and private returns execute in one transaction. Received tokens, unused input and unused gas end in participant-controlled private accounts; actual fees are excluded. The imported curve-buy guest does not complete this contract. Public pool state and trade effects remain visible. See the [private participation and recovery specification](../private-participation.md).
 
 ## Preconditions
 
-- The buyer has selected the private route and explicit trade limits.
-- The sale is open and the requested trade can pass current on-chain checks.
-- LP-0021 provider integration awaits SDK development; its final API and support for the combined private transaction remain unavailable for verification.
+- The participant has selected the private route and explicit trade limits.
+- The sale is open and the requested trade can pass current mechanism checks.
+- Sources and private return targets have compatible account types, token definitions and participant control.
+- An allowlisted LBP buy satisfies the reviewed product policy; its proof method and cross-route enforcement still need verification.
+- LP-0021 provider integration awaits SDK development. Its final API and support for the combined transaction and recovery remain unavailable for verification.
 
 ```mermaid
 sequenceDiagram
@@ -17,37 +19,48 @@ sequenceDiagram
     participant LEZ as LEZ execution
 
     Buyer->>App: Choose private purchase and trade limits
-    App->>SDK: Request private purchase
-    SDK-->>App: Disclose public effects
+    App->>SDK: Prepare private purchase
     SDK->>Wallet: Request account access
     Wallet->>Buyer: Request account selection and access approval
-    Buyer->>Wallet: Select account and approve access
+    Buyer->>Wallet: Select accounts and approve access
     Wallet-->>SDK: Approved account information if supported
-    SDK->>SDK: Validate request and construct one transaction
+    SDK->>SDK: Validate targets, obtain fresh state and quote
+    SDK-->>App: Show quote, limits, fees and public effects
+    SDK->>SDK: Construct combined transaction and record attempt
+    SDK->>SDK: Persist submission boundary before an operation that can broadcast
     SDK->>Wallet: Propose combined private purchase
     Wallet->>Buyer: Request transaction approval
     Buyer->>Wallet: Approve transaction
-    Note over Wallet,LEZ: Provider support and end-to-end failure behavior remain unverified
+    Note over Wallet,LEZ: Whole-route support and failure behavior remain unverified
     Wallet->>LEZ: Sign and submit one transaction if supported
     rect rgb(240, 240, 240)
-        Note over LEZ: One transaction with all operations committed together
-        LEZ->>LEZ: Fund fresh public account with assets and gas
-        LEZ->>LEZ: Execute public purchase with trade limits
-        LEZ->>LEZ: Re-shield purchased tokens
+        Note over LEZ: Application changes must commit together
+        LEZ->>LEZ: Fund fresh public accounts with assets and gas
+        LEZ->>LEZ: Execute public purchase with trade limits and eligibility checks
+        LEZ->>LEZ: Re-shield received tokens, unused input and unused gas
     end
-    LEZ-->>Wallet: Transaction outcome
-    Wallet-->>SDK: Report outcome
-    SDK-->>App: Show purchase outcome
+    LEZ-->>Wallet: Transaction outcome when established
+    Wallet-->>SDK: Report original attempt outcome
+    alt Confirmed
+        SDK-->>App: Show confirmed purchase and wallet synchronization status
+    else Known rejected
+        SDK-->>App: Show rejection and actual charges; require fresh preparation before retry
+    else Pending or unknown
+        SDK-->>App: Show unresolved outcome and block replacement
+        SDK->>Wallet: Reconcile original attempt when access is available
+    end
 ```
 
 ## Notes
 
-The public-account funding step includes deshield. Internal calls run in order within the same transaction. The required behavior is for all operations to commit together or fail without a partial trade or re-shield result. Verify this on the target platform; this diagram is not evidence that it works.
+The provider API is not selected in this diagram. If one provider operation can obtain approval and broadcast, persist the submission boundary before invoking it. A crash or lost response after that boundary leaves an unknown outcome unless provider evidence establishes otherwise. A known refusal before broadcast is different from a missing result.
 
-There is no separately committed purchase followed by a re-shield retry in this design. Failure handling, unknown submission outcomes and retry safety still require verification. No automatic refund, reversal or recovery flow is specified.
+Funding includes deshield. Internal calls run in order within the same transaction. Required application changes must commit together or fail without a partial purchase or return result. Actual transaction fees may still be charged after a rejected execution. Verify whole-route execution, late-return failure and fee behavior on the target platform.
 
-The SDK owns transaction construction and the app-facing flow. The wallet provider owns account access, user approval, signing and submission. The shared core does not hold user keys.
+There is no separately committed purchase followed by a re-shield retry. An unknown outcome blocks a replacement purchase until reconciliation. A confirmed transaction with pending private wallet synchronization must not be repeated. No automatic fee refund, reversal or unverified recovery guarantee is added.
 
-## Open details
+The SDK owns construction and progress. The provider owns account access, approval, signing and submission. Core progress records are participant-local and exclude keys, private-account identifiers and proof secrets. The shared core does not hold user keys.
 
-LP-0021 is the selected provider integration; its final API and support for the combined private transaction remain unverified. Private curve sells, private LBP buys and allowlist proofs require separate specifications. See [ADR 0018](../../adr/0018-private-participation.md) and [ADR 0029](../../adr/0029-wallet-integration.md).
+## Open implementation details
+
+The [platform research](../../research/private-route-transaction-patterns.md) records the current route's call-budget, gas-source ownership and missing-return gaps. The selected provider must support all required accounts, approval, confirmation and recovery. Private curve sell and LBP runtime implementation remain future work; allowlist cryptographic construction is still open. See [ADR 0018](../../adr/0018-private-participation.md), [ADR 0021](../../adr/0021-modes-and-open-limits.md) and [ADR 0029](../../adr/0029-wallet-integration.md).
