@@ -28,7 +28,7 @@ flowchart TB
     Core --> LBP[LBP sales]
 ```
 
-This is the planned product view. The QML apps and shared core are future work. Participants will be able to inspect sales, get quotes, choose slippage limits and view trade history. The SDK design combines deshield, purchase and re-shield in one transaction, while pool state and trade effects remain public. Private curve sells and private LBP buys still need further design.
+This is the planned product view. The QML apps and shared core are future work. Participants will be able to inspect sales, get quotes, choose slippage limits and view trade history. The [private-route design](docs/architecture/private-participation.md) combines deshield, trade and return of received tokens, unused input and unused gas in one transaction. Actual fees are excluded, and pool state and trade effects remain public. Runtime implementation, wallet support and allowlist proofs still need verification.
 
 ## RFPs and proposals
 
@@ -43,6 +43,7 @@ This is the planned product view. The QML apps and shared core are future work. 
 - [Curve contract and acceptance evidence](docs/product/curve-contract.md)
 - [Namespace, custody, and fee contract](docs/product/namespace-fee-contract.md)
 - [Architecture and interfaces](docs/architecture/system.md)
+- [Private participation and recovery](docs/architecture/private-participation.md)
 - [Creation and private-route sequences](docs/architecture/sequence-diagrams/README.md)
 - [Repository baseline and planned layout](docs/architecture/repository-layout.md)
 - [Workspace commands](docs/architecture/workspace-guide.md)

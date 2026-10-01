@@ -944,8 +944,7 @@ fn claim_creator_allocation(
     )
 }
 
-// The trailing treasury ATA can alias an existing recipient. Curve withdrawal
-// accepts its omission when it is the owner token1 recipient.
+// Omit the trailing treasury ATA when it already appears in the account list.
 fn unique_treasury_accounts(mut accounts: Vec<AccountWithMetadata>) -> Vec<AccountWithMetadata> {
     let last = accounts.last().expect("withdrawal accounts").account_id;
     if accounts[..accounts.len() - 1]

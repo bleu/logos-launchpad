@@ -36,7 +36,7 @@ The admin app manages namespaces. Creators and participants use the sales app. B
 
 The indexer provides listings and history. Its data can lag behind the chain. Programs check current state before they accept an action. Dashed lines show dependencies or an open integration.
 
-The curve factory can also call an optional adapter saved at sale creation. A client submits the separate public post-close transaction. The SDK and CLI expose stages and retries; no scheduler or hook UI is added. Canonical adapter custody receives only full `R` and recorded collateral due. The adapter must initialize and claim that custody before factory destination-ATA preparation. The callback receives no factory signing rights. The [curve contract](../product/curve-contract.md) defines this boundary, verified host, full guest-suite and generated-IDL checks, and their limits. A real DEX integration remains deferred.
+The curve factory can call an optional adapter saved at sale creation. A client submits separate public post-close transactions through the SDK or CLI. The adapter must initialize and claim its custody before the factory prepares destination ATAs. The hook transfers full `R` and recorded collateral due. The callback receives no factory signing rights. See the [curve contract](../product/curve-contract.md) for stages, retries, account checks and test limits. No scheduler, hook UI or live DEX integration is included.
 
 ## Flows
 

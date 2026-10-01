@@ -50,4 +50,4 @@ The backend module read API exposes indexed status after events reach the existi
 
 ## Open details
 
-Final creation inputs, account schema, custody arrangement and transaction construction need mechanism and platform review. LP-0021 integration awaits SDK development and its final API is unavailable. LBP lifecycle permissions need mechanism review. Private LBP and allowlist design remain open.
+Final creation inputs, account schema, custody arrangement and transaction construction need mechanism and platform review. LP-0021 integration awaits SDK development and its final API is unavailable. LBP lifecycle permissions need mechanism review. The [private participation contract](../private-participation.md) and [allowlist product policy](../../adr/0021-modes-and-open-limits.md) are defined; runtime implementation, enrollment tooling and proof construction still need verification.

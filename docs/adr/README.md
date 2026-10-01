@@ -35,10 +35,10 @@ Read [CONTEXT.md](../../CONTEXT.md) for terms and [repository layout](../archite
 | [0015](0015-fee-accounting.md) | Collateral fees and current-treasury collection | Accepted internally; LBP RFP departures: To be reviewed by Logos team |
 | [0016](0016-lbp-live-fees.md) | Live creator-borne LBP fees and anytime collection | Accepted internally; To be reviewed by Logos team |
 | [0017](0017-quotes-and-slippage.md) | Fresh quotes and explicit slippage limits | Accepted |
-| [0018](0018-private-participation.md) | SDK-managed single-transaction private route | Route accepted; private LBP/allowlist details open |
+| [0018](0018-private-participation.md) | SDK-managed single-transaction private route and recovery | Product and recovery rules accepted; platform, wallet and proof verification pending |
 | [0019](0019-product-packages.md) | Two QML mini-apps and a non-UI shared core | Accepted |
-| [0020](0020-settlement-and-graduation.md) | Manual settlement and optional immutable adapter hook; explicitly supersedes inactive hook | Accepted; verified host, full guest-suite and generated-IDL checks; production-readiness limits remain; live DEX deferred |
-| [0021](0021-modes-and-open-limits.md) | Adopted modes, deferred ceiling and open allowlist | Accepted internally; expiry-validation and ceiling departures: To be reviewed by Logos team; allowlist open |
+| [0020](0020-settlement-and-graduation.md) | Manual settlement and optional immutable adapter hook; replaces inactive hook | Accepted; host, full guest-suite and generated-IDL checks passed; production-readiness limits remain; live DEX deferred |
+| [0021](0021-modes-and-open-limits.md) | Adopted modes, deferred ceiling and allowlist product policy | Product rules accepted internally; expiry-validation and ceiling departures: To be reviewed by Logos team; proof design open |
 | [0022](0022-verification-boundaries.md) | Explicit build, IDL and integration evidence | Accepted |
 | [0025](0025-sale-closing.md) | Mechanism-specific sale closing | Accepted internally; expiry-validation departure: To be reviewed by Logos team |
 | [0026](0026-lbp-clock-and-poke.md) | Clock-derived weights and observational poke | Accepted |

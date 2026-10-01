@@ -1,6 +1,6 @@
 # Curve contract
 
-Status: Accepted contract. Explicit immutable trade modes and the executable public post-close adapter hook are implemented. Workspace tests, strict Clippy, guest builds, full private-authority and settlement guest suites, generated-IDL checks, formatting and dependency-pin checks passed. The evidence and its limits are mapped below. Pricing and accounting retain the reviewed baseline; these results do not establish production readiness.
+Status: Accepted contract. Immutable trade modes and the public post-close adapter hook are implemented. Pricing and accounting keep the reviewed baseline. See [acceptance evidence](#acceptance-evidence) for passed checks and their limits. These checks do not establish production readiness.
 
 Use the terms in [CONTEXT.md](../../CONTEXT.md). The [shared namespace, custody, and fee contract](namespace-fee-contract.md) defines namespace authority and live settings. [ADR 0009](../adr/0009-curve-arithmetic.md) defines the pricing decision. The amended [ADR 0020](../adr/0020-settlement-and-graduation.md) replaces the inactive-hook decision.
 
@@ -23,7 +23,7 @@ A factory sale uses the launch token as token0 and collateral as token1. Creatio
 
 Initial real collateral is zero. Creation funds only `D` into the pool. `R` stays in factory custody and the creator allocation stays separate. Creation is staged through `Minted`, `Allocated`, `PoolPrepared` and `Active`. A prepared but unfunded pool must not trade. An action and its child calls complete in one transaction, or that stage does not complete.
 
-`BuyOnly` permits collateral-input buys through both existing buy instructions and rejects launch-token-input sells. `BuyAndSell` also permits exact-input sells. There is no exact-output sell. The neutral account layer enforces an optional allowed-input-token restriction through the common direction check. Unrestricted direct pools retain their neutral behavior. The pure pricing state does not acquire factory mode policy. SDK quotes must apply the same restriction; a client check does not replace the program check.
+`BuyOnly` permits collateral-input buys through both existing buy instructions and rejects launch-token-input sells. `BuyAndSell` also permits exact-input sells. There is no exact-output sell. The neutral account layer checks which input token is allowed. Direct pools without this restriction keep their existing behavior. The pure pricing state does not store factory trade modes. SDK quotes must apply the same restriction; a client check does not replace the program check.
 
 Namespace protocol fees and treasury remain live. Creation and fee updates accept integer basis points from `0` through `9_999`, with denominator `10_000`. The pure pool's legacy handling of `10_000` is not permission to configure that rate in a namespace. A rate change affects later trades, not already recorded fees. A treasury change affects later collection.
 
@@ -62,7 +62,7 @@ There is no arbitrary trade minimum, percentage cap or new amount ceiling. Dust,
 
 ## Solvency argument
 
-The argument applies to an initially funded pool and accepted buy, sell and fee-collection interleavings before reserve withdrawal. It assumes canonical token accounts and transaction rollback when a child transfer fails. It proves custody and reserve safety, not a profitable sale or successful DEX integration.
+This argument applies to a funded pool and any accepted sequence of buys, sells and fee collections before reserve withdrawal. It assumes canonical token accounts and transaction rollback when a child transfer fails. It proves custody and reserve safety, not a profitable sale or successful DEX integration.
 
 At creation, `V0 * V1 = k`, launch custody covers `r0` and collateral custody covers `r1 + F`. For an exact-input trade, the new virtual output reserve is `ceil(k / (Vi + e))`. Thus the mathematical product of the new virtual reserves is at least `k`. For an exact-output buy, `V1 + e >= ceil(k / (V0 - Q))`, so the same inequality holds. Division and positive-amount guards exclude invalid transitions.
 
@@ -111,13 +111,13 @@ Closure permits settlement; it does not execute the adapter. A client must submi
 | Final hook payout | Transfer full `R` and full recorded collateral due to saved adapter custody, then call the saved adapter; record terminal `Graduated` in the same transaction |
 | Creator-allocation claim | Separate creator-authorized claim; does not select either settlement route or enter hook amounts |
 
-The saved shared stages are `Unstarted`, `Ready`, `Withdrawn { unsold, collateral_due }` and `Burned { collateral_due }`. The hook adds `HookReady { collateral_due }`, `Graduated` and `NoPayout` to the existing manual `TokenPaid { collateral_due }` and `Complete` states. These names describe resumable progress; they do not make preparation a payout-route lock.
+The saved shared stages are `Unstarted`, `Ready`, `Withdrawn { unsold, collateral_due }` and `Burned { collateral_due }`. The hook adds `HookReady { collateral_due }`, `Graduated` and `NoPayout` to the existing manual `TokenPaid { collateral_due }` and `Complete` states. These states record progress so settlement can resume. Preparation does not select a payout route.
 
 The first actual manual settlement payout blocks hook payout. `TokenPaid` and a completed paying manual route cannot race with the hook. `Graduated` blocks manual payout and hook replay. Route checks must also block duplicate payout or reentry during the final call. Shared preparation, reserve withdrawal, burn and adapter-ATA preparation do not select a route.
 
 Zero amounts require distinct handling. When `R = 0` and collateral due is positive, manual settlement skips the empty token-payment marker and performs the collateral payout directly. When both amounts are zero, manual bookkeeping records `NoPayout`; an uncalled configured hook may still execute once with zero amounts. Empty transfers and the separate creator-allocation claim must not block that hook. A successful zero-amount hook still records `Graduated` and cannot run twice.
 
-Atomicity is per transaction. If an adapter fails during the final stage, both final transfers and the terminal marker roll back. Earlier successful custody preparation, fee collection, reserve withdrawal and burn transactions stay complete. The unchanged final-stage state permits retry with the saved adapter settings or creator-authorized manual recovery. The adapter can change its own readiness state; the sale cannot replace its adapter or configuration.
+Each transaction completes in full or leaves its state and balances unchanged. If the adapter fails during the final stage, both final transfers and the `Graduated` state change roll back. Earlier successful custody preparation, fee collection, reserve withdrawal and burn transactions stay complete. The unchanged final-stage state permits retry with the saved adapter settings or creator-authorized manual recovery. The adapter can change its own readiness state; the sale cannot replace its adapter or configuration.
 
 For the buy/sell example above, with a treasury ATA separate from the pool vault, expiry leaves `720` unsold `D`, `R = 100`, creator allocation `100`, real collateral `9` and outstanding fees `5`. If the pool collateral vault also contains a surplus deposit of `7`, its physical balance is `21`. Withdrawal pays `5` to treasury and moves `9` to factory custody; the surplus `7` remains outside settlement. Burn the unsold `720` once. The final hook receives exactly `100` launch tokens and `9` collateral, not the surplus, fees or creator allocation. A failing callback restores these two final debits and credits; it does not restore the burned inventory or reverse the earlier treasury payment. Manual recovery pays the same `100` and `9` to the creator instead.
 
@@ -156,7 +156,7 @@ The pinned runtime permits [10 chained calls per transaction](https://github.com
 
 ## Release compatibility
 
-The release changes factory state and creation instruction encoding, and adds the neutral account restriction. It is a fresh-release incompatible state and wire change. Factory public instruction tags `0` through `3` stay fixed; `ExecuteGraduationHook` is inserted at `4` before `Private`, whose factory tag shifts to `5`. Rebuild guests and client artifacts together; their program identities can change. Use fresh local state. Do not silently decode old state, infer missing trade modes or claim a deployed-state migration. The pure `pool::Pool` pricing layout remains unchanged.
+The release changes factory state and creation instruction encoding, and adds the neutral account restriction. The new state and instruction encoding are incompatible with the old versions. Factory public instruction tags `0` through `3` stay fixed; `ExecuteGraduationHook` is inserted at `4` before `Private`, whose factory tag shifts to `5`. Rebuild guests and client artifacts together; their program identities can change. Use fresh local state. Do not silently decode old state, infer missing trade modes or claim a deployed-state migration. The pure `pool::Pool` pricing layout remains unchanged.
 
 The project `launchpad create-sale` command and SDK can create a sale without a hook or with empty hook configuration; the project CLI accepts hexadecimal configuration bytes. The pinned `lgs` SPEL parser cannot encode an empty `Vec<u8>` from either `''` or `'[]'`. Nonempty decimal bytes such as `'7,11'` work. Use the SDK or project CLI for empty-configuration creation. This upstream parser limit does not change the wire contract or prevent independent IDL generation and parity checks.
 

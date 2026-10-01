@@ -1,26 +1,44 @@
-# ADR 0021: Keep adopted modes and mark unresolved limits
+# ADR 0021: Sale modes, allowlists and open limits
 
-Status: Accepted internally; To be reviewed by Logos team for the expiry-validation and allocation-ceiling departures; allowlist design open
+Status: Sale modes and allowlist rules accepted internally. Expiry-duration and per-block limit changes: `To be reviewed by Logos team`. Proof design and verification remain open.
 
 Date: 2026-09-29
 
 ## Context
 
-The proposals include optional sale modes. This design retains selected modes but does not complete all LBP limits or private allowlist design.
+Keep the selected sale modes. The 2026-10-01 review settled the LBP allowlist product rules. It did not choose a proof method or establish that it works on LEZ.
 
-## Decision
+## Sale modes
 
-This amendment replaces the earlier unspecified curve one-way mode with required immutable `TradeMode::{BuyOnly, BuyAndSell}`. BuyOnly permits both exact-input and exact-output collateral-input buys, and rejects selling. BuyAndSell also permits exact-input sells. There is no program default or exact-output sell; UI defaults remain deferred. Enforce the direction in the neutral account layer without adding factory policy to pure pricing state. These mode inputs are implemented and have host evidence mapped in the [curve contract](../product/curve-contract.md); final release checks remain separate.
+Curve creation requires `TradeMode::{BuyOnly, BuyAndSell}`. The mode cannot change after creation. This replaces the earlier unspecified one-way mode. `BuyOnly` permits exact-input and exact-output buys with collateral. It rejects sells. `BuyAndSell` also permits exact-input sells. There is no program default or exact-output sell. UI defaults remain open.
 
-Retain optional curve expiry. Curve closing follows [ADR 0025](0025-sale-closing.md): `D` exhaustion closes immediately, while an optional configured expiry closes at `D` exhaustion or its end timestamp. The contract does not validate a minimum sale duration when expiry is configured. This is an accepted internal departure from RFP-015 with external status `To be reviewed by Logos team`. No collateral-raised target closes a curve sale.
+The neutral account layer checks the trade direction. Pure pricing state has no factory mode policy. These checks are implemented. The [curve contract](../product/curve-contract.md#acceptance-evidence) records passed tests and their limits.
 
-Retain weighted and fixed-price LBP modes, start/end times, clock-derived weights, permissionless poke and pause controls.
+A curve sale closes when all `D` tokens are sold or its optional expiry is reached. Raising a set amount of collateral does not close it. See [ADR 0025](0025-sale-closing.md).
 
-Defer the optional LBP per-block token-allocation ceiling. This is an accepted internal departure from the LBP RFP with external status `To be reviewed by Logos team`. Do not silently drop it from scope or claim it is implemented. LBP allowlist support remains required, but private LBP and ZK allowlist design stay open. DistributionX is a reference to validate, not an approved design; no final proof inputs, nullifier policy or cost claim is established here.
+The contract does not enforce a minimum duration for curve expiry. This differs from RFP-015 and is `To be reviewed by Logos team`.
 
-## Consequences
+Keep weighted and fixed-price LBP modes, start/end times and pause controls. Weights use chain time. Anyone can call `poke` to record a time checkpoint.
 
-Mode-specific behavior needs specifications and executable tests before delivery. Deferral is not external approval to remove a requirement. The proposal's allowlist sketch remains an input for review, not an accepted cryptographic design.
+Defer the optional limit on tokens allocated in one block. This differs from the LBP RFP and is `To be reviewed by Logos team`. It is not implemented or removed from scope.
+
+## LBP allowlist rules
+
+When an allowlist is enabled:
+
+- Each approved participant gets one successful purchase per sale. Public and private routes share it. Another credential for the same approved identity does not grant another purchase.
+- Failed transactions do not use the allowance. The successful purchase and allowance use must finish together.
+- The participant must prove membership and control of the approved account for this purchase. Sharing membership information alone must not grant access.
+- One public collateral limit applies to everyone. It limits buyer input under the agreed LBP fee and pricing rules.
+- The participant list stays private. Public checks must not expose it or require a persistent private participant ID.
+
+On-chain programs must enforce these rules on both routes. Proofs must be tied to the sale and actual purchase, with protection against reuse. Account control does not prove that each account belongs to a different person or prevent sharing full account keys.
+
+## Open work
+
+The proof method, verifier, identity format, enrollment, duplicate-identity checks and account-change rules still need design and tests. DistributionX is a research reference, not an approved design. No proof inputs or cost claims are settled. See the [full participation specification](../architecture/private-participation.md).
+
+Accepted product rules do not mean the proof or either route works. Deferred requirements still need Logos-team review.
 
 ## Sources
 
