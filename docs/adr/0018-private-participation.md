@@ -1,46 +1,48 @@
-# ADR 0018: SDK-managed single-transaction private participation
+# ADR 0018: One transaction for private trades
 
-Status: Product and recovery requirements accepted; platform, wallet and allowlist proof verification pending
+Status: Product and recovery rules accepted. Platform, wallet and allowlist proofs still need verification.
 
 Date: 2026-09-29
 
 ## Context
 
-A private participant can use a public pool without making its reserves or trade effects private. The imported curve-buy PoC combines funding, deshield, purchase and re-shield calls in one transaction. It does not establish a working full route, complete return accounting or production readiness. See the [platform research](../research/private-route-transaction-patterns.md).
+The private route uses a public pool. The current curve-buy PoC does not complete the required flow. See the [research note](../research/private-route-transaction-patterns.md).
 
-The LP-0021 Wallet Provider SDK is the selected integration, but it is an open prize specification with no available final API. Support for the combined private transaction, account control and safe outcome recovery remains unverified. See [ADR 0029](0029-wallet-integration.md).
+## Changes
 
-## Amendments
-
-The 2026-09-30 amendment supersedes the earlier staged private route and its post-trade re-shield recovery design. The SDK still manages the flow, but deshield, trade and re-shield execute within one transaction.
-
-The 2026-10-01 review adds participant-controlled private destinations, complete return of unused input and gas, and pending-outcome recovery rules. It also establishes the LBP allowlist product policy in [ADR 0021](0021-modes-and-open-limits.md). It does not select a proof construction or approve an unverified platform implementation.
+- 2026-09-30: Replaced the three-transaction flow with one transaction.
+- 2026-10-01: Added complete private returns, participant-controlled destinations and recovery rules. LBP allowlist rules are in [ADR 0021](0021-modes-and-open-limits.md).
 
 ## Decision
 
-Keep direct public trades and an SDK-managed private route for curve buys, permitted curve sells and LBP buys. The SDK constructs one transaction that funds fresh single-use public accounts with assets and gas, executes the public trade, and returns the received tokens, unused input and unused gas to participant-controlled private accounts. Actual fees are excluded from the return. These application changes must commit together or fail together. There is no separate-transaction fallback or separately completed trade followed by a re-shield retry.
+Keep public trades and an SDK-managed private route for curve buys, allowed curve sells and LBP buys. Each private attempt uses fresh public accounts and one transaction to:
 
-Every private return target must be controlled by the participant and compatible with its asset and current private state. Unknown, foreign or incompatible destinations are rejected. Different assets may need different account types. If platform rules prevent complete returns, record a compatibility blocker instead of reporting success with public residue.
+1. Move private input and gas funds to those accounts.
+2. Trade within the participant's limits.
+3. Return received tokens, unused input and unused gas to private accounts controlled by the participant. Actual fees are excluded.
 
-The SDK owns fresh quotes, explicit trade limits, destination validation, transaction construction, progress and pre-trade disclosure. CLI and QML use the same contract. The wallet provider owns account selection, private balance access approval, transaction approval, signing and submission once integrated. User keys stay outside the shared core.
+All three steps must finish together or fail together. Do not split them or report success with user funds left public. Return accounts must support the asset and its current private state. Reject accounts controlled by someone else or whose control cannot be checked. Different assets may need different account types.
 
-Persist the submission boundary before invoking an operation that can broadcast. A lost response, missing hash, app interruption or timeout leaves the original attempt pending until its outcome is established. Do not submit a replacement trade while that outcome is unknown. A confirmed trade with incomplete wallet synchronization is not a failed trade. A known rejection permits a new attempt only with current state, a fresh quote, explicit limits and renewed approval for changed transaction contents.
+The SDK prepares quotes, checks limits and destinations, builds the transaction and tracks progress. CLI and QML use the same rules. The wallet provider handles account access, approval, signing and submission. User keys stay outside the shared core. LP-0021 support still needs verification; see [ADR 0029](0029-wallet-integration.md).
 
-Keep recovery progress participant-local and minimal. Do not put private-account identifiers, keys, balances, membership secrets or private witnesses in core progress records, logs or events. Provider recovery references and confirmation rules require integration verification.
+## Recovery and privacy
 
-Follow the [private participation and recovery specification](../architecture/private-participation.md) for mechanism rules, progress states, return accounting, disclosures and acceptance scenarios. Follow ADR 0021 for the shared public/private LBP purchase allowance and private membership requirements. Warning acknowledgement frequency remains deferred; disclosure before transaction approval remains required.
+- Save progress before calling any operation that can send the transaction.
+- A timeout, lost reply or app closure does not prove failure. Keep the attempt pending and check its result. Do not send a replacement while the result is unknown.
+- A confirmed trade must not be repeated because wallet updates are delayed.
+- After a known rejection, prepare again with current state, a fresh quote and explicit limits. Changed transaction contents need new approval.
+- Keep minimal progress on the participant's device. Do not put private-account IDs, keys, balances, membership secrets or proof secrets in core records, logs or events.
 
-## Consequences
+Explain public effects before transaction approval. How often to require a separate warning acknowledgement remains undecided.
 
-The app handles one transaction and its outcome. It does not recover separately committed deshield, trade or re-shield stages. Pool state, trade amounts, timing and public effects remain visible; SDK policy does not guarantee privacy for callers who construct other transactions.
+## Limits and remaining work
 
-The selected platform must demonstrate successful execution and late-failure rollback for the whole flow. Actual transaction fees may still be charged after a rejected execution. Failure recovery does not promise a fee refund, automatic reversal or a provider capability that has not been verified. Curve sell, LBP, allowlist, wallet and return-accounting implementation remain future work.
+Pool changes, trade amounts and timing remain public. These SDK rules do not guarantee privacy for callers who build other transactions. A failed execution may still cost fees; no automatic refund or reversal is promised.
+
+Whole-route execution, complete returns, wallet recovery, private curve sells, LBP buys and allowlist proofs still need implementation and tests. The [full specification](../architecture/private-participation.md) defines the detailed rules and required test cases.
 
 ## Sources
 
-- [Private participation and recovery specification](../architecture/private-participation.md)
-- [Platform research and primary-source evidence](../research/private-route-transaction-patterns.md)
-- [Imported private-buy guest](../../methods/guest/src/bin/private_buy.rs)
 - [Curve proposal](https://github.com/logos-co/rfp/issues/118)
 - [LBP proposal](https://github.com/logos-co/rfp/issues/119)
-- [Historical curve PoC private boundary decision](https://github.com/bleu/lez-bonding-curve-launchpad/blob/778f92169ac08edf3cff02bbf2e45d770f176283/docs/adr/0005-private-trade-boundary-and-verification.md)
+- [Earlier curve PoC decision](https://github.com/bleu/lez-bonding-curve-launchpad/blob/778f92169ac08edf3cff02bbf2e45d770f176283/docs/adr/0005-private-trade-boundary-and-verification.md)
