@@ -4,7 +4,7 @@ use lee_core::{
     account::{AccountId, AccountWithMetadata},
     program::{AccountPostState, ProgramId},
 };
-use pool::TokenSide;
+use pool::{ExactInputSwap, ExactOutputSwap, FeeSide, TokenSide};
 
 use crate::{Config, PoolAccount, compute_config_pda, compute_pool_pda};
 
@@ -18,7 +18,7 @@ pub struct SwapSettlement {
     pub raw_amount_out: u128,
     pub amount_out: u128,
     pub protocol_fee: u128,
-    pub protocol_fee_on_output: bool,
+    pub protocol_fee_side: FeeSide,
     pub treasury: AccountId,
 }
 
@@ -38,14 +38,14 @@ pub fn swap_exact_input(
     let now = trusted_time(&pool_account, clock);
     let outcome = pool_account
         .pool
-        .swap_exact_input(
-            side,
+        .swap_exact_input(ExactInputSwap {
+            token_in: side,
             amount_in,
             min_amount_out,
-            0,
-            config_data.protocol_fee_bps,
+            pool_fee_bps: 0,
+            protocol_fee_bps: config_data.protocol_fee_bps,
             now,
-        )
+        })
         .unwrap_or_else(|error| panic!("exact-input swap rejected: {error}"));
 
     let mut post = pool.account;
@@ -60,7 +60,7 @@ pub fn swap_exact_input(
             raw_amount_out: outcome.raw_amount_out,
             amount_out: outcome.amount_out,
             protocol_fee: outcome.protocol_fee,
-            protocol_fee_on_output: outcome.protocol_fee_on_output,
+            protocol_fee_side: outcome.protocol_fee_side,
             treasury: config_data.treasury,
         },
     )
@@ -82,14 +82,14 @@ pub fn swap_exact_output(
     let now = trusted_time(&pool_account, clock);
     let outcome = pool_account
         .pool
-        .swap_exact_output(
-            side,
+        .swap_exact_output(ExactOutputSwap {
+            token_in: side,
             amount_out,
             max_amount_in,
-            0,
-            config_data.protocol_fee_bps,
+            pool_fee_bps: 0,
+            protocol_fee_bps: config_data.protocol_fee_bps,
             now,
-        )
+        })
         .unwrap_or_else(|error| panic!("exact-output swap rejected: {error}"));
 
     let mut post = pool.account;
@@ -104,7 +104,7 @@ pub fn swap_exact_output(
             raw_amount_out: outcome.raw_amount_out,
             amount_out: outcome.amount_out,
             protocol_fee: outcome.protocol_fee,
-            protocol_fee_on_output: outcome.protocol_fee_on_output,
+            protocol_fee_side: outcome.protocol_fee_side,
             treasury: config_data.treasury,
         },
     )

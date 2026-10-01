@@ -5,7 +5,7 @@ use lee_core::{
     account::{Account, AccountId, AccountWithMetadata, Data},
     program::{AccountPostState, ChainedCall, Claim, ProgramId},
 };
-use pool::{Pool, TokenSide};
+use pool::{Pool, PoolCreateParams, TokenSide};
 use token_core::{TokenDefinition, TokenHolding};
 
 use crate::{
@@ -109,14 +109,14 @@ pub fn create_pool(
             "Close timestamp must be in the future"
         );
     }
-    let pool = Pool::create(
+    let pool = Pool::create(PoolCreateParams {
         token0_amount,
         token1_amount,
         virtual_reserve0,
         virtual_reserve1,
         close_timestamp,
         close_on_depletion,
-    )
+    })
     .expect("Pool parameters are invalid");
     let mut pool_post = pool_account.account;
     pool_post.data = Data::from(&PoolAccount {

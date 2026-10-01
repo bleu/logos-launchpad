@@ -15,6 +15,25 @@ use crate::{
     update_config::update_config,
 };
 
+fn wire_depletion_side(side: u8) -> pool::TokenSide {
+    match side {
+        0 => pool::TokenSide::Token0,
+        1 => pool::TokenSide::Token1,
+        _ => panic!("Depletion side must be 0 or 1"),
+    }
+}
+
+fn wire_owner_program(
+    owner_program_id: Option<ProgramId>,
+    owner_program_seed: Option<[u8; 32]>,
+) -> Option<(ProgramId, [u8; 32])> {
+    match (owner_program_id, owner_program_seed) {
+        (None, None) => None,
+        (Some(program_id), Some(seed)) => Some((program_id, seed)),
+        _ => panic!("Owner program ID and seed must both be present or absent"),
+    }
+}
+
 #[must_use]
 pub fn process_instruction(
     pre_states: Vec<AccountWithMetadata>,
@@ -43,7 +62,9 @@ pub fn process_instruction(
                     config,
                     authority,
                     admin,
-                    protocol_fee_bps,
+                    protocol_fee_bps
+                        .try_into()
+                        .expect("Protocol fee must fit in u16"),
                     treasury,
                     self_program_id,
                 ),
@@ -69,7 +90,8 @@ pub fn process_instruction(
             close_timestamp,
             close_on_depletion,
             owner,
-            owner_program,
+            owner_program_id,
+            owner_program_seed,
             curve_program_id,
         } => {
             assert_eq!(
@@ -107,10 +129,10 @@ pub fn process_instruction(
                 virtual_reserve0,
                 virtual_reserve1,
                 close_timestamp,
-                close_on_depletion.map(Into::into),
+                close_on_depletion.map(wire_depletion_side),
                 owner,
                 curve_program_id,
-                owner_program,
+                wire_owner_program(owner_program_id, owner_program_seed),
                 defer_funding,
             );
             posts.push(AccountPostState::new(clock.account));

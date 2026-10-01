@@ -7,6 +7,11 @@ license = "MIT"
 
 [features]
 guest-tests = []
+idl-tests = []
+
+[[test]]
+name = "idl_wire"
+required-features = ["idl-tests"]
 
 [[test]]
 name = "private_authority"
@@ -41,3 +46,4 @@ workspace = true
 
 [dev-dependencies]
 risc0-zkvm.workspace = true
+serde_json.workspace = true

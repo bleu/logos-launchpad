@@ -8,15 +8,17 @@ use serde::{Deserialize, Serialize};
 
 /// Executes the RFP-015 private purchase composition in one privacy-preserving transaction.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PrivateBuyInstruction {
-    pub curve_program_id: ProgramId,
-    pub token_program_id: ProgramId,
-    pub ata_program_id: ProgramId,
-    pub native_transfer_program_id: ProgramId,
-    pub amount_out: u128,
-    pub max_collateral_in: u128,
-    pub gas_reserve: u128,
-    pub collateral_definition: AccountId,
+pub enum PrivateBuyInstruction {
+    Execute {
+        curve_program_id: ProgramId,
+        token_program_id: ProgramId,
+        ata_program_id: ProgramId,
+        native_transfer_program_id: ProgramId,
+        amount_out: u128,
+        max_collateral_in: u128,
+        gas_reserve: u128,
+        collateral_definition_id: AccountId,
+    },
 }
 
 /// One private invocation: expose the authority NFT, act, return it to its source.

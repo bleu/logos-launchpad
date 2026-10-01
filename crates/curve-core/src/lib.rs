@@ -37,8 +37,6 @@ mod tests;
 /// Curve program instruction. Token accounts are supplied by the guest/token adapter.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Instruction {
-    /// Select the pinned privacy circuit's transaction-wide PDA authorization rules.
-    Private { instruction: Box<Instruction> },
     /// Creates the config PDA on the first call, replaces it whole after.
     ///
     /// Required accounts:
@@ -48,7 +46,7 @@ pub enum Instruction {
     UpdateConfig {
         namespace: AccountId,
         admin: AccountId,
-        protocol_fee_bps: u16,
+        protocol_fee_bps: u32,
         treasury: AccountId,
     },
     /// Permanently disables namespace administration; swaps retain the last settings.
@@ -72,9 +70,10 @@ pub enum Instruction {
         virtual_reserve0: u128,
         virtual_reserve1: u128,
         close_timestamp: Option<u64>,
-        close_on_depletion: Option<DepletionSide>,
+        close_on_depletion: Option<u8>,
         owner: AccountId,
-        owner_program: Option<(ProgramId, [u8; 32])>,
+        owner_program_id: Option<ProgramId>,
+        owner_program_seed: Option<[u8; 32]>,
         /// Included in the wire instruction following the LEZ program convention;
         /// dispatch verifies it against the executing program id.
         curve_program_id: ProgramId,
@@ -101,32 +100,18 @@ pub enum Instruction {
         max_amount_in: u128,
         token_in: AccountId,
     },
-    /// Funds a prepared pool; same ten accounts as CreatePool.
-    ActivatePool,
     /// Owner-only logical closure.
     ClosePool,
+    /// Funds a prepared pool; same ten accounts as CreatePool.
+    ActivatePool,
     /// Owner-only full withdrawal after manual closure or expiry, collecting fees atomically.
     /// Accounts: pool, owner, owner ATA0/ATA1, pool ATA0/ATA1, clock, config, treasury ATA1.
     /// Omit the last account when it aliases owner ATA1 (LEZ requires unique IDs).
     WithdrawReserves,
     /// Permissionless collection: pool, namespace config, pool token1 ATA, treasury token1 ATA.
     CollectFees,
-}
-
-/// Wire-level side selection for optional depletion closure.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum DepletionSide {
-    Token0,
-    Token1,
-}
-
-impl From<DepletionSide> for pool::TokenSide {
-    fn from(side: DepletionSide) -> Self {
-        match side {
-            DepletionSide::Token0 => Self::Token0,
-            DepletionSide::Token1 => Self::Token1,
-        }
-    }
+    /// Select the pinned privacy circuit's transaction-wide PDA authorization rules.
+    Private { instruction: Box<Instruction> },
 }
 
 /// The protocol fee denominator. A fee at this rate consumes its buy-side input,

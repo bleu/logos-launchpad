@@ -4,8 +4,8 @@
 pub mod factory {
     #[instruction]
     pub fn create_factory_pool(
-        #[account(init, pda = [literal("factory"), arg("launch_salt"), arg("namespace")])] factory: AccountWithMetadata,
-        #[account(init, pda = [literal("definition"), arg("launch_salt"), arg("namespace")])] token_definition: AccountWithMetadata,
+        #[account(init)] factory: AccountWithMetadata,
+        #[account(init)] token_definition: AccountWithMetadata,
         #[account(init)] mint: AccountWithMetadata,
         #[account(init)] metadata: AccountWithMetadata,
         #[account(init)] creator_escrow: AccountWithMetadata,
@@ -52,14 +52,6 @@ pub mod factory {
     ) {}
 
     #[instruction]
-    pub fn close_factory_pool(
-        factory: AccountWithMetadata,
-        #[account(mut)] pool: AccountWithMetadata,
-        #[account(signer)] creator: AccountWithMetadata,
-        clock: AccountWithMetadata,
-    ) {}
-
-    #[instruction]
     pub fn claim_creator_allocation(
         #[account(mut)] factory: AccountWithMetadata,
         pool: AccountWithMetadata,
@@ -86,6 +78,6 @@ pub mod factory {
         #[account(mut)] creator_collateral_ata: AccountWithMetadata,
         clock: AccountWithMetadata,
         config: AccountWithMetadata,
-        #[account(mut)] treasury_collateral_ata: AccountWithMetadata,
+        #[account(mut)] treasury_collateral_atas: Vec<AccountWithMetadata>,
     ) {}
 }

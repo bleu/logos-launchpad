@@ -8,25 +8,24 @@
 pub mod curve {
     #[instruction]
     pub fn update_config(
-        #[account(mut, pda = arg("namespace"))] config: AccountWithMetadata,
+        #[account(mut)] config: AccountWithMetadata,
         #[account(signer)] authority: AccountWithMetadata,
         namespace: AccountId,
         admin: AccountId,
-        protocol_fee_bps: u16,
+        protocol_fee_bps: u32,
         treasury: AccountId,
     ) {}
 
     #[instruction]
     pub fn renounce_admin(
-        #[account(mut, pda = arg("namespace"))] config: AccountWithMetadata,
+        #[account(mut)] config: AccountWithMetadata,
         #[account(signer)] authority: AccountWithMetadata,
         namespace: AccountId,
     ) {}
 
     #[instruction]
     pub fn create_pool(
-        #[account(init, pda = [account("token0_definition"), account("token1_definition"), arg("owner"), arg("namespace")])]
-        pool: AccountWithMetadata,
+        #[account(init)] pool: AccountWithMetadata,
         #[account(signer)] owner_authority: AccountWithMetadata,
         token0_definition: AccountWithMetadata,
         token1_definition: AccountWithMetadata,
@@ -43,9 +42,10 @@ pub mod curve {
         virtual_reserve0: u128,
         virtual_reserve1: u128,
         close_timestamp: Option<u64>,
-        close_on_depletion: Option<DepletionSide>,
+        close_on_depletion: Option<u8>,
         owner: AccountId,
-        owner_program: Option<(ProgramId, [u8; 32])>,
+        owner_program_id: Option<ProgramId>,
+        owner_program_seed: Option<[u8; 32]>,
         curve_program_id: ProgramId,
     ) {}
 
@@ -69,10 +69,10 @@ pub mod curve {
         #[account(mut)] pool: AccountWithMetadata,
         config: AccountWithMetadata,
         #[account(signer)] participant: AccountWithMetadata,
-        #[account(mut)] participant_collateral_ata: AccountWithMetadata,
-        #[account(mut)] pool_collateral_ata: AccountWithMetadata,
-        #[account(mut)] pool_token_ata: AccountWithMetadata,
-        #[account(mut)] participant_token_ata: AccountWithMetadata,
+        #[account(mut)] participant_token_in_ata: AccountWithMetadata,
+        #[account(mut)] pool_token_in_ata: AccountWithMetadata,
+        #[account(mut)] pool_token_out_ata: AccountWithMetadata,
+        #[account(mut)] participant_token_out_ata: AccountWithMetadata,
         clock: AccountWithMetadata,
         amount_out: u128,
         max_amount_in: u128,
@@ -111,7 +111,7 @@ pub mod curve {
         #[account(mut)] pool_token1_ata: AccountWithMetadata,
         clock: AccountWithMetadata,
         config: AccountWithMetadata,
-        #[account(mut)] treasury_collateral_ata: AccountWithMetadata,
+        #[account(mut)] treasury_collateral_atas: Vec<AccountWithMetadata>,
     ) {}
     #[instruction]
     pub fn collect_fees(

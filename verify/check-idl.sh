@@ -15,3 +15,5 @@ for program in curve factory private_buy; do
   rm -f "$generated"
   trap - EXIT
 done
+
+cargo test -p launchpad-client --features idl-tests --test idl_wire --locked

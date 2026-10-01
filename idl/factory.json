@@ -9,45 +9,13 @@
           "name": "factory",
           "writable": true,
           "signer": false,
-          "init": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": "factory"
-              },
-              {
-                "kind": "arg",
-                "path": "launch_salt"
-              },
-              {
-                "kind": "arg",
-                "path": "namespace"
-              }
-            ]
-          }
+          "init": true
         },
         {
           "name": "token_definition",
           "writable": true,
           "signer": false,
-          "init": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": "definition"
-              },
-              {
-                "kind": "arg",
-                "path": "launch_salt"
-              },
-              {
-                "kind": "arg",
-                "path": "namespace"
-              }
-            ]
-          }
+          "init": true
         },
         {
           "name": "mint",
@@ -279,36 +247,6 @@
       "args": []
     },
     {
-      "name": "close_factory_pool",
-      "accounts": [
-        {
-          "name": "factory",
-          "writable": false,
-          "signer": false,
-          "init": false
-        },
-        {
-          "name": "pool",
-          "writable": true,
-          "signer": false,
-          "init": false
-        },
-        {
-          "name": "creator",
-          "writable": false,
-          "signer": true,
-          "init": false
-        },
-        {
-          "name": "clock",
-          "writable": false,
-          "signer": false,
-          "init": false
-        }
-      ],
-      "args": []
-    },
-    {
       "name": "claim_creator_allocation",
       "accounts": [
         {
@@ -438,10 +376,11 @@
           "init": false
         },
         {
-          "name": "treasury_collateral_ata",
+          "name": "treasury_collateral_atas",
           "writable": true,
           "signer": false,
-          "init": false
+          "init": false,
+          "rest": true
         }
       ],
       "args": []

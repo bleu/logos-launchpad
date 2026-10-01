@@ -9,7 +9,7 @@ use lee_core::{
     program::{Claim, ProgramId},
 };
 
-use pool::Pool;
+use pool::{FeeSide, Pool, PoolCreateParams};
 use token_core::{TokenDefinition, TokenHolding};
 
 use crate::dispatch::process_instruction;
@@ -692,7 +692,15 @@ fn pool_state_round_trips_with_ordered_tokens_owner_and_optional_expiry() {
         token1_definition_id: AccountId::new([2; 32]),
         owner: AccountId::new([3; 32]),
 
-        pool: Pool::create(800, 25, 1000, 100, Some(42), None).expect("valid pool"),
+        pool: Pool::create(PoolCreateParams {
+            token0_amount: 800,
+            token1_amount: 25,
+            virtual_reserve0: 1000,
+            virtual_reserve1: 100,
+            close_timestamp: Some(42),
+            close_on_depletion: None,
+        })
+        .expect("valid pool"),
     };
     let data = Data::from(&pool_account);
     assert_eq!(
@@ -713,7 +721,15 @@ fn stored_pool_owner_can_close_the_pool() {
         token0_definition_id: token0,
         token1_definition_id: token1,
         owner,
-        pool: Pool::create(800, 25, 1000, 100, None, None).expect("valid pool"),
+        pool: Pool::create(PoolCreateParams {
+            token0_amount: 800,
+            token1_amount: 25,
+            virtual_reserve0: 1000,
+            virtual_reserve1: 100,
+            close_timestamp: None,
+            close_on_depletion: None,
+        })
+        .expect("valid pool"),
     };
     let pool = AccountWithMetadata {
         account: Account {
@@ -765,7 +781,15 @@ fn an_unrelated_signer_cannot_close_the_pool() {
         token0_definition_id: token0,
         token1_definition_id: token1,
         owner,
-        pool: Pool::create(800, 25, 1000, 100, None, None).expect("valid pool"),
+        pool: Pool::create(PoolCreateParams {
+            token0_amount: 800,
+            token1_amount: 25,
+            virtual_reserve0: 1000,
+            virtual_reserve1: 100,
+            close_timestamp: None,
+            close_on_depletion: None,
+        })
+        .expect("valid pool"),
     };
     let pool = AccountWithMetadata {
         account: Account {
@@ -797,7 +821,15 @@ fn expired_pool_owner_can_withdraw_both_reserves_without_closing_first() {
         token0_definition_id: token0,
         token1_definition_id: token1,
         owner,
-        pool: Pool::create(800, 25, 1000, 100, Some(42), None).expect("valid pool"),
+        pool: Pool::create(PoolCreateParams {
+            token0_amount: 800,
+            token1_amount: 25,
+            virtual_reserve0: 1000,
+            virtual_reserve1: 100,
+            close_timestamp: Some(42),
+            close_on_depletion: None,
+        })
+        .expect("valid pool"),
     };
     let pool = AccountWithMetadata {
         account: Account {
@@ -862,7 +894,15 @@ fn withdraw_dispatch_transfers_both_real_reserves_and_retires_the_pool() {
                 token0_definition_id: token0,
                 token1_definition_id: token1,
                 owner,
-                pool: Pool::create(800, 100, 1000, 100, Some(42), None).expect("valid pool"),
+                pool: Pool::create(PoolCreateParams {
+                    token0_amount: 800,
+                    token1_amount: 100,
+                    virtual_reserve0: 1000,
+                    virtual_reserve1: 100,
+                    close_timestamp: Some(42),
+                    close_on_depletion: None,
+                })
+                .expect("valid pool"),
             }),
             ..Account::default()
         },
@@ -982,7 +1022,15 @@ fn exact_input_sell_charges_the_protocol_fee_in_collateral() {
         token0_definition_id: token0,
         token1_definition_id: token1,
         owner,
-        pool: Pool::create(800, 100, 1000, 100, None, None).expect("valid pool"),
+        pool: Pool::create(PoolCreateParams {
+            token0_amount: 800,
+            token1_amount: 100,
+            virtual_reserve0: 1000,
+            virtual_reserve1: 100,
+            close_timestamp: None,
+            close_on_depletion: None,
+        })
+        .expect("valid pool"),
     };
     let pool = AccountWithMetadata {
         account: Account {
@@ -1014,7 +1062,7 @@ fn exact_input_sell_charges_the_protocol_fee_in_collateral() {
     assert_eq!(settlement.effective_amount_in, 250);
     assert_eq!(settlement.raw_amount_out, 20);
     assert_eq!(settlement.protocol_fee, 1);
-    assert!(settlement.protocol_fee_on_output);
+    assert_eq!(settlement.protocol_fee_side, FeeSide::Output);
     assert_eq!(settlement.treasury, new_treasury());
     let [post]: [_; 1] = posts.try_into().expect("one post state");
     let updated = PoolAccount::try_from(&post.account().data).expect("valid pool state");
@@ -1047,7 +1095,15 @@ fn token0_to_token1_exact_input_accrues_fee_with_two_transfers() {
                 token0_definition_id: token0,
                 token1_definition_id: token1,
                 owner,
-                pool: Pool::create(800, 100, 1000, 100, Some(42), None).expect("valid pool"),
+                pool: Pool::create(PoolCreateParams {
+                    token0_amount: 800,
+                    token1_amount: 100,
+                    virtual_reserve0: 1000,
+                    virtual_reserve1: 100,
+                    close_timestamp: Some(42),
+                    close_on_depletion: None,
+                })
+                .expect("valid pool"),
             }),
             ..Account::default()
         },
@@ -1182,7 +1238,15 @@ fn exact_output_handler_caps_fee_inclusive_input_in_the_reverse_direction() {
         token0_definition_id: token0,
         token1_definition_id: token1,
         owner,
-        pool: Pool::create(800, 100, 1000, 100, None, None).expect("valid pool"),
+        pool: Pool::create(PoolCreateParams {
+            token0_amount: 800,
+            token1_amount: 100,
+            virtual_reserve0: 1000,
+            virtual_reserve1: 100,
+            close_timestamp: None,
+            close_on_depletion: None,
+        })
+        .expect("valid pool"),
     };
     let pool = AccountWithMetadata {
         account: Account {
@@ -1250,7 +1314,15 @@ fn exact_output_dispatch_settles_fee_inclusive_input_and_requested_output_atomic
                 token0_definition_id: token0,
                 token1_definition_id: token1,
                 owner,
-                pool: Pool::create(800, 100, 1000, 100, Some(42), None).expect("valid pool"),
+                pool: Pool::create(PoolCreateParams {
+                    token0_amount: 800,
+                    token1_amount: 100,
+                    virtual_reserve0: 1000,
+                    virtual_reserve1: 100,
+                    close_timestamp: Some(42),
+                    close_on_depletion: None,
+                })
+                .expect("valid pool"),
             }),
             ..Account::default()
         },
@@ -1365,7 +1437,7 @@ fn exact_output_dispatch_settles_fee_inclusive_input_and_requested_output_atomic
 }
 
 #[test]
-fn every_instruction_survives_the_guest_wire_format() {
+fn instruction_wire_format_matches_the_idl_order() {
     // `read_lee_inputs::<Instruction>()` in the guest deserialises with risc0's serde.
     let instructions = [
         Instruction::UpdateConfig {
@@ -1374,18 +1446,21 @@ fn every_instruction_survives_the_guest_wire_format() {
             protocol_fee_bps: 100,
             treasury: new_treasury(),
         },
+        Instruction::RenounceAdmin {
+            namespace: AccountId::new([0xAD; 32]),
+        },
         Instruction::CreatePool {
             defer_funding: false,
-            owner_program: None,
             namespace: AccountId::new([0xAD; 32]),
             token0_amount: 800,
             token1_amount: 25,
             virtual_reserve0: 1000,
             virtual_reserve1: 100,
             close_timestamp: Some(42),
-            close_on_depletion: None,
+            close_on_depletion: Some(0),
             owner: AccountId::new([3; 32]),
-
+            owner_program_id: Some([8; 8]),
+            owner_program_seed: Some([9; 32]),
             curve_program_id: [7; 8],
         },
         Instruction::SwapExactInput {
@@ -1399,13 +1474,156 @@ fn every_instruction_survives_the_guest_wire_format() {
             token_in: AccountId::new([2; 32]),
         },
         Instruction::ClosePool,
+        Instruction::ActivatePool,
         Instruction::WithdrawReserves,
+        Instruction::CollectFees,
+        Instruction::Private {
+            instruction: Box::new(Instruction::ClosePool),
+        },
     ];
-    for instruction in instructions {
+    for (tag, instruction) in (0_u32..=9).zip(instructions) {
         let words = risc0_zkvm::serde::to_vec(&instruction).expect("instruction serialises");
+        assert_eq!(words.first().copied(), Some(tag));
         let back: Instruction = risc0_zkvm::serde::from_slice(&words).expect("wire words parse");
         assert_eq!(back, instruction);
     }
+}
+
+fn valid_create_pool_instruction(
+    close_on_depletion: Option<u8>,
+    owner_program_id: Option<ProgramId>,
+    owner_program_seed: Option<[u8; 32]>,
+) -> Instruction {
+    Instruction::CreatePool {
+        defer_funding: false,
+        namespace: NAMESPACE_CREATOR,
+        token0_amount: 800,
+        token1_amount: 25,
+        virtual_reserve0: 1_000,
+        virtual_reserve1: 100,
+        close_timestamp: Some(42),
+        close_on_depletion,
+        owner: AccountId::new([3; 32]),
+        owner_program_id,
+        owner_program_seed,
+        curve_program_id: CURVE_PROGRAM_ID,
+    }
+}
+
+#[test]
+fn wire_values_reject_unrepresentable_fee_invalid_depletion_and_incomplete_owner_program() {
+    let result = std::panic::catch_unwind(|| {
+        process_instruction(
+            vec![uninitialized_config(), namespace_creator_signer()],
+            Instruction::UpdateConfig {
+                namespace: NAMESPACE_CREATOR,
+                admin: NAMESPACE_CREATOR,
+                protocol_fee_bps: u32::from(u16::MAX) + 1,
+                treasury: new_treasury(),
+            },
+            CURVE_PROGRAM_ID,
+        )
+    });
+    assert!(result.is_err());
+
+    let result = std::panic::catch_unwind(|| {
+        process_instruction(
+            vec![uninitialized_config(), namespace_creator_signer()],
+            Instruction::UpdateConfig {
+                namespace: NAMESPACE_CREATOR,
+                admin: NAMESPACE_CREATOR,
+                protocol_fee_bps: u32::from(crate::MAX_FEE_BPS) + 1,
+                treasury: new_treasury(),
+            },
+            CURVE_PROGRAM_ID,
+        )
+    });
+    assert!(result.is_err());
+
+    for instruction in [
+        valid_create_pool_instruction(Some(2), None, None),
+        valid_create_pool_instruction(None, Some([8; 8]), None),
+        valid_create_pool_instruction(None, None, Some([9; 32])),
+    ] {
+        let accounts = valid_create_pool_accounts();
+        let pre_states = vec![
+            accounts.pool,
+            accounts.owner,
+            accounts.token0_definition,
+            accounts.token1_definition,
+            accounts.owner_token0_ata,
+            accounts.owner_token1_ata,
+            accounts.pool_token0_ata,
+            accounts.pool_token1_ata,
+            trusted_clock(1),
+            initialized_config(NAMESPACE_CREATOR),
+        ];
+        assert!(
+            std::panic::catch_unwind(|| process_instruction(
+                pre_states,
+                instruction,
+                CURVE_PROGRAM_ID,
+            ))
+            .is_err()
+        );
+    }
+
+    let owner_program_id = [8; 8];
+    let owner_program_seed = [9; 32];
+    let owner = AccountId::for_public_pda(
+        &owner_program_id,
+        &lee_core::program::PdaSeed::new(owner_program_seed),
+    );
+    let token0_definition = token_definition(AccountId::new([4; 32]));
+    let token1_definition = token_definition(AccountId::new([5; 32]));
+    let pool_id = compute_pool_pda(
+        NAMESPACE_CREATOR,
+        CURVE_PROGRAM_ID,
+        token0_definition.account_id,
+        token1_definition.account_id,
+        owner,
+    );
+    let mut instruction =
+        valid_create_pool_instruction(Some(1), Some(owner_program_id), Some(owner_program_seed));
+    let Instruction::CreatePool {
+        owner: wire_owner, ..
+    } = &mut instruction
+    else {
+        unreachable!("fixture constructs a pool instruction");
+    };
+    *wire_owner = owner;
+    let (posts, _) = process_instruction(
+        vec![
+            AccountWithMetadata {
+                account_id: pool_id,
+                ..uninitialized_config()
+            },
+            AccountWithMetadata {
+                account: Account {
+                    program_owner: owner_program_id,
+                    ..Account::default()
+                },
+                account_id: owner,
+                is_authorized: true,
+            },
+            token0_definition.clone(),
+            token1_definition.clone(),
+            owner_source_ata(owner, token0_definition.account_id),
+            owner_source_ata(owner, token1_definition.account_id),
+            ata(pool_id, token0_definition.account_id, Account::default()),
+            ata(pool_id, token1_definition.account_id, Account::default()),
+            trusted_clock(1),
+            initialized_config(NAMESPACE_CREATOR),
+        ],
+        instruction,
+        CURVE_PROGRAM_ID,
+    );
+    assert_eq!(
+        PoolAccount::try_from(&posts[0].account().data)
+            .expect("pool state parses")
+            .owner_program,
+        Some((owner_program_id, owner_program_seed))
+    );
 }
 
 #[test]
@@ -1466,7 +1684,7 @@ fn namespace_config(namespace: AccountId, fee: u16, treasury: AccountId) -> Acco
         Instruction::UpdateConfig {
             namespace,
             admin: namespace,
-            protocol_fee_bps: fee,
+            protocol_fee_bps: u32::from(fee),
             treasury,
         },
         CURVE_PROGRAM_ID,
@@ -1490,7 +1708,15 @@ fn namespace_pool(namespace: AccountId) -> AccountWithMetadata {
         token1_definition_id: AccountId::new([2; 32]),
         owner: AccountId::new([3; 32]),
 
-        pool: Pool::create(800, 100, 1000, 100, None, None).unwrap(),
+        pool: Pool::create(PoolCreateParams {
+            token0_amount: 800,
+            token1_amount: 100,
+            virtual_reserve0: 1000,
+            virtual_reserve1: 100,
+            close_timestamp: None,
+            close_on_depletion: None,
+        })
+        .unwrap(),
     };
     AccountWithMetadata {
         account: Account {
@@ -1804,7 +2030,6 @@ fn pool_creation_binds_namespace_and_rejects_a_different_config() {
             ],
             Instruction::CreatePool {
                 defer_funding: false,
-                owner_program: None,
                 namespace,
                 token0_amount: 800,
                 token1_amount: 0,
@@ -1813,6 +2038,8 @@ fn pool_creation_binds_namespace_and_rejects_a_different_config() {
                 close_timestamp: None,
                 close_on_depletion: None,
                 owner,
+                owner_program_id: None,
+                owner_program_seed: None,
                 curve_program_id: CURVE_PROGRAM_ID,
             },
         )
@@ -1879,7 +2106,7 @@ fn namespace_authority_follows_the_nft_between_holders() {
             Config::try_from(&config.account.data)
                 .unwrap()
                 .protocol_fee_bps,
-            fee
+            u16::try_from(fee).expect("test fee fits in u16")
         );
     }
 }

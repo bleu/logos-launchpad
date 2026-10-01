@@ -9,15 +9,7 @@
           "name": "config",
           "writable": true,
           "signer": false,
-          "init": false,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "arg",
-                "path": "namespace"
-              }
-            ]
-          }
+          "init": false
         },
         {
           "name": "authority",
@@ -37,7 +29,7 @@
         },
         {
           "name": "protocol_fee_bps",
-          "type": "u16"
+          "type": "u32"
         },
         {
           "name": "treasury",
@@ -52,15 +44,7 @@
           "name": "config",
           "writable": true,
           "signer": false,
-          "init": false,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "arg",
-                "path": "namespace"
-              }
-            ]
-          }
+          "init": false
         },
         {
           "name": "authority",
@@ -83,27 +67,7 @@
           "name": "pool",
           "writable": true,
           "signer": false,
-          "init": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "account",
-                "path": "token0_definition"
-              },
-              {
-                "kind": "account",
-                "path": "token1_definition"
-              },
-              {
-                "kind": "arg",
-                "path": "owner"
-              },
-              {
-                "kind": "arg",
-                "path": "namespace"
-              }
-            ]
-          }
+          "init": true
         },
         {
           "name": "owner_authority",
@@ -194,9 +158,7 @@
         {
           "name": "close_on_depletion",
           "type": {
-            "option": {
-              "defined": "DepletionSide"
-            }
+            "option": "u8"
           }
         },
         {
@@ -204,9 +166,20 @@
           "type": "account_id"
         },
         {
-          "name": "owner_program",
+          "name": "owner_program_id",
           "type": {
-            "option": "unknown"
+            "option": "program_id"
+          }
+        },
+        {
+          "name": "owner_program_seed",
+          "type": {
+            "option": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
           }
         },
         {
@@ -304,25 +277,25 @@
           "init": false
         },
         {
-          "name": "participant_collateral_ata",
+          "name": "participant_token_in_ata",
           "writable": true,
           "signer": false,
           "init": false
         },
         {
-          "name": "pool_collateral_ata",
+          "name": "pool_token_in_ata",
           "writable": true,
           "signer": false,
           "init": false
         },
         {
-          "name": "pool_token_ata",
+          "name": "pool_token_out_ata",
           "writable": true,
           "signer": false,
           "init": false
         },
         {
-          "name": "participant_token_ata",
+          "name": "participant_token_out_ata",
           "writable": true,
           "signer": false,
           "init": false
@@ -491,10 +464,11 @@
           "init": false
         },
         {
-          "name": "treasury_collateral_ata",
+          "name": "treasury_collateral_atas",
           "writable": true,
           "signer": false,
-          "init": false
+          "init": false,
+          "rest": true
         }
       ],
       "args": []

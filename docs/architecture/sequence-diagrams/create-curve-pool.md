@@ -24,7 +24,7 @@ sequenceDiagram
     Creator->>App: Configure curve sale
     App->>SDK: Validate and prepare creation
     SDK->>Wallet: Request creation transaction approval
-    Note over Wallet: Account selection user approval signing and submission follow LP-0021; integration awaits SDK development
+    Note over Wallet: Account selection user approval signing and submission follow LP-0021. Integration awaits SDK development
     Wallet->>Factory: Submit creation stage if supported
     Factory->>Namespace: Check namespace binding and creation settings
     Namespace-->>Factory: Namespace state
@@ -37,7 +37,8 @@ sequenceDiagram
     App->>SDK: Prepare funding stage
     SDK->>Wallet: Request funding transaction approval
     Wallet->>Factory: Submit funding stage if supported
-    Factory->>Pool: Fund D and R and activate when valid
+    Factory->>Pool: Fund D and activate when valid
+    Note over Factory: R remains in factory custody until post-close settlement
     Pool-->>Factory: Active pool state
     Factory-->>Indexer: Emit creation events
     SDK-->>App: Show creation result
@@ -57,4 +58,4 @@ The backend module read API exposes indexed status after events reach the existi
 
 ## Open details
 
-The final instruction names, account schema, transaction construction and input limits need implementation and platform review. LP-0021 integration awaits SDK development and its final API is unavailable. Manual-close eligibility and unsold-`D` handling also remain open.
+The final instruction names, account schema, transaction construction and input limits need implementation and platform review. LP-0021 integration awaits SDK development and its final API is unavailable. Closing and unsold-`D` rules are defined in [ADR 0025](../../adr/0025-sale-closing.md).

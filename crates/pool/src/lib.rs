@@ -76,6 +76,42 @@ pub enum TokenSide {
     Token1,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PoolCreateParams {
+    pub token0_amount: u128,
+    pub token1_amount: u128,
+    pub virtual_reserve0: u128,
+    pub virtual_reserve1: u128,
+    pub close_timestamp: Option<u64>,
+    pub close_on_depletion: Option<TokenSide>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ExactInputSwap {
+    pub token_in: TokenSide,
+    pub amount_in: u128,
+    pub min_amount_out: u128,
+    pub pool_fee_bps: u16,
+    pub protocol_fee_bps: u16,
+    pub now: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ExactOutputSwap {
+    pub token_in: TokenSide,
+    pub amount_out: u128,
+    pub max_amount_in: u128,
+    pub pool_fee_bps: u16,
+    pub protocol_fee_bps: u16,
+    pub now: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FeeSide {
+    Input,
+    Output,
+}
+
 /// The persisted lifecycle. Timestamp expiry is evaluated by [`Pool::effective_lifecycle`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum PoolLifecycle {
@@ -97,7 +133,7 @@ pub struct SwapOutcome {
     /// Fee accrued in the collateral vault for later collection.
     pub protocol_fee: u128,
     /// Buys charge the collateral input; sells charge the collateral output.
-    pub protocol_fee_on_output: bool,
+    pub protocol_fee_side: FeeSide,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -157,14 +193,15 @@ pub enum CloseError {
 
 impl Pool {
     /// Creates an ordered pool and fixes `k` for its lifetime.
-    pub fn create(
-        token0_amount: u128,
-        token1_amount: u128,
-        virtual_reserve0: u128,
-        virtual_reserve1: u128,
-        close_timestamp: Option<u64>,
-        close_on_depletion: Option<TokenSide>,
-    ) -> Result<Self, CreateError> {
+    pub fn create(params: PoolCreateParams) -> Result<Self, CreateError> {
+        let PoolCreateParams {
+            token0_amount,
+            token1_amount,
+            virtual_reserve0,
+            virtual_reserve1,
+            close_timestamp,
+            close_on_depletion,
+        } = params;
         if virtual_reserve0 >= VIRTUAL_RESERVE_BOUND || virtual_reserve1 >= VIRTUAL_RESERVE_BOUND {
             return Err(CreateError::VirtualReserveAboveBound);
         }
@@ -193,15 +230,15 @@ impl Pool {
         })
     }
 
-    pub fn swap_exact_input(
-        &mut self,
-        token_in: TokenSide,
-        amount_in: u128,
-        min_amount_out: u128,
-        pool_fee_bps: u16,
-        protocol_fee_bps: u16,
-        now: u64,
-    ) -> Result<SwapOutcome, SwapError> {
+    pub fn swap_exact_input(&mut self, request: ExactInputSwap) -> Result<SwapOutcome, SwapError> {
+        let ExactInputSwap {
+            token_in,
+            amount_in,
+            min_amount_out,
+            pool_fee_bps,
+            protocol_fee_bps,
+            now,
+        } = request;
         self.ensure_swappable(now)?;
         if amount_in == 0 {
             return Err(SwapError::ZeroAmount);
@@ -233,15 +270,15 @@ impl Pool {
         if amount_out == 0 {
             return Err(SwapError::OutputTooSmall);
         }
-        let (recipient_amount_out, protocol_fee, protocol_fee_on_output) = if is_buy {
-            (amount_out, protocol_fee, false)
+        let (recipient_amount_out, protocol_fee, protocol_fee_side) = if is_buy {
+            (amount_out, protocol_fee, FeeSide::Input)
         } else {
             let fee = fee_ceil(amount_out, protocol_fee_bps)?;
             let net = amount_out.checked_sub(fee).ok_or(SwapError::Arithmetic)?;
             if net == 0 {
                 return Err(SwapError::OutputTooSmall);
             }
-            (net, fee, true)
+            (net, fee, FeeSide::Output)
         };
         if recipient_amount_out < min_amount_out {
             return Err(SwapError::SlippageExceeded);
@@ -291,19 +328,22 @@ impl Pool {
             raw_amount_out: amount_out,
             amount_out: recipient_amount_out,
             protocol_fee,
-            protocol_fee_on_output,
+            protocol_fee_side,
         })
     }
 
     pub fn swap_exact_output(
         &mut self,
-        token_in: TokenSide,
-        amount_out: u128,
-        max_amount_in: u128,
-        pool_fee_bps: u16,
-        protocol_fee_bps: u16,
-        now: u64,
+        request: ExactOutputSwap,
     ) -> Result<SwapOutcome, SwapError> {
+        let ExactOutputSwap {
+            token_in,
+            amount_out,
+            max_amount_in,
+            pool_fee_bps,
+            protocol_fee_bps,
+            now,
+        } = request;
         self.ensure_swappable(now)?;
         if token_in != TokenSide::Token1 {
             return Err(SwapError::ExactOutputRequiresCollateralInput);
@@ -386,7 +426,7 @@ impl Pool {
             raw_amount_out: amount_out,
             amount_out,
             protocol_fee,
-            protocol_fee_on_output: false,
+            protocol_fee_side: FeeSide::Input,
         })
     }
 
@@ -546,7 +586,15 @@ mod tests {
 
     #[test]
     fn create_pool_records_both_real_reserves_and_optional_close_time() {
-        let pool = Pool::create(800, 25, 1000, 100, Some(42), None).expect("valid pool");
+        let pool = Pool::create(PoolCreateParams {
+            token0_amount: 800,
+            token1_amount: 25,
+            virtual_reserve0: 1000,
+            virtual_reserve1: 100,
+            close_timestamp: Some(42),
+            close_on_depletion: None,
+        })
+        .expect("valid pool");
         assert_eq!(pool.real_reserve0, 800);
         assert_eq!(pool.real_reserve1, 25);
         assert_eq!(pool.virtual_reserve0, 1000);
@@ -558,9 +606,24 @@ mod tests {
 
     #[test]
     fn exact_input_swaps_token0_for_token1_through_the_public_pool_api() {
-        let mut pool = Pool::create(800, 100, 1000, 100, None, None).expect("valid pool");
+        let mut pool = Pool::create(PoolCreateParams {
+            token0_amount: 800,
+            token1_amount: 100,
+            virtual_reserve0: 1000,
+            virtual_reserve1: 100,
+            close_timestamp: None,
+            close_on_depletion: None,
+        })
+        .expect("valid pool");
         let outcome = pool
-            .swap_exact_input(TokenSide::Token0, 250, 20, 0, 0, 1)
+            .swap_exact_input(ExactInputSwap {
+                token_in: TokenSide::Token0,
+                amount_in: 250,
+                min_amount_out: 20,
+                pool_fee_bps: 0,
+                protocol_fee_bps: 0,
+                now: 1,
+            })
             .expect("swap succeeds");
 
         assert_eq!(outcome.amount_in, 250);
@@ -574,29 +637,64 @@ mod tests {
 
     #[test]
     fn final_exact_input_swap_closes_a_pool_configured_to_close_on_token0_depletion() {
-        let mut pool =
-            Pool::create(80, 0, 100, 100, None, Some(TokenSide::Token0)).expect("valid pool");
+        let mut pool = Pool::create(PoolCreateParams {
+            token0_amount: 80,
+            token1_amount: 0,
+            virtual_reserve0: 100,
+            virtual_reserve1: 100,
+            close_timestamp: None,
+            close_on_depletion: Some(TokenSide::Token0),
+        })
+        .expect("valid pool");
 
         let outcome = pool
-            .swap_exact_input(TokenSide::Token1, 400, 80, 0, 0, 1)
+            .swap_exact_input(ExactInputSwap {
+                token_in: TokenSide::Token1,
+                amount_in: 400,
+                min_amount_out: 80,
+                pool_fee_bps: 0,
+                protocol_fee_bps: 0,
+                now: 1,
+            })
             .expect("final swap succeeds");
 
         assert_eq!(outcome.amount_out, 80);
         assert_eq!(pool.real_reserve0, 0);
         assert_eq!(pool.effective_lifecycle(1), PoolLifecycle::Closed);
         assert_eq!(
-            pool.swap_exact_input(TokenSide::Token1, 1, 0, 0, 0, 1),
+            pool.swap_exact_input(ExactInputSwap {
+                token_in: TokenSide::Token1,
+                amount_in: 1,
+                min_amount_out: 0,
+                pool_fee_bps: 0,
+                protocol_fee_bps: 0,
+                now: 1
+            }),
             Err(SwapError::Closed)
         );
     }
 
     #[test]
     fn final_exact_output_swap_closes_a_pool_configured_to_close_on_token0_depletion() {
-        let mut pool =
-            Pool::create(80, 0, 100, 100, None, Some(TokenSide::Token0)).expect("valid pool");
+        let mut pool = Pool::create(PoolCreateParams {
+            token0_amount: 80,
+            token1_amount: 0,
+            virtual_reserve0: 100,
+            virtual_reserve1: 100,
+            close_timestamp: None,
+            close_on_depletion: Some(TokenSide::Token0),
+        })
+        .expect("valid pool");
 
-        pool.swap_exact_output(TokenSide::Token1, 80, u128::MAX, 0, 0, 1)
-            .expect("final swap succeeds");
+        pool.swap_exact_output(ExactOutputSwap {
+            token_in: TokenSide::Token1,
+            amount_out: 80,
+            max_amount_in: u128::MAX,
+            pool_fee_bps: 0,
+            protocol_fee_bps: 0,
+            now: 1,
+        })
+        .expect("final swap succeeds");
 
         assert_eq!(pool.real_reserve0, 0);
         assert_eq!(pool.effective_lifecycle(1), PoolLifecycle::Closed);
@@ -605,31 +703,68 @@ mod tests {
     #[test]
     fn configured_zero_depletion_reserve_is_rejected() {
         assert_eq!(
-            Pool::create(0, 1, 100, 100, None, Some(TokenSide::Token0)),
+            Pool::create(PoolCreateParams {
+                token0_amount: 0,
+                token1_amount: 1,
+                virtual_reserve0: 100,
+                virtual_reserve1: 100,
+                close_timestamp: None,
+                close_on_depletion: Some(TokenSide::Token0)
+            }),
             Err(CreateError::DepletionReserveZero)
         );
     }
 
     #[test]
     fn protocol_fee_is_collateral_input_on_buy_and_collateral_output_on_sell() {
-        let mut buy_pool = Pool::create(800, 100, 1_000, 100, None, None).expect("valid pool");
+        let mut buy_pool = Pool::create(PoolCreateParams {
+            token0_amount: 800,
+            token1_amount: 100,
+            virtual_reserve0: 1_000,
+            virtual_reserve1: 100,
+            close_timestamp: None,
+            close_on_depletion: None,
+        })
+        .expect("valid pool");
         let buy = buy_pool
-            .swap_exact_input(TokenSide::Token1, 25, 180, 0, 1_000, 1)
+            .swap_exact_input(ExactInputSwap {
+                token_in: TokenSide::Token1,
+                amount_in: 25,
+                min_amount_out: 180,
+                pool_fee_bps: 0,
+                protocol_fee_bps: 1_000,
+                now: 1,
+            })
             .expect("buy succeeds");
         assert_eq!((buy.effective_amount_in, buy.protocol_fee), (22, 3));
         assert_eq!((buy.raw_amount_out, buy.amount_out), (180, 180));
-        assert!(!buy.protocol_fee_on_output);
+        assert_eq!(buy.protocol_fee_side, FeeSide::Input);
         assert_eq!(buy_pool.real_reserve1, 122);
 
-        let mut sell_pool = Pool::create(800, 100, 1_000, 100, None, None).expect("valid pool");
+        let mut sell_pool = Pool::create(PoolCreateParams {
+            token0_amount: 800,
+            token1_amount: 100,
+            virtual_reserve0: 1_000,
+            virtual_reserve1: 100,
+            close_timestamp: None,
+            close_on_depletion: None,
+        })
+        .expect("valid pool");
         let sell = sell_pool
-            .swap_exact_input(TokenSide::Token0, 250, 18, 0, 1_000, 1)
+            .swap_exact_input(ExactInputSwap {
+                token_in: TokenSide::Token0,
+                amount_in: 250,
+                min_amount_out: 18,
+                pool_fee_bps: 0,
+                protocol_fee_bps: 1_000,
+                now: 1,
+            })
             .expect("sell succeeds");
         assert_eq!(
             (sell.raw_amount_out, sell.protocol_fee, sell.amount_out),
             (20, 2, 18)
         );
-        assert!(sell.protocol_fee_on_output);
+        assert_eq!(sell.protocol_fee_side, FeeSide::Output);
         assert_eq!(
             sell_pool.real_reserve1, 80,
             "the fee leaves the collateral reserve"
@@ -638,9 +773,24 @@ mod tests {
 
     #[test]
     fn exact_output_swaps_token1_for_token0_with_the_fee_inside_max_input() {
-        let mut pool = Pool::create(800, 100, 1000, 100, None, None).expect("valid pool");
+        let mut pool = Pool::create(PoolCreateParams {
+            token0_amount: 800,
+            token1_amount: 100,
+            virtual_reserve0: 1000,
+            virtual_reserve1: 100,
+            close_timestamp: None,
+            close_on_depletion: None,
+        })
+        .expect("valid pool");
         let outcome = pool
-            .swap_exact_output(TokenSide::Token1, 200, 28, 0, 1_000, 1)
+            .swap_exact_output(ExactOutputSwap {
+                token_in: TokenSide::Token1,
+                amount_out: 200,
+                max_amount_in: 28,
+                pool_fee_bps: 0,
+                protocol_fee_bps: 1_000,
+                now: 1,
+            })
             .expect("swap succeeds");
 
         assert_eq!(outcome.amount_in, 28);
@@ -654,16 +804,38 @@ mod tests {
 
     #[test]
     fn later_quotes_continue_to_use_the_creation_time_k() {
-        let mut pool = Pool::create(1_000, 1_000, 1_000, 1_000, None, None).expect("valid pool");
+        let mut pool = Pool::create(PoolCreateParams {
+            token0_amount: 1_000,
+            token1_amount: 1_000,
+            virtual_reserve0: 1_000,
+            virtual_reserve1: 1_000,
+            close_timestamp: None,
+            close_on_depletion: None,
+        })
+        .expect("valid pool");
 
-        pool.swap_exact_input(TokenSide::Token0, 100, 0, 0, 0, 1)
-            .expect("first swap succeeds");
+        pool.swap_exact_input(ExactInputSwap {
+            token_in: TokenSide::Token0,
+            amount_in: 100,
+            min_amount_out: 0,
+            pool_fee_bps: 0,
+            protocol_fee_bps: 0,
+            now: 1,
+        })
+        .expect("first swap succeeds");
         // The first integer-rounded swap leaves the live reserve product at
         // 1,001,000. RFP-015 fixes the pricing invariant at creation-time k,
         // so the next 100-unit input pays 76 rather than the 75 a live-product
         // quote would produce.
         let outcome = pool
-            .swap_exact_input(TokenSide::Token0, 100, 0, 0, 0, 1)
+            .swap_exact_input(ExactInputSwap {
+                token_in: TokenSide::Token0,
+                amount_in: 100,
+                min_amount_out: 0,
+                pool_fee_bps: 0,
+                protocol_fee_bps: 0,
+                now: 1,
+            })
             .expect("second swap succeeds");
 
         assert_eq!(pool.k, 1_000_000);
@@ -672,13 +844,35 @@ mod tests {
 
     #[test]
     fn exact_output_rejects_a_zero_cost_quote_without_mutating_the_pool() {
-        let mut pool = Pool::create(1, 74_513, 1, 1_709, None, None).expect("valid pool");
-        pool.swap_exact_input(TokenSide::Token0, u64::MAX.into(), 0, 0, 0, 1)
-            .expect("first swap succeeds");
+        let mut pool = Pool::create(PoolCreateParams {
+            token0_amount: 1,
+            token1_amount: 74_513,
+            virtual_reserve0: 1,
+            virtual_reserve1: 1_709,
+            close_timestamp: None,
+            close_on_depletion: None,
+        })
+        .expect("valid pool");
+        pool.swap_exact_input(ExactInputSwap {
+            token_in: TokenSide::Token0,
+            amount_in: u64::MAX.into(),
+            min_amount_out: 0,
+            pool_fee_bps: 0,
+            protocol_fee_bps: 0,
+            now: 1,
+        })
+        .expect("first swap succeeds");
         let before = pool.clone();
 
         assert_eq!(
-            pool.swap_exact_output(TokenSide::Token1, 1, 0, 0, 0, 1),
+            pool.swap_exact_output(ExactOutputSwap {
+                token_in: TokenSide::Token1,
+                amount_out: 1,
+                max_amount_in: 0,
+                pool_fee_bps: 0,
+                protocol_fee_bps: 0,
+                now: 1
+            }),
             Err(SwapError::InputTooSmall)
         );
         assert_eq!(pool, before);
@@ -687,9 +881,24 @@ mod tests {
     #[test]
     fn exact_output_uses_the_smallest_fee_inclusive_gross_input() {
         for fee_bps in [1, 2_500, 9_999] {
-            let mut pool = Pool::create(800, 100, 1000, 100, None, None).expect("valid pool");
+            let mut pool = Pool::create(PoolCreateParams {
+                token0_amount: 800,
+                token1_amount: 100,
+                virtual_reserve0: 1000,
+                virtual_reserve1: 100,
+                close_timestamp: None,
+                close_on_depletion: None,
+            })
+            .expect("valid pool");
             let outcome = pool
-                .swap_exact_output(TokenSide::Token1, 100, u128::MAX, 0, fee_bps, 1)
+                .swap_exact_output(ExactOutputSwap {
+                    token_in: TokenSide::Token1,
+                    amount_out: 100,
+                    max_amount_in: u128::MAX,
+                    pool_fee_bps: 0,
+                    protocol_fee_bps: fee_bps,
+                    now: 1,
+                })
                 .expect("swap succeeds");
             let required_net = 12;
             assert_eq!(
@@ -706,22 +915,66 @@ mod tests {
     #[test]
     fn exact_output_is_the_smallest_zero_fee_input_that_reaches_the_requested_amount() {
         for amount_out in [1, 100, 200, 799] {
-            let mut quoted = Pool::create(800, 100, 1_000, 100, None, None).expect("valid pool");
+            let mut quoted = Pool::create(PoolCreateParams {
+                token0_amount: 800,
+                token1_amount: 100,
+                virtual_reserve0: 1_000,
+                virtual_reserve1: 100,
+                close_timestamp: None,
+                close_on_depletion: None,
+            })
+            .expect("valid pool");
             let outcome = quoted
-                .swap_exact_output(TokenSide::Token1, amount_out, u128::MAX, 0, 0, 1)
+                .swap_exact_output(ExactOutputSwap {
+                    token_in: TokenSide::Token1,
+                    amount_out,
+                    max_amount_in: u128::MAX,
+                    pool_fee_bps: 0,
+                    protocol_fee_bps: 0,
+                    now: 1,
+                })
                 .expect("exact-output quote succeeds");
 
-            let mut at_quote = Pool::create(800, 100, 1_000, 100, None, None).expect("valid pool");
+            let mut at_quote = Pool::create(PoolCreateParams {
+                token0_amount: 800,
+                token1_amount: 100,
+                virtual_reserve0: 1_000,
+                virtual_reserve1: 100,
+                close_timestamp: None,
+                close_on_depletion: None,
+            })
+            .expect("valid pool");
             let produced = at_quote
-                .swap_exact_input(TokenSide::Token1, outcome.amount_in, 0, 0, 0, 1)
+                .swap_exact_input(ExactInputSwap {
+                    token_in: TokenSide::Token1,
+                    amount_in: outcome.amount_in,
+                    min_amount_out: 0,
+                    pool_fee_bps: 0,
+                    protocol_fee_bps: 0,
+                    now: 1,
+                })
                 .expect("the quoted input is executable");
             assert!(produced.amount_out >= amount_out);
 
-            let mut below_quote =
-                Pool::create(800, 100, 1_000, 100, None, None).expect("valid pool");
+            let mut below_quote = Pool::create(PoolCreateParams {
+                token0_amount: 800,
+                token1_amount: 100,
+                virtual_reserve0: 1_000,
+                virtual_reserve1: 100,
+                close_timestamp: None,
+                close_on_depletion: None,
+            })
+            .expect("valid pool");
             if outcome.amount_in > 1 {
                 let previous = below_quote
-                    .swap_exact_input(TokenSide::Token1, outcome.amount_in - 1, 0, 0, 0, 1)
+                    .swap_exact_input(ExactInputSwap {
+                        token_in: TokenSide::Token1,
+                        amount_in: outcome.amount_in - 1,
+                        min_amount_out: 0,
+                        pool_fee_bps: 0,
+                        protocol_fee_bps: 0,
+                        now: 1,
+                    })
                     .expect("one less input remains a positive trade");
                 assert!(previous.amount_out < amount_out);
             }
@@ -730,7 +983,15 @@ mod tests {
 
     #[test]
     fn expiry_allows_full_withdrawal_without_a_close_transaction_and_retires_the_pool() {
-        let mut pool = Pool::create(800, 25, 1000, 100, Some(42), None).expect("valid pool");
+        let mut pool = Pool::create(PoolCreateParams {
+            token0_amount: 800,
+            token1_amount: 25,
+            virtual_reserve0: 1000,
+            virtual_reserve1: 100,
+            close_timestamp: Some(42),
+            close_on_depletion: None,
+        })
+        .expect("valid pool");
         assert_eq!(pool.withdraw_reserves(42), Ok((800, 25)));
         assert_eq!(pool.real_reserve0, 0);
         assert_eq!(pool.real_reserve1, 0);
@@ -743,10 +1004,25 @@ mod tests {
 
     #[test]
     fn swaps_are_rejected_at_the_close_timestamp_without_mutating_reserves() {
-        let mut pool = Pool::create(800, 100, 1000, 100, Some(42), None).expect("valid pool");
+        let mut pool = Pool::create(PoolCreateParams {
+            token0_amount: 800,
+            token1_amount: 100,
+            virtual_reserve0: 1000,
+            virtual_reserve1: 100,
+            close_timestamp: Some(42),
+            close_on_depletion: None,
+        })
+        .expect("valid pool");
         let before = pool.clone();
         assert_eq!(
-            pool.swap_exact_input(TokenSide::Token0, 250, 20, 0, 0, 42),
+            pool.swap_exact_input(ExactInputSwap {
+                token_in: TokenSide::Token0,
+                amount_in: 250,
+                min_amount_out: 20,
+                pool_fee_bps: 0,
+                protocol_fee_bps: 0,
+                now: 42
+            }),
             Err(SwapError::Closed)
         );
         assert_eq!(pool, before);
@@ -754,10 +1030,25 @@ mod tests {
 
     #[test]
     fn a_swap_cannot_exceed_the_selected_real_output_reserve() {
-        let mut pool = Pool::create(800, 10, 1000, 100, None, None).expect("valid pool");
+        let mut pool = Pool::create(PoolCreateParams {
+            token0_amount: 800,
+            token1_amount: 10,
+            virtual_reserve0: 1000,
+            virtual_reserve1: 100,
+            close_timestamp: None,
+            close_on_depletion: None,
+        })
+        .expect("valid pool");
         let before = pool.clone();
         assert_eq!(
-            pool.swap_exact_input(TokenSide::Token0, 250, 0, 0, 0, 1),
+            pool.swap_exact_input(ExactInputSwap {
+                token_in: TokenSide::Token0,
+                amount_in: 250,
+                min_amount_out: 0,
+                pool_fee_bps: 0,
+                protocol_fee_bps: 0,
+                now: 1
+            }),
             Err(SwapError::InsufficientRealOutputReserve)
         );
         assert_eq!(pool, before);
@@ -770,11 +1061,26 @@ mod tests {
 
     #[test]
     fn exact_input_rejects_a_nonzero_trade_that_rounds_to_zero_output() {
-        let mut pool = Pool::create(800, 100, 1_000, 1_000, None, None).expect("valid pool");
+        let mut pool = Pool::create(PoolCreateParams {
+            token0_amount: 800,
+            token1_amount: 100,
+            virtual_reserve0: 1_000,
+            virtual_reserve1: 1_000,
+            close_timestamp: None,
+            close_on_depletion: None,
+        })
+        .expect("valid pool");
         let before = pool.clone();
 
         assert_eq!(
-            pool.swap_exact_input(TokenSide::Token0, 1, 0, 0, 0, 1),
+            pool.swap_exact_input(ExactInputSwap {
+                token_in: TokenSide::Token0,
+                amount_in: 1,
+                min_amount_out: 0,
+                pool_fee_bps: 0,
+                protocol_fee_bps: 0,
+                now: 1
+            }),
             Err(SwapError::OutputTooSmall)
         );
         assert_eq!(pool, before, "a rejected dust trade must be atomic");
@@ -782,7 +1088,15 @@ mod tests {
 
     #[test]
     fn manual_close_allows_full_withdrawal_for_a_pool_without_expiry() {
-        let mut pool = Pool::create(800, 25, 1000, 100, None, None).expect("valid pool");
+        let mut pool = Pool::create(PoolCreateParams {
+            token0_amount: 800,
+            token1_amount: 25,
+            virtual_reserve0: 1000,
+            virtual_reserve1: 100,
+            close_timestamp: None,
+            close_on_depletion: None,
+        })
+        .expect("valid pool");
         assert_eq!(pool.withdraw_reserves(1), Err(WithdrawError::StillOpen));
         assert_eq!(pool.close_pool(1), Ok(()));
         assert_eq!(pool.withdraw_reserves(1), Ok((800, 25)));
@@ -792,32 +1106,104 @@ mod tests {
     #[test]
     fn create_bounds_both_virtual_reserves_below_two_to_the_64() {
         assert_eq!(
-            Pool::create(800, 0, 1 << 64, 100, None, None),
+            Pool::create(PoolCreateParams {
+                token0_amount: 800,
+                token1_amount: 0,
+                virtual_reserve0: 1 << 64,
+                virtual_reserve1: 100,
+                close_timestamp: None,
+                close_on_depletion: None
+            }),
             Err(CreateError::VirtualReserveAboveBound)
         );
         assert_eq!(
-            Pool::create(800, 0, 1000, 1 << 64, None, None),
+            Pool::create(PoolCreateParams {
+                token0_amount: 800,
+                token1_amount: 0,
+                virtual_reserve0: 1000,
+                virtual_reserve1: 1 << 64,
+                close_timestamp: None,
+                close_on_depletion: None
+            }),
             Err(CreateError::VirtualReserveAboveBound)
         );
-        assert!(Pool::create(800, 0, (1 << 64) - 1, (1 << 64) - 1, None, None).is_ok());
+        assert!(
+            Pool::create(PoolCreateParams {
+                token0_amount: 800,
+                token1_amount: 0,
+                virtual_reserve0: (1 << 64) - 1,
+                virtual_reserve1: (1 << 64) - 1,
+                close_timestamp: None,
+                close_on_depletion: None
+            })
+            .is_ok()
+        );
     }
 
     #[test]
     fn create_requires_both_virtual_reserves_to_price_the_pool() {
         assert_eq!(
-            Pool::create(800, 200, 1000, 0, None, None),
+            Pool::create(PoolCreateParams {
+                token0_amount: 800,
+                token1_amount: 200,
+                virtual_reserve0: 1000,
+                virtual_reserve1: 0,
+                close_timestamp: None,
+                close_on_depletion: None
+            }),
             Err(CreateError::VirtualReserveZero)
         );
         assert_eq!(
-            Pool::create(800, 200, 0, 100, None, None),
+            Pool::create(PoolCreateParams {
+                token0_amount: 800,
+                token1_amount: 200,
+                virtual_reserve0: 0,
+                virtual_reserve1: 100,
+                close_timestamp: None,
+                close_on_depletion: None
+            }),
             Err(CreateError::VirtualReserveZero)
         );
     }
 
     #[test]
     fn a_pool_survives_a_borsh_round_trip() {
-        let pool = Pool::create(800, 200, 1000, 100, Some(42), None).expect("valid pool");
+        let pool = Pool::create(PoolCreateParams {
+            token0_amount: 800,
+            token1_amount: 200,
+            virtual_reserve0: 1000,
+            virtual_reserve1: 100,
+            close_timestamp: Some(42),
+            close_on_depletion: None,
+        })
+        .expect("valid pool");
         let bytes = borsh::to_vec(&pool).expect("pool serialises");
         assert_eq!(Pool::try_from_slice(&bytes).expect("bytes parse"), pool);
+    }
+
+    #[test]
+    fn pool_borsh_layout_matches_the_pre_refactor_golden_bytes() {
+        let pool = Pool::create(PoolCreateParams {
+            token0_amount: 800,
+            token1_amount: 200,
+            virtual_reserve0: 1000,
+            virtual_reserve1: 100,
+            close_timestamp: Some(42),
+            close_on_depletion: None,
+        })
+        .expect("valid pool");
+        let expected: [u8; 123] = [
+            0xe8, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x64, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0xa0, 0x86, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x20, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xc8, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x01, 0x2a, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        ];
+
+        assert_eq!(borsh::to_vec(&pool).expect("pool serialises"), expected);
     }
 }

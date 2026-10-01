@@ -1,4 +1,7 @@
-use pool::{Pool, PoolLifecycle, SwapOutcome, TokenSide};
+use pool::{
+    ExactInputSwap, ExactOutputSwap, FeeSide, Pool, PoolCreateParams, PoolLifecycle, SwapOutcome,
+    TokenSide,
+};
 use proptest::prelude::*;
 
 #[derive(Clone, Debug)]
@@ -96,20 +99,34 @@ fn pool_strategy() -> impl Strategy<Value = Pool> {
             1_u128..1_000_000,
         )
             .prop_map(|(real0, real1, virtual0, virtual1)| {
-                Pool::create(real0, real1, virtual0, virtual1, None, None)
-                    .expect("generated pool is valid")
+                Pool::create(PoolCreateParams {
+                    token0_amount: real0,
+                    token1_amount: real1,
+                    virtual_reserve0: virtual0,
+                    virtual_reserve1: virtual1,
+                    close_timestamp: None,
+                    close_on_depletion: None,
+                })
+                .expect("generated pool is valid")
             }),
         1 => prop::sample::select(vec![
-            Pool::create(0, u128::MAX, 1, (1_u128 << 64) - 1, None, None)
-                .expect("boundary pool"),
-            Pool::create(
-                u128::MAX,
-                u128::MAX,
-                (1_u128 << 64) - 1,
-                (1_u128 << 64) - 1,
-                None,
-                None,
-            )
+            Pool::create(PoolCreateParams {
+                token0_amount: 0,
+                token1_amount: u128::MAX,
+                virtual_reserve0: 1,
+                virtual_reserve1: (1_u128 << 64) - 1,
+                close_timestamp: None,
+                close_on_depletion: None,
+            })
+            .expect("boundary pool"),
+            Pool::create(PoolCreateParams {
+                token0_amount: u128::MAX,
+                token1_amount: u128::MAX,
+                virtual_reserve0: (1_u128 << 64) - 1,
+                virtual_reserve1: (1_u128 << 64) - 1,
+                close_timestamp: None,
+                close_on_depletion: None,
+            })
             .expect("maximum-reserve pool"),
         ]),
     ]
@@ -148,7 +165,7 @@ fn assert_successful_swap(before: &Pool, after: &Pool, side: TokenSide, outcome:
     } else {
         assert_eq!(checked_add(new_vault, outcome.amount_out), old_vault);
     }
-    if outcome.protocol_fee_on_output {
+    if outcome.protocol_fee_side == FeeSide::Output {
         assert_eq!(outcome.amount_in, outcome.effective_amount_in);
         assert_eq!(
             outcome.raw_amount_out,
@@ -186,24 +203,54 @@ fn assert_successful_swap(before: &Pool, after: &Pool, side: TokenSide, outcome:
 
 #[test]
 fn collateral_buy_fee_rounds_up_before_pricing() {
-    let mut pool = Pool::create(800, 800, 1_000, 1_000, None, None).expect("valid pool");
+    let mut pool = Pool::create(PoolCreateParams {
+        token0_amount: 800,
+        token1_amount: 800,
+        virtual_reserve0: 1_000,
+        virtual_reserve1: 1_000,
+        close_timestamp: None,
+        close_on_depletion: None,
+    })
+    .expect("valid pool");
     let outcome = pool
-        .swap_exact_input(TokenSide::Token1, 101, 0, 0, 100, 0)
+        .swap_exact_input(ExactInputSwap {
+            token_in: TokenSide::Token1,
+            amount_in: 101,
+            min_amount_out: 0,
+            pool_fee_bps: 0,
+            protocol_fee_bps: 100,
+            now: 0,
+        })
         .expect("swap succeeds");
 
     assert_eq!(outcome.effective_amount_in, 99);
     assert_eq!(outcome.protocol_fee, 2);
-    assert!(!outcome.protocol_fee_on_output);
+    assert_eq!(outcome.protocol_fee_side, FeeSide::Input);
 }
 
 #[test]
 fn manual_close_and_withdraw_are_permanent_and_post_close_swaps_fail_atomically() {
-    let mut pool = Pool::create(800, 200, 1_000, 100, None, None).expect("valid pool");
+    let mut pool = Pool::create(PoolCreateParams {
+        token0_amount: 800,
+        token1_amount: 200,
+        virtual_reserve0: 1_000,
+        virtual_reserve1: 100,
+        close_timestamp: None,
+        close_on_depletion: None,
+    })
+    .expect("valid pool");
     assert_eq!(pool.close_pool(0), Ok(()));
     let closed = pool.clone();
     assert!(
-        pool.swap_exact_input(TokenSide::Token0, 10, 0, 0, 0, 0)
-            .is_err()
+        pool.swap_exact_input(ExactInputSwap {
+            token_in: TokenSide::Token0,
+            amount_in: 10,
+            min_amount_out: 0,
+            pool_fee_bps: 0,
+            protocol_fee_bps: 0,
+            now: 0
+        })
+        .is_err()
     );
     assert_eq!(pool, closed);
     assert_eq!(pool.withdraw_reserves(0), Ok((800, 200)));
@@ -215,13 +262,35 @@ fn manual_close_and_withdraw_are_permanent_and_post_close_swaps_fail_atomically(
 #[test]
 fn fee_counter_overflow_rejects_both_buy_forms_without_mutation() {
     for exact_output in [false, true] {
-        let mut pool = Pool::create(800, 100, 1000, 100, None, None).unwrap();
+        let mut pool = Pool::create(PoolCreateParams {
+            token0_amount: 800,
+            token1_amount: 100,
+            virtual_reserve0: 1000,
+            virtual_reserve1: 100,
+            close_timestamp: None,
+            close_on_depletion: None,
+        })
+        .unwrap();
         pool.fees_collected = u128::MAX;
         let before = pool.clone();
         let result = if exact_output {
-            pool.swap_exact_output(TokenSide::Token1, 200, 100, 0, 100, 0)
+            pool.swap_exact_output(ExactOutputSwap {
+                token_in: TokenSide::Token1,
+                amount_out: 200,
+                max_amount_in: 100,
+                pool_fee_bps: 0,
+                protocol_fee_bps: 100,
+                now: 0,
+            })
         } else {
-            pool.swap_exact_input(TokenSide::Token1, 100, 0, 0, 100, 0)
+            pool.swap_exact_input(ExactInputSwap {
+                token_in: TokenSide::Token1,
+                amount_in: 100,
+                min_amount_out: 0,
+                pool_fee_bps: 0,
+                protocol_fee_bps: 100,
+                now: 0,
+            })
         };
         assert_eq!(result, Err(pool::SwapError::Arithmetic));
         assert_eq!(pool, before);
@@ -247,14 +316,14 @@ proptest! {
                     min_amount_out,
                     pool_fee_bps,
                     protocol_fee_bps,
-                } => match pool.swap_exact_input(
-                    side,
+                } => match pool.swap_exact_input(ExactInputSwap {
+                    token_in: side,
                     amount_in,
                     min_amount_out,
                     pool_fee_bps,
                     protocol_fee_bps,
-                    0,
-                ) {
+                    now: 0,
+                }) {
                     Ok(outcome) => assert_successful_swap(&before, &pool, side, outcome),
                     Err(_) => prop_assert_eq!(&pool, &before),
                 },
@@ -264,14 +333,14 @@ proptest! {
                     max_amount_in,
                     pool_fee_bps,
                     protocol_fee_bps,
-                } => match pool.swap_exact_output(
-                    side,
+                } => match pool.swap_exact_output(ExactOutputSwap {
+                    token_in: side,
                     amount_out,
                     max_amount_in,
                     pool_fee_bps,
                     protocol_fee_bps,
-                    0,
-                ) {
+                    now: 0,
+                }) {
                     Ok(outcome) => {
                         prop_assert_eq!(outcome.amount_out, amount_out);
                         assert_successful_swap(&before, &pool, side, outcome);

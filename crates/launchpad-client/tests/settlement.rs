@@ -197,7 +197,15 @@ fn fee_accrual_collection_and_withdrawal_preserve_vault_liabilities() {
                 owner_program: None,
                 token0_definition_id: token0,
                 token1_definition_id: token1,
-                pool: pool::Pool::create(800, 100, 1000, 100, None, None).unwrap(),
+                pool: pool::Pool::create(pool::PoolCreateParams {
+                    token0_amount: 800,
+                    token1_amount: 100,
+                    virtual_reserve0: 1000,
+                    virtual_reserve1: 100,
+                    close_timestamp: None,
+                    close_on_depletion: None,
+                })
+                .unwrap(),
             };
             chain.accounts.insert(
                 pool_id,
@@ -503,7 +511,7 @@ impl Chain {
 fn private_sale_resumes_creation_and_settlement_with_fresh_payout_holders() {
     for public_mode in [false, true] {
         for (allocation, seed, bought, deadline, collateral_due, remaining_supply) in [
-            (100, 100, 200, None, 12, 400),
+            (100, 100, 200, Some(2), 12, 400),
             (0, 0, 800, None, 67, 800),
             (100, 100, 0, Some(2), 0, 200),
         ] {
@@ -539,7 +547,6 @@ fn private_sale_resumes_creation_and_settlement_with_fresh_payout_holders() {
                 },
             );
             let request = launchpad_client::CreateSaleRequest {
-                launch_salt: salt,
                 name: "Sale".into(),
                 uri: "ipfs://sale".into(),
                 sale_reserve: 800,
@@ -548,6 +555,12 @@ fn private_sale_resumes_creation_and_settlement_with_fresh_payout_holders() {
                 virtual_token_reserve: 2000,
                 virtual_collateral_reserve: 100,
                 end_timestamp: deadline,
+            };
+            let sale = launchpad_client::FactorySale {
+                namespace,
+                factory_program_id: chain.factory.id(),
+                curve_program_id: chain.curve.id(),
+                launch_salt: salt,
                 collateral_definition: collateral,
             };
             let factory_id = factory_core::compute_factory_pda(namespace, chain.factory.id(), salt);
@@ -565,9 +578,7 @@ fn private_sale_resumes_creation_and_settlement_with_fresh_payout_holders() {
                     .get(&factory_id)
                     .map(|a| factory_core::FactoryState::try_from(&a.data).unwrap());
                 let call = launchpad_client::next_creation_invocation(
-                    namespace,
-                    chain.factory.id(),
-                    chain.curve.id(),
+                    sale,
                     id(100 + step),
                     request.clone(),
                     existing.as_ref(),
@@ -575,20 +586,6 @@ fn private_sale_resumes_creation_and_settlement_with_fresh_payout_holders() {
                 .unwrap()
                 .expect("next creation stage");
                 chain.run_private(source, call);
-                if step == 1 && deadline.is_some() {
-                    chain
-                        .accounts
-                        .get_mut(&clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID)
-                        .unwrap()
-                        .data = Data::try_from(
-                        clock_core::ClockAccountData {
-                            block_id: 2,
-                            timestamp: 3,
-                        }
-                        .to_bytes(),
-                    )
-                    .unwrap();
-                }
                 if step == 2 {
                     assert!(
                         !curve_core::PoolAccount::try_from(&chain.accounts[&pool_id].data)
@@ -602,9 +599,7 @@ fn private_sale_resumes_creation_and_settlement_with_fresh_payout_holders() {
             assert_eq!(state.creation_stage, factory_core::CreationStage::Active);
             assert!(
                 launchpad_client::next_creation_invocation(
-                    namespace,
-                    chain.factory.id(),
-                    chain.curve.id(),
+                    sale,
                     id(104),
                     request.clone(),
                     Some(&state)
@@ -615,15 +610,8 @@ fn private_sale_resumes_creation_and_settlement_with_fresh_payout_holders() {
             let mut changed = request.clone();
             changed.sale_reserve = 700;
             assert!(
-                launchpad_client::next_creation_invocation(
-                    namespace,
-                    chain.factory.id(),
-                    chain.curve.id(),
-                    id(104),
-                    changed,
-                    Some(&state)
-                )
-                .is_err()
+                launchpad_client::next_creation_invocation(sale, id(104), changed, Some(&state))
+                    .is_err()
             );
             assert!(
                 curve_core::PoolAccount::try_from(&chain.accounts[&pool_id].data)
@@ -648,6 +636,30 @@ fn private_sale_resumes_creation_and_settlement_with_fresh_payout_holders() {
                 )),
                 0
             );
+            if !public_mode {
+                let saved = chain.accounts.clone();
+                assert!(
+                    chain
+                        .try_private(
+                            source,
+                            launchpad_client::PublicInvocation {
+                                program_id: chain.curve.id(),
+                                account_ids: vec![
+                                    pool_id,
+                                    id(104),
+                                    clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID,
+                                ],
+                                signer_accounts: vec![id(104)],
+                                instruction: curve_core::Instruction::ClosePool,
+                            },
+                        )
+                        .is_err()
+                );
+                assert_eq!(
+                    chain.accounts, saved,
+                    "factory-owned pool rejects direct closure"
+                );
+            }
             let trader = id(20);
             chain.accounts.insert(
                 trader,
@@ -665,54 +677,40 @@ fn private_sale_resumes_creation_and_settlement_with_fresh_payout_holders() {
                 .insert(ata(id(6), collateral), holding(collateral, 0));
             if bought != 0 {
                 chain.run(launchpad_client::build_buy_invocation(
-                    namespace,
-                    chain.factory.id(),
-                    chain.curve.id(),
+                    sale,
                     trader,
-                    launchpad_client::BuyRequest {
-                        launch_salt: salt,
-                        collateral_definition: collateral,
+                    launchpad_client::ExactOutputTradeTerms {
                         amount_out: bought,
                         max_amount_in: 100,
                     },
                 ));
             }
             assert_eq!(chain.balance(ata(pool_id, collateral)), collateral_due);
-            if bought < 800 && deadline.is_none() {
-                chain.run_private(
-                    source,
-                    launchpad_client::build_close_factory_pool_invocation(
-                        namespace,
-                        chain.factory.id(),
-                        chain.curve.id(),
-                        id(104),
-                        salt,
-                        collateral,
-                    ),
-                );
+            if deadline.is_some() {
+                chain
+                    .accounts
+                    .get_mut(&clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID)
+                    .unwrap()
+                    .data = Data::try_from(
+                    clock_core::ClockAccountData {
+                        block_id: 2,
+                        timestamp: 3,
+                    }
+                    .to_bytes(),
+                )
+                .unwrap();
             }
             chain.run_private(
                 source,
-                launchpad_client::build_claim_creator_allocation_invocation(
-                    namespace,
-                    chain.factory.id(),
-                    chain.curve.id(),
-                    id(105),
-                    salt,
-                    collateral,
-                ),
+                launchpad_client::build_claim_creator_allocation_invocation(sale, id(105)),
             );
             assert_eq!(chain.balance(ata(id(105), token)), allocation);
             for step in 0..5 {
                 chain.run_private(
                     source,
                     launchpad_client::build_withdraw_factory_proceeds_invocation(
-                        namespace,
-                        chain.factory.id(),
-                        chain.curve.id(),
+                        sale,
                         id(106 + step),
-                        salt,
-                        collateral,
                         id(6),
                     ),
                 );
@@ -743,12 +741,8 @@ fn private_sale_resumes_creation_and_settlement_with_fresh_payout_holders() {
                         .try_private(
                             source,
                             launchpad_client::build_withdraw_factory_proceeds_invocation(
-                                namespace,
-                                chain.factory.id(),
-                                chain.curve.id(),
+                                sale,
                                 id(111),
-                                salt,
-                                collateral,
                                 id(6),
                             )
                         )

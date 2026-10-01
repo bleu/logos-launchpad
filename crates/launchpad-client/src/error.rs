@@ -13,6 +13,12 @@ pub enum ClientError {
         #[source]
         source: lee_core::account::AccountIdError,
     },
+    #[error("account location has an unknown prefix: {input}")]
+    #[strum(serialize = "unknown_account_location_prefix")]
+    UnknownAccountLocationPrefix { input: String },
+    #[error("a private account ID cannot use a public location: {input}")]
+    #[strum(serialize = "private_account_id_requires_private_location")]
+    PrivateAccountIdRequiresPrivateLocation { input: String },
     #[error("reading guest binary {}", path.display())]
     #[strum(serialize = "read_program")]
     ReadProgram {
@@ -31,6 +37,8 @@ pub enum ClientError {
     ZeroPrivateBuyGasReserve,
     #[error("private buy requires non-zero token output and collateral cap")]
     ZeroPrivateBuyAmount,
+    #[error("private buy curve guest does not match the sale")]
+    PrivateBuyCurveProgramMismatch,
     #[error("persisting the transient public account key")]
     #[strum(serialize = "store_transient_key")]
     StoreTransientKey(#[source] Box<dyn Error + Send + Sync>),
@@ -179,6 +187,8 @@ pub enum ClientError {
     #[error("decoding resumable factory state")]
     #[strum(serialize = "decode_resumable_factory_state")]
     DecodeResumableFactoryState(#[source] std::io::Error),
+    #[error("loaded factory state or pool does not match the selected sale")]
+    FactorySaleMismatch,
     #[error("private authority router is required")]
     PrivateAuthorityRouterRequired,
     #[error("creation already completed")]

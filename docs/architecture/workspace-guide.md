@@ -31,7 +31,7 @@ bash verify/check-pins.sh
 bash verify/check-idl.sh
 ```
 
-`check-pins.sh` checks the LEZ revision in the root and guest manifests against `scaffold.toml`. `check-idl.sh` requires `lgs` and checks generated on-chain IDLs against `idl-src/`. These checks do not cover the planned module `.lidl` interface.
+`check-pins.sh` checks the LEZ revision in the root and guest manifests against `scaffold.toml`. `check-idl.sh` requires `lgs`, checks generated on-chain IDLs against `idl-src/`, and runs the non-default `idl-tests` lane. Normal host tests do not require `lgs` or wallet state. These checks do not cover the planned module `.lidl` interface.
 
 ## Guest integration tests
 
@@ -41,11 +41,15 @@ Client tests that execute guest programs use the non-default `guest-tests` featu
 RISC0_DEV_MODE=1 cargo test -p launchpad-client --features guest-tests --test private_authority --test settlement --locked
 ```
 
-This lane checks private-authority and settlement execution. Missing artifacts are failures when the lane is selected. Host-only tests do not execute it. All-feature clippy compiles these test targets without running their guests.
+This lane checks private-authority, private-buy and settlement execution. Missing artifacts are failures when the lane is selected. Host-only tests do not execute it. All-feature clippy compiles these test targets without running their guests.
 
 ## Known limits
 
 A passing host suite does not prove guest execution. The math margin test runs with the host suite; the [math README](../../packages/weighted-math/README.md) describes fixtures, bounds and separate verification tools.
+
+Public enum variants must remain in source-IDL order. SDK-only private wrappers follow the public variants so they do not change public tags. The IDL uses the pinned serializer's supported primitive wire values: fees use `u32`, depletion uses `Option<u8>`, and owner-program ID and seed use paired optional fields. Generated CLI calls require explicit PDA addresses; the SDK computes them with its existing helpers. The trailing treasury account is a remaining-account vector and may be omitted when it aliases an earlier account. `check-idl.sh` verifies generated artifacts and compares CLI dry-run bytes and account metadata with `Program::serialize_instruction`. An omitted trailing Treasury account appears as null rest metadata in a dry run and is absent from the CLI transaction account vector. This repository does not support the old pre-launch encoding.
+
+The imported private-buy route exceeds the pinned LEZ chained-call limit when executed as a complete graph. Its guest test checks the router's instruction envelope and records this full-route rejection; it does not prove a successful private purchase. The router also deshields the full collateral cap and only requests re-shielding of purchased tokens. Its call graph leaves unspent collateral in the transient public ATA, and the SDK has no automatic remainder recovery. These route limits require separate work; the IDL correction does not remove them.
 
 Live E2E verification remains future work. Use disposable wallet and localnet state for those checks.
 
