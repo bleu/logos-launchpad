@@ -14,13 +14,13 @@ The admin mini-app serves namespace administrators only. The configured-sales mi
 
 | Actor | Goal | Interface | Expected outcome | Rule or open detail |
 | --- | --- | --- | --- | --- |
-| Namespace administrator | Manage a launchpad namespace | Admin app or CLI | Set the namespace fee rate and current treasury; manage admin authority | Standard account authority; creator rights remain separate ([0006](../adr/0006-namespaces-and-authority.md)) |
+| Namespace administrator | Manage a launchpad namespace | Admin app or CLI | Change the fee rate and current treasury through separate operations; manage admin authority | AccountId administration; creator rights remain separate ([0006](../adr/0006-namespaces-and-authority.md)) |
 | Creator | Create a curve sale | Configured-sales app or CLI | Submit typed curve inputs to the curve factory, fund allocations `D` and `R`, and optionally set expiry | No early close; settlement burns unsold `D` after expiry ([0025](../adr/0025-sale-closing.md)) |
 | Creator | Create an LBP | Configured-sales app or CLI | Submit LBP inputs to the independent LBP factory, choose weighted or fixed-price mode, fund the sale, and set its schedule | Pause controls do not stop the clock; LBP authority for those controls and allowlist design remain open ([0021](../adr/0021-modes-and-open-limits.md), [0026](../adr/0026-lbp-clock-and-poke.md)) |
 | Participant | Find a sale and trade | Configured-sales app or CLI | Inspect the sale, request a fresh quote and submit a buy with an explicit slippage limit; sell back to a curve when its mode permits | Execution uses current state; a quote does not reserve a price ([0017](../adr/0017-quotes-and-slippage.md)) |
 | Participant | Use the private route | Configured-sales app or CLI through the SDK | Deshield, trade through a fresh public account and re-shield within one transaction | Public effects stay visible; provider integration and failure behavior remain unverified. Private curve sells and private LBP details remain open ([0018](../adr/0018-private-participation.md)) |
 | Any caller | Collect accrued protocol fees | SDK or CLI | Transfer all accrued collateral fees to the current treasury, at any time | Caller cannot redirect funds; zero accrued fees cause no transfer ([0015](../adr/0015-fee-accounting.md), [0016](../adr/0016-lbp-live-fees.md)) |
-| Creator | Settle a closed sale | Configured-sales app or CLI | Withdraw permitted proceeds and allocations, with remaining fees handled separately | Closure and settlement are separate; no automatic DEX graduation ([0020](../adr/0020-settlement-and-graduation.md)) |
+| Creator | Settle a closed sale | Configured-sales app or CLI | Collect remaining fees atomically with the relevant reserve or proceeds transfer; complete permitted allocation payouts | Closure and settlement are separate; stages can span transactions; no automatic DEX graduation ([0020](../adr/0020-settlement-and-graduation.md)) |
 | Participant or operator | Inspect history | App history or existing explorer tools | Request indexed trades and sale events through the backend module read API without exposing persistent private participant identifiers | History and monitoring remain in scope; a separate analytics view does not ([0027](../adr/0027-events-and-history.md)) |
 
 ## Sale journey
@@ -64,4 +64,4 @@ See the planned [curve pool creation](../architecture/sequence-diagrams/create-c
 - Use the existing indexer and explorer tools. Do not add a separate indexer or the excluded derived analytics view.
 - Platform compatibility, precise input bounds and private-route details need further specification and tests. This brief does not choose new limits or authority rules.
 
-See [architecture and interfaces](../architecture/system.md) for component responsibilities and [repository layout](../architecture/repository-layout.md) for packages and checks.
+See the [namespace, custody, and fee contract](namespace-fee-contract.md) for shared account checks, balance examples, collection behavior, and acceptance cases. See [architecture and interfaces](../architecture/system.md) for component responsibilities and [repository layout](../architecture/repository-layout.md) for packages and checks.
