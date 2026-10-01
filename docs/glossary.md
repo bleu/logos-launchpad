@@ -33,7 +33,8 @@ This page explains technical shorthand used in this repository. [CONTEXT.md](../
 | Expiry / end timestamp | A configured time that can end a curve sale or the scheduled end of an LBP. |
 | `poke` | A permissionless LBP call that records a time checkpoint without changing the price schedule. |
 | Pause / freeze | Controls that stop specified actions. Their platform integration and policy remain separate from namespace administration. |
-| Allowlist / proof / nullifier | A list of permitted users, evidence that a user is permitted, and a value often used to prevent reuse of such evidence. The private LBP allowlist design is open. |
+| Allowlist / proof / nullifier | A list of permitted participants, evidence that a participant is permitted, and a value used to prevent proof reuse. LBP allowlist product rules are accepted; the proof method remains open. |
+| Purchase allowance | Permission for one successful LBP buy per approved participant per sale, shared across public and private routes when an allowlist is enabled. |
 | Dust / oversized trade / input envelope | Very small trades, trades that are too large, and the tested range of values that an implementation accepts safely. |
 
 ## Roles, accounts and custody
@@ -61,8 +62,8 @@ This page explains technical shorthand used in this repository. [CONTEXT.md](../
 
 | Term | Plain-English meaning |
 | --- | --- |
-| Private route | The planned SDK-managed transaction that deshields assets, makes a public trade and re-shields purchased tokens. |
-| Shielded / deshield / re-shield | Protected private balance state; moving assets to a public account; and moving purchased assets back to protected state. |
+| Private route | The planned SDK-managed transaction that deshields input, trades publicly, and returns received tokens, unused input and unused gas to participant-controlled private accounts. Actual fees are excluded. |
+| Shielded / deshield / re-shield | Protected private balance state; moving assets to a public account; and moving received or unused assets back to protected state. |
 | Fresh single-use public account | A new public account used for the trade within one private-route transaction. |
 | Public trade effects | Pool state and trade results visible on the public chain. The route does not make them private. |
 | ZK / zero knowledge / zkVM | A proof system that can show a computation was valid without exposing all inputs; a zkVM is a virtual machine that can produce such proofs. RISC Zero is a zkVM project name, but this repository does not select or implement it. |
