@@ -88,6 +88,7 @@ fn create_pool_arguments(
     owner_program_seed: &str,
 ) -> Vec<(&'static str, String)> {
     vec![
+        ("--allowed-input-token", "none".into()),
         ("--defer-funding", "false".into()),
         ("--namespace", account_hex(44)),
         ("--token0-amount", "1000".into()),
@@ -108,6 +109,9 @@ fn create_factory_pool_arguments(
     end_timestamp: &str,
 ) -> Vec<(&'static str, String)> {
     vec![
+        ("--trade-mode", "1".into()),
+        ("--graduation-hook-program-id", program_arg(program_id(60))),
+        ("--graduation-hook-configuration", "7,11".into()),
         ("--namespace", account_hex(75)),
         ("--launch-salt", hex::encode([76; 32])),
         ("--name", "Launch".into()),
@@ -124,6 +128,11 @@ fn create_factory_pool_arguments(
 
 fn create_sale_request(end_timestamp: Option<u64>) -> CreateSaleRequest {
     CreateSaleRequest {
+        trade_mode: launchpad_client::TradeMode::BuyAndSell,
+        graduation_hook: Some(launchpad_client::GraduationHook {
+            program_id: program_id(60),
+            configuration: vec![7, 11],
+        }),
         name: "Launch".into(),
         uri: "https://example.invalid/launch".into(),
         sale_reserve: 1000,
@@ -135,14 +144,12 @@ fn create_sale_request(end_timestamp: Option<u64>) -> CreateSaleRequest {
     }
 }
 
-fn run_case<I: Serialize>(
+fn dry_run_command(
     program: &str,
     instruction: &str,
     arguments: Vec<(&str, String)>,
-    expected_instruction: I,
-    accounts: Vec<AccountInput>,
-    expected_argument_order: &[&str],
-) {
+    accounts: &[AccountInput],
+) -> Command {
     let root = root();
     let idl_path = root.join("idl").join(format!("{program}.json"));
     let mut command = Command::new("lgs");
@@ -160,7 +167,7 @@ fn run_case<I: Serialize>(
     for (name, value) in arguments {
         command.arg(name).arg(value);
     }
-    for account in &accounts {
+    for account in accounts {
         if let Some(id) = account.id {
             command
                 .arg(format!("--{}", account.name.replace('_', "-")))
@@ -168,7 +175,21 @@ fn run_case<I: Serialize>(
         }
     }
 
-    let output = command.output().expect("run pinned lgs SPEL CLI");
+    command
+}
+
+fn run_case<I: Serialize>(
+    program: &str,
+    instruction: &str,
+    arguments: Vec<(&str, String)>,
+    expected_instruction: I,
+    accounts: Vec<AccountInput>,
+    expected_argument_order: &[&str],
+) {
+    let idl_path = root().join("idl").join(format!("{program}.json"));
+    let output = dry_run_command(program, instruction, arguments, &accounts)
+        .output()
+        .expect("run pinned lgs SPEL CLI");
     assert!(
         output.status.success(),
         "{} {instruction} failed: {}",
@@ -315,6 +336,7 @@ fn curve_public_instruction_wire_matches_the_pinned_cli() {
         ],
     );
     let create_pool_argument_order = [
+        "allowed_input_token",
         "defer_funding",
         "namespace",
         "token0_amount",
@@ -339,6 +361,7 @@ fn curve_public_instruction_wire_matches_the_pinned_cli() {
             &hex::encode([46; 32]),
         ),
         CurveInstruction::CreatePool {
+            allowed_input_token: None,
             defer_funding: false,
             namespace: account(44),
             token0_amount: 1000,
@@ -360,6 +383,7 @@ fn curve_public_instruction_wire_matches_the_pinned_cli() {
         "create-pool",
         create_pool_arguments(curve_program_id, "none", "none", "none", "none"),
         CurveInstruction::CreatePool {
+            allowed_input_token: None,
             defer_funding: false,
             namespace: account(44),
             token0_amount: 1000,
@@ -501,20 +525,31 @@ fn curve_public_instruction_wire_matches_the_pinned_cli() {
         with_treasury,
         &[],
     );
+    let collection_accounts = account_inputs(&["pool", "config", "pool_collateral_ata"], 53);
+    let mut without_treasury = collection_accounts.clone();
+    without_treasury.push(AccountInput {
+        name: "treasury_collateral_atas",
+        id: None,
+    });
     run_case(
         "curve",
         "collect-fees",
         vec![],
         CurveInstruction::CollectFees,
-        account_inputs(
-            &[
-                "pool",
-                "config",
-                "pool_collateral_ata",
-                "treasury_collateral_ata",
-            ],
-            53,
-        ),
+        without_treasury,
+        &[],
+    );
+    let mut with_treasury = collection_accounts;
+    with_treasury.push(AccountInput {
+        name: "treasury_collateral_atas",
+        id: Some(account(56)),
+    });
+    run_case(
+        "curve",
+        "collect-fees",
+        vec![],
+        CurveInstruction::CollectFees,
+        with_treasury,
         &[],
     );
 }
@@ -548,6 +583,9 @@ fn factory_public_instruction_wire_matches_the_pinned_cli() {
         "config",
     ];
     let create_argument_order = [
+        "trade_mode",
+        "graduation_hook_program_id",
+        "graduation_hook_configuration",
         "namespace",
         "launch_salt",
         "name",
@@ -657,6 +695,92 @@ fn factory_public_instruction_wire_matches_the_pinned_cli() {
         FactoryInstruction::WithdrawFactoryProceeds,
         with_treasury,
         &[],
+    );
+}
+
+#[test]
+fn pinned_cli_reports_its_empty_hook_configuration_limit() {
+    let accounts = account_inputs(
+        &[
+            "factory",
+            "token_definition",
+            "mint",
+            "metadata",
+            "creator_escrow",
+            "creator",
+            "creator_token_ata",
+            "collateral_definition",
+            "factory_token_ata",
+            "factory_collateral_ata",
+            "pool",
+            "pool_token_ata",
+            "pool_collateral_ata",
+            "clock",
+            "config",
+        ],
+        1,
+    );
+    for configuration in ["", "[]"] {
+        let mut arguments = create_factory_pool_arguments(program_id(30), "none");
+        for (name, value) in &mut arguments {
+            match *name {
+                "--graduation-hook-program-id" => *value = "none".into(),
+                "--graduation-hook-configuration" => *value = configuration.into(),
+                _ => {}
+            }
+        }
+        let output = dry_run_command("factory", "create-factory-pool", arguments, &accounts)
+            .output()
+            .expect("run pinned lgs SPEL CLI");
+        assert!(!output.status.success());
+        let error = String::from_utf8_lossy(&output.stderr);
+        assert!(error.contains("type mismatch: expected Vec"), "{error}");
+        assert!(error.contains("got Raw"), "{error}");
+    }
+}
+
+#[test]
+fn graduation_instruction_wire_matches_the_pinned_cli() {
+    let mut accounts = account_inputs(
+        &[
+            "factory",
+            "pool",
+            "adapter_custody",
+            "token_definition",
+            "collateral_definition",
+            "factory_token_ata",
+            "factory_collateral_ata",
+            "pool_token_ata",
+            "pool_collateral_ata",
+            "adapter_token_ata",
+            "adapter_collateral_ata",
+            "clock",
+            "config",
+        ],
+        100,
+    );
+    accounts.push(AccountInput {
+        name: "treasury_and_adapter_accounts",
+        id: Some(account(113)),
+    });
+    run_case(
+        "factory",
+        "execute-graduation-hook",
+        vec![("--remaining-accounts", "0".into())],
+        FactoryInstruction::ExecuteGraduationHook {
+            remaining_accounts: 0,
+        },
+        accounts,
+        &["remaining_accounts"],
+    );
+    let idl: Value =
+        serde_json::from_slice(&std::fs::read(root().join("idl/factory.json")).unwrap()).unwrap();
+    assert!(
+        idl["instructions"][4]["accounts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|account| account["signer"] == false)
     );
 }
 

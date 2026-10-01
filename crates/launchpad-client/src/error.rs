@@ -52,6 +52,8 @@ pub enum ClientError {
     #[error("submitting atomic private purchase")]
     #[strum(serialize = "submit_private_buy")]
     SubmitPrivateBuy(#[source] Box<wallet::ExecutionFailureKind>),
+    #[error("input token is restricted by the pool")]
+    InputTokenRestricted,
     #[error("pool funding is pending")]
     PoolFundingPending,
     #[error("cannot quote purchase: {0}")]
@@ -199,6 +201,10 @@ pub enum ClientError {
     FactoryLaunchMissing,
     #[error("launch does not match the selected collateral or curve")]
     LaunchSelectionMismatch,
+    #[error("graduation hook is not configured")]
+    GraduationNotConfigured,
+    #[error("too many graduation adapter accounts")]
+    TooManyGraduationAccounts,
     #[error("settlement did not complete; retry with the same launch salt")]
     SettlementIncomplete,
     #[error("existing launch parameters differ; resume with the original parameters")]

@@ -51,12 +51,28 @@ struct Cli {
     command: Command,
 }
 
+impl Cli {
+    fn validate_route(&self) -> Result<()> {
+        if matches!(self.command, Command::Graduate(_))
+            && (self.authority_router_path.is_some()
+                || self.namespace.is_some_and(AccountLocation::is_private))
+        {
+            eyre::bail!(
+                "graduation supports public execution only; no private namespace or authority router"
+            );
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Subcommand)]
 enum Command {
     /// Create a factory-owned launch and its neutral curve pool.
     #[command(alias = "launch")]
     CreateSale(CreateSaleArgs),
     Withdraw(FactoryLifecycleArgs),
+    /// Execute or retry one public post-close graduation stage.
+    Graduate(GraduationArgs),
     Claim(FactoryLifecycleArgs),
     Buy(BuyArgs),
     /// Spend an exact collateral amount, with a minimum launch-token output.
@@ -103,8 +119,41 @@ struct NamespaceAdminArgs {
     #[arg(long, value_parser = parse_account_location)]
     admin: AccountLocation,
 }
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum, Serialize)]
+#[serde(rename_all = "kebab-case")]
+enum TradeModeArg {
+    BuyOnly,
+    BuyAndSell,
+}
+
+impl From<TradeModeArg> for launchpad_client::TradeMode {
+    fn from(mode: TradeModeArg) -> Self {
+        match mode {
+            TradeModeArg::BuyOnly => Self::BuyOnly,
+            TradeModeArg::BuyAndSell => Self::BuyAndSell,
+        }
+    }
+}
+
+impl From<launchpad_client::TradeMode> for TradeModeArg {
+    fn from(mode: launchpad_client::TradeMode) -> Self {
+        match mode {
+            launchpad_client::TradeMode::BuyOnly => Self::BuyOnly,
+            launchpad_client::TradeMode::BuyAndSell => Self::BuyAndSell,
+        }
+    }
+}
+
 #[derive(Debug, Args)]
 struct CreateSaleArgs {
+    #[arg(long, value_enum)]
+    trade_mode: TradeModeArg,
+    /// Saved adapter ImageID as 64 hexadecimal characters (little-endian u32 words).
+    #[arg(long, value_parser = parse_program_id)]
+    graduation_hook_program_id: Option<lee::ProgramId>,
+    /// Saved opaque adapter configuration as hexadecimal bytes.
+    #[arg(long, value_parser = parse_hook_configuration, requires = "graduation_hook_program_id")]
+    graduation_hook_configuration: Option<HookConfiguration>,
     #[command(flatten)]
     launch: LaunchArgs,
     #[arg(long)]
@@ -134,6 +183,31 @@ struct CreateSaleArgs {
     /// Compiled curve guest binary paired with the factory launch.
     #[arg(long = "curve-program-path")]
     curve_program_path: PathBuf,
+}
+
+impl CreateSaleArgs {
+    fn sale_request(&self) -> CreateSaleRequest {
+        CreateSaleRequest {
+            trade_mode: self.trade_mode.into(),
+            graduation_hook: self.graduation_hook_program_id.map(|program_id| {
+                launchpad_client::GraduationHook {
+                    program_id,
+                    configuration: self
+                        .graduation_hook_configuration
+                        .as_ref()
+                        .map_or_else(Vec::new, |configuration| configuration.0.clone()),
+                }
+            }),
+            name: self.name.clone(),
+            uri: self.uri.clone(),
+            sale_reserve: self.sale_reserve,
+            dex_seed_reserve: self.dex_seed_reserve,
+            creator_allocation: self.creator_allocation,
+            virtual_token_reserve: self.virtual_token_reserve,
+            virtual_collateral_reserve: self.virtual_collateral_reserve,
+            end_timestamp: self.end_timestamp,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Args)]
@@ -220,6 +294,21 @@ struct FactoryLifecycleArgs {
 }
 
 #[derive(Debug, Args)]
+struct GraduationArgs {
+    #[command(flatten)]
+    launch: LaunchArgs,
+    #[arg(long, value_parser = parse_public_account_id)]
+    collateral_definition: lee::AccountId,
+    #[arg(long)]
+    factory_program_path: PathBuf,
+    #[arg(long)]
+    curve_program_path: PathBuf,
+    /// Repeat in the order required by the saved adapter.
+    #[arg(long, value_parser = parse_public_account_id)]
+    adapter_account: Vec<lee::AccountId>,
+}
+
+#[derive(Debug, Args)]
 struct CollectFeesArgs {
     #[arg(long, required = true, num_args = 1.., value_parser = parse_account_location)]
     pool: Vec<AccountLocation>,
@@ -286,6 +375,13 @@ fn parse_account_location(raw: &str) -> Result<AccountLocation, String> {
         .map_err(|error: launchpad_client::ClientError| error.to_string())
 }
 
+fn parse_public_account_id(raw: &str) -> Result<lee::AccountId, String> {
+    match parse_account_location(raw)? {
+        AccountLocation::Public(id) => Ok(id),
+        AccountLocation::Private(_) => Err("graduation requires public accounts".to_owned()),
+    }
+}
+
 fn parse_private_account_id(raw: &str) -> Result<PrivateAccountId, String> {
     raw.parse()
         .map_err(|error: launchpad_client::ClientError| error.to_string())
@@ -305,6 +401,28 @@ fn factory_sale(
         launch_salt,
         collateral_definition,
     }
+}
+
+fn parse_program_id(raw: &str) -> Result<lee::ProgramId, String> {
+    let bytes: [u8; 32] = hex::decode(raw)
+        .map_err(|_| "hook program ID must be hexadecimal".to_owned())?
+        .try_into()
+        .map_err(|_| {
+            "hook program ID must contain exactly 32 bytes (64 hex characters)".to_owned()
+        })?;
+    Ok(std::array::from_fn(|index| {
+        let start = index * 4;
+        u32::from_le_bytes(bytes[start..start + 4].try_into().unwrap())
+    }))
+}
+
+#[derive(Debug, Clone)]
+struct HookConfiguration(Vec<u8>);
+
+fn parse_hook_configuration(raw: &str) -> Result<HookConfiguration, String> {
+    hex::decode(raw)
+        .map(HookConfiguration)
+        .map_err(|_| "hook configuration must be hexadecimal bytes".to_owned())
 }
 
 fn parse_launch_salt(raw: &str) -> Result<[u8; 32], String> {
@@ -328,6 +446,42 @@ enum SaleStatus {
     Open,
     Closed,
     Withdrawn,
+    Graduated,
+}
+
+fn settlement_stage_name(stage: launchpad_client::SettlementStage) -> &'static str {
+    use launchpad_client::SettlementStage;
+    match stage {
+        SettlementStage::Unstarted => "unstarted",
+        SettlementStage::Ready => "ready",
+        SettlementStage::Withdrawn { .. } => "withdrawn",
+        SettlementStage::Burned { .. } => "burned",
+        SettlementStage::TokenPaid { .. } => "token_paid",
+        SettlementStage::Complete => "complete",
+        SettlementStage::HookReady { .. } => "hook_ready",
+        SettlementStage::Graduated => "graduated",
+        SettlementStage::NoPayout => "no_payout",
+    }
+}
+
+#[derive(Serialize)]
+struct HookSnapshot {
+    program_id: String,
+    configuration: String,
+}
+
+impl From<&launchpad_client::GraduationHook> for HookSnapshot {
+    fn from(hook: &launchpad_client::GraduationHook) -> Self {
+        Self {
+            program_id: hex::encode(
+                hook.program_id
+                    .iter()
+                    .flat_map(|word| word.to_le_bytes())
+                    .collect::<Vec<_>>(),
+            ),
+            configuration: hex::encode(&hook.configuration),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Serialize)]
@@ -339,6 +493,9 @@ enum QuoteMode {
 
 #[derive(Serialize)]
 struct SaleSnapshot {
+    trade_mode: TradeModeArg,
+    graduation_hook: Option<HookSnapshot>,
+    settlement_stage: &'static str,
     namespace: String,
     protocol_fee_bps: u16,
     treasury: String,
@@ -396,6 +553,7 @@ async fn main() {
 }
 
 async fn run(json: bool, cli: Cli) -> Result<()> {
+    cli.validate_route()?;
     match &cli.command {
         Command::CreateAuthority(args) => {
             let mut wallet = WalletCore::from_env()
@@ -465,6 +623,7 @@ async fn run(json: bool, cli: Cli) -> Result<()> {
             Ok(())
         }
         Command::Withdraw(args) => withdraw_factory_proceeds(namespace, json, args, router).await,
+        Command::Graduate(args) => graduate(namespace, json, args).await,
         Command::Claim(args) => claim_creator_allocation(namespace, json, args, router).await,
         Command::Buy(args) => buy(namespace, json, args).await,
         Command::BuyWithCollateral(args) => buy_with_collateral(namespace, json, args).await,
@@ -622,6 +781,46 @@ async fn withdraw_factory_proceeds(
     print_lifecycle(json, "factory withdrawal", args.launch.launch_salt, receipt)
 }
 
+async fn graduate(namespace: lee::AccountId, json: bool, args: GraduationArgs) -> Result<()> {
+    let factory = load_program(&args.factory_program_path)?;
+    let curve = load_program(&args.curve_program_path)?;
+    let sale = factory_sale(
+        namespace,
+        &factory,
+        &curve,
+        args.launch.launch_salt,
+        args.collateral_definition,
+    );
+    let wallet = WalletCore::from_env()
+        .map_err(|error| eyre::eyre!(error.into_boxed_dyn_error()))
+        .context("opening the project wallet")?;
+    let state = load_factory_state(&wallet, sale).await?;
+    state
+        .graduation_hook
+        .as_ref()
+        .ok_or(launchpad_client::ClientError::GraduationNotConfigured)?;
+    let treasury = launchpad_client::prepare_fee_collection(
+        &wallet,
+        namespace,
+        curve.id(),
+        sale.collateral_definition,
+    )
+    .await?;
+    let invocation = launchpad_client::build_graduation_invocation(
+        sale,
+        &state,
+        treasury,
+        args.adapter_account,
+    )?;
+    let transaction_hash = submit_public_invocation(&wallet, &factory, invocation).await?;
+    print_submission(
+        json,
+        "graduation stage",
+        transaction_hash,
+        args.launch.launch_salt,
+    )
+}
+
 async fn price(namespace: lee::AccountId, json: bool, args: PriceArgs) -> Result<()> {
     let factory_program = load_program(&args.launch.factory_program_path)?;
     let curve_program = load_program(&args.launch.curve_program_path)?;
@@ -703,11 +902,15 @@ async fn sale_snapshot(namespace: lee::AccountId, json: bool, args: LaunchReadAr
     } else {
         None
     };
-    let status = match pool.as_ref().map(|pool| pool.lifecycle) {
-        None => SaleStatus::Preparing,
-        Some(pool::PoolLifecycle::Open) => SaleStatus::Open,
-        Some(pool::PoolLifecycle::Closed) => SaleStatus::Closed,
-        Some(pool::PoolLifecycle::Withdrawn) => SaleStatus::Withdrawn,
+    let status = if factory.settlement_stage == launchpad_client::SettlementStage::Graduated {
+        SaleStatus::Graduated
+    } else {
+        match pool.as_ref().map(|pool| pool.lifecycle) {
+            None => SaleStatus::Preparing,
+            Some(pool::PoolLifecycle::Open) => SaleStatus::Open,
+            Some(pool::PoolLifecycle::Closed) => SaleStatus::Closed,
+            Some(pool::PoolLifecycle::Withdrawn) => SaleStatus::Withdrawn,
+        }
     };
     let tokens_sold = if let Some(pool) = &pool {
         factory
@@ -719,6 +922,9 @@ async fn sale_snapshot(namespace: lee::AccountId, json: bool, args: LaunchReadAr
     };
     let config = load_curve_config(namespace, &wallet, curve_program.id()).await?;
     let snapshot = SaleSnapshot {
+        trade_mode: factory.trade_mode.into(),
+        graduation_hook: factory.graduation_hook.as_ref().map(HookSnapshot::from),
+        settlement_stage: settlement_stage_name(factory.settlement_stage),
         namespace: namespace.to_string(),
         protocol_fee_bps: config.protocol_fee_bps,
         treasury: config.treasury.to_string(),
@@ -757,9 +963,15 @@ async fn sale_snapshot(namespace: lee::AccountId, json: bool, args: LaunchReadAr
             SaleStatus::Open => "open",
             SaleStatus::Closed => "closed",
             SaleStatus::Withdrawn => "withdrawn",
+            SaleStatus::Graduated => "graduated",
+        };
+        let trade_mode = match snapshot.trade_mode {
+            TradeModeArg::BuyOnly => "buy-only",
+            TradeModeArg::BuyAndSell => "buy-and-sell",
         };
         println!(
-            "sale {status}: namespace={} fee_bps={} treasury={} pool={} sold={}/{} token_reserve={} collateral_reserve={} fees_accrued={} fees_collected={}",
+            "sale {status}: trade_mode={trade_mode} settlement_stage={} namespace={} fee_bps={} treasury={} pool={} sold={}/{} token_reserve={} collateral_reserve={} fees_accrued={} fees_collected={}",
+            snapshot.settlement_stage,
             snapshot.namespace,
             snapshot.protocol_fee_bps,
             snapshot.treasury,
@@ -771,6 +983,14 @@ async fn sale_snapshot(namespace: lee::AccountId, json: bool, args: LaunchReadAr
             snapshot.fees_accrued,
             snapshot.fees_collected
         );
+        if let Some(hook) = &snapshot.graduation_hook {
+            println!(
+                "graduation hook: program_id={} configuration={}",
+                hook.program_id, hook.configuration,
+            );
+        } else {
+            println!("graduation hook: none");
+        }
     }
     Ok(())
 }
@@ -1041,16 +1261,7 @@ async fn create_sale(
         args.launch.launch_salt,
         args.collateral_definition.account_id(),
     );
-    let request = CreateSaleRequest {
-        name: args.name,
-        uri: args.uri,
-        sale_reserve: args.sale_reserve,
-        dex_seed_reserve: args.dex_seed_reserve,
-        creator_allocation: args.creator_allocation,
-        virtual_token_reserve: args.virtual_token_reserve,
-        virtual_collateral_reserve: args.virtual_collateral_reserve,
-        end_timestamp: args.end_timestamp,
-    };
+    let request = args.sale_request();
     let mut wallet = WalletCore::from_env()
         .map_err(|error| eyre::eyre!(error.into_boxed_dyn_error()))
         .context("opening the project wallet")?;
@@ -1233,7 +1444,11 @@ mod tests {
         ] {
             assert!(help.contains(command), "missing command: {command}");
         }
-        assert!(!help.contains("close"));
+        assert!(
+            !Cli::command()
+                .get_subcommands()
+                .any(|command| command.get_name() == "close")
+        );
     }
 
     #[test]
@@ -1367,6 +1582,90 @@ mod tests {
     }
 
     #[test]
+    fn graduate_accepts_ordered_public_adapter_accounts_without_creator_authority() {
+        let salt = "11".repeat(32);
+        let first = lee::AccountId::new([1; 32]).to_string();
+        let second = lee::AccountId::new([2; 32]).to_string();
+        let cli = Cli::try_parse_from([
+            "launchpad",
+            "graduate",
+            "--launch-salt",
+            &salt,
+            "--collateral-definition",
+            "Public/11111111111111111111111111111111",
+            "--factory-program-path",
+            "factory.bin",
+            "--curve-program-path",
+            "curve.bin",
+            "--adapter-account",
+            &first,
+            "--adapter-account",
+            &second,
+        ])
+        .unwrap();
+        let Command::Graduate(args) = cli.command else {
+            panic!("graduate")
+        };
+        assert_eq!(
+            args.adapter_account,
+            [lee::AccountId::new([1; 32]), lee::AccountId::new([2; 32])]
+        );
+        let command = Cli::command();
+        let graduate = command
+            .get_subcommands()
+            .find(|command| command.get_name() == "graduate")
+            .unwrap();
+        assert!(
+            !graduate
+                .get_arguments()
+                .any(|argument| argument.get_long() == Some("creator"))
+        );
+    }
+
+    #[test]
+    fn graduation_rejects_private_accounts_and_authority_routing() {
+        let salt = "11".repeat(32);
+        let base = vec![
+            "launchpad",
+            "graduate",
+            "--launch-salt",
+            &salt,
+            "--collateral-definition",
+            "Public/11111111111111111111111111111111",
+            "--factory-program-path",
+            "factory.bin",
+            "--curve-program-path",
+            "curve.bin",
+        ];
+        assert!(Cli::try_parse_from(&base).unwrap().validate_route().is_ok());
+        let mut routed = base.clone();
+        routed.extend(["--authority-router-path", "private_authority.bin"]);
+        assert!(
+            Cli::try_parse_from(routed)
+                .unwrap()
+                .validate_route()
+                .is_err()
+        );
+        let mut private_namespace = base.clone();
+        private_namespace.extend(["--namespace", "Private/11111111111111111111111111111111"]);
+        assert!(
+            Cli::try_parse_from(private_namespace)
+                .unwrap()
+                .validate_route()
+                .is_err()
+        );
+        let mut private_adapter = base.clone();
+        private_adapter.extend([
+            "--adapter-account",
+            "Private/11111111111111111111111111111111",
+        ]);
+        assert!(Cli::try_parse_from(private_adapter).is_err());
+        let mut private_collateral = base;
+        private_collateral[5] = "Private/11111111111111111111111111111111";
+        assert!(Cli::try_parse_from(private_collateral).is_err());
+    }
+
+    #[test]
     fn withdraw_accepts_the_factory_lifecycle_context() {
         let cli = Cli::try_parse_from([
             "launchpad",
@@ -1387,10 +1686,33 @@ mod tests {
     }
 
     #[test]
+    fn create_sale_requires_trade_mode_with_only_the_two_named_values() {
+        let command = Cli::command();
+        let create = command
+            .get_subcommands()
+            .find(|command| command.get_name() == "create-sale")
+            .unwrap();
+        let mode = create
+            .get_arguments()
+            .find(|arg| arg.get_long() == Some("trade-mode"))
+            .expect("trade mode argument");
+        assert!(mode.is_required_set());
+        let values: Vec<_> = mode
+            .get_value_parser()
+            .possible_values()
+            .unwrap()
+            .map(|value| value.get_name().to_owned())
+            .collect();
+        assert_eq!(values, ["buy-only", "buy-and-sell"]);
+    }
+
+    #[test]
     fn create_sale_accepts_the_program_binaries_and_creator_account() {
         let cli = Cli::try_parse_from([
             "launchpad",
             "create-sale",
+            "--trade-mode",
+            "buy-and-sell",
             "--launch-salt",
             &"11".repeat(32),
             "--name",
@@ -1418,6 +1740,93 @@ mod tests {
         ])
         .expect("create sale command should parse");
         assert!(matches!(cli.command, Command::CreateSale(_)));
+    }
+
+    #[test]
+    fn create_sale_saves_optional_hook_program_and_hex_configuration() {
+        let salt = "11".repeat(32);
+        let program = "01000000".repeat(8);
+        let mut arguments = vec![
+            "launchpad",
+            "create-sale",
+            "--trade-mode",
+            "buy-only",
+            "--launch-salt",
+            &salt,
+            "--name",
+            "Launch",
+            "--uri",
+            "https://example.invalid/token",
+            "--sale-reserve",
+            "800",
+            "--dex-seed-reserve",
+            "100",
+            "--creator-allocation",
+            "100",
+            "--virtual-token-reserve",
+            "2000",
+            "--virtual-collateral-reserve",
+            "100",
+            "--collateral-definition",
+            "11111111111111111111111111111111",
+            "--creator",
+            "Public/11111111111111111111111111111111",
+            "--factory-program-path",
+            "factory.bin",
+            "--curve-program-path",
+            "curve.bin",
+        ];
+        let without_hook = Cli::try_parse_from(&arguments).unwrap();
+        let Command::CreateSale(args) = without_hook.command else {
+            panic!("create sale")
+        };
+        assert!(args.sale_request().graduation_hook.is_none());
+        let mut configuration_without_program = arguments.clone();
+        configuration_without_program.extend(["--graduation-hook-configuration", "070b"]);
+        assert!(Cli::try_parse_from(configuration_without_program).is_err());
+        for invalid_program in ["00", "zz", &"00".repeat(33)] {
+            let mut invalid = arguments.clone();
+            invalid.extend(["--graduation-hook-program-id", invalid_program]);
+            assert!(Cli::try_parse_from(invalid).is_err());
+        }
+        let mut invalid_configuration = arguments.clone();
+        invalid_configuration.extend([
+            "--graduation-hook-program-id",
+            &program,
+            "--graduation-hook-configuration",
+            "07z",
+        ]);
+        assert!(Cli::try_parse_from(invalid_configuration).is_err());
+        let mut empty_configuration = arguments.clone();
+        empty_configuration.extend(["--graduation-hook-program-id", &program]);
+        let Command::CreateSale(args) = Cli::try_parse_from(empty_configuration).unwrap().command
+        else {
+            panic!("create sale")
+        };
+        assert_eq!(
+            args.sale_request().graduation_hook,
+            Some(launchpad_client::GraduationHook {
+                program_id: [1; 8],
+                configuration: vec![],
+            })
+        );
+        arguments.extend([
+            "--graduation-hook-program-id",
+            &program,
+            "--graduation-hook-configuration",
+            "070b",
+        ]);
+        let cli = Cli::try_parse_from(arguments).unwrap();
+        let Command::CreateSale(args) = cli.command else {
+            panic!("create sale")
+        };
+        assert_eq!(
+            args.sale_request().graduation_hook,
+            Some(launchpad_client::GraduationHook {
+                program_id: [1; 8],
+                configuration: vec![7, 11],
+            })
+        );
     }
 
     #[test]
@@ -1503,6 +1912,9 @@ mod tests {
             (SaleStatus::Withdrawn, "withdrawn"),
         ] {
             let snapshot = SaleSnapshot {
+                trade_mode: TradeModeArg::BuyOnly,
+                graduation_hook: None,
+                settlement_stage: "unstarted",
                 namespace: "namespace".to_owned(),
                 protocol_fee_bps: 5,
                 treasury: "treasury".to_owned(),
@@ -1523,8 +1935,58 @@ mod tests {
                 virtual_collateral_reserve: 0,
                 close_timestamp: None,
             };
-            assert_eq!(serde_json::to_value(snapshot).unwrap()["status"], expected);
+            let output = serde_json::to_value(snapshot).unwrap();
+            assert_eq!(output["status"], expected);
+            assert_eq!(output["trade_mode"], "buy-only");
         }
+    }
+
+    #[test]
+    fn saved_hook_and_settlement_json_values_are_explicit() {
+        let hook = launchpad_client::GraduationHook {
+            program_id: [1; 8],
+            configuration: vec![7, 11],
+        };
+        assert_eq!(
+            serde_json::to_value(HookSnapshot::from(&hook)).unwrap(),
+            serde_json::json!({
+                "program_id": "0100000001000000010000000100000001000000010000000100000001000000",
+                "configuration": "070b",
+            })
+        );
+        use launchpad_client::SettlementStage;
+        for (stage, expected) in [
+            (SettlementStage::Unstarted, "unstarted"),
+            (SettlementStage::Ready, "ready"),
+            (
+                SettlementStage::Withdrawn {
+                    unsold: 600,
+                    collateral_due: 12,
+                },
+                "withdrawn",
+            ),
+            (SettlementStage::Burned { collateral_due: 12 }, "burned"),
+            (
+                SettlementStage::TokenPaid { collateral_due: 12 },
+                "token_paid",
+            ),
+            (SettlementStage::Complete, "complete"),
+            (
+                SettlementStage::HookReady { collateral_due: 12 },
+                "hook_ready",
+            ),
+            (SettlementStage::Graduated, "graduated"),
+            (SettlementStage::NoPayout, "no_payout"),
+        ] {
+            assert_eq!(
+                serde_json::to_value(settlement_stage_name(stage)).unwrap(),
+                expected
+            );
+        }
+        assert_eq!(
+            serde_json::to_value(SaleStatus::Graduated).unwrap(),
+            "graduated"
+        );
     }
 
     #[test]

@@ -226,6 +226,7 @@ fn create_pool_with_accounts(
         owner_id,
         CURVE_PROGRAM_ID,
         None,
+        None,
         false,
     );
 }
@@ -315,6 +316,7 @@ fn create_pool_rejects_an_end_timestamp_at_the_trusted_time_boundary() {
         owner_id,
         CURVE_PROGRAM_ID,
         None,
+        None,
         false,
     );
 }
@@ -345,6 +347,7 @@ fn create_pool_rejects_a_substituted_clock_even_without_an_end_timestamp() {
         None,
         owner_id,
         CURVE_PROGRAM_ID,
+        None,
         None,
         false,
     );
@@ -377,6 +380,7 @@ fn owner_can_open_a_pool_and_atomically_fund_both_ata_reserves() {
         None,
         owner_id,
         CURVE_PROGRAM_ID,
+        None,
         None,
         false,
     );
@@ -464,6 +468,7 @@ fn zero_initial_reserve_creates_its_ata_without_emitting_a_zero_transfer() {
         None,
         owner_id,
         CURVE_PROGRAM_ID,
+        None,
         None,
         false,
     );
@@ -726,6 +731,7 @@ fn first_update_config_initializes_the_config() {
 #[test]
 fn pool_state_round_trips_with_ordered_tokens_owner_and_optional_expiry() {
     let pool_account = PoolAccount {
+        allowed_input_token: None,
         funded: true,
         owner_program: None,
         namespace: AccountId::new([0xAD; 32]),
@@ -756,6 +762,7 @@ fn stored_pool_owner_can_close_the_pool() {
     let token0 = AccountId::new([1; 32]);
     let token1 = AccountId::new([2; 32]);
     let pool_account = PoolAccount {
+        allowed_input_token: None,
         funded: true,
         owner_program: None,
         namespace: AccountId::new([0xAD; 32]),
@@ -816,6 +823,7 @@ fn an_unrelated_signer_cannot_close_the_pool() {
     let token0 = AccountId::new([1; 32]);
     let token1 = AccountId::new([2; 32]);
     let pool_account = PoolAccount {
+        allowed_input_token: None,
         funded: true,
         owner_program: None,
         namespace: AccountId::new([0xAD; 32]),
@@ -856,6 +864,7 @@ fn expired_pool_owner_can_withdraw_both_reserves_without_closing_first() {
     let token0 = AccountId::new([1; 32]);
     let token1 = AccountId::new([2; 32]);
     let pool_account = PoolAccount {
+        allowed_input_token: None,
         funded: true,
         owner_program: None,
         namespace: AccountId::new([0xAD; 32]),
@@ -914,6 +923,81 @@ fn expired_pool_owner_can_withdraw_both_reserves_without_closing_first() {
 }
 
 #[test]
+fn withdrawal_accepts_an_omitted_treasury_that_is_the_pool_collateral_vault() {
+    let mut pool = namespace_pool(NAMESPACE_CREATOR);
+    let mut state = PoolAccount::try_from(&pool.account.data).unwrap();
+    state.pool.lifecycle = pool::PoolLifecycle::Closed;
+    pool.account.data = Data::from(&state);
+    let pre = vec![
+        pool.clone(),
+        signer(state.owner),
+        holding_ata(state.owner, state.token0_definition_id, 0),
+        holding_ata(state.owner, state.token1_definition_id, 0),
+        holding_ata(pool.account_id, state.token0_definition_id, 800),
+        holding_ata(pool.account_id, state.token1_definition_id, 100),
+        trusted_clock(42),
+        namespace_config(NAMESPACE_CREATOR, 100, pool.account_id),
+    ];
+    let (posts, calls) =
+        process_instruction(pre.clone(), Instruction::WithdrawReserves, CURVE_PROGRAM_ID);
+    lee_core::program::validate_execution(&pre, &posts, CURVE_PROGRAM_ID).unwrap();
+    let withdrawn = PoolAccount::try_from(&posts[0].account().data).unwrap();
+    assert_eq!(withdrawn.pool.lifecycle, pool::PoolLifecycle::Withdrawn);
+    assert_eq!(posts.len(), 8);
+    let amounts: Vec<u128> = calls
+        .iter()
+        .map(|call| {
+            let instruction: AtaInstruction =
+                risc0_zkvm::serde::from_slice(&call.instruction_data).unwrap();
+            let AtaInstruction::Transfer { amount, .. } = instruction else {
+                panic!("withdrawal must transfer reserves")
+            };
+            amount
+        })
+        .collect();
+    assert_eq!(amounts, vec![800, 100]);
+}
+
+#[test]
+fn withdrawal_leaves_collected_fees_in_the_pool_when_it_is_the_treasury() {
+    let mut pool = namespace_pool(NAMESPACE_CREATOR);
+    let mut state = PoolAccount::try_from(&pool.account.data).unwrap();
+    state.pool.lifecycle = pool::PoolLifecycle::Closed;
+    state.pool.fees_accrued = 7;
+    pool.account.data = Data::from(&state);
+    let pre = vec![
+        pool.clone(),
+        signer(state.owner),
+        holding_ata(state.owner, state.token0_definition_id, 0),
+        holding_ata(state.owner, state.token1_definition_id, 0),
+        holding_ata(pool.account_id, state.token0_definition_id, 800),
+        holding_ata(pool.account_id, state.token1_definition_id, 107),
+        trusted_clock(42),
+        namespace_config(NAMESPACE_CREATOR, 100, pool.account_id),
+    ];
+    let (posts, calls) =
+        process_instruction(pre.clone(), Instruction::WithdrawReserves, CURVE_PROGRAM_ID);
+    lee_core::program::validate_execution(&pre, &posts, CURVE_PROGRAM_ID).unwrap();
+    let withdrawn = PoolAccount::try_from(&posts[0].account().data).unwrap();
+    assert_eq!(withdrawn.pool.fees_accrued, 0);
+    assert_eq!(withdrawn.pool.fees_collected, 7);
+    assert_eq!(calls.len(), 2, "fees already at treasury need no transfer");
+    let instruction: AtaInstruction =
+        risc0_zkvm::serde::from_slice(&calls[1].instruction_data).unwrap();
+    assert!(matches!(
+        instruction,
+        AtaInstruction::Transfer { amount: 100, .. }
+    ));
+    assert_eq!(
+        TokenHolding::try_from(&calls[1].pre_states[1].account.data).unwrap(),
+        TokenHolding::Fungible {
+            definition_id: state.token1_definition_id,
+            balance: 107
+        }
+    );
+}
+
+#[test]
 fn withdraw_dispatch_transfers_both_real_reserves_and_retires_the_pool() {
     let owner = AccountId::new([3; 32]);
     let token0 = AccountId::new([1; 32]);
@@ -929,6 +1013,7 @@ fn withdraw_dispatch_transfers_both_real_reserves_and_retires_the_pool() {
         account: Account {
             program_owner: CURVE_PROGRAM_ID,
             data: Data::from(&PoolAccount {
+                allowed_input_token: None,
                 funded: true,
                 owner_program: None,
                 namespace: AccountId::new([0xAD; 32]),
@@ -1057,6 +1142,7 @@ fn exact_input_sell_charges_the_protocol_fee_in_collateral() {
     let token0 = AccountId::new([1; 32]);
     let token1 = AccountId::new([2; 32]);
     let pool_account = PoolAccount {
+        allowed_input_token: None,
         funded: true,
         owner_program: None,
         namespace: AccountId::new([0xAD; 32]),
@@ -1130,6 +1216,7 @@ fn token0_to_token1_exact_input_accrues_fee_with_two_transfers() {
         account: Account {
             program_owner: CURVE_PROGRAM_ID,
             data: Data::from(&PoolAccount {
+                allowed_input_token: None,
                 funded: true,
                 owner_program: None,
                 namespace: AccountId::new([0xAD; 32]),
@@ -1273,6 +1360,7 @@ fn exact_output_handler_caps_fee_inclusive_input_in_the_reverse_direction() {
     let token0 = AccountId::new([1; 32]);
     let token1 = AccountId::new([2; 32]);
     let pool_account = PoolAccount {
+        allowed_input_token: None,
         funded: true,
         owner_program: None,
         namespace: AccountId::new([0xAD; 32]),
@@ -1349,6 +1437,7 @@ fn exact_output_dispatch_settles_fee_inclusive_input_and_requested_output_atomic
         account: Account {
             program_owner: CURVE_PROGRAM_ID,
             data: Data::from(&PoolAccount {
+                allowed_input_token: None,
                 funded: true,
                 owner_program: None,
                 namespace: AccountId::new([0xAD; 32]),
@@ -1491,6 +1580,7 @@ fn instruction_wire_format_matches_the_idl_order() {
             namespace: AccountId::new([0xAD; 32]),
         },
         Instruction::CreatePool {
+            allowed_input_token: None,
             defer_funding: false,
             namespace: AccountId::new([0xAD; 32]),
             token0_amount: 800,
@@ -1536,6 +1626,7 @@ fn valid_create_pool_instruction(
     owner_program_seed: Option<[u8; 32]>,
 ) -> Instruction {
     Instruction::CreatePool {
+        allowed_input_token: None,
         defer_funding: false,
         namespace: NAMESPACE_CREATOR,
         token0_amount: 800,
@@ -1668,6 +1759,52 @@ fn wire_values_reject_unrepresentable_fee_invalid_depletion_and_incomplete_owner
 }
 
 #[test]
+fn pool_creation_validates_and_saves_the_neutral_input_restriction() {
+    for wire_side in [None, Some(0), Some(1), Some(2), Some(u8::MAX)] {
+        let accounts = valid_create_pool_accounts();
+        let pre = vec![
+            accounts.pool,
+            accounts.owner,
+            accounts.token0_definition,
+            accounts.token1_definition,
+            accounts.owner_token0_ata,
+            accounts.owner_token1_ata,
+            accounts.pool_token0_ata,
+            accounts.pool_token1_ata,
+            trusted_clock(1),
+            initialized_config(NAMESPACE_CREATOR),
+        ];
+        let mut instruction = valid_create_pool_instruction(None, None, None);
+        let Instruction::CreatePool {
+            allowed_input_token,
+            ..
+        } = &mut instruction
+        else {
+            unreachable!()
+        };
+        *allowed_input_token = wire_side;
+        let result =
+            std::panic::catch_unwind(|| process_instruction(pre, instruction, CURVE_PROGRAM_ID));
+        let expected = match wire_side {
+            None => None,
+            Some(0) => Some(pool::TokenSide::Token0),
+            Some(1) => Some(pool::TokenSide::Token1),
+            Some(_) => {
+                assert!(result.is_err());
+                continue;
+            }
+        };
+        let (posts, _) = result.expect("valid restriction");
+        assert_eq!(
+            PoolAccount::try_from(&posts[0].account().data)
+                .unwrap()
+                .allowed_input_token,
+            expected
+        );
+    }
+}
+
+#[test]
 fn the_pool_pda_hashes_the_pair_in_fixed_order() {
     let owner = AccountId::new([3; 32]);
     let token0 = AccountId::new([1; 32]);
@@ -1742,6 +1879,7 @@ fn namespace_config(namespace: AccountId, fee: u16, treasury: AccountId) -> Acco
 
 fn namespace_pool(namespace: AccountId) -> AccountWithMetadata {
     let state = PoolAccount {
+        allowed_input_token: None,
         funded: true,
         owner_program: None,
         namespace,
@@ -1993,6 +2131,96 @@ fn execution_fee_update_respects_buy_and_sell_slippage() {
 }
 
 #[test]
+#[should_panic(expected = "Input token is restricted")]
+fn restricted_pool_rejects_selling_through_public_swap() {
+    let mut pool = namespace_pool(NAMESPACE_CREATOR);
+    let mut state = PoolAccount::try_from(&pool.account.data).unwrap();
+    state.allowed_input_token = Some(pool::TokenSide::Token1);
+    pool.account.data = Data::from(&state);
+    let participant = AccountId::new([4; 32]);
+    let accounts = vec![
+        pool.clone(),
+        initialized_config(new_admin()),
+        signer(participant),
+        holding_ata(participant, state.token0_definition_id, 250),
+        holding_ata(pool.account_id, state.token0_definition_id, 800),
+        holding_ata(pool.account_id, state.token1_definition_id, 100),
+        holding_ata(participant, state.token1_definition_id, 0),
+        trusted_clock(1),
+    ];
+    let _ = process_instruction(
+        accounts,
+        Instruction::SwapExactInput {
+            amount_in: 250,
+            min_amount_out: 19,
+            token_in: state.token0_definition_id,
+        },
+        CURVE_PROGRAM_ID,
+    );
+}
+
+#[test]
+fn neutral_input_restrictions_apply_to_both_public_buy_forms() {
+    let participant = AccountId::new([4; 32]);
+    for restriction in [
+        None,
+        Some(pool::TokenSide::Token1),
+        Some(pool::TokenSide::Token0),
+    ] {
+        let mut pool = namespace_pool(NAMESPACE_CREATOR);
+        let mut state = PoolAccount::try_from(&pool.account.data).unwrap();
+        state.allowed_input_token = restriction;
+        pool.account.data = Data::from(&state);
+        let pre = vec![
+            pool.clone(),
+            namespace_config(NAMESPACE_CREATOR, 0, new_treasury()),
+            signer(participant),
+            holding_ata(participant, state.token1_definition_id, 25),
+            holding_ata(pool.account_id, state.token1_definition_id, 100),
+            holding_ata(pool.account_id, state.token0_definition_id, 800),
+            holding_ata(participant, state.token0_definition_id, 0),
+            trusted_clock(1),
+        ];
+        for instruction in [
+            Instruction::SwapExactInput {
+                amount_in: 25,
+                min_amount_out: 200,
+                token_in: state.token1_definition_id,
+            },
+            Instruction::SwapExactOutput {
+                amount_out: 200,
+                max_amount_in: 25,
+                token_in: state.token1_definition_id,
+            },
+        ] {
+            let result = std::panic::catch_unwind(|| {
+                process_instruction(pre.clone(), instruction, CURVE_PROGRAM_ID)
+            });
+            if restriction == Some(pool::TokenSide::Token0) {
+                let panic = result.expect_err("opposite input must be restricted");
+                assert_eq!(
+                    panic
+                        .downcast_ref::<String>()
+                        .map(String::as_str)
+                        .or_else(|| panic.downcast_ref::<&str>().copied()),
+                    Some("Input token is restricted")
+                );
+                continue;
+            }
+            let (posts, calls) = result.expect("allowed collateral input");
+            lee_core::program::validate_execution(&pre, &posts, CURVE_PROGRAM_ID).unwrap();
+            let updated = PoolAccount::try_from(&posts[0].account().data).unwrap();
+            assert_eq!(
+                (updated.pool.real_reserve0, updated.pool.real_reserve1),
+                (600, 125)
+            );
+            assert_eq!(updated.allowed_input_token, restriction);
+            assert_eq!(calls.len(), 2);
+        }
+    }
+}
+
+#[test]
 fn swaps_reject_foreign_reserve_accounts() {
     let namespace = AccountId::new([51; 32]);
     let other = AccountId::new([52; 32]);
@@ -2070,6 +2298,7 @@ fn pool_creation_binds_namespace_and_rejects_a_different_config() {
                 namespace_config(namespace, 0, new_treasury()),
             ],
             Instruction::CreatePool {
+                allowed_input_token: None,
                 defer_funding: false,
                 namespace,
                 token0_amount: 800,
@@ -2206,6 +2435,43 @@ fn pool_close_rights_follow_the_owner_nft() {
             .pool
             .effective_lifecycle(1),
         pool::PoolLifecycle::Closed
+    );
+}
+
+#[test]
+fn collection_accepts_unique_accounts_when_fees_are_already_at_the_treasury() {
+    let mut pool = namespace_pool(NAMESPACE_CREATOR);
+    let mut state = PoolAccount::try_from(&pool.account.data).unwrap();
+    state.pool.fees_accrued = 7;
+    pool.account.data = Data::from(&state);
+    let pre = vec![
+        pool.clone(),
+        namespace_config(NAMESPACE_CREATOR, 100, pool.account_id),
+        holding_ata(pool.account_id, state.token1_definition_id, 107),
+    ];
+    let (posts, calls) =
+        process_instruction(pre.clone(), Instruction::CollectFees, CURVE_PROGRAM_ID);
+    lee_core::program::validate_execution(&pre, &posts, CURVE_PROGRAM_ID).unwrap();
+    assert_eq!(posts.len(), 3);
+    assert!(calls.is_empty());
+    assert_eq!(posts[2].account(), &pre[2].account);
+    let collected = PoolAccount::try_from(&posts[0].account().data).unwrap();
+    assert_eq!(collected.pool.real_reserve1, 100);
+    assert_eq!(collected.pool.fees_accrued, 0);
+    assert_eq!(collected.pool.fees_collected, 7);
+    let mut replay = pre.clone();
+    replay[0].account = posts[0].account().clone();
+    let (_, calls) = process_instruction(replay, Instruction::CollectFees, CURVE_PROGRAM_ID);
+    assert!(calls.is_empty());
+    let mut missing_treasury = pre;
+    missing_treasury[1] = namespace_config(NAMESPACE_CREATOR, 100, new_treasury());
+    assert!(
+        std::panic::catch_unwind(|| process_instruction(
+            missing_treasury,
+            Instruction::CollectFees,
+            CURVE_PROGRAM_ID
+        ))
+        .is_err()
     );
 }
 

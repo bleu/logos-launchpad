@@ -29,6 +29,8 @@ fn sale() -> FactorySale {
 
 fn creation() -> CreateSaleRequest {
     CreateSaleRequest {
+        trade_mode: factory_core::TradeMode::BuyAndSell,
+        graduation_hook: None,
         name: "E2E token".into(),
         uri: "https://example.invalid/e2e-token.json".into(),
         sale_reserve: 800,
@@ -42,6 +44,7 @@ fn creation() -> CreateSaleRequest {
 
 fn pool_snapshot() -> (curve_core::PoolAccount, curve_core::Config) {
     let pool = curve_core::PoolAccount {
+        allowed_input_token: None,
         funded: true,
         namespace: AccountId::new([0xAD; 32]),
         token0_definition_id: AccountId::new([2; 32]),
@@ -69,6 +72,8 @@ fn pool_snapshot() -> (curve_core::PoolAccount, curve_core::Config) {
 fn valid_factory_state(sale: FactorySale) -> FactoryState {
     let addresses = super::factory_pool_addresses(sale);
     FactoryState {
+        trade_mode: factory_core::TradeMode::BuyAndSell,
+        graduation_hook: None,
         creation_stage: CreationStage::Active,
         settlement_stage: SettlementStage::Ready,
         end_timestamp: None,
@@ -129,6 +134,49 @@ fn account_locations_parse_only_the_location_boundary() {
             .account_id(),
         account_id
     );
+}
+
+#[test]
+fn creation_request_encodes_the_required_typed_mode() {
+    for (mode, wire) in [
+        (factory_core::TradeMode::BuyOnly, 0),
+        (factory_core::TradeMode::BuyAndSell, 1),
+    ] {
+        let mut request = creation();
+        request.trade_mode = mode;
+        let call = build_create_sale_invocation(sale(), AccountId::new([9; 32]), request).unwrap();
+        assert!(
+            matches!(call.instruction, factory_core::Instruction::CreateFactoryPool { trade_mode, .. } if trade_mode == wire)
+        );
+    }
+}
+
+#[test]
+fn resumed_creation_cannot_change_trade_mode_at_any_stage() {
+    for stage in [
+        CreationStage::Minted,
+        CreationStage::Allocated,
+        CreationStage::PoolPrepared,
+        CreationStage::Active,
+    ] {
+        let mut state = valid_factory_state(sale());
+        state.creation_stage = stage;
+        let mut request = creation();
+        assert!(
+            super::next_creation_invocation(
+                sale(),
+                AccountId::new([9; 32]),
+                request.clone(),
+                Some(&state)
+            )
+            .is_ok()
+        );
+        request.trade_mode = factory_core::TradeMode::BuyOnly;
+        assert!(matches!(
+            super::next_creation_invocation(sale(), AccountId::new([9; 32]), request, Some(&state)),
+            Err(ClientError::LaunchParametersMismatch)
+        ));
+    }
 }
 
 #[test]
@@ -342,6 +390,9 @@ fn factory_instruction_wire_slots_follow_the_source_idl_order() {
     let encodings: [(factory_core::Instruction, &[u32]); 4] = [
         (
             factory_core::Instruction::CreateFactoryPool {
+                trade_mode: 1,
+                graduation_hook_program_id: None,
+                graduation_hook_configuration: vec![],
                 namespace: sale().namespace,
                 launch_salt: sale().launch_salt,
                 name: "Sale".into(),
@@ -388,6 +439,35 @@ fn creator_claim_uses_factory_escrow_and_derived_recipient_ata() {
         invocation.instruction,
         factory_core::Instruction::ClaimCreatorAllocation
     ));
+}
+
+#[test]
+fn saved_settlement_stages_identify_completed_manual_work() {
+    for (stage, complete) in [
+        (SettlementStage::Complete, true),
+        (SettlementStage::NoPayout, true),
+        (SettlementStage::Graduated, true),
+        (SettlementStage::Unstarted, false),
+        (SettlementStage::Ready, false),
+        (
+            SettlementStage::Withdrawn {
+                unsold: 0,
+                collateral_due: 0,
+            },
+            false,
+        ),
+        (SettlementStage::Burned { collateral_due: 0 }, false),
+        (SettlementStage::TokenPaid { collateral_due: 0 }, false),
+        (SettlementStage::HookReady { collateral_due: 0 }, false),
+    ] {
+        let mut state = valid_factory_state(sale());
+        state.settlement_stage = stage;
+        assert_eq!(
+            state.settlement_stage.is_manual_settlement_complete(),
+            complete,
+            "{stage:?}"
+        );
+    }
 }
 
 #[test]
@@ -521,6 +601,39 @@ fn sell_uses_launch_token_input_and_expected_account_order() {
 }
 
 #[test]
+fn buy_only_quotes_reject_selling_and_keep_both_buy_forms() {
+    let (mut pool, config) = pool_snapshot();
+    pool.allowed_input_token = Some(pool::TokenSide::Token1);
+    assert!(matches!(
+        quote_sell(&pool, &config, 250, 1),
+        Err(ClientError::InputTokenRestricted)
+    ));
+    assert_eq!(quote_buy(&pool, &config, 200, 1).unwrap().amount_in, 25);
+    assert_eq!(
+        quote_buy_with_collateral(&pool, &config, 25, 1)
+            .unwrap()
+            .amount_out,
+        200
+    );
+}
+
+#[test]
+fn token0_only_pool_quotes_reject_both_collateral_buy_forms() {
+    let (mut pool, config) = pool_snapshot();
+    pool.allowed_input_token = Some(pool::TokenSide::Token0);
+    let quotes = [
+        quote_buy(&pool, &config, 200, 1),
+        quote_buy_with_collateral(&pool, &config, 25, 1),
+    ];
+    for (form, quote) in ["exact-output", "exact-input"].into_iter().zip(quotes) {
+        assert!(
+            matches!(quote, Err(ClientError::InputTokenRestricted)),
+            "{form} buy returned {quote:?}"
+        );
+    }
+}
+
+#[test]
 fn quote_builders_match_pool_snapshot_rules_and_map_errors() {
     let (pool, config) = pool_snapshot();
     let exact_output = quote_buy(&pool, &config, 200, 1).unwrap();
@@ -590,6 +703,54 @@ fn collection_is_unsigned_and_factory_withdrawal_removes_duplicate_treasury_ata(
             .collect::<std::collections::HashSet<_>>()
             .len(),
         13
+    );
+}
+
+#[test]
+fn collection_builder_omits_the_treasury_when_it_is_the_pool_vault() {
+    let sale = sale();
+    let pool = AccountId::new([4; 32]);
+    let call = build_collect_fees_invocation(
+        sale.namespace,
+        sale.curve_program_id,
+        pool,
+        sale.collateral_definition,
+        pool,
+    );
+    assert_eq!(
+        call.account_ids,
+        vec![
+            pool,
+            curve_core::compute_config_pda(sale.namespace, sale.curve_program_id),
+            super::associated_token_account(pool, sale.collateral_definition),
+        ]
+    );
+    assert!(call.signer_accounts.is_empty());
+    assert_eq!(call.instruction, curve_core::Instruction::CollectFees);
+}
+
+#[test]
+fn graduation_builder_is_unsigned_and_preserves_remaining_account_order() {
+    let mut state = valid_factory_state(sale());
+    state.graduation_hook = Some(factory_core::GraduationHook {
+        program_id: [9; 8],
+        configuration: vec![7, 11],
+    });
+    let remaining = vec![AccountId::new([51; 32]), AccountId::new([52; 32])];
+    let call = super::build_graduation_invocation(
+        sale(),
+        &state,
+        AccountId::new([4; 32]),
+        remaining.clone(),
+    )
+    .unwrap();
+    assert!(call.signer_accounts.is_empty());
+    assert_eq!(call.program_id, FACTORY_PROGRAM_ID);
+    assert_eq!(call.account_ids.len(), 16);
+    assert_eq!(&call.account_ids[14..], &remaining);
+    assert_eq!(
+        Program::serialize_instruction(call.instruction).unwrap(),
+        vec![4, 2]
     );
 }
 

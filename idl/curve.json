@@ -126,6 +126,12 @@
       ],
       "args": [
         {
+          "name": "allowed_input_token",
+          "type": {
+            "option": "u8"
+          }
+        },
+        {
           "name": "defer_funding",
           "type": "bool"
         },
@@ -495,10 +501,11 @@
           "init": false
         },
         {
-          "name": "treasury_collateral_ata",
+          "name": "treasury_collateral_atas",
           "writable": true,
           "signer": false,
-          "init": false
+          "init": false,
+          "rest": true
         }
       ],
       "args": []

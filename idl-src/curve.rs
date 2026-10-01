@@ -35,6 +35,7 @@ pub mod curve {
         #[account(init)] pool_token1_ata: AccountWithMetadata,
         clock: AccountWithMetadata,
         config: AccountWithMetadata,
+        allowed_input_token: Option<u8>,
         defer_funding: bool,
         namespace: AccountId,
         token0_amount: u128,
@@ -101,7 +102,7 @@ pub mod curve {
     ) {}
 
     #[instruction]
-    /// Omit trailing treasury_collateral_ata when it is owner_token1_ata.
+    /// Omit the trailing treasury ATA when it matches an earlier account.
     pub fn withdraw_reserves(
         #[account(mut)] pool: AccountWithMetadata,
         #[account(signer)] owner: AccountWithMetadata,
@@ -114,10 +115,11 @@ pub mod curve {
         #[account(mut)] treasury_collateral_atas: Vec<AccountWithMetadata>,
     ) {}
     #[instruction]
+    /// Omit the trailing treasury ATA when it is the pool collateral ATA.
     pub fn collect_fees(
         #[account(mut)] pool: AccountWithMetadata,
         config: AccountWithMetadata,
         #[account(mut)] pool_collateral_ata: AccountWithMetadata,
-        #[account(mut)] treasury_collateral_ata: AccountWithMetadata,
+        #[account(mut)] treasury_collateral_atas: Vec<AccountWithMetadata>,
     ) {}
 }
