@@ -18,7 +18,7 @@ After expiry, settlement burns any unsold `D`. It does not add that inventory to
 
 An LBP closes at its end timestamp. That timestamp is the schedule endpoint used for weight interpolation. No collateral-raised target closes an LBP.
 
-Closure permits the mechanism's post-close operations. Settlement separately collects remaining fees and performs permitted allocation or proceeds transfers. This decision does not add automatic DEX graduation.
+Closure permits the mechanism's post-close operations. Settlement separately collects remaining fees and performs permitted allocation or proceeds transfers. For curves, the amended [ADR 0020](0020-settlement-and-graduation.md) supersedes the inactive-hook decision with an optional immutable adapter hook and manual fallback. A client submits its separate post-close transaction; closure alone does not call it. No real DEX integration or automatic migration is added.
 
 ## Consequences
 

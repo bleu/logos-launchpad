@@ -29,7 +29,8 @@ This page explains technical shorthand used in this repository. [CONTEXT.md](../
 | Live fee rate / current treasury | A namespace setting read at execution or collection time, rather than a value frozen when the sale was created. |
 | Treasury | The current namespace destination for collected protocol fees. |
 | Lifecycle / close / settlement | A sale's allowed state changes; ending trading; and the separate post-close transfer of allowed fees, allocations or proceeds. |
-| Graduation / DEX | Moving liquidity to a decentralized exchange. Automatic graduation is inactive in this design. |
+| Graduation / DEX | Moving liquidity to a decentralized exchange. A successful general adapter callback does not by itself prove that migration. Live DEX integration remains deferred. |
+| Graduation hook | Optional separate public post-close callback to a saved adapter, with exact `R` and recorded collateral transfers. See [ADR 0020](adr/0020-settlement-and-graduation.md). |
 | Expiry / end timestamp | A configured time that can end a curve sale or the scheduled end of an LBP. |
 | `poke` | A permissionless LBP call that records a time checkpoint without changing the price schedule. |
 | Pause / freeze | Controls that stop specified actions. Their platform integration and policy remain separate from namespace administration. |

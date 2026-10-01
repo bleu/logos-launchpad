@@ -16,7 +16,7 @@ Require swap output to be covered by the matching real reserve. Keep accrued pro
 
 ## Consequences
 
-The earlier dual-input-fee/monotonic-product interpretation is superseded. A creation bound alone is not proof of every production arithmetic path. The production specification must qualify its full input envelope and preserve conservative rounding and real-reserve limits.
+The earlier dual-input-fee/monotonic-product interpretation is superseded. Accepted trades keep the mathematical current virtual-reserve product at least `k`; the current product can decrease as later quotes use the fixed creation-time `k`. A creation bound alone is not proof of every production arithmetic path. The [curve contract](../product/curve-contract.md) defines quotient/remainder fee helpers, checked runtime reserve and counter arithmetic, physical custody checks, the solvency argument and the acceptance evidence map. Conservative rounding and real-output guards remain required.
 
 ## Sources
 

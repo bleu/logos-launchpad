@@ -12,7 +12,7 @@ The curve proposal describes `R` as a DEX-seed reserve. Curve closing must disti
 
 For curve sales, `D` is the purchasable allocation. The canonical close condition is supply-driven: the factory closes the sale when all `D` tokens have been purchased. No collateral-raised target is a close condition.
 
-`R` is the owner-reserved DEX-seed reserve and remains untouched until close. When `R` is not used for graduation, the factory can transfer it to the creator after close. Do not invent automatic graduation. Closing and unsold-`D` rules are defined in [ADR 0025](0025-sale-closing.md).
+`R` is the owner-reserved DEX-seed reserve and remains untouched until close. The amended [ADR 0020](0020-settlement-and-graduation.md) supersedes the inactive-hook policy: the contract permits a separate permissionless call to a saved adapter, or creator-authorized manual payout. The hook receives full `R` and full recorded real collateral, excluding fees, surplus deposits and creator allocation. No live DEX integration is claimed. Closing and unsold-`D` rules are defined in [ADR 0025](0025-sale-closing.md).
 
 An optional expiry mode closes at `D` exhaustion or the configured end timestamp, whichever occurs first. The contract does not validate a minimum sale duration when expiry is configured. This is an accepted internal departure from RFP-015 with external status `To be reviewed by Logos team`. `D` exhaustion still closes the sale immediately.
 

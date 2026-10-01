@@ -12,7 +12,7 @@ Reserves can change between a displayed quote and transaction execution. LBP wei
 
 Integrations must obtain a fresh quote and supply `minAmountOut` derived from the participant's selected slippage tolerance for purchase flows. Do not silently replace that bound with an unrestricted trade. The program checks the supplied limit against execution-time pricing.
 
-Keep existing exact-input and exact-output meanings explicit. Where exact-output APIs apply, retain their fee-inclusive input cap rather than pretending `minAmountOut` describes both operation types.
+For curves, retain exact-input buys and sells, and exact-output buys only. Exact-input `min_amount_out` is the participant's receipt, after any sell fee. Exact-output buy `max_amount_in` caps the full collateral debit including fees. Both use saved creation-time `k` and execution-time namespace fees. The immutable trade mode must restrict SDK quotes and public execution in the same way; both buy forms are valid in BuyOnly. See the [curve contract](../product/curve-contract.md) for the forward and inverse formulas, literal examples and evidence limits. This amendment makes the existing quote types explicit; it does not add exact-output sells.
 
 ## Consequences
 

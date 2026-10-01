@@ -10,7 +10,9 @@ The proposals include optional sale modes. This design retains selected modes bu
 
 ## Decision
 
-Retain curve one-way mode and the optional expiry mode. Curve closing follows [ADR 0025](0025-sale-closing.md): `D` exhaustion closes immediately, while an optional configured expiry closes at `D` exhaustion or its end timestamp. The contract does not validate a minimum sale duration when expiry is configured. This is an accepted internal departure from RFP-015 with external status `To be reviewed by Logos team`. No collateral-raised target closes a curve sale.
+This amendment replaces the earlier unspecified curve one-way mode with required immutable `TradeMode::{BuyOnly, BuyAndSell}`. BuyOnly permits both exact-input and exact-output collateral-input buys, and rejects selling. BuyAndSell also permits exact-input sells. There is no program default or exact-output sell; UI defaults remain deferred. Enforce the direction in the neutral account layer without adding factory policy to pure pricing state. These mode inputs are implemented and have host evidence mapped in the [curve contract](../product/curve-contract.md); final release checks remain separate.
+
+Retain optional curve expiry. Curve closing follows [ADR 0025](0025-sale-closing.md): `D` exhaustion closes immediately, while an optional configured expiry closes at `D` exhaustion or its end timestamp. The contract does not validate a minimum sale duration when expiry is configured. This is an accepted internal departure from RFP-015 with external status `To be reviewed by Logos team`. No collateral-raised target closes a curve sale.
 
 Retain weighted and fixed-price LBP modes, start/end times, clock-derived weights, permissionless poke and pause controls.
 
