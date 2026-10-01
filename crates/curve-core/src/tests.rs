@@ -517,8 +517,7 @@ fn update_config_rejects_an_unauthorized_authority() {
     );
 }
 
-// The RFP-001 seam: plugging the admin library in later is this rotation, applied to
-// whatever key that library controls. No code change, no redeploy.
+// Component-backed transfer still needs compatibility evidence; see ADR 0006.
 #[test]
 fn stored_admin_rotates_the_admin_to_a_new_key() {
     let rotated_to = AccountId::new([3; 32]);
@@ -566,39 +565,81 @@ fn update_rejects_the_rotated_out_admin() {
     );
 }
 
-#[should_panic(expected = "Protocol fee exceeds 10,000 basis points")]
 #[test]
-fn update_config_rejects_protocol_fee_above_the_denominator() {
-    let _post_states = update_config(
-        AccountId::new([0xAD; 32]),
-        uninitialized_config(),
-        namespace_creator_signer(),
-        new_admin(),
-        10_001,
-        new_treasury(),
-        CURVE_PROGRAM_ID,
-    );
+fn namespace_fee_rate_is_below_one_hundred_percent_on_creation_and_update() {
+    for (config, authority) in [
+        (uninitialized_config(), namespace_creator_signer()),
+        (
+            namespace_config(NAMESPACE_CREATOR, 100, new_treasury()),
+            namespace_creator_signer(),
+        ),
+    ] {
+        let pre_states = vec![config, authority];
+        for protocol_fee_bps in [0, 9_999] {
+            let (post_states, _) = process_instruction(
+                pre_states.clone(),
+                Instruction::UpdateConfig {
+                    namespace: NAMESPACE_CREATOR,
+                    admin: NAMESPACE_CREATOR,
+                    protocol_fee_bps,
+                    treasury: new_treasury(),
+                },
+                CURVE_PROGRAM_ID,
+            );
+            lee_core::program::validate_execution(&pre_states, &post_states, CURVE_PROGRAM_ID)
+                .expect("configuration must pass runtime account validation");
+            let config = Config::try_from(&post_states[0].account().data)
+                .expect("post state holds a valid Config");
+            assert_eq!(
+                config.protocol_fee_bps,
+                u16::try_from(protocol_fee_bps).expect("valid namespace fee fits in u16")
+            );
+        }
+        for protocol_fee_bps in [10_000, 10_001, 65_536, u32::MAX] {
+            let result = std::panic::catch_unwind(|| {
+                process_instruction(
+                    pre_states.clone(),
+                    Instruction::UpdateConfig {
+                        namespace: NAMESPACE_CREATOR,
+                        admin: NAMESPACE_CREATOR,
+                        protocol_fee_bps,
+                        treasury: new_treasury(),
+                    },
+                    CURVE_PROGRAM_ID,
+                )
+            });
+            assert!(
+                result.is_err(),
+                "namespace fee {protocol_fee_bps} must be rejected"
+            );
+        }
+    }
 }
 
-// Zero is legal (pool creation remains free and a fee-free pool is valid), and
-// 10,000 is the denominator itself.
 #[test]
-fn protocol_fee_boundaries_are_legal() {
-    for protocol_fee_bps in [0, 10_000] {
-        let post_states = update_config(
-            AccountId::new([0xAD; 32]),
-            uninitialized_config(),
-            namespace_creator_signer(),
-            new_admin(),
-            protocol_fee_bps,
-            new_treasury(),
-            CURVE_PROGRAM_ID,
-        );
-        let [config_post, _]: [_; 2] = post_states.try_into().expect("exactly two post states");
-        let config =
-            Config::try_from(&config_post.account().data).expect("post state holds a valid Config");
-        assert_eq!(config.protocol_fee_bps, protocol_fee_bps);
-    }
+fn namespace_fee_can_be_lowered_from_a_legacy_hundred_percent_rate() {
+    let mut legacy_config = initialized_config(new_admin());
+    legacy_config.account.data = Data::from(&Config {
+        admin: new_admin(),
+        protocol_fee_bps: 10_000,
+        treasury: new_treasury(),
+    });
+    let pre_states = vec![legacy_config, signer(new_admin())];
+    let (post_states, _) = process_instruction(
+        pre_states.clone(),
+        Instruction::UpdateConfig {
+            namespace: NAMESPACE_CREATOR,
+            admin: new_admin(),
+            protocol_fee_bps: 9_999,
+            treasury: new_treasury(),
+        },
+        CURVE_PROGRAM_ID,
+    );
+    lee_core::program::validate_execution(&pre_states, &post_states, CURVE_PROGRAM_ID)
+        .expect("configuration must pass runtime account validation");
+    let config =
+        Config::try_from(&post_states[0].account().data).expect("post state holds a valid Config");
+    assert_eq!(config.protocol_fee_bps, 9_999);
 }
 
 // The default key is indistinguishable from unset, and the token program would

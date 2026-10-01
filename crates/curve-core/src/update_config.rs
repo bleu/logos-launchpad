@@ -56,8 +56,8 @@ pub fn update_config(
     );
 
     assert!(
-        protocol_fee_bps <= MAX_FEE_BPS,
-        "Protocol fee exceeds 10,000 basis points"
+        protocol_fee_bps < MAX_FEE_BPS,
+        "Protocol fee must be below 10,000 basis points"
     );
     assert_ne!(
         admin,

@@ -4,7 +4,7 @@ Token sales on the Logos Execution Zone (LEZ), with two ways to set the sale pri
 
 The target product lets creators launch sales and participants trade through clear, reusable tools. Independent namespaces give launchpad operators their own administration, fee settings and treasury. A future shared core can support both launch mechanisms without making them use the same sale rules.
 
-This repository contains an imported PoC baseline and design documentation. The root curve crates, CLI, methods and on-chain program IDLs retain their existing behavior. This baseline does not implement the full production specification. LBP code, the shared core and QML apps are future work.
+This repository contains an imported PoC baseline and design documentation. The baseline keeps the root curve crates, CLI, methods and on-chain program IDLs. It does not implement the full production specification. The LBP state machine, shared core and QML apps remain future work.
 
 ## Two sale mechanisms
 
@@ -40,6 +40,7 @@ This is the planned product view. The QML apps and shared core are future work. 
 ## Read more
 
 - [Product goals and use cases](docs/product/prd.md)
+- [Namespace, custody, and fee contract](docs/product/namespace-fee-contract.md)
 - [Architecture and interfaces](docs/architecture/system.md)
 - [Creation and private-route sequences](docs/architecture/sequence-diagrams/README.md)
 - [Repository baseline and planned layout](docs/architecture/repository-layout.md)
