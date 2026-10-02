@@ -16,7 +16,7 @@ The admin mini-app serves namespace administrators only. The configured-sales mi
 | --- | --- | --- | --- | --- |
 | Namespace administrator | Manage a launchpad namespace | Admin app or CLI | Change the fee rate and current treasury through separate operations; manage admin authority | AccountId administration; creator rights remain separate ([0006](../adr/0006-namespaces-and-authority.md)) |
 | Creator | Create a curve sale | Configured-sales app or CLI | Submit typed curve inputs to the curve factory, fund allocations `D` and `R`, and optionally set expiry | No early close; settlement burns unsold `D` after expiry ([0025](../adr/0025-sale-closing.md)) |
-| Creator | Create an LBP | Configured-sales app or CLI | Submit LBP inputs to the independent LBP factory, choose weighted or fixed-price mode, fund the sale, and set its schedule | Pause controls do not stop the clock; LBP authority for those controls and allowlist proof design remain open ([0021](../adr/0021-modes-and-open-limits.md), [0026](../adr/0026-lbp-clock-and-poke.md)) |
+| Creator | Create an LBP | Configured-sales app or CLI | Submit LBP inputs to the independent LBP factory, choose weighted or fixed-price mode, fund the sale, and set its schedule | Current creator authority alone controls pause/resume; the schedule continues. Mechanics are specified; handlers and allowlist proofs remain future work ([LBP contract](lbp-contract.md), [0021](../adr/0021-modes-and-open-limits.md), [0026](../adr/0026-lbp-clock-and-poke.md)) |
 | Participant | Find a sale and trade | Configured-sales app or CLI | Inspect the sale, request a fresh quote and submit a buy with an explicit slippage limit; sell back to a curve when its mode permits | Execution uses current state; a quote does not reserve a price ([0017](../adr/0017-quotes-and-slippage.md)) |
 | Participant | Use the private route | Configured-sales app or CLI through the SDK | Deshield, trade through fresh public accounts, and return received tokens, unused input and unused gas to participant-controlled private accounts in one transaction | Actual fees are excluded; public effects stay visible. Whole-route execution and wallet support remain unverified ([0018](../adr/0018-private-participation.md)) |
 | Participant | Resolve an interrupted private trade | Configured-sales app or CLI through the SDK | Restore minimal local progress, reconcile the original attempt and synchronize confirmed private state | Unknown outcomes block replacement; confirmation and recovery support need provider verification ([private participation contract](../architecture/private-participation.md)) |
@@ -49,11 +49,12 @@ See the planned [curve pool creation](../architecture/sequence-diagrams/create-c
 
 | Rule | Curve | LBP |
 | --- | --- | --- |
-| Price | Constant-product pricing with virtual reserves and real-reserve limits | Time-derived weights, or fixed-price mode |
-| Close | All `D` sold, or optional expiry, whichever occurs first | Scheduled end, using the weight schedule's clock |
-| Minimum duration | No contract minimum for optional expiry; a frontend rule is undecided | Curve expiry policy does not change the LBP schedule |
+| Price | Constant-product pricing with virtual reserves and real-reserve limits | Execution-time linear weights with timestamp-keyed checkpoints, or exact rational fixed-price mode |
+| Buy forms | Exact input or exact output with an explicit limit | Both forms in both modes; no partial fills or exact-input rounding refunds |
+| Close | All `D` sold, or optional expiry, whichever occurs first | Original scheduled end, even while paused |
+| Minimum duration | No contract minimum for optional expiry; a frontend rule is undecided | No contract minimum; require `end > start` and no past scheduled start |
 | Protocol fee | Collateral deducted from buy input or sell output | Creator-borne collateral claim; full buyer input enters pricing |
-| Fee collection | Permissionless, anytime, to current treasury | Permissionless, anytime, to current treasury |
+| Fee collection | Permissionless, anytime, to current treasury | Permissionless, anytime, to current treasury; pricing reserves unchanged |
 
 `R` is the curve's DEX-seed reserve. It stays untouched until close. The creator can withdraw it after close when it is not used for graduation.
 
@@ -66,6 +67,6 @@ See the planned [curve pool creation](../architecture/sequence-diagrams/create-c
 - The per-block allocation ceiling is deferred. Live LBP fee rates, anytime LBP collection and omission of curve contract minimum-duration validation differ from the RFPs. The relevant ADRs are marked `To be reviewed by Logos team`.
 - Automatic DEX graduation is inactive. Direct neutral pools are internal primitives, not a separate sale product.
 - Use the existing indexer and explorer tools. Do not add a separate indexer or the excluded derived analytics view.
-- Platform compatibility, precise input bounds and private-route details need further specification and tests. This brief does not choose new limits or authority rules.
+- Platform compatibility, checked numerical input/error guards and private-route implementation still need evidence. The [LBP contract](lbp-contract.md) defines mechanics and future-handler acceptance cases; it does not claim a working LBP program.
 
-See the [namespace, custody, and fee contract](namespace-fee-contract.md) for shared account checks, balance examples, collection behavior, and acceptance cases. See [architecture and interfaces](../architecture/system.md) for component responsibilities and [repository layout](../architecture/repository-layout.md) for packages and checks.
+See the [namespace, custody, and fee contract](namespace-fee-contract.md) for shared account checks and collection rules. The [LBP contract](lbp-contract.md) adds its worked balances and lifecycle acceptance cases. See [architecture and interfaces](../architecture/system.md) for component responsibilities and [repository layout](../architecture/repository-layout.md) for packages and checks.
