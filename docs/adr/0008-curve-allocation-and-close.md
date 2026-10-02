@@ -1,26 +1,14 @@
-# ADR 0008: Curve allocations and closing
+# ADR 0008: Curve allocations
 
 Status: Accepted internally; To be reviewed by Logos team
 
 Date: 2026-09-29
 
-## Context
-
-The curve proposal describes `R` as a DEX-seed reserve. Curve closing must distinguish the canonical supply-driven condition, optional expiry, and post-close settlement.
-
 ## Decision
 
-For curve sales, `D` is the purchasable allocation. The canonical close condition is supply-driven: the factory closes the sale when all `D` tokens have been purchased. No collateral-raised target is a close condition.
+The curve factory keeps three allocations separate: purchasable `D`, owner-reserved `R` for DEX seeding, and the creator allocation. `R` remains untouched until close. This prevents trading from spending tokens reserved for settlement.
 
-`R` is the owner-reserved DEX-seed reserve and remains untouched until close. The amended [ADR 0020](0020-settlement-and-graduation.md) supersedes the inactive-hook policy: the contract permits a separate permissionless call to a saved adapter, or creator-authorized manual payout. The hook receives full `R` and full recorded real collateral, excluding fees, surplus deposits and creator allocation. No live DEX integration is claimed. Closing and unsold-`D` rules are defined in [ADR 0025](0025-sale-closing.md).
-
-An optional expiry mode closes at `D` exhaustion or the configured end timestamp, whichever occurs first. The contract does not validate a minimum sale duration when expiry is configured. This is an accepted internal departure from RFP-015 with external status `To be reviewed by Logos team`. `D` exhaustion still closes the sale immediately.
-
-Keep allocation and closing policy in the factory. Closure is distinct from settlement. Retain reviewed curve depletion-close and settlement behavior where compatible, then test it against these production rules.
-
-## Consequences
-
-Source docs and interfaces that describe a different `R` lifecycle need explicit adaptation. Closure, allocation claims and settlement tests must cover each terminal path. These are curve rules; they do not define LBP allocations or its lifecycle.
+Allocation policy belongs to the factory, not the neutral pool. [ADR 0025](0025-sale-closing.md) supersedes this record's earlier closing rules and governs unsold `D`. [ADR 0020](0020-settlement-and-graduation.md) governs post-close payouts, including manual settlement when `R` is not used for graduation. These rules do not define LBP allocations.
 
 ## Sources
 

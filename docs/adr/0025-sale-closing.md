@@ -1,28 +1,18 @@
 # ADR 0025: Mechanism-specific sale closing
 
-Status: Accepted internally; To be reviewed by Logos team
+Status: Accepted internally; expiry-validation departure: To be reviewed by Logos team
 
 Date: 2026-09-29
 
-## Context
-
-Curve and LBP sales have different canonical closing conditions. An earlier shared closing rule and collateral-target clarifications do not describe the selected design. Closure and settlement are separate lifecycle steps.
-
 ## Decision
 
-This record supersedes the prior shared closing description in [ADR 0008](0008-curve-allocation-and-close.md) and [ADR 0021](0021-modes-and-open-limits.md).
+Use separate closing rules because curve sales are supply-driven and LBP sales are time-driven. This supersedes the earlier shared closing descriptions in [ADR 0008](0008-curve-allocation-and-close.md) and [ADR 0021](0021-modes-and-open-limits.md). Neither mechanism closes on a collateral-raised target.
 
-A curve sale closes when all `D` sale tokens have been purchased. This is a supply-driven close condition. A curve sale has no collateral-raised target. Optional expiry closes at `D` exhaustion or its configured end timestamp, whichever comes first. The contract does not validate a minimum sale duration when expiry is configured. This is an accepted internal departure from RFP-015 with external status `To be reviewed by Logos team`. `D` exhaustion still closes the sale immediately. A creator cannot close a factory sale early. No separate close transaction is required at sell-out or expiry.
+A curve sale closes when all `D` is purchased or its optional expiry is reached, whichever occurs first. A creator cannot close a factory sale early. No separate close transaction is required. The contract enforces no minimum expiry duration, an accepted internal departure from RFP-015 with external status `To be reviewed by Logos team`.
 
-After expiry, settlement burns any unsold `D`. It does not add that inventory to the creator's allocation. The reserved `R` allocation and the separate creator allocation retain their existing post-close rules. Settlement retries must not burn or pay an allocation twice.
+After expiry, settlement burns unsold `D` once; it cannot become creator allocation. `R` and the separate creator allocation retain their [post-close payout rules](0020-settlement-and-graduation.md). Retries must not burn or pay twice.
 
-An LBP closes at its end timestamp. That timestamp is the schedule endpoint used for weight interpolation. No collateral-raised target closes an LBP.
-
-Closure permits the mechanism's post-close operations. Settlement separately collects remaining fees and performs permitted allocation or proceeds transfers. For curves, the amended [ADR 0020](0020-settlement-and-graduation.md) supersedes the inactive-hook decision with an optional immutable adapter hook and manual fallback. A client submits its separate post-close transaction; closure alone does not call it. No real DEX integration or automatic migration is added.
-
-## Consequences
-
-Mechanism specifications and tests must keep curve supply exhaustion, optional curve expiry and LBP schedule closure distinct. LBP live-rate and anytime-collection RFP departures have external status `To be reviewed by Logos team` under [ADR 0016](0016-lbp-live-fees.md).
+An LBP closes at its scheduled end, which is also the weight-interpolation endpoint. Closure permits post-close operations; settlement is separate. See [curve settlement](0020-settlement-and-graduation.md) and [LBP fees and withdrawals](0016-lbp-live-fees.md).
 
 ## Sources
 

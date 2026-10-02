@@ -1,36 +1,30 @@
 # ADR 0020: Manual settlement and an optional adapter hook
 
-Status: Accepted; implemented with verified host, full guest-suite and generated-IDL checks; production-readiness limits remain; live DEX integration deferred
+Status: Accepted and implemented; production-readiness limits remain; live DEX integration deferred
 
-Date: 2026-09-29
-
-Amended: 2026-10-01
+Date: 2026-09-29; amended 2026-10-01
 
 ## Context
 
-The original decision kept manual settlement and an inactive graduation hook because the reviewed PoC had no live DEX integration. That decision did not provide an executable adapter boundary. A general post-close callback can be defined without choosing a DEX or promising an external liquidity migration.
+The original inactive hook provided no executable adapter boundary. A post-close callback allows adapter integration without choosing a DEX or promising a liquidity result.
 
 ## Decision
 
-This amendment explicitly supersedes this record's original inactive-hook decision. Retain creator-authorized manual settlement and add an optional immutable adapter program and opaque configuration saved at curve sale creation. No setter, call-time override, new administrator role or live DEX integration is added. The adapter interprets its own settings and checks its result.
+This amendment supersedes the inactive-hook decision. Keep creator-authorized manual settlement and add an optional adapter program and opaque configuration saved at creation. Configuration requires an adapter program. Neither can change or be overridden at execution. The adapter interprets its settings and checks its result.
 
-The hook is permissionless after effective close and completed creation. Closure does not call it. A client submits a separate transaction and advances the required stages. Who submits and pays remains deferred. The initial release permits public hook execution only and rejects private-wrapped hook execution. Existing private manual settlement remains available.
+After creation completes and the sale closes, anyone can submit the separate hook transaction. Closure does not call it. Hook execution is public only; private manual settlement remains available. Automation and payer policy are deferred.
 
-Share canonical custody preparation, fee-bearing reserve withdrawal and unsold-`D` burn between the routes. Remaining fees go to the current treasury in the same transaction as the relevant reserve withdrawal. Burn unsold `D` after expiry once. Keep `R` and the creator allocation separate. Adapter ATA preparation is idempotent and does not select a payout route.
+Both routes share custody preparation, [fee collection](0015-fee-accounting.md) and [unsold-`D` burn](0025-sale-closing.md). Preparation is idempotent. The adapter must first initialize and claim its canonical custody PDA, derived under its program from the saved sale identity. The factory rejects missing or wrongly owned custody before preparing its ATAs. It cannot claim custody for the adapter.
 
-The saved adapter must initialize and claim its canonical custody PDA before the factory prepares destination ATAs. The factory checks ownership by the saved adapter. It must not authorize adapter custody or share factory seeds to bypass this check. Missing or wrongly owned custody rejects preparation without payout or route selection. Earlier stages stay complete. Anyone can retry after adapter setup, and creator-authorized manual recovery remains available until a payout selects a route. See the [curve contract](../product/curve-contract.md#general-adapter-hook) for the pinned ATA claim behavior.
+The final hook stage transfers full `R` and recorded real collateral to those ATAs, then calls the saved adapter. Exclude fees, surplus deposits and creator allocation. The callback receives trusted context and credited ATA snapshots, but no factory signing rights or PDA seeds. Require unauthorized factory and remaining-account snapshots; reject protected aliases, duplicates and extra factory-owned accounts. The adapter verifies its runtime caller and authorizes its own PDAs. See the [handler](../../crates/factory-core/src/hook.rs) for the account contract.
 
-The final hook stage transfers full `R` and full recorded real collateral due to canonical adapter custody, then calls the saved adapter. Exclude fees, surplus deposits and the creator allocation. Derive custody under the saved adapter program from the saved sale identity. Supply trusted fixed context and credited ATA snapshots, followed by validated ordered remaining accounts. Require an unauthorized root factory snapshot and unauthorized remaining accounts. Reject protected aliases, duplicates and additional factory-owned accounts. Give the callback no factory PDA seeds or signing rights; the adapter verifies its runtime caller and authorizes its own PDAs.
+The first actual settlement payout selects the route and blocks competing or duplicate payouts. Preparation and creator-allocation claims do not select it. Empty manual transfers (`NoPayout`) must still permit one uncalled zero-amount hook, including after a creator-allocation claim.
 
-Record `Graduated` in the final transaction. If any final transfer or callback fails, its transfers and marker roll back together. Earlier successful stages remain complete; retry and creator-authorized manual recovery remain possible. The first actual settlement payout blocks the competing route and duplicates. Preparation and creator-allocation claims do not select a route. Empty manual transfers must not block an uncalled zero-amount hook.
-
-See the [curve contract](../product/curve-contract.md) for exact accounting, stage, zero-amount, callback and evidence rules. Its evidence map records verified host, full guest-suite and generated-IDL checks, with the remaining runtime and production-readiness limits. These rules supersede dependent references to an inactive hook; they do not change LBP lifecycle or enable automatic DEX migration.
+The final transfers, callback and `Graduated` marker succeed or roll back together. Earlier completed stages remain complete. A failure permits retry or creator-authorized manual recovery until a payout selects a route. `Graduated` proves callback success, not a DEX liquidity result.
 
 ## Consequences
 
-Settlement is repeat-safe across stages and atomic per transaction, not across the whole workflow. A terminal factory hook marker proves successful callback execution, not a DEX pool or external liquidity result. A failing adapter cannot force the creator to lose the manual recovery path before a successful payout. An immutable adapter cannot be replaced to repair a bad selection.
-
-The fresh release changes state and wire encoding, including the shifted private factory tag. Build and verify guest, SDK, CLI and IDL artifacts together. Use fresh local state; no deployed-state migration is claimed. Delivery requires real guest balance and rollback tests, not only emitted child-call assertions. A real DEX adapter, automation and UI remain separate work.
+Settlement is atomic per transaction, not across the whole workflow. An immutable adapter cannot be replaced to repair a bad choice. These rules do not change LBP settlement. See the [curve overview](../product/curve-contract.md#release-compatibility) for release compatibility and [verification boundaries](0022-verification-boundaries.md) for required evidence.
 
 ## Sources
 

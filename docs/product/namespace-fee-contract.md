@@ -13,10 +13,10 @@ Anyone can create a namespace. Creation sets its administrator, fee, and treasur
 | Change administrator | Current administrator and accepting successor | Administrator only |
 | Give up administration | Current administrator | Remove administration permanently; keep fee and treasury |
 | Create a sale or perform manual settlement | Current creator authority holder | Sale actions allowed at the current stage |
-| Execute a configured curve adapter hook | Anyone | Post-close preparation and exact payout to the immutable adapter; no creator or namespace-admin authority required |
+| Execute a configured curve adapter hook | Anyone | Post-close settlement under [ADR 0020](../adr/0020-settlement-and-graduation.md) |
 | Collect fees | Anyone | Collect all outstanding fees for the current treasury; no self-transfer if already in its vault |
 
-Each namespace has one administration record. The [administration module](../adr/0006-namespaces-and-authority.md) defines its setup and transfer rules. The administrator manages namespace settings. The creator controls permitted creator actions. The optional public curve hook is a separate permissionless path under amended [ADR 0020](../adr/0020-settlement-and-graduation.md), not a namespace administration right. The [curve acceptance evidence](curve-contract.md#acceptance-evidence) maps verified host, full guest-suite and generated-IDL checks, with their limits.
+Each namespace has one administration record. The [administration module](../adr/0006-namespaces-and-authority.md) defines its setup and transfer rules. Namespace administration does not grant creator rights.
 
 ## Funds
 
@@ -26,7 +26,7 @@ Curve accounts must hold enough collateral for the real reserve and outstanding 
 
 ## Fees and collection
 
-Fees use collateral: token1 for curve factory sales. Namespace creation and updates permit integer rates `0..=9_999` basis points, with denominator `10_000`. Calculate `amount * rate / 10_000`, rounded up, using checked arithmetic. Curve helpers use quotient and remainder to avoid an unnecessary full-width product; see the [curve contract](curve-contract.md#pricing-and-fees). Keep outstanding fees and total collected fees separate from reserves and creator proceeds.
+Fees use collateral: token1 for curve factory sales. Namespace creation and updates permit integer rates `0..=9_999` basis points, with denominator `10_000`. Calculate `amount * rate / 10_000`, rounded up, using checked arithmetic. Keep outstanding fees and total collected fees separate from reserves and creator proceeds.
 
 | Trade | Calculate the fee on | Pricing and payment |
 | --- | --- | --- |

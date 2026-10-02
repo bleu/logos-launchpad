@@ -1,26 +1,20 @@
-# ADR 0015: Collateral-denominated fees and current-treasury collection
+# ADR 0015: Collateral fees and current-treasury collection
 
 Status: Accepted internally; LBP RFP departures: To be reviewed by Logos team
 
 Date: 2026-09-29; fee-limit review: 2026-10-01
 
-## Context
-
-Protocol fees must not inflate trading reserves or creator proceeds. An administrator can change the namespace treasury while fees remain uncollected. Both mechanisms need one explicit fee currency.
-
 ## Decision
 
-Protocol fees are always denominated in the collateral token. Track accrued fees separately. For both curve and LBP sales, collection transfers all accrued fees to the current namespace treasury, is permissionless and idempotent, and is available at any time. The caller cannot choose or redirect the treasury. Terminal settlement collects any remainder atomically with the relevant reserve or proceeds transfer. Previously accrued fees follow the current treasury. If the curve pool is the current treasury, the fees are already in its collateral vault: collection records them and clears accrued fees without a transfer to itself; reserve withdrawal leaves them in that vault.
+Protocol fees use collateral and are tracked separately from reserves and creator proceeds. Collection transfers all accrued fees to the current namespace treasury, including fees accrued before a treasury change. It is permissionless, idempotent and available at any time. The caller cannot redirect payment. Terminal settlement collects any remainder atomically with the relevant reserve or proceeds transfer.
 
-Namespace fee rates are integers from 0 through 9,999 basis points at creation and update. Reject 10,000 and larger rates when settings are created or changed. A 100% fee consumes all curve buy input, so it is not a valid namespace setting. Keep 10,000 as the arithmetic denominator. Rounding can still consume a small curve trade below this limit; mechanism input/output and custody checks remain required. Fee-rate and treasury changes are separate operations under [ADR 0006](0006-namespaces-and-authority.md).
+If the curve pool is the treasury, collection records and clears fees without a self-transfer. Reserve withdrawal leaves those collected fees in the vault. This prevents collection from treating fees as liquidity.
 
-Curve swaps use the live namespace rate and charge fees in token1, the factory's collateral token. Deduct a fee from buy input or sell output. Fees do not change the immutable curve invariant. Keep collected fees distinguishable from uncollected fees and reserves.
+Namespace fee rates must be integers from 0 through 9,999 basis points at creation and update. Reject 10,000 or more: a 100% fee consumes all curve buy input. Rounding can still consume a small trade below this limit, so trade guards remain necessary.
 
-LBP fees are also collateral-denominated, but remain creator-borne claims on collateral proceeds and do not reduce the buyer's pricing input. Its live-rate and anytime-collection design departs from the LBP RFP baseline and is accepted internally, with external status `To be reviewed by Logos team` in [ADR 0016](0016-lbp-live-fees.md).
+Curve swaps use the live namespace rate. Deduct fees from buy input or sell output in token1, the factory's collateral token. [ADR 0016](0016-lbp-live-fees.md) owns the different creator-borne LBP model and its pending RFP review.
 
-## Consequences
-
-Accounting tests must prevent double collection and spending fees as liquidity. Curve fee deductions cannot substitute for the creator-borne LBP model. The [shared contract](../product/namespace-fee-contract.md) defines balances, access checks, collection behavior, and acceptance cases. The curve PoC enforces the namespace fee limit, but still replaces configuration through one combined operation; separate production updates remain planned.
+Fee-rate and treasury updates must be separate operations under [ADR 0006](0006-namespaces-and-authority.md). The curve PoC enforces the rate limit but still uses one combined configuration update. See the [shared contract](../product/namespace-fee-contract.md) for custody checks.
 
 ## Sources
 

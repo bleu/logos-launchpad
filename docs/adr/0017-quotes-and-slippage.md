@@ -4,19 +4,13 @@ Status: Accepted
 
 Date: 2026-09-29
 
-## Context
-
-Reserves can change between a displayed quote and transaction execution. LBP weights also change with chain time. A quote is not a promise that execution will use the same state.
-
 ## Decision
 
-Integrations must obtain a fresh quote and supply `minAmountOut` derived from the participant's selected slippage tolerance for purchase flows. Do not silently replace that bound with an unrestricted trade. The program checks the supplied limit against execution-time pricing.
+Integrations must obtain fresh quotes and set limits from the participant's selected slippage tolerance. Never silently use an unrestricted trade. The program checks limits against execution-time pricing because reserves, fees and LBP weights can change after a quote.
 
-For curves, retain exact-input buys and sells, and exact-output buys only. Exact-input `min_amount_out` is the participant's receipt, after any sell fee. Exact-output buy `max_amount_in` caps the full collateral debit including fees. Both use saved creation-time `k` and execution-time namespace fees. The immutable trade mode must restrict SDK quotes and public execution in the same way; both buy forms are valid in BuyOnly. See the [curve contract](../product/curve-contract.md) for the forward and inverse formulas, literal examples and evidence limits. This amendment makes the existing quote types explicit; it does not add exact-output sells.
+For curves, exact-input `min_amount_out` limits the participant's receipt after any sell fee. Exact-output buy `max_amount_in` caps the full collateral debit, including fees. SDK quotes and public execution must enforce the same [trade mode](0021-modes-and-open-limits.md#sale-modes).
 
-## Consequences
-
-SDK, CLI and app tests must cover stale quotes and rejected limits. The UI must show the selected tolerance and handle a failed trade without claiming the quoted output was guaranteed. Fresh quotes reduce surprises but cannot eliminate concurrent state changes.
+The UI must show the tolerance and handle rejected limits without promising the quoted output. Test stale quotes and rejected limits in the SDK, CLI and app. See [curve evidence](../product/curve-contract.md#acceptance-evidence).
 
 ## Sources
 
