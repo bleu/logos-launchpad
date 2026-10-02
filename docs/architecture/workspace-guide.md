@@ -14,7 +14,7 @@ This repository contains the imported curve PoC and weighted-math library. They 
 
 Root workspace commands do not include the nested math, guest or fuzz workspaces. Keep their lockfiles separate. The future LBP can depend on `packages/weighted-math/crates/weighted-math-core/` by Cargo path. No LBP package exists yet.
 
-Both host workspaces declare edition 2024 and a minimum Rust version of 1.94. The root and math zkVM `rust-toolchain.toml` files select Rust 1.94.0. Guest builds and parity also require the pinned RISC0 tools. See the [build guide](../../verify/README.md) for exact setup commands and the full locked build/test check. Fuzzing needs nightly Rust and `cargo-fuzz`.
+Both host workspaces declare edition 2024 and a minimum Rust version of 1.94. The root and math zkVM `rust-toolchain.toml` files select Rust 1.94.0. Guest builds and parity also require the tool versions in [`verify/build-tools.env`](../../verify/build-tools.env). Check setup with `bash verify/check-builds.sh --preflight`. Fuzzing needs nightly Rust and `cargo-fuzz`.
 
 ## Host checks
 
@@ -53,7 +53,7 @@ The imported private-buy route exceeds the pinned LEZ chained-call limit when ex
 
 Live E2E verification remains future work. Use disposable wallet and localnet state for those checks.
 
-No source CI workflows are enabled. The [build checker](../../verify/README.md) covers locked host and guest builds, release overflow behavior and clean-source reproduction. Release artifact identity uses the fixed source path documented in that guide; arbitrary-path reproduction remains unresolved. CI coverage and live platform tests remain separate work. Guest execution and development receipts do not establish real-proof generation.
+No source CI workflows are enabled. Run `bash verify/check-builds.sh` for locked host and guest builds, tests and release overflow checks. For stable guest IDs, use a committed checkout at `/tmp/logos-launchpad-release/source` and run `bash verify/check-builds.sh --release`. Keep its guest binaries and image IDs. Builds from other paths can change the factory ID; cross-OS identity is unverified. CI, live platform tests and real-proof generation remain separate work.
 
 ## Licenses
 
