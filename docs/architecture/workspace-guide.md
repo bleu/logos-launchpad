@@ -8,13 +8,13 @@ This repository contains the imported curve PoC and weighted-math library. They 
 | --- | --- | --- |
 | Root `Cargo.toml` | Curve math, pool, handlers, client and CLI | `cargo test --workspace --locked` |
 | `packages/weighted-math/Cargo.toml` | Weighted kernel, harness and numerical fixtures | `cargo test --manifest-path packages/weighted-math/Cargo.toml --workspace --locked` |
-| `methods/guest/` | Curve, factory and private-flow guest entry points | Separate guest build with `lgs build` |
-| `packages/weighted-math/zkvm/` | Weighted-math host/guest parity | `cd packages/weighted-math/zkvm && cargo run --release --locked` |
+| `methods/guest/` | Curve, factory and private-flow guest entry points | `RISC0_BUILD_LOCKED=1 cargo build --manifest-path methods/Cargo.toml --release --locked` |
+| `packages/weighted-math/zkvm/` | Weighted-math host/guest parity | `RISC0_BUILD_LOCKED=1 cargo run --manifest-path packages/weighted-math/zkvm/Cargo.toml --release --locked` |
 | `packages/weighted-math/fuzz/` | Weighted trade invariant fuzz target | `cd packages/weighted-math/fuzz && cargo +nightly fuzz run trade_invariant` |
 
 Root workspace commands do not include the nested math, guest or fuzz workspaces. Keep their lockfiles separate. The future LBP can depend on `packages/weighted-math/crates/weighted-math-core/` by Cargo path. No LBP package exists yet.
 
-Both host workspaces declare edition 2024 and a minimum Rust version of 1.94. The root `rust-toolchain.toml` selects Rust 1.94.0. Host tests require Cargo and access to the dependencies in the lockfiles. Guest builds and parity also require the RISC0 tools; the curve build uses the `lgs` CLI. Fuzzing needs nightly Rust and `cargo-fuzz`.
+Both host workspaces declare edition 2024 and a minimum Rust version of 1.94. The root and math zkVM `rust-toolchain.toml` files select Rust 1.94.0. Guest builds and parity also require the pinned RISC0 tools. See the [build guide](../../verify/README.md) for exact setup commands and the full locked build/test check. Fuzzing needs nightly Rust and `cargo-fuzz`.
 
 ## Host checks
 
@@ -35,10 +35,10 @@ bash verify/check-idl.sh
 
 ## Guest integration tests
 
-Client tests that execute guest programs use the non-default `guest-tests` feature. Build the guest ELFs with `cargo build --manifest-path methods/Cargo.toml --locked`. The `r0vm` executable must be on `PATH`, or `RISC0_SERVER_PATH` must point to it. Then run:
+Client tests that execute guest programs use the non-default `guest-tests` feature. Build the guest artifacts with `RISC0_BUILD_LOCKED=1 cargo build --manifest-path methods/Cargo.toml --release --locked`. The nested guest lock needs `RISC0_BUILD_LOCKED=1`; outer Cargo `--locked` alone does not lock it. The `r0vm` executable must be on `PATH`, or `RISC0_SERVER_PATH` must point to it. Then run:
 
 ```sh
-RISC0_DEV_MODE=1 cargo test -p launchpad-client --features guest-tests --test private_authority --test settlement --locked
+RISC0_DEV_MODE=1 cargo test -p launchpad-client --release --features guest-tests --test private_authority --test settlement --locked
 ```
 
 This lane checks private-authority, private-buy and settlement execution. Missing artifacts are failures when the lane is selected. Host-only tests do not execute it. All-feature clippy compiles these test targets without running their guests.
@@ -53,7 +53,7 @@ The imported private-buy route exceeds the pinned LEZ chained-call limit when ex
 
 Live E2E verification remains future work. Use disposable wallet and localnet state for those checks.
 
-No source CI workflows were enabled by this import. Reproducible guest builds, CI coverage and live platform tests remain separate work.
+No source CI workflows are enabled. The [build checker](../../verify/README.md) covers locked host and guest builds, release overflow behavior and clean-source reproduction. Release artifact identity uses the fixed source path documented in that guide; arbitrary-path reproduction remains unresolved. CI coverage and live platform tests remain separate work. Guest execution and development receipts do not establish real-proof generation.
 
 ## Licenses
 

@@ -39,3 +39,7 @@ token_core = { git = "https://github.com/logos-blockchain/logos-execution-zone.g
 [profile.release]
 debug = 0
 strip = "symbols"
+overflow-checks = true
+
+[package.metadata.risc0]
+rustc-flags = ["-Zremap-cwd-prefix=/source"]
