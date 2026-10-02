@@ -26,7 +26,11 @@ This is the shared language for both launchpads. The repository contains an impo
 | Fee collection | Permissionless, full, idempotent transfer of accrued fees to the current treasury for both mechanisms. The caller cannot choose or redirect the treasury. Anytime LBP collection and live LBP rates are accepted internally but have external status `To be reviewed by Logos team` because they depart from the LBP RFP baseline. |
 | Creator | Sale authority holder responsible for creation and permitted lifecycle actions. This role is separate from namespace administration. |
 | Participant | Person or client using the configured-sales app to trade. |
-| Settlement | Post-close collection of remaining fees and permitted allocation/proceeds transfers. It does not mean active DEX graduation. |
+| Settlement | Post-close collection of remaining fees and permitted allocation/proceeds transfers. See [ADR 0020](docs/adr/0020-settlement-and-graduation.md) for manual and adapter routes. |
+| Trade mode | Immutable curve setting that selects permitted trade directions. See [ADR 0021](docs/adr/0021-modes-and-open-limits.md#sale-modes). |
+| Graduation hook | Public post-close call to an adapter saved at creation. |
+| Adapter custody | Adapter-owned PDA whose canonical ATAs receive hook payouts. |
+| Graduated | Final factory state after successful hook transfers and callback; not proof of DEX liquidity. |
 | Private route | SDK-managed deshield, public trade and return of received tokens, unused input and unused gas to participant-controlled private accounts within one transaction. Actual fees are excluded from returns. Public pool state and trade effects remain visible. |
 | LBP allowlist | Private list of approved participants with one common public collateral limit. Product policy is accepted; the proof method remains open. |
 | Purchase allowance | One successful LBP buy per approved participant per sale across public and private routes, when an allowlist is enabled. |
@@ -45,5 +49,7 @@ The curve pool owns neutral pricing and custody rules. The curve factory owns cu
 Each factory binds a sale to its creation namespace. Namespace state is logical per-namespace state, not a selected registry or shared physical schema. The administrator manages namespace configuration only. A creator acts through the configured-sales app and does not need administrator approval for every permitted action.
 
 SDK code owns transaction construction, fresh quotes and the single-transaction private route, including minimal participant-local progress and reconciliation without replacement while an outcome is unknown. CLI and QML call that code. See the [private participation contract](docs/architecture/private-participation.md). QML reads indexed data through a backend module read API instead of calling the indexer directly. The admin app handles namespace administration only. The configured-sales app contains creator and participant flows. The apps ship separately from the non-UI shared core, and their placement does not change authority roles. The LP-0021 Wallet Provider SDK owns account selection, user approval, signing and submission once developed and integrated; its final API is unavailable, and support for the combined private transaction and recovery remains unverified. The shared core does not custody user keys. See [ADR 0029](docs/adr/0029-wallet-integration.md).
+
+See the [curve overview](docs/product/curve-contract.md) for its decisions and evidence limits.
 
 See the [namespace, custody, and fee contract](docs/product/namespace-fee-contract.md) for shared account checks and accounting rules. The [LBP overview](docs/product/lbp-contract.md) explains its modes, clock, buys and pricing collateral, with links to the governing ADRs. See [planned ownership](docs/architecture/repository-layout.md) for package and artifact responsibilities. Keep the LBP fee RFP departures, curve expiry-validation departure, deferred allocation ceiling, private-route verification and open allowlist proof design visible in the [ADR index](docs/adr/README.md).

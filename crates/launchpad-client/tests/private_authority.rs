@@ -135,6 +135,7 @@ fn private_nft_closes_a_direct_pool() {
     let token1 = AccountId::new([87; 32]);
     let pool_id = curve_core::compute_pool_pda(namespace, curve.id(), token0, token1, nft);
     let pool = curve_core::PoolAccount {
+        allowed_input_token: None,
         funded: true,
         namespace,
         token0_definition_id: token0,
@@ -287,6 +288,7 @@ fn private_buy_execute_envelope_reaches_the_platform_call_limit() {
         ..Account::default()
     };
     let pool = curve_core::PoolAccount {
+        allowed_input_token: None,
         funded: true,
         namespace,
         token0_definition_id: launch,

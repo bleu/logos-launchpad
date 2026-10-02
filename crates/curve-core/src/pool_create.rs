@@ -37,6 +37,7 @@ pub fn create_pool(
     expected_owner: AccountId,
     curve_program_id: ProgramId,
     owner_program: Option<(ProgramId, [u8; 32])>,
+    allowed_input_token: Option<TokenSide>,
     defer_funding: bool,
 ) -> (Vec<AccountPostState>, Vec<ChainedCall>) {
     let ata_program_id = ASSOCIATED_TOKEN_ACCOUNT_PROGRAM_ID;
@@ -120,6 +121,7 @@ pub fn create_pool(
     .expect("Pool parameters are invalid");
     let mut pool_post = pool_account.account;
     pool_post.data = Data::from(&PoolAccount {
+        allowed_input_token,
         funded: !defer_funding,
         namespace,
         token0_definition_id: token0_definition.account_id,

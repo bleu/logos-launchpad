@@ -153,13 +153,19 @@ pub(crate) fn validated_pool(
 }
 
 fn direction(pool: &PoolAccount, token_in: AccountId) -> (TokenSide, AccountId) {
-    if token_in == pool.token0_definition_id {
+    let (side, token_out) = if token_in == pool.token0_definition_id {
         (TokenSide::Token0, pool.token1_definition_id)
     } else if token_in == pool.token1_definition_id {
         (TokenSide::Token1, pool.token0_definition_id)
     } else {
         panic!("token_in is not a token definition for the pool")
-    }
+    };
+    assert!(
+        pool.allowed_input_token
+            .is_none_or(|allowed| allowed == side),
+        "Input token is restricted"
+    );
+    (side, token_out)
 }
 
 fn trusted_time(pool: &PoolAccount, clock: Option<AccountWithMetadata>) -> u64 {

@@ -81,6 +81,7 @@ pub fn process_instruction(
             )
         }
         Instruction::CreatePool {
+            allowed_input_token,
             defer_funding,
             namespace,
             token0_amount,
@@ -133,6 +134,11 @@ pub fn process_instruction(
                 owner,
                 curve_program_id,
                 wire_owner_program(owner_program_id, owner_program_seed),
+                allowed_input_token.map(|side| match side {
+                    0 => pool::TokenSide::Token0,
+                    1 => pool::TokenSide::Token1,
+                    _ => panic!("Allowed input token must be 0 or 1"),
+                }),
                 defer_funding,
             );
             posts.push(AccountPostState::new(clock.account));
@@ -210,13 +216,37 @@ pub fn process_instruction(
                 self_program_id,
             )
         }
-        Instruction::CollectFees => collect_fees(pre_states, self_program_id),
+        Instruction::CollectFees => {
+            let mut pre_states = pre_states;
+            if pre_states.len() == 3 {
+                pre_states.push(pre_states[2].clone());
+            }
+            collect_fees(pre_states, self_program_id)
+        }
         Instruction::WithdrawReserves => {
-            // The runtime requires unique account IDs. Omit the trailing treasury
-            // ATA when it is already the owner's token1 recipient.
+            // The runtime requires unique account IDs when the treasury shares a vault.
             let mut pre_states = pre_states;
             if pre_states.len() == 8 {
-                pre_states.push(pre_states[3].clone());
+                let state = crate::pool_swap::validated_pool(&pre_states[0], self_program_id);
+                let config = crate::pool_swap::validated_config(
+                    &pre_states[7],
+                    state.namespace,
+                    self_program_id,
+                );
+                let seed = associated_token_account_core::compute_ata_seed(
+                    config.treasury,
+                    state.token1_definition_id,
+                );
+                let treasury_id = associated_token_account_core::get_associated_token_account_id(
+                    &ASSOCIATED_TOKEN_ACCOUNT_PROGRAM_ID,
+                    &seed,
+                );
+                let treasury = pre_states
+                    .iter()
+                    .find(|a| a.account_id == treasury_id)
+                    .expect("Missing treasury ATA")
+                    .clone();
+                pre_states.push(treasury);
             }
 
             let [
@@ -289,6 +319,7 @@ fn settle_withdrawal(
         pool_state.token0_definition_id,
     );
     let treasury_is_owner = treasury_ata.account_id == owner_token1_ata.account_id;
+    let treasury_is_vault = treasury_ata.account_id == pool_token1_ata.account_id;
     let (fee_posts, fee_calls) = collect_fees(
         vec![pool.clone(), config, pool_token1_ata.clone(), treasury_ata],
         curve_program_id,
@@ -340,7 +371,7 @@ fn settle_withdrawal(
     for call in &mut calls {
         call.pre_states[0].account = signer.account.clone();
     }
-    let pool_token1_ata = if collected == 0 {
+    let pool_token1_ata = if collected == 0 || treasury_is_vault {
         pool_token1_ata
     } else {
         debited(pool_token1_ata, collected)
@@ -728,7 +759,7 @@ fn collect_fees(
         AccountPostState::new(vault.account.clone()),
         AccountPostState::new(treasury_ata.account.clone()),
     ];
-    let calls = if amount == 0 {
+    let calls = if amount == 0 || vault.account_id == treasury_ata.account_id {
         vec![]
     } else {
         vec![

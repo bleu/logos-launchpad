@@ -22,6 +22,26 @@ use token_core::{MetadataStandard, NewTokenDefinition, NewTokenMetadata, TokenHo
 pub const ASSOCIATED_TOKEN_ACCOUNT_PROGRAM_ID: ProgramId =
     curve_core::ASSOCIATED_TOKEN_ACCOUNT_PROGRAM_ID;
 
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+#[borsh(use_discriminant = true)]
+pub enum TradeMode {
+    BuyOnly = 0,
+    BuyAndSell = 1,
+}
+
+impl TryFrom<u8> for TradeMode {
+    type Error = CreateError;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(Self::BuyOnly),
+            1 => Ok(Self::BuyAndSell),
+            _ => Err(CreateError::InvalidTradeMode),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum CreationStage {
     Minted,
@@ -38,10 +58,42 @@ pub enum SettlementStage {
     Burned { collateral_due: u128 },
     TokenPaid { collateral_due: u128 },
     Complete,
+    HookReady { collateral_due: u128 },
+    Graduated,
+    NoPayout,
 }
+
+impl SettlementStage {
+    /// NoPayout completes manual settlement but still permits a saved hook.
+    pub fn is_manual_settlement_complete(self) -> bool {
+        matches!(self, Self::Complete | Self::NoPayout | Self::Graduated)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize, Serialize, Deserialize)]
+pub struct GraduationHook {
+    pub program_id: ProgramId,
+    pub configuration: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GraduationRequest {
+    pub factory_program_id: ProgramId,
+    pub namespace: AccountId,
+    pub launch_salt: [u8; 32],
+    pub token_definition_id: AccountId,
+    pub collateral_definition_id: AccountId,
+    pub dex_seed_reserve: u128,
+    pub collateral_amount: u128,
+    pub configuration: Vec<u8>,
+}
+
+mod hook;
 
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct FactoryState {
+    pub trade_mode: TradeMode,
+    pub graduation_hook: Option<GraduationHook>,
     pub creation_stage: CreationStage,
     pub settlement_stage: SettlementStage,
     pub end_timestamp: Option<u64>,
@@ -84,6 +136,9 @@ impl From<&FactoryState> for Data {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Instruction {
     CreateFactoryPool {
+        trade_mode: u8,
+        graduation_hook_program_id: Option<ProgramId>,
+        graduation_hook_configuration: Vec<u8>,
         namespace: AccountId,
         launch_salt: [u8; 32],
         name: String,
@@ -99,6 +154,9 @@ pub enum Instruction {
     ContinueCreation,
     ClaimCreatorAllocation,
     WithdrawFactoryProceeds,
+    ExecuteGraduationHook {
+        remaining_accounts: u32,
+    },
     /// Select the pinned privacy circuit's transaction-wide PDA authorization rules.
     Private {
         instruction: Box<Instruction>,
@@ -109,6 +167,7 @@ pub enum Instruction {
 /// explicit panics, matching the neighbouring curve-core handlers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CreateError {
+    InvalidTradeMode,
     SaleReserveZero,
     VirtualTokenReserveNotAboveSaleReserve,
     VirtualReserveZero,
@@ -121,6 +180,7 @@ pub enum CreateError {
 impl std::fmt::Display for CreateError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let text = match self {
+            Self::InvalidTradeMode => "trade mode must be 0 or 1",
             Self::SaleReserveZero => "a factory launch needs a non-zero sale reserve",
             Self::VirtualTokenReserveNotAboveSaleReserve => {
                 "virtual token reserve must exceed the tradeable sale reserve"
@@ -189,6 +249,22 @@ fn seed(namespace: AccountId, tag: &[u8], launch_salt: [u8; 32]) -> PdaSeed {
             .expect("sha256 is 32 bytes"),
     )
 }
+pub fn compute_graduation_seed(factory: AccountId) -> PdaSeed {
+    use risc0_zkvm::sha::{Impl, Sha256 as _};
+    let mut bytes = b"launchpad-graduation-v1".to_vec();
+    bytes.extend_from_slice(&factory.to_bytes());
+    PdaSeed::new(
+        Impl::hash_bytes(&bytes)
+            .as_bytes()
+            .try_into()
+            .expect("sha256 is 32 bytes"),
+    )
+}
+
+pub fn compute_graduation_pda(adapter: ProgramId, factory: AccountId) -> AccountId {
+    AccountId::for_public_pda(&adapter, &compute_graduation_seed(factory))
+}
+
 pub fn compute_factory_seed(namespace: AccountId, launch_salt: [u8; 32]) -> PdaSeed {
     seed(namespace, b"factory", launch_salt)
 }
@@ -292,6 +368,9 @@ struct CreateFactoryPoolAccounts {
 }
 
 struct CreateFactoryPoolParams {
+    trade_mode: TradeMode,
+    graduation_hook_program_id: Option<ProgramId>,
+    graduation_hook_configuration: Vec<u8>,
     namespace: AccountId,
     launch_salt: [u8; 32],
     name: String,
@@ -329,6 +408,9 @@ fn create_factory_pool(
         clock,
     } = accounts;
     let CreateFactoryPoolParams {
+        trade_mode,
+        graduation_hook_program_id,
+        graduation_hook_configuration,
         namespace,
         launch_salt,
         name,
@@ -342,6 +424,10 @@ fn create_factory_pool(
         factory_program_id,
         curve_program_id,
     } = params;
+    assert!(
+        graduation_hook_program_id.is_some() || graduation_hook_configuration.is_empty(),
+        "Hook configuration requires a program"
+    );
     curve_core::validated_config(&config, namespace, curve_program_id);
     assert!(!name.is_empty(), "token name must not be empty");
     assert!(!uri.is_empty(), "token metadata URI must not be empty");
@@ -409,6 +495,11 @@ fn create_factory_pool(
     );
 
     let state = FactoryState {
+        trade_mode,
+        graduation_hook: graduation_hook_program_id.map(|program_id| GraduationHook {
+            program_id,
+            configuration: graduation_hook_configuration,
+        }),
         creation_stage: CreationStage::Minted,
         settlement_stage: SettlementStage::Unstarted,
         end_timestamp,
@@ -623,6 +714,10 @@ pub fn continue_creation(
         CreationStage::Allocated | CreationStage::PoolPrepared => {
             let instruction = if stage == CreationStage::Allocated {
                 CurveInstruction::CreatePool {
+                    allowed_input_token: match state.trade_mode {
+                        TradeMode::BuyOnly => Some(1),
+                        TradeMode::BuyAndSell => None,
+                    },
                     defer_funding: true,
                     namespace: state.namespace,
                     token0_amount: state.sale_reserve,
@@ -849,8 +944,7 @@ fn claim_creator_allocation(
     )
 }
 
-// The trailing treasury ATA can alias an existing recipient. Curve withdrawal
-// accepts its omission when it is the owner token1 recipient.
+// Omit the trailing treasury ATA when it already appears in the account list.
 fn unique_treasury_accounts(mut accounts: Vec<AccountWithMetadata>) -> Vec<AccountWithMetadata> {
     let last = accounts.last().expect("withdrawal accounts").account_id;
     if accounts[..accounts.len() - 1]
@@ -889,6 +983,14 @@ fn withdraw_factory_proceeds(
     accounts: WithdrawFactoryProceedsAccounts,
     params: WithdrawFactoryProceedsParams,
 ) -> (Vec<AccountPostState>, Vec<ChainedCall>) {
+    settle_factory_proceeds(accounts, params, false)
+}
+
+fn settle_factory_proceeds(
+    accounts: WithdrawFactoryProceedsAccounts,
+    params: WithdrawFactoryProceedsParams,
+    hook: bool,
+) -> (Vec<AccountPostState>, Vec<ChainedCall>) {
     let WithdrawFactoryProceedsAccounts {
         factory,
         pool,
@@ -923,7 +1025,40 @@ fn withdraw_factory_proceeds(
         treasury_ata.clone(),
     ];
     let mut state = FactoryState::try_from(&factory.account.data).expect("valid factory state");
-    validate_creator(&factory, &creator, &state, factory_program_id);
+    if hook {
+        assert_eq!(
+            factory.account.program_owner, factory_program_id,
+            "Wrong factory program owner"
+        );
+        assert_eq!(
+            factory.account_id,
+            compute_factory_pda(state.namespace, factory_program_id, state.launch_salt),
+            "Factory account ID does not match PDA"
+        );
+        let settings = state
+            .graduation_hook
+            .as_ref()
+            .expect("Graduation hook is not configured");
+        if matches!(
+            state.settlement_stage,
+            SettlementStage::Burned { .. }
+                | SettlementStage::HookReady { .. }
+                | SettlementStage::NoPayout
+        ) {
+            assert_eq!(
+                creator.account.program_owner, settings.program_id,
+                "Adapter must initialize its custody PDA before ATA preparation"
+            );
+        }
+        assert_eq!(
+            creator.account_id,
+            compute_graduation_pda(settings.program_id, factory.account_id),
+            "Wrong adapter custody PDA"
+        );
+    } else {
+        assert!(creator.is_authorized, "Creator authorization is missing");
+        validate_creator(&factory, &creator, &state, factory_program_id);
+    }
     assert_eq!(
         state.creation_stage,
         CreationStage::Active,
@@ -977,6 +1112,14 @@ fn withdraw_factory_proceeds(
         );
     }
     let stage = state.settlement_stage;
+    assert!(
+        !hook
+            || !matches!(
+                stage,
+                SettlementStage::TokenPaid { .. } | SettlementStage::Complete
+            ),
+        "Manual payout has started"
+    );
     state.settlement_stage = match stage {
         SettlementStage::Unstarted => SettlementStage::Ready,
         SettlementStage::Ready => SettlementStage::Withdrawn {
@@ -986,7 +1129,27 @@ fn withdraw_factory_proceeds(
         SettlementStage::Withdrawn { collateral_due, .. } => {
             SettlementStage::Burned { collateral_due }
         }
+        SettlementStage::Burned { collateral_due } if hook => {
+            SettlementStage::HookReady { collateral_due }
+        }
+        SettlementStage::Burned { collateral_due }
+        | SettlementStage::HookReady { collateral_due }
+            if !hook && state.dex_seed_reserve == 0 =>
+        {
+            if collateral_due == 0 {
+                SettlementStage::NoPayout
+            } else {
+                SettlementStage::Complete
+            }
+        }
+        SettlementStage::NoPayout if hook => SettlementStage::HookReady { collateral_due: 0 },
+        SettlementStage::NoPayout => panic!("Proceeds settlement has no payout"),
         SettlementStage::Burned { collateral_due } => SettlementStage::TokenPaid { collateral_due },
+        SettlementStage::HookReady { .. } if hook => SettlementStage::Graduated,
+        SettlementStage::HookReady { collateral_due } => {
+            SettlementStage::TokenPaid { collateral_due }
+        }
+        SettlementStage::Graduated => panic!("Proceeds have graduated"),
         SettlementStage::TokenPaid { .. } => SettlementStage::Complete,
         SettlementStage::Complete => panic!("Proceeds settlement is already complete"),
     };
@@ -1044,15 +1207,47 @@ fn withdraw_factory_proceeds(
                 ]
             }
         }
-        SettlementStage::Burned { .. } => payout_calls(
-            owner,
-            creator,
-            factory_token_ata,
-            creator_token_ata,
-            token_definition,
-            state.dex_seed_reserve,
-            seeds,
-        ),
+        SettlementStage::Burned { .. } | SettlementStage::NoPayout if hook => vec![
+            ChainedCall::new(
+                ASSOCIATED_TOKEN_ACCOUNT_PROGRAM_ID,
+                vec![creator.clone(), token_definition, creator_token_ata],
+                &associated_token_account_core::Instruction::Create {
+                    ata_program_id: ASSOCIATED_TOKEN_ACCOUNT_PROGRAM_ID,
+                },
+            ),
+            ChainedCall::new(
+                ASSOCIATED_TOKEN_ACCOUNT_PROGRAM_ID,
+                vec![creator, collateral_definition, creator_collateral_ata],
+                &associated_token_account_core::Instruction::Create {
+                    ata_program_id: ASSOCIATED_TOKEN_ACCOUNT_PROGRAM_ID,
+                },
+            ),
+        ],
+        SettlementStage::Burned { collateral_due }
+        | SettlementStage::HookReady { collateral_due }
+            if !hook && state.dex_seed_reserve == 0 =>
+        {
+            payout_calls(
+                owner,
+                creator,
+                factory_collateral_ata,
+                creator_collateral_ata,
+                collateral_definition,
+                collateral_due,
+                seeds,
+            )
+        }
+        SettlementStage::Burned { .. } | SettlementStage::HookReady { .. } if !hook => {
+            payout_calls(
+                owner,
+                creator,
+                factory_token_ata,
+                creator_token_ata,
+                token_definition,
+                state.dex_seed_reserve,
+                seeds,
+            )
+        }
         SettlementStage::TokenPaid { collateral_due } => payout_calls(
             owner,
             creator,
@@ -1062,7 +1257,13 @@ fn withdraw_factory_proceeds(
             collateral_due,
             seeds,
         ),
-        SettlementStage::Complete => unreachable!(),
+        SettlementStage::HookReady { collateral_due } => {
+            hook::final_calls(&pre, snapshot, &state, factory_program_id, collateral_due)
+        }
+        SettlementStage::Complete
+        | SettlementStage::Graduated
+        | SettlementStage::NoPayout
+        | SettlementStage::Burned { .. } => unreachable!(),
     };
     let mut posts: Vec<_> = pre
         .into_iter()
@@ -1105,6 +1306,72 @@ fn payout_calls(
     ]
 }
 
+fn settlement_accounts(
+    pre_states: Vec<AccountWithMetadata>,
+    program: ProgramId,
+) -> WithdrawFactoryProceedsAccounts {
+    let mut pre_states = pre_states;
+    if pre_states.len() == 13 {
+        let state = FactoryState::try_from(&pre_states[0].account.data).expect("valid factory");
+        let config =
+            curve_core::validated_config(&pre_states[12], state.namespace, state.curve_program_id);
+        let treasury_id = associated_token_account_core::get_associated_token_account_id(
+            &ASSOCIATED_TOKEN_ACCOUNT_PROGRAM_ID,
+            &associated_token_account_core::compute_ata_seed(
+                config.treasury,
+                state.collateral_definition_id,
+            ),
+        );
+        let existing = pre_states
+            .iter()
+            .find(|a| a.account_id == treasury_id)
+            .expect("omitted treasury ATA must already be supplied")
+            .clone();
+        pre_states.push(existing);
+    }
+
+    assert_eq!(
+        pre_states.len(),
+        14,
+        "Settlement requires fourteen accounts"
+    );
+    hook::validate_settlement(&pre_states, program);
+    let [
+        factory,
+        pool,
+        creator,
+        token_definition,
+        collateral_definition,
+        factory_token_ata,
+        factory_collateral_ata,
+        pool_token_ata,
+        pool_collateral_ata,
+        creator_token_ata,
+        creator_collateral_ata,
+        clock,
+        config,
+        treasury_ata,
+    ] = pre_states
+        .try_into()
+        .expect("WithdrawFactoryProceeds requires exactly fourteen accounts");
+    WithdrawFactoryProceedsAccounts {
+        factory,
+        pool,
+        creator,
+        token_definition,
+        collateral_definition,
+        factory_token_ata,
+        factory_collateral_ata,
+        pool_token_ata,
+        pool_collateral_ata,
+        creator_token_ata,
+        creator_collateral_ata,
+        clock,
+        config,
+        treasury_ata,
+    }
+}
+
 fn trusted_time(clock: &AccountWithMetadata) -> u64 {
     assert_eq!(
         clock.account_id,
@@ -1125,9 +1392,16 @@ pub fn process_instruction(
         instruction => (false, instruction),
     };
     let original = pre_states.clone();
+    let saved_curve_program = original
+        .first()
+        .and_then(|account| FactoryState::try_from(&account.account.data).ok())
+        .map(|state| state.curve_program_id);
     let (mut posts, mut calls) = match instruction {
         Instruction::Private { .. } => panic!("nested execution mode wrapper"),
         Instruction::CreateFactoryPool {
+            trade_mode,
+            graduation_hook_program_id,
+            graduation_hook_configuration,
             namespace,
             launch_salt,
             name,
@@ -1178,6 +1452,9 @@ pub fn process_instruction(
                     clock,
                 },
                 CreateFactoryPoolParams {
+                    trade_mode: TradeMode::try_from(trade_mode).expect("valid trade mode"),
+                    graduation_hook_program_id,
+                    graduation_hook_configuration,
                     namespace,
                     launch_salt,
                     name,
@@ -1219,74 +1496,54 @@ pub fn process_instruction(
                 ClaimCreatorAllocationParams { factory_program_id },
             )
         }
-        Instruction::WithdrawFactoryProceeds => {
+        Instruction::ExecuteGraduationHook { remaining_accounts } => {
+            assert!(!private, "Graduation hook requires public execution");
+            let remaining = usize::try_from(remaining_accounts).expect("remaining account count");
+            let fixed = pre_states
+                .len()
+                .checked_sub(remaining)
+                .expect("Invalid remaining account count");
+            assert!(
+                fixed == 13 || fixed == 14,
+                "Hook requires thirteen or fourteen fixed accounts"
+            );
             let mut pre_states = pre_states;
-            if pre_states.len() == 13 {
-                let state =
-                    FactoryState::try_from(&pre_states[0].account.data).expect("valid factory");
-                let config = curve_core::validated_config(
-                    &pre_states[12],
-                    state.namespace,
-                    state.curve_program_id,
-                );
-                let treasury_id = associated_token_account_core::get_associated_token_account_id(
-                    &ASSOCIATED_TOKEN_ACCOUNT_PROGRAM_ID,
-                    &associated_token_account_core::compute_ata_seed(
-                        config.treasury,
-                        state.collateral_definition_id,
-                    ),
-                );
-                let existing = pre_states
-                    .iter()
-                    .find(|a| a.account_id == treasury_id)
-                    .expect("omitted treasury ATA must already be supplied")
-                    .clone();
-                pre_states.push(existing);
-            }
-
-            let [
-                factory,
-                pool,
-                creator,
-                token_definition,
-                collateral_definition,
-                factory_token_ata,
-                factory_collateral_ata,
-                pool_token_ata,
-                pool_collateral_ata,
-                creator_token_ata,
-                creator_collateral_ata,
-                clock,
-                config,
-                treasury_ata,
-            ] = pre_states
-                .try_into()
-                .expect("WithdrawFactoryProceeds requires exactly fourteen accounts");
-            withdraw_factory_proceeds(
-                WithdrawFactoryProceedsAccounts {
-                    factory,
-                    pool,
-                    creator,
-                    token_definition,
-                    collateral_definition,
-                    factory_token_ata,
-                    factory_collateral_ata,
-                    pool_token_ata,
-                    pool_collateral_ata,
-                    creator_token_ata,
-                    creator_collateral_ata,
-                    clock,
-                    config,
-                    treasury_ata,
-                },
+            let remaining = pre_states.split_off(fixed);
+            hook::validate_interface(&pre_states, &remaining, factory_program_id);
+            let (mut posts, mut calls) = settle_factory_proceeds(
+                settlement_accounts(pre_states, factory_program_id),
                 WithdrawFactoryProceedsParams { factory_program_id },
-            )
+                true,
+            );
+            if FactoryState::try_from(&posts[0].account().data)
+                .expect("valid factory")
+                .settlement_stage
+                == SettlementStage::Graduated
+            {
+                calls
+                    .last_mut()
+                    .expect("hook callback")
+                    .pre_states
+                    .extend(remaining.clone());
+            }
+            posts.truncate(fixed);
+            posts.extend(
+                remaining
+                    .into_iter()
+                    .map(|account| AccountPostState::new(account.account)),
+            );
+            (posts, calls)
         }
+        Instruction::WithdrawFactoryProceeds => withdraw_factory_proceeds(
+            settlement_accounts(pre_states, factory_program_id),
+            WithdrawFactoryProceedsParams { factory_program_id },
+        ),
     };
     posts.truncate(original.len());
     if private {
         for call in &mut calls {
-            if call.program_id != ASSOCIATED_TOKEN_ACCOUNT_PROGRAM_ID
+            if Some(call.program_id) == saved_curve_program
+                && call.program_id != ASSOCIATED_TOKEN_ACCOUNT_PROGRAM_ID
                 && call.program_id != curve_core::TOKEN_PROGRAM_ID
             {
                 let instruction: CurveInstruction =
@@ -1303,6 +1560,9 @@ pub fn process_instruction(
     }
     (posts, calls)
 }
+
+#[cfg(test)]
+mod hook_tests;
 
 #[cfg(test)]
 mod tests {
@@ -1395,6 +1655,8 @@ mod tests {
     fn delayed_factory(creator: &AccountWithMetadata) -> (AccountWithMetadata, FactoryState) {
         let launch_salt = [1; 32];
         let state = FactoryState {
+            trade_mode: TradeMode::BuyAndSell,
+            graduation_hook: None,
             settlement_stage: SettlementStage::Unstarted,
             creation_stage: CreationStage::Active,
             end_timestamp: None,
@@ -1448,6 +1710,7 @@ mod tests {
             account: Account {
                 program_owner: CURVE_PROGRAM_ID,
                 data: Data::from(&PoolAccount {
+                    allowed_input_token: None,
                     funded: true,
                     namespace: state.namespace,
                     token0_definition_id: state.token_definition_id,
@@ -1503,6 +1766,53 @@ mod tests {
             clock: trusted_clock(timestamp),
             config: namespace_config(),
             treasury_ata: creator(8, false),
+        }
+    }
+
+    #[test]
+    fn creation_continuation_translates_saved_mode_into_neutral_pool_restriction() {
+        for (mode, expected) in [(TradeMode::BuyOnly, Some(1)), (TradeMode::BuyAndSell, None)] {
+            let creator = creator(9, true);
+            let (mut factory, mut state) = delayed_factory(&creator);
+            state.creation_stage = CreationStage::Allocated;
+            state.trade_mode = mode;
+            factory.account.program_owner = FACTORY_PROGRAM_ID;
+            factory.account.data = Data::from(&state);
+            let placeholder = |id| AccountWithMetadata {
+                account_id: id,
+                account: Account::default(),
+                is_authorized: false,
+            };
+            let mut accounts = vec![placeholder(AccountId::new([20; 32])); 15];
+            accounts[0] = factory;
+            accounts[1] = placeholder(state.token_definition_id);
+            accounts[2] = placeholder(compute_mint_pda(
+                state.namespace,
+                FACTORY_PROGRAM_ID,
+                state.launch_salt,
+            ));
+            accounts[4] = placeholder(state.creator_escrow_id);
+            accounts[5] = creator;
+            accounts[7] = placeholder(state.collateral_definition_id);
+            accounts[10] = placeholder(state.pool_id);
+            let (posts, calls) =
+                process_instruction(accounts, Instruction::ContinueCreation, FACTORY_PROGRAM_ID);
+            assert_eq!(
+                FactoryState::try_from(&posts[0].account().data)
+                    .unwrap()
+                    .trade_mode,
+                mode
+            );
+            let instruction: CurveInstruction =
+                risc0_zkvm::serde::from_slice(&calls[0].instruction_data).unwrap();
+            let CurveInstruction::CreatePool {
+                allowed_input_token,
+                ..
+            } = instruction
+            else {
+                panic!("pool creation required")
+            };
+            assert_eq!(allowed_input_token, expected);
         }
     }
 
@@ -1603,6 +1913,9 @@ mod tests {
         };
         assert_eq!(
             tag(Instruction::CreateFactoryPool {
+                trade_mode: 1,
+                graduation_hook_program_id: None,
+                graduation_hook_configuration: vec![],
                 namespace: AccountId::new([0xAD; 32]),
                 launch_salt: [1; 32],
                 name: "Launch".into(),
@@ -1624,7 +1937,7 @@ mod tests {
             tag(Instruction::Private {
                 instruction: Box::new(Instruction::ContinueCreation),
             }),
-            Some(4)
+            Some(5)
         );
     }
 
@@ -1816,6 +2129,7 @@ mod tests {
         let pool = AccountWithMetadata {
             account: Account {
                 data: Data::from(&PoolAccount {
+                    allowed_input_token: None,
                     funded: true,
                     namespace: AccountId::new([0xAD; 32]),
                     token0_definition_id: state.token_definition_id,
@@ -1878,6 +2192,7 @@ mod tests {
         let pool = AccountWithMetadata {
             account: Account {
                 data: Data::from(&PoolAccount {
+                    allowed_input_token: None,
                     funded: true,
                     namespace: AccountId::new([0xAD; 32]),
                     token0_definition_id: state.token_definition_id,
@@ -2033,6 +2348,9 @@ mod tests {
                 clock: trusted_clock(1),
             },
             CreateFactoryPoolParams {
+                trade_mode: TradeMode::BuyOnly,
+                graduation_hook_program_id: None,
+                graduation_hook_configuration: vec![],
                 namespace: AccountId::new([0xAD; 32]),
                 launch_salt,
                 name: "Launch".into(),
@@ -2069,6 +2387,9 @@ mod tests {
         let (dispatch_posts, dispatch_calls) = process_instruction(
             dispatch_pre,
             Instruction::CreateFactoryPool {
+                trade_mode: 0,
+                graduation_hook_program_id: None,
+                graduation_hook_configuration: vec![],
                 namespace: AccountId::new([0xAD; 32]),
                 launch_salt,
                 name: "Launch".into(),
@@ -2092,6 +2413,7 @@ mod tests {
         assert_eq!(post_states.len(), 15);
         let state =
             FactoryState::try_from(&post_states[0].account().data).expect("factory state parses");
+        assert_eq!(state.trade_mode, TradeMode::BuyOnly);
         assert_eq!(state.total_supply, 1_000);
         assert_eq!(state.sale_reserve, 800);
         assert_eq!(state.dex_seed_reserve, 150);
@@ -2195,6 +2517,7 @@ mod tests {
             account: Account {
                 program_owner: CURVE_PROGRAM_ID,
                 data: Data::from(&PoolAccount {
+                    allowed_input_token: None,
                     funded: true,
                     namespace: AccountId::new([0xAD; 32]),
                     token0_definition_id: state.token_definition_id,
@@ -2366,6 +2689,8 @@ mod tests {
     #[test]
     fn factory_state_round_trips_without_private_authorization_material() {
         let state = FactoryState {
+            trade_mode: TradeMode::BuyAndSell,
+            graduation_hook: None,
             settlement_stage: SettlementStage::Unstarted,
             creation_stage: CreationStage::Active,
             end_timestamp: None,

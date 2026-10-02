@@ -98,6 +98,22 @@
       ],
       "args": [
         {
+          "name": "trade_mode",
+          "type": "u8"
+        },
+        {
+          "name": "graduation_hook_program_id",
+          "type": {
+            "option": "program_id"
+          }
+        },
+        {
+          "name": "graduation_hook_configuration",
+          "type": {
+            "vec": "u8"
+          }
+        },
+        {
           "name": "namespace",
           "type": "account_id"
         },
@@ -384,6 +400,102 @@
         }
       ],
       "args": []
+    },
+    {
+      "name": "execute_graduation_hook",
+      "accounts": [
+        {
+          "name": "factory",
+          "writable": true,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "pool",
+          "writable": true,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "adapter_custody",
+          "writable": true,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "token_definition",
+          "writable": false,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "collateral_definition",
+          "writable": false,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "factory_token_ata",
+          "writable": true,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "factory_collateral_ata",
+          "writable": true,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "pool_token_ata",
+          "writable": true,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "pool_collateral_ata",
+          "writable": true,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "adapter_token_ata",
+          "writable": true,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "adapter_collateral_ata",
+          "writable": true,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "clock",
+          "writable": false,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "config",
+          "writable": false,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "treasury_and_adapter_accounts",
+          "writable": true,
+          "signer": false,
+          "init": false,
+          "rest": true
+        }
+      ],
+      "args": [
+        {
+          "name": "remaining_accounts",
+          "type": "u32"
+        }
+      ]
     }
   ],
   "instruction_type": "factory_core::Instruction"

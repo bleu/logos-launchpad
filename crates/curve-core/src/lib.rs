@@ -63,6 +63,7 @@ pub enum Instruction {
     /// - Pool PDA's token 0 ATA (uninitialized)
     /// - Pool PDA's token 1 ATA (uninitialized)
     CreatePool {
+        allowed_input_token: Option<u8>,
         defer_funding: bool,
         namespace: AccountId,
         token0_amount: u128,
@@ -171,6 +172,7 @@ pub fn compute_config_pda_seed(namespace: AccountId) -> PdaSeed {
 /// The pool PDA's contents: ordered token roles, owner, and bounded-AMM state.
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PoolAccount {
+    pub allowed_input_token: Option<pool::TokenSide>,
     pub funded: bool,
     pub namespace: AccountId,
     pub token0_definition_id: AccountId,

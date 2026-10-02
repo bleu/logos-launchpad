@@ -12,7 +12,7 @@
 mod error;
 pub use error::{ClientError, Result};
 
-pub use factory_core::CreationStage;
+pub use factory_core::{CreationStage, GraduationHook, SettlementStage, TradeMode};
 
 mod types;
 pub use types::{
@@ -67,6 +67,8 @@ pub fn load_program(path: &Path) -> Result<Program> {
 /// Inputs for the factory's one-time launch and pool creation operation.
 #[derive(Debug, Clone)]
 pub struct CreateSaleRequest {
+    pub trade_mode: TradeMode,
+    pub graduation_hook: Option<GraduationHook>,
     pub name: String,
     pub uri: String,
     pub sale_reserve: u128,
@@ -240,6 +242,12 @@ pub fn quote_buy(
     if !pool_account.funded {
         return Err(ClientError::PoolFundingPending);
     }
+    if pool_account
+        .allowed_input_token
+        .is_some_and(|side| side != pool::TokenSide::Token1)
+    {
+        return Err(ClientError::InputTokenRestricted);
+    }
     let mut pool = pool_account.pool.clone();
     pool.swap_exact_output(pool::ExactOutputSwap {
         token_in: pool::TokenSide::Token1,
@@ -263,6 +271,12 @@ pub fn quote_sell(
     if !pool_account.funded {
         return Err(ClientError::PoolFundingPending);
     }
+    if pool_account
+        .allowed_input_token
+        .is_some_and(|side| side != pool::TokenSide::Token0)
+    {
+        return Err(ClientError::InputTokenRestricted);
+    }
     let mut pool = pool_account.pool.clone();
     pool.swap_exact_input(pool::ExactInputSwap {
         token_in: pool::TokenSide::Token0,
@@ -284,6 +298,12 @@ pub fn quote_buy_with_collateral(
 ) -> Result<pool::SwapOutcome> {
     if !pool_account.funded {
         return Err(ClientError::PoolFundingPending);
+    }
+    if pool_account
+        .allowed_input_token
+        .is_some_and(|side| side != pool::TokenSide::Token1)
+    {
+        return Err(ClientError::InputTokenRestricted);
     }
     let mut pool = pool_account.pool.clone();
     pool.swap_exact_input(pool::ExactInputSwap {
@@ -341,6 +361,14 @@ pub fn build_create_sale_invocation(
         account_ids,
         signer_accounts: vec![creator],
         instruction: FactoryInstruction::CreateFactoryPool {
+            trade_mode: request.trade_mode as u8,
+            graduation_hook_program_id: request
+                .graduation_hook
+                .as_ref()
+                .map(|hook| hook.program_id),
+            graduation_hook_configuration: request
+                .graduation_hook
+                .map_or_else(Vec::new, |hook| hook.configuration),
             namespace: sale.namespace,
             launch_salt: sale.launch_salt,
             name: request.name,
@@ -390,6 +418,32 @@ pub fn build_withdraw_factory_proceeds_invocation(
         invocation.account_ids.pop();
     }
     invocation
+}
+
+/// Builds one permissionless stage using the sale's saved adapter and custody.
+pub fn build_graduation_invocation(
+    sale: FactorySale,
+    state: &FactoryState,
+    treasury: AccountId,
+    remaining_accounts: Vec<AccountId>,
+) -> Result<PublicInvocation<FactoryInstruction>> {
+    validate_factory_state(sale, state)?;
+    let hook = state
+        .graduation_hook
+        .as_ref()
+        .ok_or(ClientError::GraduationNotConfigured)?;
+    let factory = factory_pool_addresses(sale).factory;
+    let custody = factory_core::compute_graduation_pda(hook.program_id, factory);
+    let mut invocation = build_withdraw_factory_proceeds_invocation(sale, custody, treasury);
+    invocation.signer_accounts.clear();
+    invocation.instruction = FactoryInstruction::ExecuteGraduationHook {
+        remaining_accounts: remaining_accounts
+            .len()
+            .try_into()
+            .map_err(|_| ClientError::TooManyGraduationAccounts)?,
+    };
+    invocation.account_ids.extend(remaining_accounts);
+    Ok(invocation)
 }
 
 /// Builds the creator-authorized release of an `OnClose` allocation from factory escrow.
@@ -960,14 +1014,17 @@ pub fn build_collect_fees_invocation(
     collateral: AccountId,
     treasury: AccountId,
 ) -> PublicInvocation<CurveInstruction> {
+    let mut account_ids = vec![
+        pool,
+        compute_config_pda(namespace, curve_program_id),
+        associated_token_account(pool, collateral),
+    ];
+    if treasury != pool {
+        account_ids.push(associated_token_account(treasury, collateral));
+    }
     PublicInvocation {
         program_id: curve_program_id,
-        account_ids: vec![
-            pool,
-            compute_config_pda(namespace, curve_program_id),
-            associated_token_account(pool, collateral),
-            associated_token_account(treasury, collateral),
-        ],
+        account_ids,
         signer_accounts: vec![],
         instruction: CurveInstruction::CollectFees,
     }

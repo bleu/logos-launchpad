@@ -40,6 +40,7 @@ This is the planned product view. The QML apps and shared core are future work. 
 ## Read more
 
 - [Product goals and use cases](docs/product/prd.md)
+- [Curve overview](docs/product/curve-contract.md)
 - [Namespace, custody, and fee contract](docs/product/namespace-fee-contract.md)
 - [Architecture and interfaces](docs/architecture/system.md)
 - [Private participation and recovery](docs/architecture/private-participation.md)

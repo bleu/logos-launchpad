@@ -12,10 +12,11 @@ Anyone can create a namespace. Creation sets its administrator, fee, and treasur
 | Change treasury | Current administrator | Treasury only |
 | Change administrator | Current administrator and accepting successor | Administrator only |
 | Give up administration | Current administrator | Remove administration permanently; keep fee and treasury |
-| Create or settle a sale | Current creator authority holder | Sale actions allowed at the current stage |
-| Collect fees | Anyone | All outstanding fees move to the current treasury |
+| Create a sale or perform manual settlement | Current creator authority holder | Sale actions allowed at the current stage |
+| Execute a configured curve adapter hook | Anyone | Post-close settlement under [ADR 0020](../adr/0020-settlement-and-graduation.md) |
+| Collect fees | Anyone | Collect all outstanding fees for the current treasury; no self-transfer if already in its vault |
 
-Each namespace has one administration record. The [administration module](../adr/0006-namespaces-and-authority.md) defines its setup and transfer rules. The administrator manages namespace settings. The creator controls permitted sale actions.
+Each namespace has one administration record. The [administration module](../adr/0006-namespaces-and-authority.md) defines its setup and transfer rules. Namespace administration does not grant creator rights.
 
 ## Funds
 
@@ -25,7 +26,7 @@ Curve accounts must hold enough collateral for the real reserve and outstanding 
 
 ## Fees and collection
 
-Fees use collateral: token1 for curve factory sales. Calculate `amount * rate / 10_000`, rounded up. Keep outstanding fees and total collected fees separate from reserves and creator proceeds.
+Fees use collateral: token1 for curve factory sales. Namespace creation and updates permit integer rates `0..=9_999` basis points, with denominator `10_000`. Calculate `amount * rate / 10_000`, rounded up, using checked arithmetic. Keep outstanding fees and total collected fees separate from reserves and creator proceeds.
 
 | Trade | Calculate the fee on | Pricing and payment |
 | --- | --- | --- |
@@ -35,7 +36,7 @@ Fees use collateral: token1 for curve factory sales. Calculate `amount * rate / 
 
 Execution checks trade amounts, rounding, price limits, and available funds. A fee change affects later trades; amounts already recorded stay fixed.
 
-Fees can be collected at any time. Collection pays all outstanding fees, clears that record, and increases total collected fees by the amount paid. Collecting a zero balance succeeds and leaves the records unchanged. Repeated collection gives the same result until a trade adds new fees.
+Fees can be collected at any time. Collection pays all outstanding fees, clears that record, and increases total collected fees by the amount paid. If the curve pool is the current treasury, its fees are already in the destination collateral vault: clear outstanding fees and record collection without a transfer to itself. Reserve withdrawal leaves those collected fees in that vault. Collecting a zero balance succeeds and leaves the records unchanged. Repeated collection gives the same result until a trade adds new fees.
 
 Settlement collects remaining fees in the same transaction as the related reserve or proceeds payment. The payment uses the balance after collection. If that stage fails, its state and balances stay unchanged. Earlier stages stay complete. The full process can use several transactions. Completed payments and token burns are recorded so a retry is safe.
 

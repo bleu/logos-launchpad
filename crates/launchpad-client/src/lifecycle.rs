@@ -150,7 +150,7 @@ impl<'a> FactorySession<'a> {
                 .state(sale)
                 .await?
                 .ok_or(ClientError::FactoryLaunchMissing)?;
-            if state.settlement_stage == SettlementStage::Complete {
+            if state.settlement_stage.is_manual_settlement_complete() {
                 return Ok(receipt);
             }
             if self.authority.is_private() && state.settlement_stage == SettlementStage::Ready {
@@ -187,7 +187,7 @@ impl<'a> FactorySession<'a> {
         if !(self
             .state(sale)
             .await?
-            .is_some_and(|state| state.settlement_stage == SettlementStage::Complete))
+            .is_some_and(|state| state.settlement_stage.is_manual_settlement_complete()))
         {
             return Err(ClientError::SettlementIncomplete);
         }
@@ -204,7 +204,9 @@ pub fn next_creation_invocation(
 ) -> Result<Option<PublicInvocation<FactoryInstruction>>> {
     if let Some(state) = state {
         validate_factory_state(sale, state)?;
-        if !(state.sale_reserve == request.sale_reserve
+        if !(state.trade_mode == request.trade_mode
+            && state.graduation_hook == request.graduation_hook
+            && state.sale_reserve == request.sale_reserve
             && state.dex_seed_reserve == request.dex_seed_reserve
             && state.creator_allocation == request.creator_allocation
             && state.virtual_token_reserve == request.virtual_token_reserve

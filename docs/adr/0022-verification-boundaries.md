@@ -6,19 +6,19 @@ Date: 2026-09-29
 
 ## Context
 
-The reviewed curve CI omits client/CLI tests and guest builds. Its E2E script has stale commands. Weighted host/guest parity is useful math evidence, but does not prove production integration or proving readiness.
+The imported curve CI omitted client/CLI tests and guest builds. Root Cargo commands do not cover every nested workspace. Math parity and host tests alone cannot prove production integration.
 
 ## Decision
 
-Keep local behavior tests with each package. Put cross-package build, pin, on-chain program IDL and integration checks in root `verify/`, called by root CI. Preserve separate guest workspaces and pinned toolchains/lockfiles. Include client and CLI tests, guest builds and weighted-math integration explicitly; root Cargo commands do not cover every nested workspace.
+Keep local tests with each package. Put cross-package build, pin, IDL and integration checks in root `verify/`, called by root CI. Preserve separate guest workspaces and pinned toolchains/lockfiles. Explicitly include client/CLI tests, guest builds and weighted-math integration.
 
-Reuse existing pin and on-chain program IDL checks plus numerical harnesses. Repair E2E commands before execution and use isolated disposable state. Report ignored, unavailable and opt-in checks. Verify custody, clock, events, administration, freeze authority and Basecamp packaging on the selected platform.
+Repair stale E2E commands before execution and use disposable state. Report ignored, unavailable and opt-in checks. Verify each mechanism's qualified math limits, rounding and trade guards, plus namespace isolation, custody, clock, events, administration, freeze authority, private-route failure behavior and Basecamp packaging.
 
-Before a mechanism accepts creation or trade inputs, verify its qualified math envelope. Evidence must cover its applicable weight and amount limits, dust guards and oversized-trade guards without assuming undocumented thresholds. Also verify rounding, namespace isolation, single-transaction private-route execution and failure behavior, and inactive graduation within their defined scopes.
+For [curve settlement](0020-settlement-and-graduation.md), use handler tests for account guards, stages and emitted calls. Real guest tests must check payout balances, callback execution, rollback, retry and manual recovery. Record zero-amount and replay coverage at the tested layer; every host guard need not be repeated in guest tests. Emitted calls alone do not prove rollback. Current results and limits belong in the [curve evidence record](../product/curve-contract.md#acceptance-evidence).
 
 ## Consequences
 
-A green host suite is not a release gate by itself. Historical pins are a reproducibility baseline, not an automatic production target. Build reproduction and CI implementation remain separate tasks; no new workflow is installed by this decision.
+Historical pins support reproduction; they do not select a production platform. This decision does not install CI or establish production readiness.
 
 ## Sources
 

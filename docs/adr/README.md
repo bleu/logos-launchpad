@@ -1,6 +1,6 @@
 # Architecture decision records
 
-Each record explains one decision without requiring access to the original discussion. `Accepted` means an adopted design or reviewed baseline, not shipped behavior. An accepted internal design can still have external status `To be reviewed by Logos team` when it departs from an RFP. Weighted-math records remain unaudited. External approval and unresolved work are stated separately.
+`Accepted` means an adopted design or reviewed baseline, not necessarily shipped behavior. RFP departures marked `To be reviewed by Logos team` lack external approval. Weighted math remains unaudited.
 
 Read [CONTEXT.md](../../CONTEXT.md) for terms and [repository layout](../architecture/repository-layout.md) for planned ownership and checks.
 
@@ -14,8 +14,8 @@ Read [CONTEXT.md](../../CONTEXT.md) for terms and [repository layout](../archite
 | [0004](0004-upstream-patterns.md) | Adopt AMM patterns without a fork | Accepted |
 | [0005](0005-mechanism-boundaries.md) | Separate mechanisms, pools and factory policy | Accepted |
 | [0006](0006-namespaces-and-authority.md) | Namespaces and AccountId administration | Accepted; platform checks outstanding |
-| [0007](0007-typed-sale-inputs.md) | Typed immutable sale inputs | Accepted internally; expiry-validation departure: To be reviewed by Logos team |
-| [0008](0008-curve-allocation-and-close.md) | Curve allocation and closing | Accepted internally; expiry-validation departure: To be reviewed by Logos team |
+| [0007](0007-typed-sale-inputs.md) | Typed immutable sale inputs | Accepted internally; To be reviewed by Logos team |
+| [0008](0008-curve-allocation-and-close.md) | Curve allocations | Accepted internally; To be reviewed by Logos team |
 | [0009](0009-curve-arithmetic.md) | Checked curve pricing and reserve solvency | Accepted baseline |
 
 ## Weighted math
@@ -37,8 +37,8 @@ Read [CONTEXT.md](../../CONTEXT.md) for terms and [repository layout](../archite
 | [0017](0017-quotes-and-slippage.md) | Fresh quotes and explicit slippage limits | Accepted |
 | [0018](0018-private-participation.md) | SDK-managed single-transaction private route and recovery | Product and recovery rules accepted; platform, wallet and proof verification pending |
 | [0019](0019-product-packages.md) | Two QML mini-apps and a non-UI shared core | Accepted |
-| [0020](0020-settlement-and-graduation.md) | Manual settlement and inactive graduation | Accepted |
-| [0021](0021-modes-and-open-limits.md) | Adopted modes, deferred ceiling and allowlist product policy | Product rules accepted internally; expiry-validation and ceiling departures: To be reviewed by Logos team; proof design open |
+| [0020](0020-settlement-and-graduation.md) | Manual settlement and optional adapter hook | Accepted and implemented; production readiness and live DEX integration pending |
+| [0021](0021-modes-and-open-limits.md) | Modes, deferred ceiling and allowlist rules | Accepted internally; ceiling deferral: To be reviewed by Logos team; proof design open |
 | [0022](0022-verification-boundaries.md) | Explicit build, IDL and integration evidence | Accepted |
 | [0025](0025-sale-closing.md) | Mechanism-specific sale closing | Accepted internally; expiry-validation departure: To be reviewed by Logos team |
 | [0026](0026-lbp-clock-and-poke.md) | Fixed-total clock weights and timestamp-keyed buy/poke checkpoints | Accepted; clock integration unverified |

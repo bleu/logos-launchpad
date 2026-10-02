@@ -1,6 +1,6 @@
 # ADR 0021: Sale modes, allowlists and open limits
 
-Status: Sale modes and allowlist rules accepted internally. Expiry-duration and per-block limit changes: `To be reviewed by Logos team`. Proof design and verification remain open.
+Status: Product rules accepted internally; per-block limit deferral: `To be reviewed by Logos team`; allowlist proof design and verification open.
 
 Date: 2026-09-29; LBP mechanics review: 2026-10-02
 
@@ -10,13 +10,13 @@ Keep the selected sale modes. The 2026-10-01 review settled the LBP allowlist pr
 
 ## Sale modes
 
-Keep curve one-way mode, which allows buys only, and optional expiry. A curve sale closes when all `D` tokens are sold or its expiry is reached. Raising a set amount of collateral does not close it. See [ADR 0025](0025-sale-closing.md).
+Curve creation requires `TradeMode::{BuyOnly, BuyAndSell}`. The mode cannot change after creation. This replaces the earlier unspecified one-way mode. `BuyOnly` permits exact-input and exact-output buys with collateral. It rejects sells. `BuyAndSell` also permits exact-input sells. There is no program default or exact-output sell. UI defaults remain open.
 
-The contract does not enforce a minimum duration for curve expiry. This differs from RFP-015 and is `To be reviewed by Logos team`.
+The account layer enforces direction; pure pricing state has no factory mode policy. See [implementation evidence](../product/curve-contract.md#acceptance-evidence). [ADR 0025](0025-sale-closing.md) owns closing rules and the pending expiry-duration review.
 
-Keep weighted and true fixed-price LBP modes. Both expose exact-input buys with a minimum output and exact-output buys with a maximum full input. Fixed-price exact input spends the full input and floors output; exact output ceils payment. Reject oversized buys in full, with no partial fill or rounding-remainder refund. The [LBP overview](../product/lbp-contract.md) summarizes modes, buys and the schedule.
+Keep weighted and true fixed-price LBP modes. Both support exact-input buys with a minimum output and exact-output buys with a maximum full input. Fixed-price exact input spends the full input and floors output; exact output ceils payment. Reject oversized buys in full, without partial fills or rounding-remainder refunds.
 
-LBP schedules require `end > start`, with no product minimum duration. Resolve start-now using creation-execution time; a scheduled start cannot be in the past. Weights use chain time under [ADR 0026](0026-lbp-clock-and-poke.md). Anyone can call `poke` to record a time checkpoint.
+LBP schedules require `end > start`, with no product minimum duration. Resolve start-now at creation execution; scheduled starts cannot be in the past. [ADR 0026](0026-lbp-clock-and-poke.md) owns chain-time weights and permissionless `poke` checkpoints.
 
 Only the current creator authority holder can pause/resume before the original end, including before start. Authorized repeated calls succeed without another state change or event. Authority must still be checked. Pause does not stop weights or move the end, and resume cannot reopen an ended sale. This settles the previously open LBP pause authority; it does not grant sale control to namespace administrators or select platform freeze gates.
 

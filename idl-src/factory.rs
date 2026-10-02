@@ -19,6 +19,9 @@ pub mod factory {
         #[account(init)] pool_collateral_ata: AccountWithMetadata,
         clock: AccountWithMetadata,
         config: AccountWithMetadata,
+        trade_mode: u8,
+        graduation_hook_program_id: Option<ProgramId>,
+        graduation_hook_configuration: Vec<u8>,
         namespace: AccountId,
         launch_salt: [u8; 32],
         name: String,
@@ -79,5 +82,25 @@ pub mod factory {
         clock: AccountWithMetadata,
         config: AccountWithMetadata,
         #[account(mut)] treasury_collateral_atas: Vec<AccountWithMetadata>,
+    ) {}
+
+    #[instruction]
+    /// Tail: optional distinct treasury ATA, then the counted adapter accounts in order.
+    pub fn execute_graduation_hook(
+        #[account(mut)] factory: AccountWithMetadata,
+        #[account(mut)] pool: AccountWithMetadata,
+        #[account(mut)] adapter_custody: AccountWithMetadata,
+        token_definition: AccountWithMetadata,
+        collateral_definition: AccountWithMetadata,
+        #[account(mut)] factory_token_ata: AccountWithMetadata,
+        #[account(mut)] factory_collateral_ata: AccountWithMetadata,
+        #[account(mut)] pool_token_ata: AccountWithMetadata,
+        #[account(mut)] pool_collateral_ata: AccountWithMetadata,
+        #[account(mut)] adapter_token_ata: AccountWithMetadata,
+        #[account(mut)] adapter_collateral_ata: AccountWithMetadata,
+        clock: AccountWithMetadata,
+        config: AccountWithMetadata,
+        #[account(mut)] treasury_and_adapter_accounts: Vec<AccountWithMetadata>,
+        remaining_accounts: u32,
     ) {}
 }
