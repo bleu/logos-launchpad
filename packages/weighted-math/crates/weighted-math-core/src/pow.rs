@@ -1,7 +1,7 @@
 //! Fixed-point power kernel: `pow(base, y) = exp(y · ln base)`.
 //!
 //! Domain: `base ∈ (0, 1]`, `y ∈ (0, 99]`. The `exp` argument is always
-//! `<= 0` and every result lands in `(0, 1]`, so no large-argument `exp`
+//! `<= 0` and every result lands in `[0, 1]`, so no large-argument `exp`
 //! code is needed.
 //!
 //! The pipeline runs at [`LN_SCALE`] = 62 bits and rounds once at the end;
@@ -10,9 +10,9 @@
 //! division (forming `t` inside `ln`) — everything else is shifts,
 //! multiplies, and precomputed constants.
 //!
-//! Total pipeline error is under half an ulp at any `SCALE <= 56`. The
-//! accounting is in `docs/error-analysis.md`; the overflow bounds are in
-//! `docs/overflow-proof.md`.
+//! At SCALE 52, the derived unpadded power bound is 400 internal units.
+//! See `docs/error-analysis.md` and `docs/overflow-proof.md`; other scales
+//! need separate numerical qualification.
 
 use crate::fixed::{Fixed, ONE, SCALE};
 use crate::wide;
@@ -32,8 +32,8 @@ const INV_LN2_30: u128 = 1_549_082_005;
 /// round(2^62 / sqrt(2))
 const SQRT2_HALF_62: i128 = 3_260_954_456_333_195_553;
 
-/// Padding applied by `pow_up`/`pow_down`, in ulps at `SCALE`. Covers the
-/// pipeline error plus the final rounding (docs/error-analysis.md).
+/// Directional pad at SCALE 52; covers pipeline error and nearest rounding.
+/// Other compile-time scales need separate qualification.
 const POW_PAD_ULPS: i128 = 2;
 
 /// atanh series constants: round(2^62 / (2i+1)) for i = 0..=12.
@@ -183,8 +183,8 @@ pub fn expm1(x: Fixed) -> Fixed {
     Fixed(-to_scale_nearest(omp62))
 }
 
-/// Pool-favouring pad for the 62-bit swap-path results: `2^-53`, twice
-/// the pipeline error bound (docs/error-analysis.md).
+/// Swap-path pad; exceeds the derived 400-unit kernel bound at SCALE 52.
+/// Combined one-sided error is bounded in docs/error-analysis.md.
 const PAD_62: i128 = 512;
 
 /// `exp(exponent · ln base)` at `LN_SCALE`, unpadded — shared core of the
@@ -227,8 +227,8 @@ fn pow_raw(base: Fixed, exponent: Fixed) -> i128 {
     to_scale_nearest(exp_inner(neg_arg))
 }
 
-/// `base^exponent`, both fixed-point. Error within [`POW_PAD_ULPS`] either
-/// side; use `pow_down` / `pow_up` when the direction matters.
+/// `base^exponent`, both fixed-point. At SCALE 52, error is within
+/// [`POW_PAD_ULPS`] either side; use `pow_down` / `pow_up` for direction.
 ///
 /// # Panics
 ///
@@ -238,7 +238,7 @@ pub fn pow(base: Fixed, exponent: Fixed) -> Fixed {
     Fixed(pow_raw(base, exponent))
 }
 
-/// `base^exponent` rounded down (never overstates the result).
+/// `base^exponent` rounded down (never overstates the result at SCALE 52).
 ///
 /// # Panics
 ///
@@ -247,7 +247,7 @@ pub fn pow_down(base: Fixed, exponent: Fixed) -> Fixed {
     Fixed((pow_raw(base, exponent) - POW_PAD_ULPS).max(0))
 }
 
-/// `base^exponent` rounded up (never understates the result). Never zero:
+/// `base^exponent` rounded up (never understates at SCALE 52). Never zero:
 /// the true result is positive, so the padded floor is at least one ulp.
 ///
 /// # Panics

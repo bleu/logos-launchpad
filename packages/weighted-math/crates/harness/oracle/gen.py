@@ -21,10 +21,10 @@ Design notes (see repository-root docs/adr/0014-weighted-math-evidence.md):
   Truth is computed at the exact rational inputs: exact Fraction arithmetic
   when the exponent is an integer, mpmath at 220 digits otherwise.
   `tokens_out_floor` is the true payout rounded down (pool-favouring), so
-  the Rust gate is a pure integer comparison. Each case also carries
-  first-order sensitivities (wei of payout per unit of base/exponent error)
-  so the harness can derive a SCALE-parametric magnitude bound; the
-  direction check (never overpay) is absolute and needs no bound.
+  the Rust direction gate is a pure integer comparison. First-order
+  sensitivities remain diagnostic fields. Qualification uses rational
+  bounds from docs/error-analysis.md, with explicit rejection counts.
+  Large raw weights use high-precision powers, not huge integer exponents.
 """
 
 import json
@@ -280,6 +280,21 @@ def out_given_in_cases():
         (3 * 10**26, 10**25, 7 * 10**19, 95, 5, "exp_high"),
         (10**24, 10**21, 10**21, 90, 10, "exp_high"),
     ]
+    high = 1 << 64
+    weights = [(high, high - 1), (high - 1, high),
+               (high, (high + 98) // 99), ((high + 98) // 99, high)]
+    for wi, wo in weights:
+        for amount in [1, 10**18, 10**21]:
+            specs.append((10**24, amount, 10**33, wi, wo, "large_weights"))
+    for reserve in [1, 2, 10, 1000, 10**6, 10**18, 10**24, 10**27, 10**33, U128]:
+        amount = min(reserve, U128 - reserve)
+        specs.append((reserve, amount, reserve, high, high, "equal_weight_boundary"))
+    for di in [0, 6, 8, 18, 24]:
+        for do in [0, 6, 8, 18, 24]:
+            for wi, wo in [(50, 50), (1, 99), (99, 1), (high, high - 1)]:
+                for whole_amount in [1, 100, 10_000]:
+                    specs.append((10**(9 + di), whole_amount * 10**di,
+                                  10**(9 + do), wi, wo, "mixed_decimals"))
     return [out_case(*s) for s in specs]
 
 
@@ -288,7 +303,7 @@ def out_given_in_cases():
 # the inverted base p = ((b_out - a)/b_out)^(w_out/w_in), which lives in
 # (0,1), and amount_in = b_in · (1-p)/p rounded UP (the user can never pay
 # less than the true price). amount_out is capped at 30% of the reserve
-# (Balancer parity), which also keeps p far above the kernel's pad floor.
+# (domain cap only; the accuracy guard can reject much smaller trades).
 # ---------------------------------------------------------------------------
 
 def in_case(balance_in, weight_in, balance_out, weight_out, amount_out, zone):
@@ -365,6 +380,20 @@ def in_given_out_cases():
         (10**27, 99, 10**20, 1, 3 * 10**19, "sale_end"),
         (10**24, 90, 10**21, 10, 10**20, "sale_end"),
     ]
+    high = 1 << 64
+    weights = [(high, high - 1), (high - 1, high),
+               (high, (high + 98) // 99), ((high + 98) // 99, high)]
+    for wi, wo in weights:
+        for amount in [1, 10**21, 10**30]:
+            specs.append((10**24, wi, 10**33, wo, amount, "large_weights"))
+    for reserve in [1, 2, 10, 1000, 10**6, 10**18, 10**24, 10**27, 10**33, (1 << 128) - 1]:
+        specs.append((reserve, high, reserve, high, reserve * 3 // 10, "equal_weight_boundary"))
+    for di in [0, 6, 8, 18, 24]:
+        for do in [0, 6, 8, 18, 24]:
+            for wi, wo in [(50, 50), (1, 99), (99, 1), (high, high - 1)]:
+                for whole_amount in [1, 100, 10_000]:
+                    specs.append((10**(9 + di), wi, 10**(9 + do), wo,
+                                  whole_amount * 10**do, "mixed_decimals"))
     return [in_case(*s) for s in specs]
 
 
