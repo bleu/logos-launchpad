@@ -20,5 +20,20 @@ workspace = true
 [build-dependencies]
 risc0-build = "3.0.5"
 
+[dev-dependencies]
+risc0-build = { version = "3.0.5", features = ["unstable"] }
+risc0-binfmt = "3.0.5"
+risc0-zkvm = { version = "3.0.5", default-features = false, features = ["client"] }
+
 [package.metadata.risc0]
 methods = ["guest"]
+
+[features]
+overflow-tests = []
+
+[[test]]
+name = "release_overflow"
+required-features = ["overflow-tests"]
+
+[profile.release]
+overflow-checks = true

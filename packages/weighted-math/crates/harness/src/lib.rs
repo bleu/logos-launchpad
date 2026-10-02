@@ -1,10 +1,9 @@
 //! Test harness for `weighted-math-core`: fixture structs, the quantizer,
 //! and the signed one-sided band checker. See ADR 0014.
 //!
-//! The grader is parametric over `(SCALE, BUDGET)`. `SCALE` comes from the
-//! kernel crate (the sweepable knob); [`BUDGET_ULPS`] is the algorithmic
-//! allowance on top of the one-ulp representation floor. Re-sweeping the
-//! scale is a one-line change in the kernel; no fixture ever regenerates.
+//! Primitive bands use the compiled `(SCALE, BUDGET)`. Trade qualification
+//! uses scale-52 rational error guards and explicit rejection counts; other
+//! scales need separate qualification.
 
 #![cfg_attr(not(test), warn(unused_crate_dependencies))]
 
@@ -147,13 +146,6 @@ pub fn load_fixture<T: DeserializeOwned>(name: &str) -> T {
 pub fn parse_u128(s: &str) -> u128 {
     s.parse()
         .unwrap_or_else(|e| panic!("parsing u128 {s:?}: {e}"))
-}
-
-/// Parses a decimal integer, or `None` if it exceeds `u128`. Sensitivity
-/// fields can exceed u128 on deep-drain cases; `None` skips the magnitude
-/// gate there while the direction gate stays strict.
-pub fn parse_u128_checked(s: &str) -> Option<u128> {
-    s.parse().ok()
 }
 
 // Fixture inputs are exact only for scales at or above the dyadic grid.

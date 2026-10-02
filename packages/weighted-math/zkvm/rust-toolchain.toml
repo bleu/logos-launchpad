@@ -2,4 +2,4 @@
 # recent rustc. The guest itself is compiled by the rzup-managed risc0
 # toolchain regardless of this file.
 [toolchain]
-channel = "stable"
+channel = "1.94.0"
