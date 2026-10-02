@@ -28,19 +28,22 @@ narrower facts:
 
 ## Prerequisites
 
-```sh
-curl -L https://risczero.com/install | bash
-rzup install            # cargo-risczero, r0vm, and the risc0 rust toolchain
-```
+Use the tool versions in [`verify/build-tools.env`](../../../verify/build-tools.env). With the pinned rzup installed, run from the repository root:
 
-Pinned against risc0 3.0.5 (`rzup install` as of 2026-07 installs exactly
-that; if the default moves, `rzup install cargo-risczero 3.0.5` etc.).
+```sh
+source verify/build-tools.env
+rzup install rust "$RISC0_RUST_VERSION"
+rzup install cpp "$RISC0_CPP_VERSION"
+rzup install r0vm "$RISC0_TOOLS_VERSION"
+rzup install cargo-risczero "$RISC0_TOOLS_VERSION"
+```
 
 ## Run
 
+From the repository root:
+
 ```sh
-cd zkvm
-cargo run --release
+RISC0_BUILD_LOCKED=1 cargo run --manifest-path packages/weighted-math/zkvm/Cargo.toml --release --locked
 ```
 
 Executor only — no proofs are generated, so the run takes seconds. Cycle

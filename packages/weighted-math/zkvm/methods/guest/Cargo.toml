@@ -20,6 +20,11 @@ weighted-math-core = { path = "../../../crates/weighted-math-core" }
 # The cycle numbers below therefore INCLUDE the overflow-check cost — this
 # is the binary the on-chain program would actually ship.
 overflow-checks = true
+debug = 0
+strip = "symbols"
+
+[package.metadata.risc0]
+rustc-flags = ["-Zremap-cwd-prefix=/source"]
 
 [workspace.package]
 edition = "2024"
