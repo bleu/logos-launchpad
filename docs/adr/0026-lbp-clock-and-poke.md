@@ -10,7 +10,7 @@ LBP prices depend on a time-based weight schedule. Observers need an inspectable
 
 ## Decision
 
-Derive linear LBP weights from trusted LEZ time at trade execution. Use endpoint pairs with one equal total weight. Floor the collateral weight's convex interpolation and calculate the token weight as its exact complement. This keeps the total fixed and preserves the qualified endpoint bounds for rising, falling or constant schedules. The [LBP contract](../product/lbp-contract.md#clock-and-linear-weights) defines the checked integer equation and timestamp constraints; target clock access and units still need platform verification.
+Derive linear LBP weights from trusted LEZ time at trade execution. Use endpoint pairs with one equal total weight. Floor the collateral weight's convex interpolation and calculate the token weight as its exact complement. This keeps the total fixed and preserves the qualified endpoint bounds for rising, falling or constant schedules. The [LBP overview](../product/lbp-contract.md#clock-and-linear-weights) summarizes the clock and weight schedule; target clock access and units still need platform verification.
 
 A permissionless `poke` stores a checkpoint for observers, but pricing correctness does not require a prior poke. Every successful buy also stores the execution timestamp and pair when that timestamp differs from the last checkpoint. At the same timestamp, reuse the pair without a checkpoint write. Each buy still uses current reserves and emits its own trade event. A failed buy commits no checkpoint or other trade state. Compare trusted timestamps, not block numbers. This extends the original poke-only checkpoint decision.
 

@@ -67,6 +67,6 @@ See the planned [curve pool creation](../architecture/sequence-diagrams/create-c
 - The per-block allocation ceiling is deferred. Live LBP fee rates, anytime LBP collection and omission of curve contract minimum-duration validation differ from the RFPs. The relevant ADRs are marked `To be reviewed by Logos team`.
 - Automatic DEX graduation is inactive. Direct neutral pools are internal primitives, not a separate sale product.
 - Use the existing indexer and explorer tools. Do not add a separate indexer or the excluded derived analytics view.
-- Platform compatibility, checked numerical input/error guards and private-route implementation still need evidence. The [LBP contract](lbp-contract.md) defines mechanics and future-handler acceptance cases; it does not claim a working LBP program.
+- Platform compatibility, checked numerical input/error guards and private-route implementation still need evidence. The [LBP overview](lbp-contract.md) summarizes mechanics; it does not claim a working LBP program.
 
-See the [namespace, custody, and fee contract](namespace-fee-contract.md) for shared account checks and collection rules. The [LBP contract](lbp-contract.md) adds its worked balances and lifecycle acceptance cases. See [architecture and interfaces](../architecture/system.md) for component responsibilities and [repository layout](../architecture/repository-layout.md) for packages and checks.
+See the [namespace, custody, and fee contract](namespace-fee-contract.md) for shared account checks and collection rules. The [LBP overview](lbp-contract.md) summarizes its main concepts. See [architecture and interfaces](../architecture/system.md) for component responsibilities and [repository layout](../architecture/repository-layout.md) for packages and checks.

@@ -14,7 +14,7 @@ Keep curve one-way mode, which allows buys only, and optional expiry. A curve sa
 
 The contract does not enforce a minimum duration for curve expiry. This differs from RFP-015 and is `To be reviewed by Logos team`.
 
-Keep weighted and true fixed-price LBP modes. Both expose exact-input buys with a minimum output and exact-output buys with a maximum full input. Fixed-price exact input spends the full input and floors output; exact output ceils payment. Reject oversized buys in full, with no partial fill or rounding-remainder refund. The [LBP contract](../product/lbp-contract.md) defines raw-unit rational prices, schedules and future-handler acceptance cases.
+Keep weighted and true fixed-price LBP modes. Both expose exact-input buys with a minimum output and exact-output buys with a maximum full input. Fixed-price exact input spends the full input and floors output; exact output ceils payment. Reject oversized buys in full, with no partial fill or rounding-remainder refund. The [LBP overview](../product/lbp-contract.md) summarizes modes, buys and the schedule.
 
 LBP schedules require `end > start`, with no product minimum duration. Resolve start-now using creation-execution time; a scheduled start cannot be in the past. Weights use chain time under [ADR 0026](0026-lbp-clock-and-poke.md). Anyone can call `poke` to record a time checkpoint.
 
