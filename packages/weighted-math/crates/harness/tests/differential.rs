@@ -6,6 +6,7 @@
 #![cfg_attr(not(test), warn(unused_crate_dependencies))]
 
 use harness::*;
+use num_bigint::BigUint;
 use weighted_math_core::{
     calc_in_given_out, calc_out_given_in, exp, expm1, ln, pow, pow_down, pow_up,
 };
@@ -229,9 +230,7 @@ fn kernel_arith_wrappers() {
     }
 }
 
-/// The reverse economic gate: the ceiled payment in wei. Never
-/// undercharge (absolute); magnitude mirrors the out gate plus a term for
-/// the kernel's own power error.
+/// Check direction and the rational excess-payment bound for every fixture.
 #[test]
 fn kernel_in_given_out_gate() {
     let cases: Vec<InGivenOutCase> = load_fixture("in_given_out.json");
@@ -239,6 +238,11 @@ fn kernel_in_given_out_gate() {
         cases[0].zone, "sale_start",
         "danger zone must lead the file"
     );
+    assert_eq!(
+        SCALE, 52,
+        "trade bounds require separate qualification at other scales"
+    );
+    let mut counts = QualificationCounts::default();
     for c in &cases {
         let amount_in = calc_in_given_out(
             parse_u128(&c.balance_in),
@@ -256,31 +260,212 @@ fn kernel_in_given_out_gate() {
             "UNDERCHARGE (fund leak): kernel {amount_in} < truth {truth} in {c:?}"
         );
 
-        // Sensitivities beyond u128 mean the case is direction-only.
-        let sens = parse_u128_checked(&c.sens_base_wei)
-            .and_then(|a| parse_u128_checked(&c.sens_exp_wei).and_then(|b| a.checked_add(b)));
-        let sens_pow = parse_u128_checked(&c.sens_pow_wei);
-        if let (Some(sens), Some(sens_pow)) = (sens, sens_pow) {
-            let bound_wei = (sens >> (SCALE - 1))
-                .saturating_add(wide_shr_or_max(sens_pow, bound_ulps()))
-                .saturating_add((balance_in >> SCALE) * bound_ulps())
-                .saturating_add(1);
-            let overcharge = amount_in - truth;
-            assert!(
-                overcharge <= bound_wei,
-                "overcharge {overcharge} wei > bound {bound_wei} in {c:?}"
-            );
-        }
+        let bound = payment_error_bound(c, amount_in);
+        let overcharge = BigUint::from(amount_in - truth);
+        assert!(overcharge <= bound, "payment error exceeds bound in {c:?}");
+        let payment = BigUint::from(amount_in);
+        let lower = if payment > bound {
+            payment - &bound
+        } else {
+            BigUint::default()
+        };
+        counts.record(
+            parse_u128(&c.amount_out) == 0 || amount_in == 0,
+            balance_in.checked_add(amount_in).is_some(),
+            lower,
+            &bound,
+        );
     }
+    counts.report("exact-output", cases.len());
 }
 
-/// `sens_pow * ulps / 2^SCALE`, saturating (sens_pow can be near u128::MAX).
-fn wide_shr_or_max(sens_pow: u128, ulps: u128) -> u128 {
-    let (hi, lo) = mul_wide(sens_pow, ulps);
-    if hi >> SCALE != 0 {
-        u128::MAX
-    } else {
-        (hi << (128 - SCALE)) | (lo >> SCALE)
+#[test]
+fn mixed_decimal_sales_have_small_buy_oracle_coverage() {
+    let outputs: Vec<OutGivenInCase> = load_fixture("out_given_in.json");
+    let payments: Vec<InGivenOutCase> = load_fixture("in_given_out.json");
+    let mut checked = 0;
+    for c in outputs.iter().filter(|c| c.zone == "mixed_decimals") {
+        let actual = calc_out_given_in(
+            parse_u128(&c.balance_in),
+            parse_u128(&c.weight_in),
+            parse_u128(&c.balance_out),
+            parse_u128(&c.weight_out),
+            parse_u128(&c.amount_in),
+        );
+        assert!(actual <= parse_u128(&c.tokens_out_floor), "{c:?}");
+        checked += 1;
+    }
+    for c in payments.iter().filter(|c| c.zone == "mixed_decimals") {
+        let actual = calc_in_given_out(
+            parse_u128(&c.balance_in),
+            parse_u128(&c.weight_in),
+            parse_u128(&c.balance_out),
+            parse_u128(&c.weight_out),
+            parse_u128(&c.amount_out),
+        );
+        assert!(actual >= parse_u128(&c.amount_in_ceil), "{c:?}");
+        checked += 1;
+    }
+    assert!(
+        checked >= 600,
+        "only {checked} mixed-decimal trades checked"
+    );
+}
+
+#[test]
+fn equal_weight_boundaries_have_exact_rational_coverage() {
+    let outputs: Vec<OutGivenInCase> = load_fixture("out_given_in.json");
+    let payments: Vec<InGivenOutCase> = load_fixture("in_given_out.json");
+    let mut checked = 0;
+    for c in outputs.iter().filter(|c| c.zone == "equal_weight_boundary") {
+        let actual = calc_out_given_in(
+            parse_u128(&c.balance_in),
+            parse_u128(&c.weight_in),
+            parse_u128(&c.balance_out),
+            parse_u128(&c.weight_out),
+            parse_u128(&c.amount_in),
+        );
+        assert!(actual <= parse_u128(&c.tokens_out_floor), "{c:?}");
+        checked += 1;
+    }
+    for c in payments
+        .iter()
+        .filter(|c| c.zone == "equal_weight_boundary")
+    {
+        let actual = calc_in_given_out(
+            parse_u128(&c.balance_in),
+            parse_u128(&c.weight_in),
+            parse_u128(&c.balance_out),
+            parse_u128(&c.weight_out),
+            parse_u128(&c.amount_out),
+        );
+        assert!(actual >= parse_u128(&c.amount_in_ceil), "{c:?}");
+        checked += 1;
+    }
+    assert!(
+        checked >= 20,
+        "only {checked} exact-rational trades checked"
+    );
+}
+
+#[test]
+fn near_u64_weights_match_oracle_direction() {
+    let outputs: Vec<OutGivenInCase> = load_fixture("out_given_in.json");
+    let payments: Vec<InGivenOutCase> = load_fixture("in_given_out.json");
+    let mut checked = 0;
+    for c in outputs.iter().filter(|c| c.zone == "large_weights") {
+        let actual = calc_out_given_in(
+            parse_u128(&c.balance_in),
+            parse_u128(&c.weight_in),
+            parse_u128(&c.balance_out),
+            parse_u128(&c.weight_out),
+            parse_u128(&c.amount_in),
+        );
+        assert!(actual <= parse_u128(&c.tokens_out_floor), "{c:?}");
+        checked += 1;
+    }
+    for c in payments.iter().filter(|c| c.zone == "large_weights") {
+        let actual = calc_in_given_out(
+            parse_u128(&c.balance_in),
+            parse_u128(&c.weight_in),
+            parse_u128(&c.balance_out),
+            parse_u128(&c.weight_out),
+            parse_u128(&c.amount_out),
+        );
+        assert!(actual >= parse_u128(&c.amount_in_ceil), "{c:?}");
+        checked += 1;
+    }
+    assert!(checked >= 24, "only {checked} large-weight trades checked");
+}
+
+fn big(value: &str) -> BigUint {
+    BigUint::parse_bytes(value.as_bytes(), 10).expect("unsigned integer fixture")
+}
+
+fn ceil_ratio(num: BigUint, den: &BigUint) -> BigUint {
+    (num + den - 1u32) / den
+}
+
+// Scale-52 rational guards are derived in docs/error-analysis.md.
+fn payout_error_bound(c: &OutGivenInCase, actual: u128) -> BigUint {
+    let (bi, bo, ai, wi, wo) = (
+        big(&c.balance_in),
+        big(&c.balance_out),
+        big(&c.amount_in),
+        big(&c.weight_in),
+        big(&c.weight_out),
+    );
+    if wi == wo {
+        return bo * &ai / (&bi + &ai) - actual;
+    }
+    let h = BigUint::from(1u32) << 20;
+    let num = &wi * (&h + 1u32) * (&bi + &ai)
+        + &ai * &h * &wo
+        + (BigUint::from(912u32) << 10) * &bi * &wo;
+    let den = (BigUint::from(1u32) << 72) * bi * wo;
+    ceil_ratio(bo * num, &den)
+}
+
+fn payment_error_bound(c: &InGivenOutCase, actual: u128) -> BigUint {
+    let (bi, bo, ao, wi, wo) = (
+        big(&c.balance_in),
+        big(&c.balance_out),
+        big(&c.amount_out),
+        big(&c.weight_in),
+        big(&c.weight_out),
+    );
+    if wi == wo {
+        let truth = ceil_ratio(&bi * &ao, &(&bo - &ao));
+        return BigUint::from(actual) - truth;
+    }
+    let h: BigUint = BigUint::from(1u32) << 52;
+    let d = BigUint::from(1u32) << 62;
+    let m = BigUint::from(1u32) << 72;
+    let dx = (BigUint::from(1u32) << 20) + 1u32;
+    let ell_num = (&bo - &ao) * &m - &dx * &bo;
+    let b_hi_num = (&wo * &h + &wi).min(99u32 * &wi * &h);
+    let form_num = b_hi_num * &dx * &bo + &wi * (&dx * &bo + &ao * &m);
+    let form_den = &wi * h * ell_num;
+    let e_num = form_num * &d + 912u32 * &form_den;
+    let e_den = form_den * &d;
+    let total = &bi + actual;
+    let price_den = &bi * e_den + &total * &e_num;
+    let num = e_num * &total * total * &d + &bi * &price_den;
+    ceil_ratio(num, &(price_den * d))
+}
+
+#[derive(Default)]
+struct QualificationCounts {
+    accepted: usize,
+    dust: usize,
+    accuracy_rejected: usize,
+    representation_rejected: usize,
+}
+
+impl QualificationCounts {
+    fn record(&mut self, dust: bool, fits: bool, lower: BigUint, bound: &BigUint) {
+        if dust {
+            self.dust += 1;
+        } else if !fits {
+            self.representation_rejected += 1;
+        } else if lower != BigUint::default() && bound * 10_000u32 <= lower {
+            self.accepted += 1;
+        } else {
+            self.accuracy_rejected += 1;
+        }
+    }
+
+    fn report(&self, operation: &str, total: usize) {
+        assert_eq!(
+            self.accepted + self.dust + self.accuracy_rejected + self.representation_rejected,
+            total
+        );
+        assert!(self.accepted > 0);
+        assert!(self.accuracy_rejected > 0);
+        println!(
+            "{operation}: total={total} accepted={} dust={} accuracy_rejected={} representation_rejected={}",
+            self.accepted, self.dust, self.accuracy_rejected, self.representation_rejected
+        );
     }
 }
 
@@ -327,9 +512,7 @@ fn measure_error_margins() {
     println!("payout worst shortfall = {worst_rel_num} reserve-ulps (balance_out * 2^-SCALE)");
 }
 
-/// The economic gate: the floored payout in wei. Never overpay
-/// (absolute); magnitude bounded by first-order sensitivities plus the
-/// kernel allowance, parametric in SCALE.
+/// Check direction and the rational payout-loss bound for every fixture.
 #[test]
 fn kernel_out_given_in_gate() {
     let cases: Vec<OutGivenInCase> = load_fixture("out_given_in.json");
@@ -337,6 +520,11 @@ fn kernel_out_given_in_gate() {
         cases[0].zone, "sale_start",
         "danger zone must lead the file"
     );
+    assert_eq!(
+        SCALE, 52,
+        "trade bounds require separate qualification at other scales"
+    );
+    let mut counts = QualificationCounts::default();
     for c in &cases {
         let tokens_out = calc_out_given_in(
             parse_u128(&c.balance_in),
@@ -355,20 +543,10 @@ fn kernel_out_given_in_gate() {
         );
         assert!(tokens_out <= balance_out, "payout exceeds reserve in {c:?}");
 
-        // Input-formation sensitivities (doubled for curvature) plus the
-        // kernel's own pow allowance. Sensitivities beyond u128 mean the
-        // case is direction-only.
-        let sens = parse_u128_checked(&c.sens_base_wei)
-            .and_then(|a| parse_u128_checked(&c.sens_exp_wei).and_then(|b| a.checked_add(b)));
-        if let Some(sens) = sens {
-            let bound_wei = (sens >> (SCALE - 1))
-                .saturating_add((balance_out >> SCALE) * bound_ulps())
-                .saturating_add(1);
-            let shortfall = truth - tokens_out;
-            assert!(
-                shortfall <= bound_wei,
-                "payout too small: shortfall {shortfall} wei > bound {bound_wei} in {c:?}"
-            );
-        }
+        let bound = payout_error_bound(c, tokens_out);
+        let shortfall = BigUint::from(truth - tokens_out);
+        assert!(shortfall <= bound, "payout error exceeds bound in {c:?}");
+        counts.record(tokens_out == 0, true, BigUint::from(tokens_out), &bound);
     }
+    counts.report("exact-input", cases.len());
 }

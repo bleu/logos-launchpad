@@ -54,6 +54,26 @@ fn pow_at_the_domain_corners() {
     }
 }
 
+#[test]
+#[should_panic(expected = "widened product exceeds u128 after rounding")]
+fn fixed_multiplication_rejects_an_unrepresentable_ceiling() {
+    let a = Fixed((1_i128 << 90) - 1);
+    let b = Fixed((1_i128 << 90) + 1);
+    a.mul_up(b);
+}
+
+#[test]
+#[should_panic(expected = "widened product exceeds u128 after rounding")]
+fn exact_output_rejects_an_unrepresentable_ceiling() {
+    calc_in_given_out(
+        326_937_960_375_019_080_809_068_952_671_530_218_863,
+        1,
+        10,
+        2,
+        3,
+    );
+}
+
 /// A payment past u128 must halt at the fit assert in release, never
 /// wrap. Here the payment is ~2^51 · balance_in.
 #[test]

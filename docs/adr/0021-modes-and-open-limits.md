@@ -2,7 +2,7 @@
 
 Status: Sale modes and allowlist rules accepted internally. Expiry-duration and per-block limit changes: `To be reviewed by Logos team`. Proof design and verification remain open.
 
-Date: 2026-09-29
+Date: 2026-09-29; LBP mechanics review: 2026-10-02
 
 ## Context
 
@@ -14,7 +14,11 @@ Keep curve one-way mode, which allows buys only, and optional expiry. A curve sa
 
 The contract does not enforce a minimum duration for curve expiry. This differs from RFP-015 and is `To be reviewed by Logos team`.
 
-Keep weighted and fixed-price LBP modes, start/end times and pause controls. Weights use chain time. Anyone can call `poke` to record a time checkpoint.
+Keep weighted and true fixed-price LBP modes. Both expose exact-input buys with a minimum output and exact-output buys with a maximum full input. Fixed-price exact input spends the full input and floors output; exact output ceils payment. Reject oversized buys in full, with no partial fill or rounding-remainder refund. The [LBP overview](../product/lbp-contract.md) summarizes modes, buys and the schedule.
+
+LBP schedules require `end > start`, with no product minimum duration. Resolve start-now using creation-execution time; a scheduled start cannot be in the past. Weights use chain time under [ADR 0026](0026-lbp-clock-and-poke.md). Anyone can call `poke` to record a time checkpoint.
+
+Only the current creator authority holder can pause/resume before the original end, including before start. Authorized repeated calls succeed without another state change or event. Authority must still be checked. Pause does not stop weights or move the end, and resume cannot reopen an ended sale. This settles the previously open LBP pause authority; it does not grant sale control to namespace administrators or select platform freeze gates.
 
 Defer the optional limit on tokens allocated in one block. This differs from the LBP RFP and is `To be reviewed by Logos team`. It is not implemented or removed from scope.
 

@@ -128,7 +128,7 @@ pub fn calc_in_given_out(
     let exponent = Fixed(((weight_out << SCALE).div_ceil(weight_in)) as i128);
     let base = ratio_down(balance_out - amount_out, balance_out);
     let p62 = pow::pow_62_down(base, exponent);
-    // With the 30% cap, p >= 0.7^99 ~ 2^-50.6, four times the pad floor.
+    // Positive power is required for inversion; the cap is not an accuracy bound.
     assert!(p62 > 0, "power underflows the internal scale");
     debug_assert!(p62 <= ONE_62);
 
@@ -157,8 +157,8 @@ fn check_weights(weight_in: u128, weight_out: u128) {
 
 /// `num / den` as a `Fixed`, rounded up, for `num <= den` — one division.
 ///
-/// Wide operands are pre-shifted down, biased so the result can only
-/// round up (cost `< 2^-73` relative).
+/// Wide operands are pre-shifted with upward bias. At SCALE 52, the added
+/// absolute ratio error is below 2^-72 before the final division rounding.
 fn ratio_up(num: u128, den: u128) -> Fixed {
     debug_assert!(num <= den && den > 0);
     let den_bits = 128 - den.leading_zeros();

@@ -1,24 +1,21 @@
-//! Host runner: executes the weighted-math guest in the RISC0 executor over
-//! the harness fixture set, checks every output bit-for-bit against a direct
-//! host call into `weighted-math-core`, and reports cycle costs.
-//!
-//! The host harness remains the source of truth (the oracle gates live
-//! there); this binary only establishes that the guest is the *same
-//! function* — bit-identical — and what it costs in zkVM cycles.
-//!
-//! Exit code is nonzero on any parity mismatch.
+//! Runs guest/host parity and cycle checks, or one opt-in local proof.
+//! Numerical qualification stays in the independent host harness.
+//! Exits with an error on a mismatch or an invalid proof.
 
 #![cfg_attr(not(test), warn(unused_crate_dependencies))]
 
 use eyre::{Result, WrapErr, bail};
-use risc0_zkvm::{ExecutorEnv, default_executor};
+use risc0_zkvm::{
+    ExecutorEnv, ExternalProver, InnerReceipt, Prover, ProverOpts, VerifierContext,
+    default_executor,
+};
 use serde::Deserialize;
-use std::path::PathBuf;
+use std::{path::PathBuf, time::Instant};
 use weighted_math_core::{Fixed, SCALE};
 use weighted_math_core::{
     calc_in_given_out, calc_out_given_in, exp, expm1, ln, pow, pow_down, pow_up,
 };
-use zkvm_methods::WEIGHTED_MATH_GUEST_ELF;
+use zkvm_methods::{WEIGHTED_MATH_GUEST_ELF, WEIGHTED_MATH_GUEST_ID};
 
 /// Fixture inputs are dyadic multiples of 2^-40 (harness::S40_BITS).
 const S40_BITS: u32 = 40;
@@ -131,7 +128,7 @@ struct BatchResult {
     segments: usize,
 }
 
-fn run_guest(op: u32, cases: &[Vec<u128>]) -> Result<BatchResult> {
+fn guest_input(op: u32, cases: &[Vec<u128>]) -> Vec<u32> {
     let mut input: Vec<u32> = vec![op, cases.len() as u32];
     for case in cases {
         for &v in case {
@@ -140,6 +137,11 @@ fn run_guest(op: u32, cases: &[Vec<u128>]) -> Result<BatchResult> {
             }
         }
     }
+    input
+}
+
+fn run_guest(op: u32, cases: &[Vec<u128>]) -> Result<BatchResult> {
+    let input = guest_input(op, cases);
     let env = ExecutorEnv::builder()
         .write_slice(&input)
         .build()
@@ -196,7 +198,91 @@ fn stats(cycles: &[u64]) -> CycleStats {
     }
 }
 
+fn prove_buy() -> Result<()> {
+    if std::env::var_os("RISC0_DEV_MODE").is_some_and(|value| value != "0") {
+        bail!("RISC0_DEV_MODE must be unset or 0 for a real proof");
+    }
+
+    let case = vec![
+        1_000_000_000_000,
+        4u128 << 60,
+        1_000_000_000_000_000_000_000_000,
+        1u128 << 60,
+        100_000_000,
+    ];
+    let expected = host_eval(6, &case);
+    let input = guest_input(6, std::slice::from_ref(&case));
+    let env = ExecutorEnv::builder()
+        .write_slice(&input)
+        .build()
+        .map_err(|error| eyre::eyre!(error.into_boxed_dyn_error()))
+        .wrap_err("building proof ExecutorEnv")?;
+    let server = std::env::var_os("RISC0_SERVER_PATH").unwrap_or_else(|| "r0vm".into());
+    let prover = ExternalProver::new("local-ipc", &server);
+    let context = VerifierContext::default().with_dev_mode(false);
+    let options = ProverOpts::composite().with_dev_mode(false);
+
+    println!("prover=local-ipc server={server:?} dev_mode=false");
+    println!(
+        "image_id={}",
+        risc0_zkvm::sha::Digest::from(WEIGHTED_MATH_GUEST_ID)
+    );
+    println!("op=calc_out_given_in inputs={case:?} host_output={expected}");
+    let started = Instant::now();
+    let result = prover.prove_with_ctx(env, &context, WEIGHTED_MATH_GUEST_ELF, &options);
+    println!("prove_seconds={:.6}", started.elapsed().as_secs_f64());
+    let info = result
+        .map_err(|error| eyre::eyre!(error.into_boxed_dyn_error()))
+        .wrap_err("proving weighted buy with local IPC")?;
+    let kind = match &info.receipt.inner {
+        InnerReceipt::Composite(_) => "composite",
+        InnerReceipt::Succinct(_) => "succinct",
+        InnerReceipt::Groth16(_) => "groth16",
+        InnerReceipt::Fake(_) => bail!("Fake receipt is not a real proof"),
+        _ => bail!("unsupported receipt kind"),
+    };
+    println!("receipt_kind={kind}");
+
+    let started = Instant::now();
+    let verification = info
+        .receipt
+        .verify_with_context(&context, WEIGHTED_MATH_GUEST_ID);
+    println!("verify_seconds={:.6}", started.elapsed().as_secs_f64());
+    verification.wrap_err("verifying weighted buy image ID and journal")?;
+
+    let bytes = &info.receipt.journal.bytes;
+    if bytes.len() != 24 {
+        bail!("proof journal length {} != expected 24", bytes.len());
+    }
+    let output = u128::from_le_bytes(bytes[..16].try_into().unwrap());
+    let kernel_cycles = u64::from_le_bytes(bytes[16..24].try_into().unwrap());
+    if output != expected {
+        bail!("proof journal mismatch: host={expected} guest={output}");
+    }
+    println!("guest_output={output} kernel_cycles={kernel_cycles}");
+    println!(
+        "segments={} total_cycles={} user_cycles={} paging_cycles={} reserved_cycles={}",
+        info.stats.segments,
+        info.stats.total_cycles,
+        info.stats.user_cycles,
+        info.stats.paging_cycles,
+        info.stats.reserved_cycles,
+    );
+    println!("real proof verified; journal matches host");
+    Ok(())
+}
+
 fn main() -> Result<()> {
+    let mut arguments = std::env::args_os().skip(1);
+    if let Some(argument) = arguments.next() {
+        if argument == "--prove-buy" {
+            if let Some(extra) = arguments.next() {
+                bail!("unexpected argument {extra:?}");
+            }
+            return prove_buy();
+        }
+        bail!("unknown argument {argument:?}");
+    }
     let mut ops: Vec<(u32, Vec<Vec<u128>>)> = Vec::new();
 
     let pow_cases: Vec<PowCase> = load("pow.json")?;

@@ -36,7 +36,9 @@ pub(crate) fn mul_shr_up(a: u128, b: u128, shift: u32) -> u128 {
     let (hi, lo) = mul_wide(a, b);
     assert!(hi >> shift == 0, "widened product exceeds u128 after shift");
     let floor = (hi << (128 - shift)) | (lo >> shift);
-    floor + (lo & ((1u128 << shift) - 1) != 0) as u128
+    floor
+        .checked_add(u128::from(lo & ((1u128 << shift) - 1) != 0))
+        .expect("widened product exceeds u128 after rounding")
 }
 
 #[cfg(test)]
