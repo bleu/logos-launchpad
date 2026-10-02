@@ -1,6 +1,6 @@
 # Weighted-math qualification evidence
 
-Recorded on 2026-10-02. This work started from remote main `46cdf253ae134ccf9052d3d35d55c113bc4e70c9`. It qualifies the standalone, unaudited kernel at public scale 52 and internal scale 62. It specifies future LBP behavior in the [LBP contract](../../../docs/product/lbp-contract.md); it does not implement that program.
+Recorded on 2026-10-02. This work started from remote main `46cdf253ae134ccf9052d3d35d55c113bc4e70c9` and was then rebased onto `a80eb64`, which added locked guest builds and path-remap settings. It qualifies the standalone, unaudited kernel at public scale 52 and internal scale 62. It specifies future LBP behavior in the [LBP contract](../../../docs/product/lbp-contract.md); it does not implement that program.
 
 ## Scope and numerical policy
 
@@ -25,6 +25,13 @@ The expanded grid covers all 25 combinations of 0, 6, 8, 18 and 24 token decimal
 
 The unchanged primitive fixtures contain 87 power cases, 23 logarithm/exponential cases, 12 arithmetic cases and six scale-grid records. Historical Balancer captures remain an independent grader check, not the kernel's price reference.
 
+The verified swap fixture SHA256 values are:
+
+```text
+out_given_in.json 593dcdf9fc427bd8f27ca403132b896a9c352815f4aff105ac3f4cc1a3c42161
+in_given_out.json 4c4e140addd7d143dfb09d0a36690dab1564c8350a6baefff48806ea17e303fa
+```
+
 ## TDD regressions and host checks
 
 Tests use the existing public Fixed/arithmetic and pricing functions, and the host command interface. No private helper or new test-only public interface was introduced.
@@ -34,9 +41,9 @@ Tests use the existing public Fixed/arithmetic and pricing functions, and the ho
 - Each large-weight, equal-weight-boundary and mixed-decimal coverage test first failed because its fixture zone had no cases. Independent fixtures then made it pass. These red runs identified missing coverage, not new pricing defects.
 - The host command tests first failed for unknown arguments, development mode and extra arguments. They now reject those inputs before starting a prover. They do not mock or generate a real proof.
 
-The weighted workspace passed 40 tests and two doctests in all four configurations: debug and release, each with overflow checks enabled and disabled through explicit `RUSTFLAGS` and `RUSTDOCFLAGS`. Formatting and all-target/all-feature Clippy with warnings denied passed. Its power diagnostic reported zero wrong-side cases, upward/downward maximum error two public units against a four-unit fixture bound. The reserve-normalized payout diagnostic was 1,084,410 reserve-ulps; that diagnostic is not the trade-relative policy. Property tests retain their bounded random domains and exact small-integer invariant referee. No new long fuzz campaign or compile-time scale sweep was run.
+The weighted workspace passed 40 tests and two doctests in all four configurations: debug and release, each with overflow checks enabled and disabled through explicit `RUSTFLAGS` and `RUSTDOCFLAGS`. Formatting and all-target/all-feature Clippy with warnings denied passed. The initial formatting check failed; mechanical rustfmt changes corrected the two test files, and the final check passed. Each test mode emitted 17 existing proptest source-persistence warning lines, with no failed or ignored test. Its power diagnostic reported zero wrong-side cases, upward/downward maximum error two public units against a four-unit fixture bound. The reserve-normalized payout diagnostic was 1,084,410 reserve-ulps; that diagnostic is not the trade-relative policy. Property tests retain their bounded random domains and exact small-integer invariant referee. No new fuzz campaign or compile-time scale sweep was run.
 
-The root workspace host tests reported 154 passed, zero failed and zero ignored. Root formatting, all-target/all-feature Clippy with warnings denied, and `verify/check-pins.sh` passed. Root source and lockfiles were unchanged. These host checks do not establish platform compatibility.
+After the rebase, root workspace host tests again reported 154 passed, zero failed and zero ignored. Root formatting, all-target/all-feature Clippy with warnings denied, and `verify/check-pins.sh` passed. All seven default regression groups in `verify/tests/check-builds.sh` passed. That script's first attempt rejected a `CARGO_TARGET_DIR` override; its rerun passed with that variable unset. The full build-check command was not run for this change. Root source and lockfiles were unchanged by this work. These host checks do not establish platform compatibility.
 
 The zkVM command tests passed in debug and release. Recursive guest Clippy failed because its wrapper could not locate guest `std`. Host-scoped Clippy passed with `RISC0_SKIP_BUILD=1`; a real guest rebuild followed with that skip unset. Guest lint is therefore not claimed as passing. The executor and proof results below used the rebuilt guest, not a skipped or development guest.
 
@@ -55,7 +62,7 @@ Different lockfile selections are recorded explicitly. The standalone nested wor
 
 ## Guest execution
 
-Executor-only parity passed for 988 math evaluations: 351 exact-input, 341 exact-output, 87 each of `pow`, `pow_up` and `pow_down`, 11 logarithm, 12 exponential and 12 complement calls. Six division and 16 baseline cases also passed. All outputs were bit-identical to the host. Dust and accuracy-rejected executable cases were included.
+Before main's build-setting update, executor-only parity passed for 988 math evaluations: 351 exact-input, 341 exact-output, 87 each of `pow`, `pow_up` and `pow_down`, 11 logarithm, 12 exponential and 12 complement calls. Six division and 16 baseline cases also passed. All outputs were bit-identical to the host. Dust and accuracy-rejected executable cases were included.
 
 | Operation | Net median kernel cycles | Single-call user cycles | Padded single-call total cycles |
 | --- | ---: | ---: | ---: |
@@ -63,16 +70,16 @@ Executor-only parity passed for 988 math evaluations: 351 exact-input, 341 exact
 | Exact input | 10939 | 15119 | 65536 |
 | Exact output | 13346 | 17526 | 65536 |
 
-Net medians subtract the 98-cycle baseline. Session totals include guest setup and paging. These are pure math measurements. They contain no LBP authority, account validation, clock, fees, custody or settlement. They are not full-operation cost or proof-time guarantees.
+Net medians subtract the 98-cycle baseline. Session totals include guest setup and paging. After the rebase, the final locked-build image also passed all 988 math evaluations, six division cases and 16 baseline cases; its reported cycle tables were unchanged. The three command tests passed again in debug and release, with formatting and host-only Clippy passing. Final-image proof verification was not performed. These are pure math measurements. They contain no LBP authority, account validation, clock, fees, custody or settlement. They are not full-operation cost or proof-time guarantees.
 
 ## One real local proof
 
 Exactly one real attempt ran, after setup and builds, with a 30-minute limit. It used local IPC, disabled development proving and verification, rejected Fake receipts, verified the guest image ID and compared the verified journal with the host output. No remote or paid prover was used.
 
-From the repository root, the recorded command was:
+From the repository root, the attempt ran the prebuilt release host under this command, with `CARGO_TARGET_DIR` set to its temporary build directory:
 
 ```sh
-RISC0_DEV_MODE=0 RISC0_SERVER_PATH=/Users/yvesfracari/.cargo/bin/r0vm gtimeout --signal=KILL 1800s /tmp/log-32-zkvm-target/release/zkvm-host --prove-buy
+RISC0_DEV_MODE=0 RISC0_SERVER_PATH="$HOME/.cargo/bin/r0vm" gtimeout --signal=KILL 1800s "$CARGO_TARGET_DIR/release/zkvm-host" --prove-buy
 ```
 
 | Result | Recorded value |
@@ -91,11 +98,11 @@ RISC0_DEV_MODE=0 RISC0_SERVER_PATH=/Users/yvesfracari/.cargo/bin/r0vm gtimeout -
 | Reserved cycles | 21292 |
 | Total cycles / segments | 65536 / 1 |
 
-The final guest rebuilt after comment-only source edits and retained exactly this image ID. Executor parity passed again. No second proof attempt was made. Build and setup time were outside the proof budget. This one-run result proves the selected guest math computation, not a working LBP, numerical truth for all inputs, full LEZ compatibility or production performance.
+After comment-only source edits, the guest rebuilt and retained the proved image ID; executor parity passed again. The later rebase onto main's locked-build, release-strip and path-remap settings changed the final embedded image ID to `3ea031f8c4b2c1c2a57290441b99a5c033348616988c1cbae1650f0db6962eae`. The recorded receipt does not verify that final image. No second proof attempt was made, as only one was planned. Build and setup time were outside the proof budget. The successful one-run proof is evidence for its recorded guest math computation, not the final integrated image, a working LBP, numerical truth for all inputs, full LEZ compatibility or production performance.
 
 ## Reproduce and remaining checks
 
-Use the [oracle guide](../crates/harness/oracle/README.md) for fixture generation and the [zkVM guide](../zkvm/README.md) for tool versions, parity and opt-in proof commands. Regular host tests do not prove anything. Rerunning the real-proof command is optional and separate from the default suite.
+Use the [oracle guide](../crates/harness/oracle/README.md) for fixture generation and the [zkVM guide](../zkvm/README.md) for tool versions, parity and opt-in proof commands. Regular host tests do not generate zkVM receipts. Rerunning the real-proof command is optional and separate from the default suite.
 
 Run from the repository root:
 
