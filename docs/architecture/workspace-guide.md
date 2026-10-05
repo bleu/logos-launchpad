@@ -1,24 +1,25 @@
 # Workspace guide
 
-This repository contains the imported curve PoC and weighted-math library. They are a starting point for production work, not a claim that the [accepted design](../adr/README.md) is implemented. `packages/launchpad/` contains initial product package entry points, but the LBP state machine, full SDK and shared-core business logic, namespace administration and sales workflows remain unimplemented. The current app behavior is only `Test backend` -> `Backend OK`; see the [package README](../../packages/launchpad/README.md) for package-specific build and evidence. See [repository layout](repository-layout.md) for each package's role.
+This repository contains the imported curve PoC and weighted-math library. They are a starting point for production work, not a claim that the [accepted design](../adr/README.md) is implemented. See [repository layout](repository-layout.md) for each package's role.
 
 ## Build contexts
 
-| Workspace | Contents | Test command from the repository root |
+| Workspace | Contents | Command from the repository root |
 | --- | --- | --- |
 | Root `Cargo.toml` | Curve math, pool, handlers, client and CLI | `cargo test --workspace --locked` |
 | `packages/weighted-math/Cargo.toml` | Weighted kernel, harness and numerical fixtures | `cargo test --manifest-path packages/weighted-math/Cargo.toml --workspace --locked` |
+| Launchpad core workspaces | Separate logic and native adapter workspaces under `packages/launchpad/core/` | See the [package README](../../packages/launchpad/README.md) for setup and package commands |
 | `methods/guest/` | Curve, factory and private-flow guest entry points | `RISC0_BUILD_LOCKED=1 cargo build --manifest-path methods/Cargo.toml --release --locked` |
 | `packages/weighted-math/zkvm/` | Weighted-math host/guest parity | `RISC0_BUILD_LOCKED=1 cargo run --manifest-path packages/weighted-math/zkvm/Cargo.toml --release --locked` |
 | `packages/weighted-math/fuzz/` | Weighted trade invariant fuzz target | `cd packages/weighted-math/fuzz && cargo +nightly fuzz run trade_invariant` |
 
-Root workspace commands do not include the nested math, guest or fuzz workspaces. Keep their lockfiles separate. The future LBP can depend on `packages/weighted-math/crates/weighted-math-core/` by Cargo path. No LBP package exists yet.
+Root workspace commands do not include the nested math, launchpad, guest or fuzz workspaces. Keep their lockfiles separate. The future LBP can depend on `packages/weighted-math/crates/weighted-math-core/` by Cargo path. No LBP package exists yet.
 
-Both host workspaces declare edition 2024 and a minimum Rust version of 1.94. The root and math zkVM `rust-toolchain.toml` files select Rust 1.94.0. Guest builds and parity also require the tool versions in [`verify/build-tools.env`](../../verify/build-tools.env). Check setup with `bash verify/check-builds.sh --preflight`. Fuzzing needs nightly Rust and `cargo-fuzz`.
+The root and weighted-math host workspaces declare edition 2024 and a minimum Rust version of 1.94. The root and math zkVM `rust-toolchain.toml` files select Rust 1.94.0. Guest builds and parity also require the tool versions in [`verify/build-tools.env`](../../verify/build-tools.env). Check setup with `bash verify/check-builds.sh --preflight`. Fuzzing needs nightly Rust and `cargo-fuzz`.
 
 ## Host checks
 
-Run from the repository root:
+Run these curve and weighted-math checks from the repository root:
 
 ```sh
 cargo test --workspace --locked
@@ -31,7 +32,7 @@ bash verify/check-pins.sh
 bash verify/check-idl.sh
 ```
 
-`check-pins.sh` checks the LEZ revision in the root and guest manifests against `scaffold.toml`. `check-idl.sh` requires `lgs`, checks generated on-chain IDLs against `idl-src/`, and runs the non-default `idl-tests` lane. Normal host tests do not require `lgs` or wallet state. These checks do not cover `packages/launchpad/`; see its [README](../../packages/launchpad/README.md) for its package checks.
+`check-pins.sh` checks the LEZ revision in the root and guest manifests against `scaffold.toml`. `check-idl.sh` requires `lgs`, checks generated on-chain IDLs against `idl-src/`, and runs the non-default `idl-tests` lane. Normal host tests do not require `lgs` or wallet state.
 
 ## Guest integration tests
 
