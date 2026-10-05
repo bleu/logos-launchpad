@@ -1,0 +1,19 @@
+[workspace]
+members = ["."]
+resolver = "2"
+
+[package]
+name = "event-probe-guest"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+event-probe = { path = "../.." }
+lee_core = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", rev = "c31a6bca60537ec08f595cf786f1ae6275ab7f43", default-features = false }
+borsh = { version = "1.8", features = ["derive"] }
+risc0-zkvm = { version = "=3.0.5", default-features = false, features = ["std"] }
+
+[profile.release]
+overflow-checks = true
+lto = true
