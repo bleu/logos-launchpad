@@ -43,6 +43,14 @@
           admin = mkApp ./apps/admin;
           configuredSales = mkApp ./apps/configured-sales;
         in {
+          default = pkgs.symlinkJoin {
+            name = "launchpad-packages";
+            paths = [
+              core.packages.${system}.lgx-portable
+              admin.packages.${system}.lgx-portable
+              configuredSales.packages.${system}.lgx-portable
+            ];
+          };
           core-lgx = core.packages.${system}.lgx-portable;
           admin-lgx = admin.packages.${system}.lgx-portable;
           configured-sales-lgx = configuredSales.packages.${system}.lgx-portable;
