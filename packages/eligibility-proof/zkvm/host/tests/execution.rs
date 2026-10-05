@@ -131,14 +131,32 @@ fn verifier_rejects_a_fake_receipt_with_an_otherwise_valid_journal() {
 }
 
 #[test]
-#[ignore = "opt-in real local proof; run with a wall-time limit"]
+#[ignore = "opt-in real local proof for 100,000 accounts; run with a wall-time limit"]
 fn real_public_receipt_binds_image_journal_and_purchase() {
-    let input = public_fixture();
+    let input = benchmark::prepare(TreeHash::Sha256).unwrap().public;
+    assert_eq!(input.policy.depth, 17);
     let evidence =
         eligibility_host::prove(&input, eligibility_host::ReceiptMode::Composite).unwrap();
+    let encoded = risc0_zkvm::serde::to_vec(&evidence.receipt).unwrap();
+    let restored: risc0_zkvm::Receipt = risc0_zkvm::serde::from_slice(&encoded).unwrap();
     let permit =
-        eligibility_host::verify_receipt(&evidence.receipt, &input.policy, &input.purchase)
-            .unwrap();
+        eligibility_host::verify_receipt(&restored, &input.policy, &input.purchase).unwrap();
+    let mut wrong_policy = input.policy.clone();
+    wrong_policy.root[0] ^= 1;
+    assert!(eligibility_host::verify_receipt(&restored, &wrong_policy, &input.purchase).is_err());
+    println!(
+        "account=public accounts=100000 depth=17 receipt=composite verified=true prove_seconds={:.6} verify_seconds={:.6} user_cycles={} total_cycles={} segments={} journal_bytes={} serialized_bytes={} artifact_files={} artifact_bytes={} artifacts_removed={}",
+        evidence.prove_seconds,
+        evidence.verify_seconds,
+        evidence.user_cycles,
+        evidence.total_cycles,
+        evidence.segments,
+        evidence.receipt.journal.bytes.len(),
+        encoded.len() * 4,
+        evidence.artifacts.files,
+        evidence.artifacts.bytes,
+        evidence.artifacts.removed,
+    );
     assert_eq!(
         permit.nullifier,
         digest("f8bcfd4fa8fefb511c2708862bffc01f0f2267af81c272ef630becd72770db13")
@@ -163,6 +181,33 @@ fn measurement_command_rejects_bad_arguments_before_proving() {
         .unwrap();
     assert!(!result.status.success());
     assert!(String::from_utf8(result.stderr).unwrap().contains("usage:"));
+}
+
+#[test]
+fn failed_measurement_command_keeps_private_inputs_out_of_both_outputs() {
+    let result = std::process::Command::new(env!("CARGO_BIN_EXE_eligibility-host"))
+        .env("RISC0_SERVER_PATH", "/nonexistent-eligibility-executor")
+        .args(["execute", "sha256"])
+        .output()
+        .unwrap();
+    assert!(!result.status.success());
+    assert_eq!(
+        String::from_utf8(result.stderr.clone()).unwrap().trim(),
+        "measurement failed; witness details are not logged"
+    );
+    for output in [result.stdout, result.stderr] {
+        let output = String::from_utf8(output).unwrap();
+        for forbidden in [
+            "390540739938b833cfee63a593d6d5971efb1ec48616e0d3ed7888e1bcdcf91c",
+            "ec2cbcd4488075c4b30678c30351327fdf99f3fe703edc2999b68f8fd12bdbc8",
+            "a5342820e7ab710a41f19c489acf7ac00f2e32fd69a4595428bfb67740ff438e",
+            "siblings",
+            "blinder",
+            "nullifier_key",
+        ] {
+            assert!(!output.contains(forbidden));
+        }
+    }
 }
 
 #[test]
@@ -192,6 +237,67 @@ fn measurement_command_reports_metrics_without_witness_data() {
     for forbidden in [
         "390540739938b833cfee63a593d6d5971efb1ec48616e0d3ed7888e1bcdcf91c",
         "ec2cbcd4488075c4b30678c30351327fdf99f3fe703edc2999b68f8fd12bdbc8",
+        "a5342820e7ab710a41f19c489acf7ac00f2e32fd69a4595428bfb67740ff438e",
+        "siblings",
+        "blinder",
+        "nullifier_key",
+    ] {
+        assert!(!output.contains(forbidden));
+    }
+}
+
+#[test]
+fn measurement_command_reports_protected_segment_storage() {
+    let result = std::process::Command::new(env!("CARGO_BIN_EXE_eligibility-host"))
+        .args(["execute", "sha256"])
+        .output()
+        .unwrap();
+    assert!(result.status.success());
+    let output = String::from_utf8(result.stdout).unwrap();
+    let artifacts: Vec<_> = output
+        .lines()
+        .filter(|line| line.contains("artifact_directory_mode="))
+        .collect();
+    assert_eq!(artifacts.len(), 2);
+    for line in artifacts {
+        assert!(line.contains("artifact_directory_mode=700"));
+        assert!(line.contains("artifacts_removed=true"));
+        let files = line
+            .split_whitespace()
+            .find_map(|field| field.strip_prefix("artifact_files="))
+            .unwrap()
+            .parse::<usize>()
+            .unwrap();
+        assert_eq!(files, 0);
+    }
+}
+
+#[test]
+#[ignore = "opt-in real local proof and protected-artifact measurement"]
+fn private_proof_command_reports_protected_artifacts_without_witness_data() {
+    let result = std::process::Command::new(env!("CARGO_BIN_EXE_eligibility-host"))
+        .args(["prove", "sha256", "private", "composite"])
+        .output()
+        .unwrap();
+    assert!(result.status.success());
+    assert!(result.stderr.is_empty());
+    let output = String::from_utf8(result.stdout).unwrap();
+    for expected in [
+        "verified=true",
+        "image_id=",
+        "artifact_directory_mode=700",
+        "artifact_files=1",
+        "artifacts_removed=true",
+    ] {
+        assert!(
+            output.contains(expected),
+            "missing proof metric: {expected}"
+        );
+    }
+    for forbidden in [
+        "390540739938b833cfee63a593d6d5971efb1ec48616e0d3ed7888e1bcdcf91c",
+        "ec2cbcd4488075c4b30678c30351327fdf99f3fe703edc2999b68f8fd12bdbc8",
+        "a5342820e7ab710a41f19c489acf7ac00f2e32fd69a4595428bfb67740ff438e",
         "siblings",
         "blinder",
         "nullifier_key",
@@ -217,6 +323,96 @@ fn measurement_command_refuses_development_proving() {
 }
 
 #[test]
+fn measurement_command_refuses_witness_debug_before_preparation() {
+    let result = std::process::Command::new(env!("CARGO_BIN_EXE_eligibility-host"))
+        .env("RISC0_WITGEN_DEBUG", "0")
+        .args(["execute", "sha256"])
+        .output()
+        .unwrap();
+    assert!(!result.status.success());
+    assert!(result.stdout.is_empty());
+    assert_eq!(
+        String::from_utf8(result.stderr).unwrap().trim(),
+        "unsafe local proving configuration"
+    );
+}
+
+#[test]
+fn measurement_command_refuses_witness_dump_before_preparation() {
+    let result = std::process::Command::new(env!("CARGO_BIN_EXE_eligibility-host"))
+        .env("RISC0_DUMP_PATH", "/nonexistent-eligibility-dump")
+        .args(["execute", "sha256"])
+        .output()
+        .unwrap();
+    assert!(!result.status.success());
+    assert!(result.stdout.is_empty());
+    assert_eq!(
+        String::from_utf8(result.stderr).unwrap().trim(),
+        "unsafe local proving configuration"
+    );
+}
+
+#[test]
+fn measurement_command_refuses_profiling_before_preparation() {
+    let result = std::process::Command::new(env!("CARGO_BIN_EXE_eligibility-host"))
+        .env("RISC0_PPROF_OUT", "/dev/null")
+        .args(["execute", "sha256"])
+        .output()
+        .unwrap();
+    assert!(!result.status.success());
+    assert!(result.stdout.is_empty());
+    assert_eq!(
+        String::from_utf8(result.stderr).unwrap().trim(),
+        "unsafe local proving configuration"
+    );
+}
+
+#[test]
+fn measurement_command_refuses_trace_logging_before_preparation() {
+    let result = std::process::Command::new(env!("CARGO_BIN_EXE_eligibility-host"))
+        .env("RUST_LOG", "trace")
+        .args(["execute", "sha256"])
+        .output()
+        .unwrap();
+    assert!(!result.status.success());
+    assert!(result.stdout.is_empty());
+    assert_eq!(
+        String::from_utf8(result.stderr).unwrap().trim(),
+        "unsafe local proving configuration"
+    );
+}
+
+#[test]
+fn public_verifier_reports_rejection_cost_within_the_lez_budget() {
+    let input = public_fixture();
+    let permit =
+        eligibility_core::check_eligibility(&input.policy, &input.purchase, &input.witness)
+            .unwrap();
+    let journal: Vec<u8> = risc0_zkvm::serde::to_vec(&Some(permit))
+        .unwrap()
+        .into_iter()
+        .flat_map(u32::to_le_bytes)
+        .collect();
+    let claim =
+        risc0_zkvm::ReceiptClaim::ok(eligibility_methods::ELIGIBILITY_GUEST_ID, journal.clone());
+    let verification = eligibility_host::PublicVerification {
+        mode: eligibility_host::PublicReceiptMode::Groth16,
+        receipt: risc0_zkvm::Receipt::new(
+            risc0_zkvm::InnerReceipt::Fake(risc0_zkvm::FakeReceipt::new(claim)),
+            journal,
+        ),
+        policy: input.policy,
+        purchase: input.purchase,
+    };
+    let result = eligibility_host::measure_public_verifier(&verification).unwrap();
+    assert!(!result.accepted);
+    assert!(result.user_cycles > 0);
+    assert!(result.user_cycles < 33_554_432);
+    assert!(result.input_bytes > 536);
+    assert!(result.execute_seconds > 0.0);
+}
+
+#[test]
 fn normal_public_guest_rejects_a_fake_eligibility_receipt() {
     let input = public_fixture();
     let permit =
@@ -234,6 +430,7 @@ fn normal_public_guest_rejects_a_fake_eligibility_receipt() {
         journal,
     );
     let verification = eligibility_host::PublicVerification {
+        mode: eligibility_host::PublicReceiptMode::Groth16,
         receipt,
         policy: input.policy,
         purchase: input.purchase,
@@ -266,6 +463,7 @@ fn real_private_receipt_binds_image_journal_and_purchase() {
     altered.journal.bytes[4] ^= 1;
     assert!(eligibility_host::verify_receipt(&altered, &input.policy, &input.purchase).is_err());
     let public_check = eligibility_host::PublicVerification {
+        mode: eligibility_host::PublicReceiptMode::Groth16,
         receipt: evidence.receipt,
         policy: input.policy,
         purchase: input.purchase,
@@ -275,7 +473,75 @@ fn real_private_receipt_binds_image_journal_and_purchase() {
 }
 
 #[test]
-fn normal_public_guest_rejects_malformed_groth16_with_expected_public_statement() {
+#[ignore = "known LEZ cycle-limit failure; opt-in real Succinct proof experiment"]
+fn normal_public_guest_verifies_a_real_private_succinct_receipt() {
+    let input = benchmark::prepare(TreeHash::Sha256).unwrap().private;
+    let evidence =
+        eligibility_host::prove(&input, eligibility_host::ReceiptMode::Succinct).unwrap();
+    let encoded = risc0_zkvm::serde::to_vec(&evidence.receipt).unwrap();
+    let bytes: Vec<u8> = encoded.iter().flat_map(|word| word.to_le_bytes()).collect();
+    for secret in [
+        digest("390540739938b833cfee63a593d6d5971efb1ec48616e0d3ed7888e1bcdcf91c"),
+        digest("ec2cbcd4488075c4b30678c30351327fdf99f3fe703edc2999b68f8fd12bdbc8"),
+        digest("a5342820e7ab710a41f19c489acf7ac00f2e32fd69a4595428bfb67740ff438e"),
+        input.witness.membership.blinder,
+    ]
+    .into_iter()
+    .chain(input.witness.membership.siblings.iter().copied())
+    {
+        let words: Vec<u8> = risc0_zkvm::serde::to_vec(&secret)
+            .unwrap()
+            .into_iter()
+            .flat_map(u32::to_le_bytes)
+            .collect();
+        for representation in [secret.to_vec(), words] {
+            assert!(
+                !bytes
+                    .windows(representation.len())
+                    .any(|window| window == representation)
+            );
+        }
+    }
+    let receipt: risc0_zkvm::Receipt = risc0_zkvm::serde::from_slice(&encoded).unwrap();
+    let verification = eligibility_host::PublicVerification {
+        mode: eligibility_host::PublicReceiptMode::Succinct,
+        receipt,
+        policy: input.policy,
+        purchase: input.purchase,
+    };
+    let permit = eligibility_host::verify_public_receipt(&verification).unwrap();
+    assert_eq!(
+        permit.nullifier,
+        digest("216a87db55c348245382affbee432e0f1a34fa44daa40bac67fa754ca82b76d9")
+    );
+    println!(
+        "account=private accounts=100000 depth=17 receipt=succinct host_verified=true receipt_literal_scan=passed prove_seconds={:.6} verify_seconds={:.6} user_cycles={} total_cycles={} segments={} journal_bytes={} serialized_bytes={} artifact_files={} artifact_bytes={} artifacts_removed={}",
+        evidence.prove_seconds,
+        evidence.verify_seconds,
+        evidence.user_cycles,
+        evidence.total_cycles,
+        evidence.segments,
+        evidence.receipt.journal.bytes.len(),
+        bytes.len(),
+        evidence.artifacts.files,
+        evidence.artifacts.bytes,
+        evidence.artifacts.removed,
+    );
+    println!(
+        "public_verifier_attempt=succinct session_limit_cycles=33554432 input_bytes={}",
+        risc0_zkvm::serde::to_vec(&verification).unwrap().len() * 4,
+    );
+    let execution = eligibility_host::measure_public_verifier(&verification).unwrap();
+    assert!(execution.accepted);
+    assert!(execution.user_cycles < 33_554_432);
+    println!(
+        "public_verifier=succinct accepted={} user_cycles={} input_bytes={} execute_seconds={:.6}",
+        execution.accepted, execution.user_cycles, execution.input_bytes, execution.execute_seconds,
+    );
+}
+
+#[test]
+fn normal_public_guest_stops_malformed_groth16_at_the_lez_budget() {
     use risc0_zkvm::sha::Digestible as _;
     let input = public_fixture();
     let permit =
@@ -288,9 +554,12 @@ fn normal_public_guest_rejects_malformed_groth16_with_expected_public_statement(
         .collect();
     let claim =
         risc0_zkvm::ReceiptClaim::ok(eligibility_methods::ELIGIBILITY_GUEST_ID, journal.clone());
-    for parameters in [
-        risc0_zkvm::Groth16ReceiptVerifierParameters::default().digest(),
-        risc0_zkvm::sha::Digest::ZERO,
+    for (parameters, exceeds_budget) in [
+        (
+            risc0_zkvm::Groth16ReceiptVerifierParameters::default().digest(),
+            true,
+        ),
+        (risc0_zkvm::sha::Digest::ZERO, false),
     ] {
         let inner = risc0_zkvm::Groth16Receipt::new(
             vec![0; 256],
@@ -300,12 +569,23 @@ fn normal_public_guest_rejects_malformed_groth16_with_expected_public_statement(
         let receipt =
             risc0_zkvm::Receipt::new(risc0_zkvm::InnerReceipt::Groth16(inner), journal.clone());
         let verification = eligibility_host::PublicVerification {
+            mode: eligibility_host::PublicReceiptMode::Groth16,
             receipt,
             policy: input.policy.clone(),
             purchase: input.purchase,
         };
         assert!(eligibility_host::verify_public_receipt(&verification).is_err());
-        assert!(!eligibility_host::execute_public_verifier(&verification).unwrap());
+        let execution = eligibility_host::execute_public_verifier(&verification);
+        if exceeds_budget {
+            assert!(
+                execution
+                    .unwrap_err()
+                    .to_string()
+                    .contains("Session limit exceeded: 33554432 >= 33554432")
+            );
+        } else {
+            assert!(!execution.unwrap());
+        }
     }
 }
 

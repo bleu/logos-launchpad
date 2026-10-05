@@ -10,7 +10,7 @@ publish = false
 
 [dependencies]
 eligibility-core = { path = "../../../crates/eligibility-core" }
-risc0-zkvm = { version = "=3.0.5", default-features = false, features = ["std"] }
+risc0-zkvm = { version = "=3.0.6", default-features = false, features = ["std"] }
 serde = { version = "1", features = ["derive"] }
 
 [profile.release]

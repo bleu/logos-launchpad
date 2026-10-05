@@ -5,6 +5,10 @@ use eyre::Result;
 use std::time::Instant;
 
 fn main() {
+    if eligibility_host::check_local_configuration().is_err() {
+        eprintln!("unsafe local proving configuration");
+        std::process::exit(1);
+    }
     let args: Vec<String> = std::env::args().skip(1).collect();
     if let [action, hash, account, mode] = args.as_slice()
         && action == "prove"
@@ -70,6 +74,18 @@ fn run_proof(hash: TreeHash, account: &str, mode: eligibility_host::ReceiptMode)
         evidence.segments,
         evidence.receipt.journal.bytes.len()
     );
+    let image: Vec<_> = eligibility_methods::ELIGIBILITY_GUEST_ID
+        .into_iter()
+        .flat_map(u32::to_le_bytes)
+        .collect();
+    println!("image_id={}", hex::encode(image));
+    println!(
+        "artifact_directory_mode={:o} artifact_files={} artifact_bytes={} artifacts_removed={}",
+        evidence.artifacts.directory_mode,
+        evidence.artifacts.files,
+        evidence.artifacts.bytes,
+        evidence.artifacts.removed
+    );
     Ok(())
 }
 
@@ -103,6 +119,13 @@ fn run(hash: TreeHash) -> Result<()> {
             execution.user_cycles,
             execution.padded_cycles,
             execution.segments
+        );
+        println!(
+            "artifact_directory_mode={:o} artifact_files={} artifact_bytes={} artifacts_removed={}",
+            execution.artifacts.directory_mode,
+            execution.artifacts.files,
+            execution.artifacts.bytes,
+            execution.artifacts.removed
         );
     }
     Ok(())

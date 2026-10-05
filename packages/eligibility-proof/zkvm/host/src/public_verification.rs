@@ -1,9 +1,19 @@
 use eligibility_core::{EligibilityPermit, Purchase, SalePolicy, check_public_binding};
-use risc0_zkvm::{Groth16ReceiptVerifierParameters, InnerReceipt, Receipt, VerifierContext};
+use risc0_zkvm::{
+    Groth16ReceiptVerifierParameters, InnerReceipt, Receipt, SuccinctReceiptVerifierParameters,
+    VerifierContext,
+};
 use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Copy, Serialize, Deserialize)]
+pub enum PublicReceiptMode {
+    Groth16,
+    Succinct,
+}
 
 #[derive(Serialize, Deserialize)]
 pub struct PublicVerification {
+    pub mode: PublicReceiptMode,
     pub receipt: Receipt,
     pub policy: SalePolicy,
     pub purchase: Purchase,
@@ -13,12 +23,16 @@ pub fn verify(
     input: &PublicVerification,
     trusted_image: [u32; 8],
 ) -> Result<EligibilityPermit, &'static str> {
-    if !matches!(input.receipt.inner, InnerReceipt::Groth16(_)) {
-        return Err("Groth16 receipt required");
-    }
-    let context = VerifierContext::empty()
-        .with_dev_mode(false)
-        .with_groth16_verifier_parameters(Groth16ReceiptVerifierParameters::default());
+    let context = match (input.mode, &input.receipt.inner) {
+        (PublicReceiptMode::Groth16, InnerReceipt::Groth16(_)) => VerifierContext::empty()
+            .with_dev_mode(false)
+            .with_groth16_verifier_parameters(Groth16ReceiptVerifierParameters::default()),
+        (PublicReceiptMode::Succinct, InnerReceipt::Succinct(_)) => VerifierContext::empty()
+            .with_dev_mode(false)
+            .with_suites(VerifierContext::default_hash_suites())
+            .with_succinct_verifier_parameters(SuccinctReceiptVerifierParameters::default()),
+        _ => return Err("unexpected receipt kind"),
+    };
     input
         .receipt
         .verify_with_context(&context, trusted_image)

@@ -9,10 +9,11 @@ publish = false
 [dependencies]
 eligibility-core = { path = "../../crates/eligibility-core" }
 eligibility-methods = { path = "../methods" }
-risc0-zkvm = { version = "=3.0.5", default-features = false, features = ["client"] }
+risc0-zkvm = { version = "=3.0.6", default-features = false, features = ["client"] }
 eyre = "0.6.12"
 serde = { version = "1", features = ["derive"] }
 hex = "0.4"
+tempfile = "=3.27.0"
 lee_core = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", rev = "a58fbce2ff48c58b7bb5001b1a27e64b9596ee3a" }
 
 [lints]
