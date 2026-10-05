@@ -8,7 +8,7 @@ let
         let
           drv = prev.stdenv.mkDerivation args;
           name = drv.pname or drv.name;
-        in if lib.hasPrefix "logos-" name || lib.hasPrefix "launchpad_status_core" name
+        in if lib.hasPrefix "logos-" name || lib.hasPrefix "launchpad_core" name
           then withLocale drv
           else drv;
     };

@@ -1,7 +1,0 @@
-/backend/logos-rust-sdk-src
-/backend/rust-lib/generated/
-/result-*
-/dist/
-/tools/
-/session-*/
-*.log

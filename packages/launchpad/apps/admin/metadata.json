@@ -1,13 +1,13 @@
 {
-  "name": "launchpad_status_app",
-  "display_name": "Launchpad status check",
+  "name": "launchpad_admin_app",
+  "display_name": "Launchpad admin",
   "version": "0.1.0",
   "type": "ui_qml",
-  "category": "example",
-  "description": "Basecamp package and Rust backend smoke check",
+  "category": "finance",
+  "description": "Namespace administration app; currently provides only a backend connectivity check",
   "view": "Main.qml",
   "icon": "src/icons/icon.png",
-  "dependencies": ["launchpad_status_core"],
+  "dependencies": ["launchpad_core"],
   "provides": [],
   "uses": [],
   "nix": {

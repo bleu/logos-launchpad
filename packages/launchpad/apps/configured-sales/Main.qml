@@ -17,7 +17,7 @@ Item {
         pending = true
         statusMessage = "Waiting for the backend..."
         try {
-            logos.callModuleAsync("launchpad_status_core", "get_status", [], function(payload) {
+            logos.callModuleAsync("launchpad_core", "get_status", [], function(payload) {
                 root.pending = false
                 try {
                     var reply = JSON.parse(payload)
@@ -50,8 +50,14 @@ Item {
 
         Label {
             Layout.fillWidth: true
-            text: "Launchpad packaging check"
+            text: "Launchpad sales"
             font.pixelSize: 22
+            wrapMode: Text.Wrap
+        }
+
+        Label {
+            Layout.fillWidth: true
+            text: "Sales workflows are not available yet. Only the backend check works."
             wrapMode: Text.Wrap
         }
 

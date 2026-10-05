@@ -1,17 +1,17 @@
 {
-  "name": "launchpad_status_core",
-  "display_name": "Launchpad status backend",
+  "name": "launchpad_core",
+  "display_name": "Launchpad core",
   "version": "0.1.0",
   "type": "core",
   "interface": "cdylib",
-  "category": "example",
-  "description": "Rust backend for the Basecamp packaging check",
-  "main": "launchpad_status_core_plugin",
+  "category": "finance",
+  "description": "Shared backend for the Launchpad apps; currently provides a connectivity check",
+  "main": "launchpad_core_plugin",
   "dependencies": [],
   "codegen": {
     "rust": {
       "crate": "rust-lib",
-      "trait": "LaunchpadStatusCoreModule"
+      "trait": "LaunchpadCoreModule"
     }
   },
   "nix": {

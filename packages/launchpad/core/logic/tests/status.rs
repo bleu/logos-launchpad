@@ -1,4 +1,4 @@
-use launchpad_status::get_status;
+use launchpad_core_logic::get_status;
 
 #[test]
 fn backend_reports_ok() {

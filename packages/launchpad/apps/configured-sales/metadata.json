@@ -1,0 +1,23 @@
+{
+  "name": "launchpad_configured_sales_app",
+  "display_name": "Launchpad sales",
+  "version": "0.1.0",
+  "type": "ui_qml",
+  "category": "finance",
+  "description": "Creator and participant app for configured namespaces; currently provides only a backend connectivity check",
+  "view": "Main.qml",
+  "icon": "src/icons/icon.png",
+  "dependencies": ["launchpad_core"],
+  "provides": [],
+  "uses": [],
+  "nix": {
+    "packages": { "build": [], "runtime": [] },
+    "external_libraries": [],
+    "cmake": {
+      "find_packages": [],
+      "extra_sources": [],
+      "extra_include_dirs": [],
+      "extra_link_libraries": []
+    }
+  }
+}

@@ -1,4 +1,4 @@
-pub trait LaunchpadStatusCoreModule: Send + 'static {
+pub trait LaunchpadCoreModule: Send + 'static {
     fn get_status(&mut self) -> String;
 
     fn on_context_ready(&mut self, _ctx: &RustModuleContext) {}
@@ -10,15 +10,15 @@ include!(concat!(
 ));
 
 #[derive(Default)]
-struct Status;
+struct Core;
 
-impl LaunchpadStatusCoreModule for Status {
+impl LaunchpadCoreModule for Core {
     fn get_status(&mut self) -> String {
-        launchpad_status::get_status()
+        launchpad_core_logic::get_status()
     }
 }
 
 #[no_mangle]
 pub extern "Rust" fn logos_module_install() {
-    install::<Status>();
+    install::<Core>();
 }

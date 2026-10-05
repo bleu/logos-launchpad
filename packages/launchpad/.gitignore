@@ -1,0 +1,5 @@
+/core/logos-rust-sdk-src
+/core/rust-lib/generated/
+/result-*
+/dist/
+*.log

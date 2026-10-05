@@ -15,8 +15,8 @@ exclude = [
     "methods",
     "methods/guest",
     "packages/weighted-math",
-    "packages/basecamp-status/backend/status",
-    "packages/basecamp-status/backend/rust-lib",
+    "packages/launchpad/core/logic",
+    "packages/launchpad/core/rust-lib",
 ]
 
 [workspace.package]
