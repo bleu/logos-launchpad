@@ -10,6 +10,32 @@ fn main() {
         std::process::exit(1);
     }
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args
+        .first()
+        .is_some_and(|action| action.starts_with("native-"))
+        && (std::env::var_os("RISC0_PROVER").is_some_and(|value| value != "ipc")
+            || std::env::var_os("RISC0_DEV_MODE").is_some_and(|value| value != "0"))
+    {
+        eprintln!("unsafe native proving configuration");
+        std::process::exit(1);
+    }
+    if args.as_slice() == ["native-child"] {
+        use std::os::unix::fs::PermissionsExt;
+        let protected = std::env::var_os("TMPDIR")
+            .and_then(|path| std::fs::symlink_metadata(path).ok())
+            .is_some_and(|metadata| {
+                metadata.is_dir() && metadata.permissions().mode() & 0o777 == 0o700
+            });
+        if !protected {
+            eprintln!("unsafe native worker storage");
+            std::process::exit(1);
+        }
+        if eligibility_host::native::run_worker().is_err() {
+            eprintln!("native worker failed; witness details are not logged");
+            std::process::exit(1);
+        }
+        return;
+    }
     if let [action, hash, account, mode] = args.as_slice()
         && action == "prove"
         && ["sha256", "poseidon"].contains(&hash.as_str())

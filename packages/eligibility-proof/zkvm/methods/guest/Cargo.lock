@@ -759,6 +759,7 @@ name = "eligibility-guest"
 version = "0.0.0"
 dependencies = [
  "eligibility-core",
+ "lee_core",
  "risc0-zkvm",
  "serde",
 ]

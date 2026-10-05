@@ -4,6 +4,7 @@ use eyre::Result;
 use risc0_zkvm::{Executor, ExecutorEnv, ExternalProver};
 use std::os::unix::fs::PermissionsExt;
 
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct ArtifactEvidence {
     pub directory_mode: u32,
     pub files: usize,
@@ -47,6 +48,8 @@ fn finish_segments(directory: tempfile::TempDir) -> Result<ArtifactEvidence> {
     })
 }
 
+pub mod native;
+pub mod native_execution;
 mod public_verification;
 #[path = "../../methods/guest/src/trusted_image.rs"]
 mod trusted_image;

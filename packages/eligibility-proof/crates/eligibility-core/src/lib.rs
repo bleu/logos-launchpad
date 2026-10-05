@@ -6,6 +6,8 @@ use light_poseidon::{Poseidon, PoseidonHasher as _};
 use risc0_zkvm::sha::{Impl, Sha256 as _};
 use serde::{Deserialize, Serialize};
 
+pub mod native;
+
 pub type Digest = [u8; 32];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
