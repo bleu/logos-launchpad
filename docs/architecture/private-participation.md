@@ -38,7 +38,7 @@ Public-state changes can invalidate a private proof even when the displayed pric
 
 ## LBP allowlist policy
 
-These rules apply only when an LBP allowlist is enabled. They are accepted product requirements. The proof construction, identity format, enrollment tooling and verifier remain unselected and unverified.
+These rules apply only when an LBP allowlist is enabled. They are accepted product requirements. One approved public or private LEZ account is the eligibility identity. The fixed list is prepared from known account IDs before buyer proof setup. The proof construction, membership-data format, enrollment tooling and verifier remain unselected; see the [research evidence](../research/lbp-eligibility-proof.md).
 
 - Each approved participant has one successful purchase per sale. A purchase below the limit still consumes that purchase allowance.
 - Public and private routes use the same allowance. Switching route, receiving another credential or changing the public trade account must not grant another purchase for the same approved identity.
@@ -50,7 +50,9 @@ These rules apply only when an LBP allowlist is enabled. They are accepted produ
 
 Enforce membership, account control, collateral limits and allowance consumption on-chain for both routes. SDK checks alone are insufficient. The selected proof approach must establish sale-scoped replay protection without creating a persistent cross-sale private identity. DistributionX remains a reference, not the selected method.
 
-Approved-account control does not prove that each account belongs to a different person. It does not prevent someone from sharing full account keys. Do not claim human uniqueness, identity checks or protection against that key sharing. Approved-identity deduplication and replacement rules need definition in the eligibility-proof investigation; multiple credentials for one approved identity must not create multiple allowances.
+Approved-account control does not prove that each account belongs to a different person. It does not prevent someone from sharing full account keys. Multiple approved accounts can have separate allowances. Duplicate or redelivered credentials for one account must share its allowance. The approved account cannot be replaced during the sale; lost access requires recovery of that account.
+
+The creator's service may be needed for initial membership-data delivery. After delivery, proof generation and buying must work without that service. Proving is local in the wallet or a protected tool. The private proof must hide the approved account from public observers; hiding it from the creator is not required. No buyer-tracking feature is added.
 
 ## Responsibilities
 
@@ -61,7 +63,7 @@ Approved-account control does not prove that each account belongs to a different
 | Wallet provider | Select accounts, approve private balance access, obtain transaction approval, sign, submit and provide outcome and private-state synchronization support. |
 | On-chain programs and platform | Enforce custody, mechanism and allowlist rules; validate the complete transaction; commit or reject its application changes. |
 
-User keys stay outside the shared core. Wallet state, private witnesses and proving data need a protected wallet/proving boundary. The final provider interface and the location of proving remain integration questions. Do not assume that LP-0021 supplies all required methods. See [ADR 0029](../adr/0029-wallet-integration.md).
+User keys stay outside the shared core. Wallet state, private witnesses and proving data need a protected wallet/proving boundary. Local proving is required; the final provider interface and exact location within that protected tooling remain integration questions. Do not assume that LP-0021 supplies all required methods. See [ADR 0029](../adr/0029-wallet-integration.md).
 
 ## Progress states
 

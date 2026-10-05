@@ -1,0 +1,28 @@
+[package]
+name = "eligibility-guest"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.94"
+license = "MIT"
+publish = false
+
+[workspace]
+
+[dependencies]
+eligibility-core = { path = "../../../crates/eligibility-core" }
+risc0-zkvm = { version = "=3.0.5", default-features = false, features = ["std"] }
+serde = { version = "1", features = ["derive"] }
+
+[profile.release]
+overflow-checks = true
+debug = 0
+strip = "symbols"
+
+[package.metadata.risc0]
+rustc-flags = ["-Zremap-cwd-prefix=/source"]
+
+[workspace.lints.clippy]
+all = { level = "deny", priority = -1 }
+
+[lints]
+workspace = true

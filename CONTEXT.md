@@ -32,8 +32,8 @@ This is the shared language for both launchpads. The repository contains an impo
 | Adapter custody | Adapter-owned PDA whose canonical ATAs receive hook payouts. |
 | Graduated | Final factory state after successful hook transfers and callback; not proof of DEX liquidity. |
 | Private route | SDK-managed deshield, public trade and return of received tokens, unused input and unused gas to participant-controlled private accounts within one transaction. Actual fees are excluded from returns. Public pool state and trade effects remain visible. |
-| LBP allowlist | Private list of approved participants with one common public collateral limit. Product policy is accepted; the proof method remains open. |
-| Purchase allowance | One successful LBP buy per approved participant per sale across public and private routes, when an allowlist is enabled. |
+| LBP allowlist | Fixed private list of approved LEZ accounts, public or private, with one common public collateral limit. Product policy and account setup are accepted; the proof method remains open. |
+| Purchase allowance | One successful LBP buy per approved account per sale across public and private routes, when an allowlist is enabled. Duplicate credentials do not add allowances. |
 | Admin app | Separately packaged Basecamp QML mini-app in `packages/launchpad/apps/admin/` for namespace administration only. |
 | Configured-sales app | Separately packaged Basecamp QML mini-app in `packages/launchpad/apps/configured-sales/` for creator and participant flows within a configured namespace. |
 | Shared core | Non-UI reusable SDK logic exposed through a core module in `packages/launchpad/core/`. |

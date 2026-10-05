@@ -38,7 +38,7 @@ Read [CONTEXT.md](../../CONTEXT.md) for terms and [repository layout](../archite
 | [0018](0018-private-participation.md) | SDK-managed single-transaction private route and recovery | Product and recovery rules accepted; platform, wallet and proof verification pending |
 | [0019](0019-product-packages.md) | Two QML mini-apps and a non-UI shared core | Accepted |
 | [0020](0020-settlement-and-graduation.md) | Manual settlement and optional adapter hook | Accepted and implemented; production readiness and live DEX integration pending |
-| [0021](0021-modes-and-open-limits.md) | Modes, deferred ceiling and allowlist rules | Accepted internally; ceiling deferral: To be reviewed by Logos team; proof design open |
+| [0021](0021-modes-and-open-limits.md) | Modes, deferred ceiling, allowlist rules and approved-account setup | Accepted internally; ceiling deferral: To be reviewed by Logos team; proof design open |
 | [0022](0022-verification-boundaries.md) | Explicit build, IDL and integration evidence | Accepted |
 | [0025](0025-sale-closing.md) | Mechanism-specific sale closing | Accepted internally; expiry-validation departure: To be reviewed by Logos team |
 | [0026](0026-lbp-clock-and-poke.md) | Fixed-total clock weights and timestamp-keyed buy/poke checkpoints | Accepted; clock integration unverified |

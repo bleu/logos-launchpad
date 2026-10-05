@@ -2,7 +2,7 @@
 
 Status: Product rules accepted internally; per-block limit deferral: `To be reviewed by Logos team`; allowlist proof design and verification open.
 
-Date: 2026-09-29; LBP mechanics review: 2026-10-02
+Date: 2026-09-29; LBP mechanics and approved-account setup review: 2026-10-02
 
 ## Context
 
@@ -34,9 +34,17 @@ When an allowlist is enabled:
 
 On-chain programs must enforce these rules on both routes. Proofs must be tied to the sale and actual purchase, with protection against reuse. Account control does not prove that each account belongs to a different person or prevent sharing full account keys.
 
+## Approved-account setup
+
+One approved LEZ account is the eligibility identity. Support public and private approved accounts. The approved account is separate from a fresh public trading account. Multiple approved accounts can have separate allowances, even when one person controls them.
+
+The creator prepares a fixed list from known account IDs before buyers set up proof access. The creator's service may deliver membership data initially. After delivery, a buyer must be able to prove and buy without that service. Redelivery or duplicate credentials must not reset the allowance. An account cannot be replaced during the sale; lost access requires recovery of the original account.
+
+Proving is local in a wallet or protected tool. The private route must hide the approved account from public observers; hiding it from the creator is not required. This does not add buyer tracking. Account keys stay outside the app, creator service and shared core.
+
 ## Open work
 
-The proof method, verifier, identity format, enrollment, duplicate-identity checks and account-change rules still need design and tests. DistributionX is a research reference, not an approved design. No proof inputs or cost claims are settled. See the [full participation specification](../architecture/private-participation.md).
+The proof construction, tree/hash, membership-data format, verifier and wallet integration remain open. DistributionX is a research reference, not an approved design. The [eligibility-proof investigation](../research/lbp-eligibility-proof.md) records the prototype, measurements and remaining gates. Its roughly 100,000-account target is a feasibility test, not a capacity guarantee. No product proof-time limit is set; measured local cost requires review. See the [full participation specification](../architecture/private-participation.md).
 
 Accepted product rules do not mean the proof or either route works. Deferred requirements still need Logos-team review.
 
