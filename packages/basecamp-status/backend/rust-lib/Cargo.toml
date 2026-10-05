@@ -1,0 +1,15 @@
+[package]
+name = "launchpad_status_core"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[workspace]
+
+[lib]
+crate-type = ["staticlib"]
+
+[dependencies]
+launchpad-status = { path = "../status" }
+logos-rust-sdk = { path = "../logos-rust-sdk-src" }
+serde_json = "1"

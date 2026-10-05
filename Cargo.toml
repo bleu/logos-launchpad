@@ -11,7 +11,13 @@ members = [
     "crates/private-flow-core",
     "cli",
 ]
-exclude = ["methods", "methods/guest", "packages/weighted-math"]
+exclude = [
+    "methods",
+    "methods/guest",
+    "packages/weighted-math",
+    "packages/basecamp-status/backend/status",
+    "packages/basecamp-status/backend/rust-lib",
+]
 
 [workspace.package]
 edition = "2024"

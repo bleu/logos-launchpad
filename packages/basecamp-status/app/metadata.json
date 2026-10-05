@@ -1,0 +1,23 @@
+{
+  "name": "launchpad_status_app",
+  "display_name": "Launchpad status check",
+  "version": "0.1.0",
+  "type": "ui_qml",
+  "category": "example",
+  "description": "Basecamp package and Rust backend smoke check",
+  "view": "Main.qml",
+  "icon": "src/icons/icon.png",
+  "dependencies": ["launchpad_status_core"],
+  "provides": [],
+  "uses": [],
+  "nix": {
+    "packages": { "build": [], "runtime": [] },
+    "external_libraries": [],
+    "cmake": {
+      "find_packages": [],
+      "extra_sources": [],
+      "extra_include_dirs": [],
+      "extra_link_libraries": []
+    }
+  }
+}

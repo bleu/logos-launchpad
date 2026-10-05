@@ -1,6 +1,6 @@
 # Workspace guide
 
-This repository contains the imported curve PoC and weighted-math library. They are a starting point for production work, not a claim that the [accepted design](../adr/README.md) is implemented. The LBP state machine, shared core module and QML apps remain planned. See [repository layout](repository-layout.md) for each package's role.
+This repository contains the imported curve PoC and weighted-math library. They are a starting point for production work, not a claim that the [accepted design](../adr/README.md) is implemented. The LBP state machine, production shared core module and product QML apps remain planned. The separate [Basecamp status probe](../../packages/basecamp-status/README.md) checks packaging only; see its README for build and manual runtime results. See [repository layout](repository-layout.md) for each package's role.
 
 ## Build contexts
 
@@ -31,7 +31,7 @@ bash verify/check-pins.sh
 bash verify/check-idl.sh
 ```
 
-`check-pins.sh` checks the LEZ revision in the root and guest manifests against `scaffold.toml`. `check-idl.sh` requires `lgs`, checks generated on-chain IDLs against `idl-src/`, and runs the non-default `idl-tests` lane. Normal host tests do not require `lgs` or wallet state. These checks do not cover the planned module `.lidl` interface.
+`check-pins.sh` checks the LEZ revision in the root and guest manifests against `scaffold.toml`. `check-idl.sh` requires `lgs`, checks generated on-chain IDLs against `idl-src/`, and runs the non-default `idl-tests` lane. Normal host tests do not require `lgs` or wallet state. These checks do not cover module `.lidl` generation or the [Basecamp status probe](../../packages/basecamp-status/README.md).
 
 ## Guest integration tests
 
