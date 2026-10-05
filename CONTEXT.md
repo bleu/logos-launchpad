@@ -34,10 +34,10 @@ This is the shared language for both launchpads. The repository contains an impo
 | Private route | SDK-managed deshield, public trade and return of received tokens, unused input and unused gas to participant-controlled private accounts within one transaction. Actual fees are excluded from returns. Public pool state and trade effects remain visible. |
 | LBP allowlist | Private list of approved participants with one common public collateral limit. Product policy is accepted; the proof method remains open. |
 | Purchase allowance | One successful LBP buy per approved participant per sale across public and private routes, when an allowlist is enabled. |
-| Admin app | Separately packaged Basecamp QML mini-app for namespace administration only. |
-| Configured-sales app | Separately packaged Basecamp QML mini-app for creator and participant flows within a configured namespace. |
-| Shared core | Planned non-UI reusable SDK logic exposed through a core module. Its planned C ABI and generated module-adapter integration need compatibility verification and are separate from on-chain program handlers. |
-| Module `.lidl` contract | Machine-readable module interface used by the planned generated module adapter. It is distinct from an on-chain program IDL. |
+| Admin app | Separately packaged Basecamp QML mini-app in `packages/launchpad/apps/admin/` for namespace administration only. |
+| Configured-sales app | Separately packaged Basecamp QML mini-app in `packages/launchpad/apps/configured-sales/` for creator and participant flows within a configured namespace. |
+| Shared core | Non-UI reusable SDK logic exposed through a core module in `packages/launchpad/core/`. |
+| Module `.lidl` contract | Machine-readable module interface used by the generated module adapter. It is distinct from an on-chain program IDL. |
 | On-chain program IDL | Machine-readable program interface used to generate client-facing transaction artifacts. |
 | ATA | Associated token account derived from an owner and token definition. |
 | PoC | Proof of concept. Useful source and test evidence, not a production-readiness claim. |

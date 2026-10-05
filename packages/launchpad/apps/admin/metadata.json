@@ -1,0 +1,23 @@
+{
+  "name": "launchpad_admin_app",
+  "display_name": "Launchpad admin",
+  "version": "0.1.0",
+  "type": "ui_qml",
+  "category": "finance",
+  "description": "Namespace administration app; currently provides only a backend connectivity check",
+  "view": "Main.qml",
+  "icon": "src/icons/icon.png",
+  "dependencies": ["launchpad_core"],
+  "provides": [],
+  "uses": [],
+  "nix": {
+    "packages": { "build": [], "runtime": [] },
+    "external_libraries": [],
+    "cmake": {
+      "find_packages": [],
+      "extra_sources": [],
+      "extra_include_dirs": [],
+      "extra_link_libraries": []
+    }
+  }
+}

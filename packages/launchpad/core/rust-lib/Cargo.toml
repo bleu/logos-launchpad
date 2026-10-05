@@ -1,0 +1,15 @@
+[package]
+name = "launchpad_core"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[workspace]
+
+[lib]
+crate-type = ["staticlib"]
+
+[dependencies]
+launchpad-core-logic = { path = "../logic" }
+logos-rust-sdk = { path = "../logos-rust-sdk-src" }
+serde_json = "1"

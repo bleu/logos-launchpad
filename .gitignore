@@ -3,3 +3,4 @@ target/
 *.bin
 .claude/skills/
 .cursor/rules/
+/.local/launchpad/
