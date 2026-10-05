@@ -38,13 +38,3 @@ lgpm --modules-dir "$SESSION/modules" --ui-plugins-dir "$SESSION/plugins" instal
 ```
 
 Open `Launchpad admin` or `Launchpad sales` and click `Test backend`. Expect `Backend OK`. Use the same launch command after closing Basecamp to keep the installed apps and data.
-
-## Developer check
-
-This check needs Rust/Cargo 1.94.0. It is not a setup step:
-
-```sh
-cargo test --manifest-path packages/launchpad/core/logic/Cargo.toml --locked
-```
-
-See the [workspace guide](../../docs/architecture/workspace-guide.md) for repository checks.
