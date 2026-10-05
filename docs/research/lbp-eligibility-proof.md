@@ -8,9 +8,9 @@ Updated: 2026-10-05. Scope: A bounded design investigation. The accepted account
 
 SHA-256 remains the cheaper application-proof candidate in this RISC0 implementation. Real local public Composite and private Composite/Succinct receipts now verify for a 100,000-account list. The public Composite trial took about 14 minutes and reached about 7.1 GiB of sampled process-group memory. That cost still needs user review. No account-check optimization was needed.
 
-Direct Succinct receipt verification in the normal public guest exceeded the pinned LEZ limit of 33,554,432 cycles. This path is not viable as tested. The existing local Docker setup lacks the required Groth16 image, and ARM-host emulation remains untested. No image or tool was installed. There is no positive public-guest or native transaction verification result, so this investigation cannot select a proof method.
+Direct Succinct receipt verification in the normal public guest exceeded the pinned LEZ limit of 33,554,432 cycles. This path is not viable as tested. The existing local Docker setup lacks the required Groth16 image, and ARM-host emulation remains untested. No image or tool was installed. A separate native private-program path now has genuine proofs for both approved account types accepted by the pinned local LEZ state validator. Its private-account proof took about 9 minutes; its public-account proof took about 24 minutes. Final cost, confidentiality and cached outer-circuit provenance review remain open.
 
-Native LEZ reuse remains preferable where it meets the requirements. Direct native public-account authorization publishes the approved account ID, so it cannot meet the accepted private-route requirement for that account type unchanged. Next, compare inline private-program checking with a locally supported Groth16 wrapper. Receipt confidentiality and final cost review remain open. Do not build production handlers to bypass these gates.
+The native path checks membership and account control inside a private program. LEZ's existing private transaction circuit authenticates its chained mock purchase. This avoids full receipt verification inside an ordinary public guest. The approved identity stays out of public pre-states and signers. This is a no-funds local fixture, not a deployed LBP or complete private route. Do not build production handlers to bypass the remaining gates.
 
 ## What the evidence proves
 
@@ -21,13 +21,14 @@ Native LEZ reuse remains preferable where it meets the requirements. Direct nati
 | Guest execution | Depth-17 trees with 100,000 approved accounts pass for both account types and hashes. | Execution is not a proof. |
 | Real local proof | SHA-256, depth 17: public Composite and private Composite/Succinct receipts verify against the embedded image and bound public purchase. Public receipt serialization/reverification passed. | Public Succinct not attempted after the private guest-verifier budget failure; cost and privacy still need review. |
 | Normal public guest checker | Builds with SDK 3.0.6. Rejects Fake, Composite and incorrect Groth16 parameters. Malformed Groth16 with trusted parameters and a genuine private Succinct receipt reach the 33,554,432-cycle guest cap. | No positive in-budget verification; no genuine Groth16 receipt or LEZ transaction. |
-| Wallet, chain and full route | Not implemented or tested here. | The [single-transaction private route](../architecture/private-participation.md) still needs its own evidence. |
+| Native private-program path | Both account types execute the depth-17 SHA fixture. Genuine outer proofs for both pass strict verification and the pinned local LEZ transaction validator. Marker, mock purchase and private scratch effects commit together. | Fresh state per account type. No funded transaction, sequencer block or full route. Cached outer-circuit provenance and confidentiality remain open. |
+| Wallet and full route | Not implemented or tested here. | The [single-transaction private route](../architecture/private-participation.md) still needs its own evidence. |
 
 The prototype is in [packages/eligibility-proof](../../packages/eligibility-proof/README.md). It is isolated from production handlers, IDLs, SDK key custody, root dependencies and existing locks. The source and reference-vector record is [SOURCES.md](../../packages/eligibility-proof/SOURCES.md).
 
 ## Native and reference checks
 
-The pinned LEZ revision is `a58fbce2ff48c58b7bb5001b1a27e64b9596ee3a`. Regular private account IDs stay stable while their account state changes. Native state nullifiers prevent state reuse; they do not supply a one-buy-per-sale allowance. Native commitment paths and account control can support further inline private-program research. No verified generic native application allowlist registry was found. A sale/account marker PDA remains an untested candidate.
+The pinned LEZ revision is `a58fbce2ff48c58b7bb5001b1a27e64b9596ee3a`. Regular private account IDs stay stable while their account state changes. Native state nullifiers prevent state reuse; they do not supply a one-buy-per-sale allowance. No verified generic native application allowlist registry was found. The native fixture uses a separate sale/account marker PDA. Its successful transitions for both approved account types and replay rejection now have local native-validator evidence.
 
 Public IDs use BIP340 x-only secp256k1 keys. The checker canonicalizes equivalent secret scalars before deriving the sale marker. Private IDs use the native nullifier public key and account identifier; two private accounts with one wallet key retain separate allowances. These are control checks for regular accounts, not proof of human uniqueness or arbitrary program-owned account authority.
 
@@ -37,7 +38,7 @@ Standalone application receipts cannot simply be added as LEZ program assumption
 
 The public verifier includes input decoding and journal work under the native `1024 * 1024 * 32 = 33,554,432`-cycle session cap. The genuine private SHA/depth-17 Succinct experiment failed with `Session limit exceeded: 33554432 >= 33554432`. Host verification and receipt-restoration checks had passed first. Complete verifier cycles and remaining sale-handler budget are unknown; the 256-million-cycle research checker bound was not used to hide this failure. The positive opt-in test stays as a visibly failing research gate.
 
-Local Groth16 generation is not established. Docker Desktop 4.22.1 with Engine 24.0.5 now answers on Linux arm64. A bounded local image inspection returned `No such image: risczero/risc0-groth16-prover:v2025-04-03.1`. SDK documentation requires x86 for Docker proving; source has no hard host-architecture rejection and invokes Docker without `--platform`. ARM-host amd64 emulation was not tested. The bounded no-install fallback stopped here. No image download, Groth16 proof or native no-op transaction test was attempted. Positive public-guest verification needs a genuine eligibility proof on a supported local setup before the native transaction test can provide useful positive evidence. Compilation and invalid-seal rejection do not establish that result.
+Local Groth16 generation is not established. Docker Desktop 4.22.1 with Engine 24.0.5 now answers on Linux arm64. A bounded local image inspection returned `No such image: risczero/risc0-groth16-prover:v2025-04-03.1`. SDK documentation requires x86 for Docker proving; source has no hard host-architecture rejection and invokes Docker without `--platform`. ARM-host amd64 emulation was not tested. The bounded no-install fallback stopped here. No image download or Groth16 proof was attempted. A direct public-guest integration needs a genuine eligibility proof on a supported local setup. Compilation and invalid-seal rejection do not establish that result. The native experiment below uses a different path and does not resolve the direct public-guest budget failure.
 
 ## Candidate and participant setup
 
@@ -61,9 +62,9 @@ Deliver the blinder and path over an authenticated, protected initial channel. K
 
 ## Local measurements
 
-These are single release-build observations on an Apple M3 Pro, 11 logical CPUs, 18 GiB RAM, macOS Darwin 23.4.0. Caches were warm; other system activity was not controlled. They are not capacity, wallet latency or minimum-memory guarantees. Creator ID collection and buyer account creation are excluded. The synthetic list has one public account and 99,999 regular private IDs from one published wallet key, with different identifiers. Exactly two paths are retrieved per tree; no batch of 100,000 proofs is generated.
+The standalone measurements below use release builds on an Apple M3 Pro, 11 logical CPUs, 18 GiB RAM, macOS Darwin 23.4.0. The native experiment's profile is stated separately. Caches were warm; other system activity was not controlled. They are not capacity, wallet latency or minimum-memory guarantees. Creator ID collection and buyer account creation are excluded. The synthetic list has one public account and 99,999 regular private IDs from one published wallet key, with different identifiers. Exactly two paths are retrieved per tree; no batch of 100,000 proofs is generated.
 
-Host Rust is 1.94.0. Guest Rust is 1.94.1. Installed RISC0 tools/executor remain 3.0.5; C++ is 2024.1.5. The initial measurements below used SDK/build library 3.0.5 and image `f6ed577574da9b5fc452b627c0d472862626f1921b7e896318d9aceefa2a3c36`. The continuation aligns only the isolated SDK/build library and three locks with root SDK 3.0.6. Its eligibility image is `961317040c198b1e0d7c49fef2aade777078a3d9f0a0211c805ef4afea824b75`. Local IPC `r0vm` is used; development mode is disabled for proving and verification. Global tool pins and root/weighted-math locks remain unchanged.
+Host Rust is 1.94.0. Guest Rust is 1.94.1. Installed RISC0 tools/executor remain 3.0.5; C++ is 2024.1.5. The initial measurements below used SDK/build library 3.0.5 and image `f6ed577574da9b5fc452b627c0d472862626f1921b7e896318d9aceefa2a3c36`. The continuation aligns only the isolated SDK/build library and three locks with root SDK 3.0.6. The earlier continuation measurements used eligibility image `961317040c198b1e0d7c49fef2aade777078a3d9f0a0211c805ef4afea824b75`. Adding the native instruction types changed the current standalone checker image to `04eea04e61e414e3b50741c3081cefba13203a2757f4fad682a632927960dc85`; the earlier proof costs were not remeasured for this image. Local IPC `r0vm` is used; development mode is disabled for proving and verification. Global tool pins and root/weighted-math locks remain unchanged.
 
 ### Initial SDK 3.0.5 observations
 
@@ -120,6 +121,41 @@ A bounded private Succinct rerun completed proving in 32.593172 s and host verif
 
 The malformed Groth16 test with trusted default parameters also reaches that cap, rather than returning `false`. SDK verifier-key pairing preparation occurs before parsing its invalid seal. Incorrect Groth16 parameters reject earlier and return `false`. Neither result supplies genuine Groth16 verification evidence. Full verification cost and an in-budget positive target path remain unmeasured.
 
+### Native private-program experiment
+
+The two application guests use eligibility image `4b2a931ef536ab00b8ce0a6a013444c6ef977550f62e9dc7341f6e82700e6451` and receiver image `6188e4cc274a8c4dd9861f2fe0f6cbefaee2e1b0b263d3f42d3b7dc5c883468c`. A fixed receiver-owned configuration account holds the trusted eligibility image and sale policy. The receiver rejects direct or foreign callers, changed policy and changed purchases. These negative caller and deliberately failed-purchase cases were guest execution tests, not proven native rollback tests.
+
+| SHA-256 / depth 17 / 100,000 accounts | Two-guest user cycles | Execution wall time | Program runs |
+| --- | --- | --- | --- |
+| Private approved account | 1,428,039 | 0.227441 s | 2 |
+| Public approved account | 8,844,533 | 0.283137 s | 2 |
+
+Each application guest ran under the exact 33,554,432-cycle execution cap. These cycles exclude the outer privacy circuit and recursive proving. Execution wrote no segment files. The proof experiment used debug host tests, release guests and the pinned installed local prover. Fixture preparation, compilation and transaction validation are excluded from the prover timer.
+
+These measurements use the same Apple M3 Pro, 11 logical CPUs, 18 GiB RAM and macOS Darwin 23.4.0. The host tests use the debug profile; the application guests use real release builds. The trusted cached outer privacy-circuit image is `ab86d257c5e0b8a8f6390b35500c37ca24fa57aa7a06bda330753cf36ad6a249`. Its relation to pinned source was not independently verified; see [SOURCES.md](../../packages/eligibility-proof/SOURCES.md#local-prover-provenance).
+
+| Native outer proof / approved account | Private | Public |
+| --- | --- | --- |
+| Local complete driver prove time | 529.035436 s | 1,435.908950 s |
+| Protected worker wall time, through verification and cleanup | 538.182004 s | 1,446.259825 s |
+| Test wall time | 548.80 s | 1,457.18 s |
+| Sampled peak child-process-group RSS | 6,677,807,104 bytes | 7,258,226,688 bytes |
+| Borsh outer proof / complete transaction | 234,815 / 237,230 bytes | 234,815 / 237,230 bytes |
+| Outer journal | 11,676 bytes | 11,676 bytes |
+| New commitments / native nullifiers | 1 / 1 | 1 / 1 |
+| Sampled peak artifact files / aggregate bytes | 3 / 695,059 | 9 / 781,049 |
+| Normal cleanup | Protected subtree removed | Protected subtree removed |
+
+One proof was attempted per account type, private first and public second. Neither reached the 1,800-second worker wall bound or 12 GiB sampled child-process-group RSS bound. The wall timer starts before child launch and excludes parent preflight, fixture preparation, compilation and transaction application. RSS samples sum the child process group without shared-memory deduplication and can miss short peaks. Parent crash cleanup and forced termination were not tested through the full native prover.
+
+Strict host verification requires a Succinct outer receipt for the pinned native privacy circuit, trusted parameters and hash suites, real proving and canonical output. The pinned `V03State` validator then accepts the native message and proof. One transition uses the sale/account marker, increments the mock purchase and initializes a separate zero-balance private scratch account. That private effect is required by the native transaction format; a marker-only private transaction is invalid. Each account-type trial starts from fresh fixture state. This does not test both purchases against one live state or a complete public/private route.
+
+Both genuine artifacts were reused without another proof. Corrupt seal, changed journal, changed purchase output, stale purchase nonce, changed trusted policy and replay all reject. Rejection preserves the observed marker, mock purchase and commitment root. The marker remains unused for the rejected pre-success cases. Successful-buy/replay checks use the actual native validator; deliberate chained purchase failure and credential redelivery remain execution-only evidence.
+
+The complete serialized transaction is below 1 MiB. Its size includes the native message and witness set, including the outer proof and encrypted scratch output. It excludes block headers, other transactions and sequencer overhead. No block was built or submitted, so this is not block-acceptance evidence. The 10-program-run and 100 KiB account-data limits were not increased.
+
+Both final outer proofs, journals, serialized transactions and captured proof-command outputs passed full raw, RISC0-word and hexadecimal scans for the selected control key, both approved fixture IDs, blinder and every sibling. This detects specified literal leaks only. Public configuration, the sale/account marker, mock purchase account and amounts remain visible. The scratch commitment, nullifier and encrypted output are also public. Native inner journals contain the instruction witness; they were not exported, logged or used as public transactions.
+
 ## Privacy and completion gates
 
 A successful receipt verifies the statement. The absence of witness fields from the journal does not by itself establish witness confidentiality. SDK 3.0.6 describes ordinary Composite, Succinct and Groth16 receipts as zero knowledge; that claim depends on the prover and its build/settings. Composite exposes segment claims and attached assumptions. Receipt kind is not a separate confidentiality flag. Journals and claim commitments remain public. SDK source has randomized padding for ordinary proving; debug circuit/witness settings can change it. The inspected local binary matches the official archive and its published recipe excludes debug features, but an independent effective external-server compiler/feature record was not verified. See [prover provenance](../../packages/eligibility-proof/SOURCES.md#local-prover-provenance).
@@ -132,9 +168,9 @@ Public sale state, cap, purchase effects, amounts, timing and a same-sale allowa
 
 Before final proof selection, complete these investigation checks or split them into explicit follow-up research:
 
-- Review the completed public Composite proof's local cost. A public Succinct trial was deferred after the private guest-verifier budget failure.
-- Validate confidentiality for the selected receipt mode, including public account secrets, disclosures, artifacts, logs and effective prover build/settings.
-- Establish a genuine in-budget target verifier, then run the pinned LEZ-format no-op transaction test. Direct Succinct failed the limit; the current Groth16 negative path also reaches it. Compare inline private-program checking and native marker-account reuse with a supported local Groth16 route, without changing LEZ in this investigation.
+- Review local proof costs. Native proofs pass for both approved account types: about 9 minutes for private and 24 minutes for public on this host. These are single observations, not product latency guarantees.
+- Validate confidentiality for the selected path, including both account types, disclosures, artifacts, logs and effective prover build/settings. Literal scans are insufficient. Independently check the cached outer-circuit artifact against the pinned source or trusted release evidence.
+- Review native target-format evidence and its limits. Full block overhead, sequencer acceptance and supervised failure cleanup remain untested. Keep the failed direct public-guest verifier visible; a supported local Groth16 route remains untested.
 - Review the results with the user. Record a selected approach only after its evidence and limits are accepted. Selection remains open if a follow-up is needed to select and test the approach.
 
 Production work is separate from this bounded investigation. Before production use:
@@ -145,7 +181,7 @@ Production work is separate from this bounded investigation. Before production u
 
 ## Verification record
 
-The 16 core tests and 16 regular host/guest tests pass with the continuation locks. Five host tests are opt-in. The large-list guest test, real public Composite receipt test, real private Composite receipt-binding test and protected private-proof command test passed explicitly. The remaining positive Succinct public-guest experiment was run and failed at the exact LEZ cap; it stays marked as a known failure. The regular Groth16 budget test requires the exact limit error.
+The current isolated package passes 16 core tests and 31 regular host tests: 16 standalone, 11 native execution and four native validator/startup tests. Nine host tests are opt-in. Current large-list standalone and native execution checks pass. One genuine native proof per approved account type passes, followed by artifact-reuse literal scans and corrupt-proof/output, stale-state and replay checks for both. Earlier standalone proof successes and the positive Succinct public-guest failure are recorded above with their historical images; those expensive proofs were not regenerated only to change the image label. The regular Groth16 budget test still requires the exact limit error.
 
 Core and host lint checks pass with warnings denied. Guest source lint passes on the host target; actual locked RISC0 guest builds, regular execution and the large-list test were run again after host lint's skipped build. All three format checks pass. Root `cargo test --workspace --locked --offline` passed with 196 tests. Root and all four weighted-math locks remain unchanged.
 
