@@ -11,7 +11,7 @@ members = [
     "crates/private-flow-core",
     "cli",
 ]
-exclude = ["methods", "methods/guest", "packages/weighted-math"]
+exclude = ["methods", "methods/guest", "packages/weighted-math", "third-party/spel-admin-authority", "third-party/spel-freeze-authority"]
 
 [workspace.package]
 edition = "2024"

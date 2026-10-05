@@ -261,6 +261,343 @@ fn run_case<I: Serialize>(
 }
 
 #[test]
+fn freeze_namespace_wire_matches_the_pinned_cli() {
+    let instruction = CurveInstruction::FreezeNamespace {
+        namespace: account(40),
+    };
+    assert_eq!(Program::serialize_instruction(&instruction).unwrap()[0], 14);
+    run_case(
+        "curve",
+        "freeze-namespace",
+        vec![("--namespace", account_hex(40))],
+        instruction,
+        account_inputs(&["config", "emergency_authority"], 1),
+        &["namespace"],
+    );
+}
+
+#[test]
+fn unfreeze_namespace_wire_matches_the_pinned_cli() {
+    let instruction = CurveInstruction::UnfreezeNamespace {
+        namespace: account(40),
+    };
+    assert_eq!(Program::serialize_instruction(&instruction).unwrap()[0], 15);
+    run_case(
+        "curve",
+        "unfreeze-namespace",
+        vec![("--namespace", account_hex(40))],
+        instruction,
+        account_inputs(&["config", "emergency_authority"], 1),
+        &["namespace"],
+    );
+}
+
+#[test]
+fn namespace_setting_wire_matches_the_pinned_cli() {
+    run_case(
+        "curve",
+        "initialize-namespace",
+        vec![
+            ("--namespace", account_hex(40)),
+            ("--admin", account_hex(41)),
+            ("--protocol-fee-bps", "30".into()),
+            ("--treasury", account_hex(42)),
+            ("--emergency-authority", account_hex(2)),
+            ("--emergency-candidate", "none".into()),
+        ],
+        CurveInstruction::InitializeNamespace {
+            namespace: account(40),
+            admin: account(41),
+            protocol_fee_bps: 30,
+            treasury: account(42),
+            emergency_authority: account(2),
+            emergency_candidate: curve_core::EmergencyCandidate::Signer,
+        },
+        account_inputs(
+            &["config", "namespace_authority", "accepted_authorities"],
+            1,
+        ),
+        &[
+            "namespace",
+            "admin",
+            "protocol_fee_bps",
+            "treasury",
+            "emergency_authority",
+            "emergency_candidate",
+        ],
+    );
+    run_case(
+        "curve",
+        "update-fee",
+        vec![
+            ("--namespace", account_hex(40)),
+            ("--protocol-fee-bps", "90".into()),
+        ],
+        CurveInstruction::UpdateFee {
+            namespace: account(40),
+            protocol_fee_bps: 90,
+        },
+        account_inputs(&["config", "authority"], 1),
+        &["namespace", "protocol_fee_bps"],
+    );
+    run_case(
+        "curve",
+        "update-treasury",
+        vec![
+            ("--namespace", account_hex(40)),
+            ("--treasury", account_hex(42)),
+        ],
+        CurveInstruction::UpdateTreasury {
+            namespace: account(40),
+            treasury: account(42),
+        },
+        account_inputs(&["config", "authority"], 1),
+        &["namespace", "treasury"],
+    );
+}
+
+#[test]
+fn initialization_alias_wire_matches_the_pinned_cli() {
+    let mut accounts = account_inputs(&["config", "namespace_authority"], 1);
+    accounts.push(AccountInput {
+        name: "accepted_authorities",
+        id: None,
+    });
+    run_case(
+        "curve",
+        "initialize-namespace",
+        vec![
+            ("--namespace", account_hex(40)),
+            ("--admin", account_hex(2)),
+            ("--protocol-fee-bps", "30".into()),
+            ("--treasury", account_hex(42)),
+            ("--emergency-authority", account_hex(2)),
+            ("--emergency-candidate", "none".into()),
+        ],
+        CurveInstruction::InitializeNamespace {
+            namespace: account(40),
+            admin: account(2),
+            protocol_fee_bps: 30,
+            treasury: account(42),
+            emergency_authority: account(2),
+            emergency_candidate: curve_core::EmergencyCandidate::Signer,
+        },
+        accounts,
+        &[
+            "namespace",
+            "admin",
+            "protocol_fee_bps",
+            "treasury",
+            "emergency_authority",
+            "emergency_candidate",
+        ],
+    );
+}
+
+#[test]
+fn initialization_emergency_candidates_and_role_aliases_match_the_pinned_cli() {
+    let program = [0, 1, 255, 256, 65_535, 65_536, 0x1234abcd, u32::MAX];
+    let seed = std::array::from_fn(|index| if index == 31 { 255 } else { (index * 7) as u8 });
+    let pda_raw = program
+        .iter()
+        .copied()
+        .chain(seed.iter().copied().map(u32::from))
+        .map(|word| word.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+    for (candidate, raw) in [
+        (curve_core::EmergencyCandidate::Signer, "none".to_owned()),
+        (
+            curve_core::EmergencyCandidate::Pda {
+                program_id: program,
+                seed,
+            },
+            pda_raw,
+        ),
+    ] {
+        for admin in [account(2), account(3)] {
+            let instruction = CurveInstruction::InitializeNamespace {
+                namespace: account(40),
+                admin,
+                protocol_fee_bps: 30,
+                treasury: account(42),
+                emergency_authority: account(3),
+                emergency_candidate: candidate.clone(),
+            };
+            assert_eq!(Program::serialize_instruction(&instruction).unwrap()[0], 10);
+            run_case(
+                "curve",
+                "initialize-namespace",
+                vec![
+                    ("--namespace", account_hex(40)),
+                    ("--admin", account_id_hex(admin)),
+                    ("--protocol-fee-bps", "30".into()),
+                    ("--treasury", account_hex(42)),
+                    ("--emergency-authority", account_hex(3)),
+                    ("--emergency-candidate", raw.clone()),
+                ],
+                instruction,
+                account_inputs(
+                    &["config", "namespace_authority", "accepted_authorities"],
+                    1,
+                ),
+                &[
+                    "namespace",
+                    "admin",
+                    "protocol_fee_bps",
+                    "treasury",
+                    "emergency_authority",
+                    "emergency_candidate",
+                ],
+            );
+        }
+    }
+    let idl: Value =
+        serde_json::from_slice(&std::fs::read(root().join("idl/curve.json")).unwrap()).unwrap();
+    let accounts = &idl["instructions"][10]["accounts"];
+    assert_eq!(accounts[1]["signer"], true);
+    assert_eq!(accounts[2]["signer"], false);
+}
+
+#[test]
+fn initialization_emergency_pda_wire_rejects_seed_words_above_one_byte() {
+    let mut candidate = [0u32; 40];
+    candidate[39] = 256;
+    let output = dry_run_command(
+        "curve",
+        "initialize-namespace",
+        vec![
+            ("--namespace", account_hex(40)),
+            ("--admin", account_hex(2)),
+            ("--protocol-fee-bps", "30".into()),
+            ("--treasury", account_hex(42)),
+            ("--emergency-authority", account_hex(3)),
+            (
+                "--emergency-candidate",
+                candidate
+                    .iter()
+                    .map(u32::to_string)
+                    .collect::<Vec<_>>()
+                    .join(","),
+            ),
+        ],
+        &account_inputs(
+            &["config", "namespace_authority", "accepted_authorities"],
+            1,
+        ),
+    )
+    .output()
+    .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let dry_run: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let bytes = hex::decode(dry_run["instruction_data"].as_str().unwrap()).unwrap();
+    let words: Vec<u32> = bytes
+        .chunks_exact(4)
+        .map(|chunk| u32::from_le_bytes(chunk.try_into().unwrap()))
+        .collect();
+    assert!(risc0_zkvm::serde::from_slice::<CurveInstruction, u32>(&words).is_err());
+}
+
+fn transfer_wire(candidate: curve_core::AdminCandidate, raw: String, alias: bool) {
+    let successor = if alias { account(2) } else { account(3) };
+    let mut accounts = account_inputs(&["config", "authority"], 1);
+    accounts.push(AccountInput {
+        name: "successor",
+        id: (!alias).then_some(successor),
+    });
+    run_case(
+        "curve",
+        "transfer-admin",
+        vec![
+            ("--namespace", account_hex(40)),
+            ("--new-admin", account_id_hex(successor)),
+            ("--candidate", raw),
+        ],
+        CurveInstruction::TransferAdmin {
+            namespace: account(40),
+            new_admin: successor,
+            candidate,
+        },
+        accounts,
+        &["namespace", "new_admin", "candidate"],
+    );
+}
+
+#[test]
+fn transfer_signer_wire_matches_the_pinned_cli() {
+    transfer_wire(curve_core::AdminCandidate::Signer, "none".into(), false);
+}
+
+#[test]
+fn transfer_alias_wire_matches_the_pinned_cli() {
+    transfer_wire(curve_core::AdminCandidate::Signer, "none".into(), true);
+}
+
+#[test]
+fn transfer_pda_wire_matches_the_pinned_cli() {
+    let program = [0, 1, 255, 256, 65_535, 65_536, 0x1234abcd, u32::MAX];
+    let seed = std::array::from_fn(|index| if index == 31 { 255 } else { (index * 7) as u8 });
+    let raw = program
+        .iter()
+        .copied()
+        .chain(seed.iter().copied().map(u32::from))
+        .map(|word| word.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+    for alias in [false, true] {
+        transfer_wire(
+            curve_core::AdminCandidate::Pda {
+                program_id: program,
+                seed,
+            },
+            raw.clone(),
+            alias,
+        );
+    }
+}
+
+#[test]
+fn transfer_pda_wire_rejects_seed_words_above_one_byte() {
+    let mut words = vec![0u32; 40];
+    words[8] = 256;
+    let output = dry_run_command(
+        "curve",
+        "transfer-admin",
+        vec![
+            ("--namespace", account_hex(40)),
+            ("--new-admin", account_hex(3)),
+            (
+                "--candidate",
+                words
+                    .iter()
+                    .map(u32::to_string)
+                    .collect::<Vec<_>>()
+                    .join(","),
+            ),
+        ],
+        &account_inputs(&["config", "authority", "successor"], 1),
+    )
+    .output()
+    .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let dry_run: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let bytes = hex::decode(dry_run["instruction_data"].as_str().unwrap()).unwrap();
+    let words: Vec<u32> = bytes
+        .chunks_exact(4)
+        .map(|chunk| u32::from_le_bytes(chunk.try_into().unwrap()))
+        .collect();
+    assert!(risc0_zkvm::serde::from_slice::<CurveInstruction, u32>(&words).is_err());
+}
+
+#[test]
 fn curve_public_instruction_wire_matches_the_pinned_cli() {
     let curve_program_id = program_id(10);
     run_case(

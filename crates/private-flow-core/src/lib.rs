@@ -124,9 +124,48 @@ mod authority_tests {
                 ..Account::default()
             },
         };
+        let token0 = AccountId::new([40; 32]);
+        let token1 = AccountId::new([41; 32]);
+        let state = curve_core::PoolAccount {
+            namespace,
+            funded: true,
+            allowed_input_token: None,
+            owner: namespace,
+            owner_program: None,
+            token0_definition_id: token0,
+            token1_definition_id: token1,
+            pool: pool::Pool::create(pool::PoolCreateParams {
+                token0_amount: 100,
+                token1_amount: 0,
+                virtual_reserve0: 1000,
+                virtual_reserve1: 100,
+                close_timestamp: None,
+                close_on_depletion: None,
+            })
+            .unwrap(),
+        };
         let config = AccountWithMetadata {
-            account_id: curve_core::compute_config_pda(namespace, [7; 8]),
-            account: Account::default(),
+            account_id: curve_core::compute_pool_pda(namespace, [7; 8], token0, token1, namespace),
+            account: Account {
+                program_owner: [7; 8],
+                data: (&state).into(),
+                ..Account::default()
+            },
+            is_authorized: false,
+        };
+        let clock = AccountWithMetadata {
+            account_id: clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID,
+            account: Account {
+                program_owner: [88; 8],
+                data: clock_core::ClockAccountData {
+                    block_id: 1,
+                    timestamp: 1,
+                }
+                .to_bytes()
+                .try_into()
+                .unwrap(),
+                ..Account::default()
+            },
             is_authorized: false,
         };
         let transient = AccountWithMetadata {
@@ -134,17 +173,12 @@ mod authority_tests {
             account: Account::default(),
             is_authorized: true,
         };
-        let pre = vec![source, config, transient];
+        let pre = vec![source, config, transient, clock];
         let instruction = PrivateAuthorityInstruction {
             program_id: [7; 8],
             authority_index: 1,
-            instruction_data: risc0_zkvm::serde::to_vec(&curve_core::Instruction::UpdateConfig {
-                namespace,
-                admin: namespace,
-                protocol_fee_bps: 25,
-                treasury: AccountId::new([34; 32]),
-            })
-            .unwrap(),
+            instruction_data: risc0_zkvm::serde::to_vec(&curve_core::Instruction::ClosePool)
+                .unwrap(),
         };
         let (post, calls) = authority_action(pre.clone(), instruction);
         lee_core::program::validate_execution(&pre, &post, [8; 8]).unwrap();
@@ -155,10 +189,11 @@ mod authority_tests {
             curve_core::process_instruction(calls[1].pre_states.clone(), action, [7; 8]);
         lee_core::program::validate_execution(&calls[1].pre_states, &action_post, [7; 8]).unwrap();
         assert_eq!(
-            curve_core::Config::try_from(&action_post[0].account().data)
+            curve_core::PoolAccount::try_from(&action_post[0].account().data)
                 .unwrap()
-                .protocol_fee_bps,
-            25
+                .pool
+                .effective_lifecycle(1),
+            pool::PoolLifecycle::Closed
         );
         assert_eq!(calls[2].pre_states[1].account_id, pre[0].account_id);
         assert_eq!(

@@ -242,11 +242,7 @@ fn fee_accrual_collection_and_withdrawal_preserve_vault_liabilities() {
                 config_id,
                 Account {
                     program_owner: chain.curve.id(),
-                    data: Data::from(&curve_core::Config {
-                        admin: namespace,
-                        treasury,
-                        protocol_fee_bps: if sell { 500 } else { 1000 },
-                    }),
+                    data: Data::from(&curve_core::Config::new(id(99), 0, treasury, id(99))),
                     ..Account::default()
                 },
             );
@@ -268,6 +264,40 @@ fn fee_accrual_collection_and_withdrawal_preserve_vault_liabilities() {
                     .accounts
                     .insert(ata(owner, definition), holding(definition, balance));
             }
+            for admin in [id(99), id(100)] {
+                chain.accounts.insert(
+                    admin,
+                    Account {
+                        program_owner: [77; 8],
+                        ..Account::default()
+                    },
+                );
+            }
+            let custody_before = chain.accounts[&pool_id].clone();
+            chain.run_public(launchpad_client::build_transfer_admin_invocation(
+                namespace,
+                chain.curve.id(),
+                id(99),
+                id(100),
+                curve_core::AdminCandidate::Signer,
+            ));
+            chain.run_public(launchpad_client::build_update_fee_invocation(
+                namespace,
+                chain.curve.id(),
+                id(100),
+                if sell { 500 } else { 1000 },
+            ));
+            assert_eq!(chain.accounts[&pool_id], custody_before);
+            assert!(
+                chain
+                    .try_public(launchpad_client::build_update_fee_invocation(
+                        namespace,
+                        chain.curve.id(),
+                        id(99),
+                        0
+                    ))
+                    .is_err()
+            );
             let (input, output) = if sell {
                 (token0, token1)
             } else {
@@ -317,10 +347,55 @@ fn fee_accrual_collection_and_withdrawal_preserve_vault_liabilities() {
             assert_eq!(after_swap.pool.fees_accrued, fee);
             // Rotate the namespace treasury after accrual, then collect without a signer.
             let next_treasury = if sell { id(7) } else { id(20) };
-            let mut config =
-                curve_core::Config::try_from(&chain.accounts[&config_id].data).unwrap();
-            config.treasury = next_treasury;
-            chain.accounts.get_mut(&config_id).unwrap().data = Data::from(&config);
+            let custody_before = [pool_id, ata(pool_id, token0), ata(pool_id, token1)]
+                .map(|id| (id, chain.accounts[&id].clone()));
+            chain.run_public(launchpad_client::build_update_treasury_invocation(
+                namespace,
+                chain.curve.id(),
+                id(100),
+                next_treasury,
+            ));
+            chain.run_public(launchpad_client::build_renounce_admin_invocation(
+                namespace,
+                chain.curve.id(),
+                id(100),
+            ));
+            for (id, before) in custody_before {
+                assert_eq!(chain.accounts[&id], before);
+            }
+            assert_eq!(
+                curve_core::Config::try_from(&chain.accounts[&config_id].data)
+                    .unwrap()
+                    .current_admin(),
+                None
+            );
+            chain.run(launchpad_client::PublicInvocation {
+                program_id: chain.curve.id(),
+                account_ids: vec![
+                    pool_id,
+                    config_id,
+                    trader,
+                    ata(trader, token1),
+                    ata(pool_id, token1),
+                    ata(pool_id, token0),
+                    ata(trader, token0),
+                    clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID,
+                ],
+                signer_accounts: vec![trader],
+                instruction: curve_core::Instruction::SwapExactOutput {
+                    token_in: token1,
+                    amount_out: 1,
+                    max_amount_in: 2,
+                },
+            });
+            let fee = fee + 1;
+            assert_eq!(
+                curve_core::PoolAccount::try_from(&chain.accounts[&pool_id].data)
+                    .unwrap()
+                    .pool
+                    .fees_accrued,
+                fee
+            );
             chain
                 .accounts
                 .insert(ata(next_treasury, token1), holding(token1, 0));
@@ -434,11 +509,7 @@ fn public_creation_saves_immutable_hook_configuration() {
         curve_core::compute_config_pda(namespace, chain.curve.id()),
         Account {
             program_owner: chain.curve.id(),
-            data: Data::from(&curve_core::Config {
-                admin: namespace,
-                treasury: id(6),
-                protocol_fee_bps: 1000,
-            }),
+            data: Data::from(&curve_core::Config::new(namespace, 1000, id(6), namespace)),
             ..Account::default()
         },
     );
@@ -786,6 +857,462 @@ fn hook_preserves_recorded_payouts_when_current_treasury_aliases_settlement_cust
     }
 }
 
+#[test]
+fn frozen_namespace_rejects_supported_signed_swaps_and_unfreeze_restores_trading() {
+    let mut chain = Chain::new();
+    chain.public_mode = true;
+    let sale = emergency_sale(&mut chain, id(1), false, None);
+    chain.run(launchpad_client::build_buy_invocation(
+        sale,
+        id(20),
+        launchpad_client::ExactOutputTradeTerms {
+            amount_out: 200,
+            max_amount_in: 100,
+        },
+    ));
+    chain.run(launchpad_client::build_freeze_namespace_invocation(
+        sale.namespace,
+        chain.curve.id(),
+        id(200),
+    ));
+    let calls = [
+        launchpad_client::build_buy_invocation(
+            sale,
+            id(20),
+            launchpad_client::ExactOutputTradeTerms {
+                amount_out: 20,
+                max_amount_in: 100,
+            },
+        ),
+        launchpad_client::build_buy_with_collateral_invocation(
+            sale,
+            id(20),
+            launchpad_client::ExactInputTradeTerms {
+                amount_in: 10,
+                min_amount_out: 1,
+            },
+        ),
+        launchpad_client::build_sell_invocation(
+            sale,
+            id(20),
+            launchpad_client::ExactInputTradeTerms {
+                amount_in: 100,
+                min_amount_out: 1,
+            },
+        ),
+    ];
+    for call in &calls {
+        let error = chain.try_public(call.clone()).unwrap_err();
+        assert!(
+            matches!(error, lee::error::LeeError::ProgramExecutionFailed(ref message) if message == "Guest panicked: Namespace swaps are frozen"),
+            "{error:?}"
+        );
+    }
+    chain.run(launchpad_client::build_unfreeze_namespace_invocation(
+        sale.namespace,
+        chain.curve.id(),
+        id(200),
+    ));
+    for call in calls {
+        chain.run(call);
+    }
+}
+
+#[test]
+fn factory_creation_while_frozen_preserves_namespace_swap_isolation() {
+    let mut chain = Chain::new();
+    chain.public_mode = true;
+    let frozen = emergency_sale(&mut chain, id(1), true, None);
+    let active = emergency_sale(&mut chain, id(7), false, None);
+    let terms = launchpad_client::ExactOutputTradeTerms {
+        amount_out: 200,
+        max_amount_in: 100,
+    };
+    let error = chain
+        .try_public(launchpad_client::build_buy_invocation(
+            frozen,
+            id(20),
+            terms,
+        ))
+        .unwrap_err();
+    assert!(
+        matches!(error, lee::error::LeeError::ProgramExecutionFailed(ref message) if message == "Guest panicked: Namespace swaps are frozen"),
+        "{error:?}"
+    );
+    chain.run(launchpad_client::build_buy_invocation(
+        active,
+        id(20),
+        terms,
+    ));
+    let active_token = factory_core::compute_definition_pda(
+        active.namespace,
+        active.factory_program_id,
+        active.launch_salt,
+    );
+    assert_eq!(chain.balance(ata(id(20), active_token)), 200);
+    let frozen_token = factory_core::compute_definition_pda(
+        frozen.namespace,
+        frozen.factory_program_id,
+        frozen.launch_salt,
+    );
+    assert_eq!(chain.balance(ata(id(20), frozen_token)), 0);
+}
+
+#[test]
+fn unfreeze_does_not_reopen_expired_or_exhausted_factory_sales() {
+    for exhausted in [false, true] {
+        let mut chain = Chain::new();
+        chain.public_mode = true;
+        let sale = emergency_sale(
+            &mut chain,
+            id(1),
+            false,
+            if exhausted { None } else { Some(2) },
+        );
+        if exhausted {
+            chain.run(launchpad_client::build_buy_invocation(
+                sale,
+                id(20),
+                launchpad_client::ExactOutputTradeTerms {
+                    amount_out: 800,
+                    max_amount_in: 100,
+                },
+            ));
+        }
+        chain.run(launchpad_client::build_freeze_namespace_invocation(
+            sale.namespace,
+            chain.curve.id(),
+            id(200),
+        ));
+        chain
+            .accounts
+            .get_mut(&clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID)
+            .unwrap()
+            .data = Data::try_from(
+            clock_core::ClockAccountData {
+                block_id: 2,
+                timestamp: 2,
+            }
+            .to_bytes(),
+        )
+        .unwrap();
+        chain.run(launchpad_client::build_unfreeze_namespace_invocation(
+            sale.namespace,
+            chain.curve.id(),
+            id(200),
+        ));
+        for call in [
+            launchpad_client::build_buy_invocation(
+                sale,
+                id(20),
+                launchpad_client::ExactOutputTradeTerms {
+                    amount_out: 1,
+                    max_amount_in: 100,
+                },
+            ),
+            launchpad_client::build_buy_with_collateral_invocation(
+                sale,
+                id(20),
+                launchpad_client::ExactInputTradeTerms {
+                    amount_in: 1,
+                    min_amount_out: 1,
+                },
+            ),
+            launchpad_client::build_sell_invocation(
+                sale,
+                id(20),
+                launchpad_client::ExactInputTradeTerms {
+                    amount_in: 1,
+                    min_amount_out: 0,
+                },
+            ),
+        ] {
+            let error = chain.try_public(call).unwrap_err();
+            assert!(
+                matches!(error, lee::error::LeeError::ProgramExecutionFailed(ref message) if message.contains("the pool is closed")),
+                "{error:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn frozen_namespace_allows_fee_collection_settlement_and_creator_recovery() {
+    for collect_before_settlement in [false, true] {
+        let mut chain = Chain::new();
+        chain.public_mode = true;
+        let sale = emergency_sale(&mut chain, id(1), false, Some(2));
+        let config_id = curve_core::compute_config_pda(sale.namespace, sale.curve_program_id);
+        let assert_frozen = |chain: &Chain| {
+            assert!(
+                curve_core::Config::try_from(&chain.accounts[&config_id].data)
+                    .unwrap()
+                    .is_frozen()
+            );
+        };
+        let factory = factory_core::compute_factory_pda(
+            sale.namespace,
+            sale.factory_program_id,
+            sale.launch_salt,
+        );
+        let token = factory_core::compute_definition_pda(
+            sale.namespace,
+            sale.factory_program_id,
+            sale.launch_salt,
+        );
+        let pool = curve_core::compute_pool_pda(
+            sale.namespace,
+            sale.curve_program_id,
+            token,
+            id(5),
+            factory,
+        );
+        chain.run(launchpad_client::build_buy_invocation(
+            sale,
+            id(20),
+            launchpad_client::ExactOutputTradeTerms {
+                amount_out: 200,
+                max_amount_in: 100,
+            },
+        ));
+        chain.run(launchpad_client::build_freeze_namespace_invocation(
+            sale.namespace,
+            chain.curve.id(),
+            id(200),
+        ));
+        assert_frozen(&chain);
+        if collect_before_settlement {
+            for _ in 0..2 {
+                chain.run(launchpad_client::build_collect_fees_invocation(
+                    sale.namespace,
+                    sale.curve_program_id,
+                    pool,
+                    id(5),
+                    id(6),
+                ));
+                assert_frozen(&chain);
+            }
+            assert_eq!(chain.balance(ata(id(6), id(5))), 2);
+        }
+        chain
+            .accounts
+            .get_mut(&clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID)
+            .unwrap()
+            .data = Data::try_from(
+            clock_core::ClockAccountData {
+                block_id: 2,
+                timestamp: 2,
+            }
+            .to_bytes(),
+        )
+        .unwrap();
+        chain.run(launchpad_client::build_claim_creator_allocation_invocation(
+            sale,
+            id(99),
+        ));
+        assert_eq!(chain.balance(ata(id(99), token)), 100);
+        assert_frozen(&chain);
+        for _ in 0..5 {
+            chain.run(
+                launchpad_client::build_withdraw_factory_proceeds_invocation(sale, id(99), id(6)),
+            );
+            assert_frozen(&chain);
+        }
+        assert_eq!(
+            factory_core::FactoryState::try_from(&chain.accounts[&factory].data)
+                .unwrap()
+                .settlement_stage,
+            factory_core::SettlementStage::Complete
+        );
+        assert_eq!(chain.balance(ata(id(99), token)), 200);
+        assert_eq!(chain.balance(ata(id(99), id(5))), 12);
+        assert_eq!(chain.balance(ata(id(6), id(5))), 2);
+        assert_eq!(chain.balance(ata(pool, id(5))), 0);
+        assert!(matches!(
+            token_core::TokenDefinition::try_from(&chain.accounts[&token].data).unwrap(),
+            token_core::TokenDefinition::Fungible {
+                total_supply: 400,
+                ..
+            }
+        ));
+        chain.run(launchpad_client::build_collect_fees_invocation(
+            sale.namespace,
+            sale.curve_program_id,
+            pool,
+            id(5),
+            id(6),
+        ));
+        assert_eq!(chain.balance(ata(id(6), id(5))), 2);
+        assert_frozen(&chain);
+    }
+}
+
+#[test]
+fn signed_private_swap_wrappers_reach_freeze_gate_without_a_deshield_envelope() {
+    use launchpad_client::PrivateInstruction;
+
+    let mut chain = Chain::new();
+    chain.public_mode = true;
+    let sale = emergency_sale(&mut chain, id(1), false, None);
+    chain.run(launchpad_client::build_buy_invocation(
+        sale,
+        id(20),
+        launchpad_client::ExactOutputTradeTerms {
+            amount_out: 200,
+            max_amount_in: 100,
+        },
+    ));
+    let calls = [
+        launchpad_client::build_buy_invocation(
+            sale,
+            id(20),
+            launchpad_client::ExactOutputTradeTerms {
+                amount_out: 20,
+                max_amount_in: 100,
+            },
+        ),
+        launchpad_client::build_buy_with_collateral_invocation(
+            sale,
+            id(20),
+            launchpad_client::ExactInputTradeTerms {
+                amount_in: 10,
+                min_amount_out: 1,
+            },
+        ),
+        launchpad_client::build_sell_invocation(
+            sale,
+            id(20),
+            launchpad_client::ExactInputTradeTerms {
+                amount_in: 100,
+                min_amount_out: 1,
+            },
+        ),
+    ]
+    .map(|mut call| {
+        call.instruction = call.instruction.for_private_execution();
+        call
+    });
+    chain.run(launchpad_client::build_freeze_namespace_invocation(
+        sale.namespace,
+        chain.curve.id(),
+        id(200),
+    ));
+    for call in &calls {
+        let error = chain.try_public(call.clone()).unwrap_err();
+        assert!(
+            matches!(error, lee::error::LeeError::ProgramExecutionFailed(ref message) if message == "Guest panicked: Namespace swaps are frozen"),
+            "{error:?}"
+        );
+    }
+    chain.run(launchpad_client::build_unfreeze_namespace_invocation(
+        sale.namespace,
+        chain.curve.id(),
+        id(200),
+    ));
+    for call in calls {
+        chain.run(call);
+    }
+}
+
+fn emergency_sale(
+    chain: &mut Chain,
+    namespace: AccountId,
+    frozen: bool,
+    end_timestamp: Option<u64>,
+) -> launchpad_client::FactorySale {
+    chain.private_source(id(2));
+    chain.accounts.entry(id(200)).or_insert(Account {
+        program_owner: [77; 8],
+        ..Account::default()
+    });
+    chain.accounts.insert(
+        id(5),
+        Account {
+            program_owner: programs::token().id(),
+            data: Data::from(&token_core::TokenDefinition::Fungible {
+                name: "Collateral".into(),
+                total_supply: 10000,
+                metadata_id: None,
+            }),
+            ..Account::default()
+        },
+    );
+    chain.accounts.insert(
+        curve_core::compute_config_pda(namespace, chain.curve.id()),
+        Account {
+            program_owner: chain.curve.id(),
+            data: Data::from(&curve_core::Config::new(id(200), 1000, id(6), id(200))),
+            ..Account::default()
+        },
+    );
+    if frozen {
+        chain.run(launchpad_client::build_freeze_namespace_invocation(
+            namespace,
+            chain.curve.id(),
+            id(200),
+        ));
+    }
+    let sale = launchpad_client::FactorySale {
+        namespace,
+        factory_program_id: chain.factory.id(),
+        curve_program_id: chain.curve.id(),
+        launch_salt: [42; 32],
+        collateral_definition: id(5),
+    };
+    let factory =
+        factory_core::compute_factory_pda(namespace, chain.factory.id(), sale.launch_salt);
+    let token =
+        factory_core::compute_definition_pda(namespace, chain.factory.id(), sale.launch_salt);
+    let request = launchpad_client::CreateSaleRequest {
+        name: "Emergency sale".into(),
+        uri: "ipfs://sale".into(),
+        sale_reserve: 800,
+        dex_seed_reserve: 100,
+        creator_allocation: 100,
+        virtual_token_reserve: 2000,
+        virtual_collateral_reserve: 100,
+        trade_mode: factory_core::TradeMode::BuyAndSell,
+        graduation_hook: None,
+        end_timestamp,
+    };
+    for _ in 0..4 {
+        let state = chain
+            .accounts
+            .get(&factory)
+            .map(|a| factory_core::FactoryState::try_from(&a.data).unwrap());
+        chain.run(
+            launchpad_client::next_creation_invocation(
+                sale,
+                id(99),
+                request.clone(),
+                state.as_ref(),
+            )
+            .unwrap()
+            .unwrap(),
+        );
+    }
+    assert_eq!(
+        factory_core::FactoryState::try_from(&chain.accounts[&factory].data)
+            .unwrap()
+            .creation_stage,
+        factory_core::CreationStage::Active
+    );
+    chain.accounts.entry(id(20)).or_insert(Account {
+        program_owner: [77; 8],
+        ..Account::default()
+    });
+    chain.accounts.insert(ata(id(20), token), holding(token, 0));
+    chain
+        .accounts
+        .entry(ata(id(20), id(5)))
+        .or_insert(holding(id(5), 1000));
+    chain
+        .accounts
+        .entry(ata(id(6), id(5)))
+        .or_insert(holding(id(5), 0));
+    sale
+}
+
 struct HookFixture {
     chain: Chain,
     sale: launchpad_client::FactorySale,
@@ -821,11 +1348,7 @@ impl HookFixture {
             curve_core::compute_config_pda(namespace, chain.curve.id()),
             Account {
                 program_owner: chain.curve.id(),
-                data: Data::from(&curve_core::Config {
-                    admin: namespace,
-                    treasury: id(6),
-                    protocol_fee_bps: 1000,
-                }),
+                data: Data::from(&curve_core::Config::new(namespace, 1000, id(6), namespace)),
                 ..Account::default()
             },
         );
@@ -1126,14 +1649,19 @@ fn private_sale_resumes_creation_and_settlement_with_fresh_payout_holders() {
                 curve_core::compute_config_pda(namespace, chain.curve.id()),
                 Account {
                     program_owner: chain.curve.id(),
-                    data: Data::from(&curve_core::Config {
-                        admin: namespace,
-                        treasury: id(6),
-                        protocol_fee_bps: 0,
-                    }),
+                    data: Data::from(&curve_core::Config::new(id(200), 30, id(6), id(200))),
                     ..Account::default()
                 },
             );
+            for admin in [id(200), id(201)] {
+                chain.accounts.insert(
+                    admin,
+                    Account {
+                        program_owner: [77; 8],
+                        ..Account::default()
+                    },
+                );
+            }
             let request = launchpad_client::CreateSaleRequest {
                 name: "Sale".into(),
                 uri: "ipfs://sale".into(),
@@ -1176,6 +1704,23 @@ fn private_sale_resumes_creation_and_settlement_with_fresh_payout_holders() {
                 .unwrap()
                 .expect("next creation stage");
                 chain.run_private(source, call);
+                if step == 0 {
+                    let factory_before = chain.accounts[&factory_id].clone();
+                    chain.run_public(launchpad_client::build_transfer_admin_invocation(
+                        namespace,
+                        chain.curve.id(),
+                        id(200),
+                        id(201),
+                        curve_core::AdminCandidate::Signer,
+                    ));
+                    chain.run_public(launchpad_client::build_update_fee_invocation(
+                        namespace,
+                        chain.curve.id(),
+                        id(201),
+                        0,
+                    ));
+                    assert_eq!(chain.accounts[&factory_id], factory_before);
+                }
                 if step == 2 {
                     assert!(
                         !curve_core::PoolAccount::try_from(&chain.accounts[&pool_id].data)
@@ -1295,6 +1840,10 @@ fn private_sale_resumes_creation_and_settlement_with_fresh_payout_holders() {
                 launchpad_client::build_claim_creator_allocation_invocation(sale, id(105)),
             );
             assert_eq!(chain.balance(ata(id(105), token)), allocation);
+            let mut treasury = id(6);
+            chain
+                .accounts
+                .insert(ata(id(8), collateral), holding(collateral, 0));
             for step in 0..5 {
                 let state = factory_core::FactoryState::try_from(&chain.accounts[&factory_id].data)
                     .unwrap();
@@ -1306,9 +1855,33 @@ fn private_sale_resumes_creation_and_settlement_with_fresh_payout_holders() {
                     launchpad_client::build_withdraw_factory_proceeds_invocation(
                         sale,
                         id(106 + step),
-                        id(6),
+                        treasury,
                     ),
                 );
+                if step == 0 {
+                    let custody_before = [
+                        factory_id,
+                        pool_id,
+                        ata(factory_id, token),
+                        ata(factory_id, collateral),
+                    ]
+                    .map(|id| (id, chain.accounts.get(&id).cloned().unwrap_or_default()));
+                    treasury = id(8);
+                    chain.run_public(launchpad_client::build_update_treasury_invocation(
+                        namespace,
+                        chain.curve.id(),
+                        id(201),
+                        treasury,
+                    ));
+                    chain.run_public(launchpad_client::build_renounce_admin_invocation(
+                        namespace,
+                        chain.curve.id(),
+                        id(201),
+                    ));
+                    for (id, before) in custody_before {
+                        assert_eq!(chain.accounts.get(&id).cloned().unwrap_or_default(), before);
+                    }
+                }
             }
             assert_eq!(
                 factory_core::FactoryState::try_from(&chain.accounts[&factory_id].data)
@@ -1342,7 +1915,7 @@ fn private_sale_resumes_creation_and_settlement_with_fresh_payout_holders() {
                             launchpad_client::build_withdraw_factory_proceeds_invocation(
                                 sale,
                                 id(111),
-                                id(6),
+                                treasury,
                             )
                         )
                         .is_err()

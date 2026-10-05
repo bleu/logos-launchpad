@@ -18,6 +18,8 @@ Use those events to preserve history and support monitoring. Do not add persiste
 
 Event schemas require compatibility and privacy review. Product interfaces can consume existing indexed history through the backend module read API, but they must not claim that an excluded analytics view exists. Indexed state can lag and does not authorize a trade or replace a current-state check by a program.
 
+The [platform probes](../../packages/platform-probes/README.md) verify emission and decoding on a separate candidate revision. The current launchpad pin has no event output. The candidate drops events after a later chained failure, so it does not meet LP-0012 pre-failure retention. Private event delivery, deployed indexer ingestion and integration with the launchpad remain unverified.
+
 ## Sources
 
 - [Curve proposal](https://github.com/logos-co/rfp/issues/118)

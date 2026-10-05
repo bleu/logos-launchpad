@@ -34,6 +34,7 @@ pub fn swap_exact_input(
 ) -> (Vec<AccountPostState>, SwapSettlement) {
     let mut pool_account = validated_pool(&pool, curve_program_id);
     let config_data = validated_config(&config, pool_account.namespace, curve_program_id);
+    assert!(!config_data.is_frozen(), "Namespace swaps are frozen");
     let (side, token_out) = direction(&pool_account, token_in);
     let now = trusted_time(&pool_account, clock);
     let outcome = pool_account
@@ -78,6 +79,7 @@ pub fn swap_exact_output(
 ) -> (Vec<AccountPostState>, SwapSettlement) {
     let mut pool_account = validated_pool(&pool, curve_program_id);
     let config_data = validated_config(&config, pool_account.namespace, curve_program_id);
+    assert!(!config_data.is_frozen(), "Namespace swaps are frozen");
     let (side, token_out) = direction(&pool_account, token_in);
     let now = trusted_time(&pool_account, clock);
     let outcome = pool_account

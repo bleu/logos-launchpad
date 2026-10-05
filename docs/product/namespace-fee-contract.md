@@ -1,17 +1,18 @@
 # Namespace, custody, and fee contract
 
-M0 design contract for curve and LBP sales. Use the terms in [CONTEXT.md](../../CONTEXT.md).
+M0 design contract for curve and LBP sales. Use the terms in [CONTEXT.md](../../CONTEXT.md). Curve administration is recorded in [ADR 0006](../adr/0006-namespaces-and-authority.md). Curve emergency controls pass core and signed guest tests; [ADR 0028](../adr/0028-token-custody-and-freeze.md#evidence-and-limits) records coverage and limits. LBP state and events below remain design requirements.
 
 ## Namespace rules
 
-Anyone can create a namespace. Creation sets its administrator, fee, and treasury in one transaction. Each sale keeps its creation namespace. Sale inputs and token roles stay fixed. Accounts, listings, and history belong to that namespace.
+Anyone can create a namespace. Creation sets its administrator, fixed emergency authority, fee, and treasury in one transaction. Each sale keeps its creation namespace. Sale inputs and token roles stay fixed. Accounts, listings, and history belong to that namespace.
 
 | Action | Who can do it | What changes |
 | --- | --- | --- |
 | Change fee | Current administrator | Fee only |
 | Change treasury | Current administrator | Treasury only |
 | Change administrator | Current administrator and accepting successor | Administrator only |
-| Give up administration | Current administrator | Remove administration permanently; keep fee and treasury |
+| Give up administration | Current administrator | Remove administration permanently; keep fee, treasury and emergency authority |
+| Freeze or unfreeze swaps | Fixed namespace emergency authority | Stop or restore swaps across both mechanisms under [ADR 0028](../adr/0028-token-custody-and-freeze.md) |
 | Create a sale or perform manual settlement | Current creator authority holder | Sale actions allowed at the current stage |
 | Execute a configured curve adapter hook | Anyone | Post-close settlement under [ADR 0020](../adr/0020-settlement-and-graduation.md) |
 | Collect fees | Anyone | Collect all outstanding fees for the current treasury; no self-transfer if already in its vault |
@@ -22,7 +23,7 @@ Each namespace has one administration record. The [administration module](../adr
 
 Sale and namespace accounts must have the correct addresses and program owners. Token account checks cover the owner, token definition, expected address, token-program data, and permission to use the account.
 
-Curve accounts must hold enough collateral for the real reserve and outstanding fees. LBP accounts must cover outstanding fees and remaining payouts. Fee records contain trade fees; extra deposits remain surplus. Token creation, fund transfers, namespace settings, and pause/freeze controls have separate authority checks. See [ADR 0028](../adr/0028-token-custody-and-freeze.md).
+Curve accounts must hold enough collateral for the real reserve and outstanding fees. LBP accounts must cover outstanding fees and remaining payouts. Fee records contain trade fees; extra deposits remain surplus. Token creation, fund transfers, namespace settings, and emergency freeze controls have separate authority checks. See [ADR 0028](../adr/0028-token-custody-and-freeze.md).
 
 ## Fees and collection
 
@@ -40,7 +41,7 @@ Fees can be collected at any time. Collection pays all outstanding fees, clears 
 
 Settlement collects remaining fees in the same transaction as the related reserve or proceeds payment. The payment uses the balance after collection. If that stage fails, its state and balances stay unchanged. Earlier stages stay complete. The full process can use several transactions. Completed payments and token burns are recorded so a retry is safe.
 
-LBP creator withdrawal waits for the original end timestamp. A pause keeps the schedule and weight changes active. See [ADR 0015](../adr/0015-fee-accounting.md), [ADR 0016](../adr/0016-lbp-live-fees.md), and [ADR 0020](../adr/0020-settlement-and-graduation.md).
+LBP creator withdrawal waits for the original end timestamp. A freeze keeps the schedule and weight changes active. See [ADR 0015](../adr/0015-fee-accounting.md), [ADR 0016](../adr/0016-lbp-live-fees.md), and [ADR 0020](../adr/0020-settlement-and-graduation.md).
 
 ## Events and errors
 
@@ -48,7 +49,8 @@ Events identify the namespace and chain location and record completed changes. H
 
 | Event | Required fields |
 | --- | --- |
-| Namespace creation | Initial administrator, fee, treasury |
+| Namespace creation | Initial administrator, fixed emergency authority, fee, treasury |
+| Emergency freeze or release | Namespace, emergency authority, resulting freeze state |
 | Fee or treasury update | Setting, old value, new value |
 | Administrator change or removal | Action, affected administrator identities |
 | Trade | Sale, sale type, tokens, input/output, fee base, rate, fee, amount used for pricing or paid after fees, fee records |

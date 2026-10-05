@@ -61,11 +61,12 @@ fn pool_snapshot() -> (curve_core::PoolAccount, curve_core::Config) {
         })
         .unwrap(),
     };
-    let config = curve_core::Config {
-        admin: AccountId::new([3; 32]),
-        protocol_fee_bps: 0,
-        treasury: AccountId::new([4; 32]),
-    };
+    let config = curve_core::Config::new(
+        AccountId::new([3; 32]),
+        0,
+        AccountId::new([4; 32]),
+        AccountId::new([3; 32]),
+    );
     (pool, config)
 }
 
@@ -880,4 +881,261 @@ fn factory_state_rejects_a_mismatched_derived_pool_id() {
         validate_factory_state(sale, &state),
         Err(ClientError::FactorySaleMismatch)
     ));
+}
+
+#[test]
+fn namespace_initialization_lists_emergency_signer_and_deduplicates_aliases() {
+    let namespace = AccountId::new([80; 32]);
+    let proof = AccountId::new([81; 32]);
+    let admin = AccountId::new([82; 32]);
+    let treasury = AccountId::new([83; 32]);
+    let emergency = AccountId::new([84; 32]);
+    let call = super::build_initialize_namespace_invocation(
+        namespace,
+        CURVE_PROGRAM_ID,
+        proof,
+        admin,
+        40,
+        treasury,
+        emergency,
+        super::EmergencyCandidate::Signer,
+    );
+    assert_eq!(
+        call.account_ids,
+        vec![
+            curve_core::compute_config_pda(namespace, CURVE_PROGRAM_ID),
+            proof,
+            admin,
+            emergency
+        ]
+    );
+    assert_eq!(call.signer_accounts, vec![proof, admin, emergency]);
+    assert_eq!(
+        call.instruction,
+        curve_core::Instruction::InitializeNamespace {
+            namespace,
+            admin,
+            protocol_fee_bps: 40,
+            treasury,
+            emergency_authority: emergency,
+            emergency_candidate: super::EmergencyCandidate::Signer,
+        }
+    );
+    let alias = super::build_initialize_namespace_invocation(
+        namespace,
+        CURVE_PROGRAM_ID,
+        admin,
+        admin,
+        40,
+        treasury,
+        admin,
+        super::EmergencyCandidate::Signer,
+    );
+    assert_eq!(alias.account_ids.len(), 2);
+    assert_eq!(alias.signer_accounts, vec![admin]);
+}
+
+#[test]
+fn namespace_initialization_pda_emergency_preserves_other_role_authorization() {
+    let namespace = sale().namespace;
+    let proof = AccountId::new([81; 32]);
+    let admin = AccountId::new([82; 32]);
+    let emergency = AccountId::new([84; 32]);
+    let candidate = super::EmergencyCandidate::Pda {
+        program_id: [9; 8],
+        seed: [1; 32],
+    };
+    for (proof, admin, emergency, roles, signers) in [
+        (
+            proof,
+            admin,
+            emergency,
+            vec![proof, admin, emergency],
+            vec![proof, admin],
+        ),
+        (proof, admin, proof, vec![proof, admin], vec![proof, admin]),
+        (proof, admin, admin, vec![proof, admin], vec![proof, admin]),
+        (proof, proof, proof, vec![proof], vec![proof]),
+    ] {
+        let call = super::build_initialize_namespace_invocation(
+            namespace,
+            CURVE_PROGRAM_ID,
+            proof,
+            admin,
+            40,
+            AccountId::new([83; 32]),
+            emergency,
+            candidate.clone(),
+        );
+        let mut accounts = vec![curve_core::compute_config_pda(namespace, CURVE_PROGRAM_ID)];
+        accounts.extend(roles);
+        assert_eq!(call.account_ids, accounts);
+        assert_eq!(call.signer_accounts, signers);
+        assert_eq!(call.program_id, CURVE_PROGRAM_ID);
+        assert_eq!(
+            call.instruction,
+            curve_core::Instruction::InitializeNamespace {
+                namespace,
+                admin,
+                protocol_fee_bps: 40,
+                treasury: AccountId::new([83; 32]),
+                emergency_authority: emergency,
+                emergency_candidate: candidate.clone(),
+            }
+        );
+    }
+}
+
+#[test]
+fn freeze_builder_requires_emergency_authorization_for_the_selected_namespace() {
+    let namespace = sale().namespace;
+    let emergency = AccountId::new([84; 32]);
+    let call = super::build_freeze_namespace_invocation(namespace, CURVE_PROGRAM_ID, emergency);
+    assert_eq!(call.program_id, CURVE_PROGRAM_ID);
+    assert_eq!(
+        call.account_ids,
+        vec![
+            curve_core::compute_config_pda(namespace, CURVE_PROGRAM_ID),
+            emergency
+        ]
+    );
+    assert_eq!(call.signer_accounts, vec![emergency]);
+    assert_eq!(
+        call.instruction,
+        curve_core::Instruction::FreezeNamespace { namespace }
+    );
+}
+
+#[test]
+fn unfreeze_builder_requires_emergency_authorization_for_the_selected_namespace() {
+    let namespace = AccountId::new([85; 32]);
+    let emergency = AccountId::new([84; 32]);
+    let call = super::build_unfreeze_namespace_invocation(namespace, CURVE_PROGRAM_ID, emergency);
+    assert_eq!(call.program_id, CURVE_PROGRAM_ID);
+    assert_eq!(
+        call.account_ids,
+        vec![
+            curve_core::compute_config_pda(namespace, CURVE_PROGRAM_ID),
+            emergency
+        ]
+    );
+    assert_eq!(call.signer_accounts, vec![emergency]);
+    assert_eq!(
+        call.instruction,
+        curve_core::Instruction::UnfreezeNamespace { namespace }
+    );
+}
+
+#[test]
+fn fee_builder_has_only_fee_arguments_and_current_admin_signature() {
+    let admin = AccountId::new([82; 32]);
+    let call = super::build_update_fee_invocation(sale().namespace, CURVE_PROGRAM_ID, admin, 80);
+    assert_eq!(
+        call.instruction,
+        curve_core::Instruction::UpdateFee {
+            namespace: sale().namespace,
+            protocol_fee_bps: 80
+        }
+    );
+    assert_eq!(call.signer_accounts, vec![admin]);
+    assert_eq!(
+        call.account_ids,
+        vec![
+            curve_core::compute_config_pda(sale().namespace, CURVE_PROGRAM_ID),
+            admin
+        ]
+    );
+}
+
+#[test]
+fn treasury_builder_has_only_treasury_arguments_and_current_admin_signature() {
+    let admin = AccountId::new([82; 32]);
+    let treasury = AccountId::new([83; 32]);
+    let call = super::build_update_treasury_invocation(
+        sale().namespace,
+        CURVE_PROGRAM_ID,
+        admin,
+        treasury,
+    );
+    assert_eq!(
+        call.instruction,
+        curve_core::Instruction::UpdateTreasury {
+            namespace: sale().namespace,
+            treasury
+        }
+    );
+    assert_eq!(call.signer_accounts, vec![admin]);
+    assert_eq!(
+        call.account_ids,
+        vec![
+            curve_core::compute_config_pda(sale().namespace, CURVE_PROGRAM_ID),
+            admin
+        ]
+    );
+}
+
+#[test]
+fn admin_transfer_builder_selects_acceptance_and_unique_signers() {
+    let admin = AccountId::new([82; 32]);
+    let successor = AccountId::new([83; 32]);
+    let call = super::build_transfer_admin_invocation(
+        sale().namespace,
+        CURVE_PROGRAM_ID,
+        admin,
+        successor,
+        curve_core::AdminCandidate::Signer,
+    );
+    assert_eq!(call.signer_accounts, vec![admin, successor]);
+    assert_eq!(
+        call.account_ids,
+        vec![
+            curve_core::compute_config_pda(sale().namespace, CURVE_PROGRAM_ID),
+            admin,
+            successor
+        ]
+    );
+    assert_eq!(
+        call.instruction,
+        curve_core::Instruction::TransferAdmin {
+            namespace: sale().namespace,
+            new_admin: successor,
+            candidate: curve_core::AdminCandidate::Signer
+        }
+    );
+    let same = super::build_transfer_admin_invocation(
+        sale().namespace,
+        CURVE_PROGRAM_ID,
+        admin,
+        admin,
+        curve_core::AdminCandidate::Signer,
+    );
+    assert_eq!(same.signer_accounts, vec![admin]);
+    assert_eq!(same.account_ids.len(), 2);
+    let pda = super::build_transfer_admin_invocation(
+        sale().namespace,
+        CURVE_PROGRAM_ID,
+        admin,
+        successor,
+        curve_core::AdminCandidate::Pda {
+            program_id: [9; 8],
+            seed: [1; 32],
+        },
+    );
+    assert_eq!(pda.signer_accounts, vec![admin]);
+}
+
+#[test]
+fn config_reader_rejects_valid_data_owned_by_another_program() {
+    let account = lee_core::account::Account {
+        program_owner: [99; 8],
+        data: (&curve_core::Config::new(
+            AccountId::new([2; 32]),
+            30,
+            AccountId::new([3; 32]),
+            AccountId::new([2; 32]),
+        ))
+            .into(),
+        ..Default::default()
+    };
+    assert!(super::read_curve_config(&account, CURVE_PROGRAM_ID).is_err());
 }

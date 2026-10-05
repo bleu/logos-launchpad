@@ -6,7 +6,8 @@ This is the shared language for both launchpads. The repository contains an impo
 
 | Term | Meaning |
 | --- | --- |
-| Namespace | Independent launchpad identity with an `AccountId` administrator, protocol fee rate and treasury. Sales stay bound to their creation namespace. |
+| Namespace | Independent launchpad identity with an `AccountId` administrator, fixed emergency authority, protocol fee rate and treasury. Sales stay bound to their creation namespace. |
+| Emergency authority | Fixed per-namespace `AccountId` that can freeze or unfreeze swaps across curve and LBP sales. It cannot transfer or renounce this role. Namespace administration and creator authority do not grant it. See [ADR 0028](docs/adr/0028-token-custody-and-freeze.md) for policy and verification status. |
 | Namespace state | Logical per-namespace administration and configuration state used for creation validation and applicable runtime checks. It does not select a registry, shared physical schema or cross-factory account owner. |
 | Authority NFT | Unique transferable NFT master that grants a role. Its token definition is the stable role identity; its current holder proves control. It can support a creator or pool-owner role, but does not administer a namespace. Target-platform compatibility still needs verification. |
 | Treasury | Current namespace destination for collected protocol fees. |
@@ -52,4 +53,4 @@ SDK code owns transaction construction, fresh quotes and the single-transaction 
 
 See the [curve overview](docs/product/curve-contract.md) for its decisions and evidence limits.
 
-See the [namespace, custody, and fee contract](docs/product/namespace-fee-contract.md) for shared account checks and accounting rules. The [LBP overview](docs/product/lbp-contract.md) explains its modes, clock, buys and pricing collateral, with links to the governing ADRs. See [planned ownership](docs/architecture/repository-layout.md) for package and artifact responsibilities. Keep the LBP fee RFP departures, curve expiry-validation departure, deferred allocation ceiling, private-route verification and open allowlist proof design visible in the [ADR index](docs/adr/README.md).
+See the [namespace, custody, and fee contract](docs/product/namespace-fee-contract.md) for shared account checks and accounting rules. The [LBP overview](docs/product/lbp-contract.md) explains its modes, clock, buys and pricing collateral, with links to the governing ADRs. See [planned ownership](docs/architecture/repository-layout.md) for package and artifact responsibilities. Keep the LBP fee and creator-pause RFP departures, curve expiry-validation departure, deferred allocation ceiling, private-route verification and open allowlist proof design visible in the [ADR index](docs/adr/README.md).

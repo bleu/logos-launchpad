@@ -10,6 +10,7 @@ Trade modes and the optional adapter hook are implemented. This page links the g
 | Trading | [Pricing and rounding](../adr/0009-curve-arithmetic.md), [trade modes](../adr/0021-modes-and-open-limits.md#sale-modes) and [slippage limits](../adr/0017-quotes-and-slippage.md) |
 | Custody | [Namespace, custody, and fee contract](namespace-fee-contract.md) |
 | Lifecycle | [Closing](../adr/0025-sale-closing.md) and [manual settlement or adapter hook](../adr/0020-settlement-and-graduation.md) |
+| Emergency control | [Fixed namespace authority and swaps-only freeze](../adr/0028-token-custody-and-freeze.md); curve core and signed guest tests pass; production verification remains open |
 
 Pricing uses virtual reserves; payouts require real reserves. Each trade changes custody by the same amount as its reserve and fee liabilities. Collection reduces custody and fees together, or clears fees already held by the treasury. Surplus deposits do not increase payout rights. Checked arithmetic and transaction rollback preserve these rules. See the [pool code](../../crates/pool/src/lib.rs) and [solvency tests](../../crates/pool/tests/proptest_invariants.rs).
 
@@ -17,11 +18,11 @@ Adapter authors should use the [factory types and handler](../../crates/factory-
 
 ## Release compatibility
 
-State and instruction encodings have changed. Rebuild guests and clients together and use fresh local state; no deployed-state migration is provided. The pinned `lgs` parser cannot encode an empty hook configuration. Use the SDK or project CLI for that case; see the [wire tests](../../crates/launchpad-client/tests/idl_wire.rs).
+State and instruction encodings have changed. Namespace config v2 rejects old state. Use fresh deployments; no deployed-state migration is provided. Rebuild guests and clients together: binaries, program IDs and derived addresses change. See [ADR 0028](../adr/0028-token-custody-and-freeze.md) for emergency integration limits. The pinned `lgs` parser cannot encode an empty hook configuration. Use the SDK or project CLI for that case; see the [wire tests](../../crates/launchpad-client/tests/idl_wire.rs).
 
 ## Acceptance evidence
 
-Host tests, strict Clippy, formatting, dependency pins, guest builds and generated-IDL checks passed for this implementation. Coverage lives with the tests:
+The earlier trade-mode and adapter-hook checks passed. Current emergency integration evidence and pending CLI/IDL and full build-suite checks are recorded in [ADR 0028](../adr/0028-token-custody-and-freeze.md#evidence-and-limits). Coverage lives with the tests:
 
 - [Curve handlers](../../crates/curve-core/src/tests.rs): trade restrictions, fees, slippage and treasury aliases.
 - [Factory handlers](../../crates/factory-core/src/hook_tests.rs): saved settings, custody, authority and settlement guards.

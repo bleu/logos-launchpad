@@ -20,7 +20,7 @@ All private destinations must be controlled by the participant and compatible wi
 
 ## Mechanism rules
 
-Private and public routes use the same mechanism state, custody checks, price rules and protocol fees. Private participation does not bypass sale closing, pause controls, reserve checks or trade limits.
+Private and public routes use the same mechanism state, custody checks, price rules and protocol fees. Private participation does not bypass sale closing, the [namespace emergency freeze](../adr/0028-token-custody-and-freeze.md), reserve checks or trade limits. The freeze blocks swaps only; recovery keeps its normal checks and permissions. The emergency gate is not integrated into production routes.
 
 | Operation | Input | Received tokens | Protocol fee rule |
 | --- | --- | --- | --- |
@@ -118,7 +118,7 @@ These are required tests for later implementation. They have not been executed f
 | Curve private buy succeeds | Pool and fee state change once. Received launch tokens, unused collateral and unused gas end in participant-controlled private accounts. |
 | Curve private sell succeeds | Permitted sale mode, correct collateral fee treatment and explicit output bound. Received collateral, unused launch input and unused gas end private. |
 | LBP private buy succeeds | Weighted or fixed-price execution follows current chain state. Full buyer collateral enters pricing; creator-borne fees are not charged twice. All user returns end private. |
-| Sale closes, pauses or rejects selling | Current mechanism checks reject the trade. No deshield or trade application changes commit. Account for any actual transaction charge separately. |
+| Sale closes, namespace is frozen or sale mode rejects selling | Current mechanism checks reject the trade. No deshield or trade application changes commit. Account for any actual transaction charge separately. |
 | Collateral funding fails | No funding, trade or return application changes commit. No purchase allowance is consumed. |
 | Native funding fails or uses the wrong program owner | Reject the complete transaction. Do not treat successful collateral funding as a completed stage. |
 | Fresh-account setup or source authorization fails | Reject mismatched accounts, token definitions and unauthorized spending. No partial setup/funding is accepted as route success. |
