@@ -34,6 +34,14 @@ bash verify/check-idl.sh
 
 `check-pins.sh` checks the LEZ revision in the root and guest manifests against `scaffold.toml`. `check-idl.sh` requires `lgs`, checks generated on-chain IDLs against `idl-src/`, and runs the non-default `idl-tests` lane. Normal host tests do not require `lgs` or wallet state.
 
+## CI
+
+[Root CI](../../.github/workflows/ci.yml) runs on pull requests, pushes to `main` and manual runs. It checks formatting across the root, curve guest and weighted-math workspaces, including fuzz source, and checks the fuzz lockfile without building it. It checks dependency pins, then runs `verify/check-builds.sh` and `verify/check-idl.sh` for locked builds, tests, guest execution, math parity and generated program interfaces. The Ubuntu 24.04 setup uses `rust-toolchain.toml` and `verify/build-tools.env`; the workflow contains the tool installation commands.
+
+The root weighted-math smoke test calls the local kernel's public trade functions. Run it with `cargo test -p launchpad-client --test weighted_math --locked`. It checks consumption from the root workspace, not an LBP program.
+
+CI excludes the separate launchpad core workspaces, mini-app builds and installation, fuzz campaigns, live standalone-sequencer/E2E tests, concurrency and private-flow fault testing, and real-proof generation. Clippy remains a local check. Guest development receipts and standalone math parity do not establish production readiness.
+
 ## Guest integration tests
 
 Client tests that execute guest programs use the non-default `guest-tests` feature. Build the guest artifacts with `RISC0_BUILD_LOCKED=1 cargo build --manifest-path methods/Cargo.toml --release --locked`. The nested guest lock needs `RISC0_BUILD_LOCKED=1`; outer Cargo `--locked` alone does not lock it. The `r0vm` executable must be on `PATH`, or `RISC0_SERVER_PATH` must point to it. Then run:
@@ -54,7 +62,7 @@ The imported private-buy route exceeds the pinned LEZ chained-call limit when ex
 
 Live E2E verification remains future work. Use disposable wallet and localnet state for those checks.
 
-No source CI workflows are enabled. Run `bash verify/check-builds.sh` for locked host and guest builds, tests and release overflow checks. For stable guest IDs, use a committed checkout at `/tmp/logos-launchpad-release/source` and run `bash verify/check-builds.sh --release`. Keep its guest binaries and image IDs. Builds from other paths can change the factory ID; cross-OS identity is unverified. CI, live platform tests and real-proof generation remain separate work.
+Run `bash verify/check-builds.sh` locally for the same locked build/test lane. For stable guest IDs, use a committed checkout at `/tmp/logos-launchpad-release/source` and run `bash verify/check-builds.sh --release`. Keep its guest binaries and image IDs. Builds from other paths can change the factory ID; cross-OS identity is unverified. CI does not verify stable release image IDs.
 
 ## Licenses
 
