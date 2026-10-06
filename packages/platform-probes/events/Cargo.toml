@@ -10,13 +10,24 @@ edition = "2024"
 publish = false
 
 [features]
-guest-tests = ["dep:event-probe-methods", "dep:lee"]
+guest-tests = ["dep:event-probe-methods", "dep:lee", "dep:programs", "dep:admin-authority"]
 
 [dependencies]
+admin-authority = { path = "../../../third-party/spel-admin-authority/admin-authority", optional = true }
 borsh = { version = "1.8", features = ["derive"] }
 lee_core = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", rev = "c31a6bca60537ec08f595cf786f1ae6275ab7f43", default-features = false }
 lee = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", rev = "c31a6bca60537ec08f595cf786f1ae6275ab7f43", optional = true }
 event-probe-methods = { path = "methods", optional = true }
+token_core = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", rev = "c31a6bca60537ec08f595cf786f1ae6275ab7f43" }
+programs = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", rev = "c31a6bca60537ec08f595cf786f1ae6275ab7f43", features = ["artifacts"], optional = true }
+
+[[test]]
+name = "pda_admission"
+required-features = ["guest-tests"]
+
+[[test]]
+name = "compatibility"
+required-features = ["guest-tests"]
 
 [[test]]
 name = "event_roundtrip"

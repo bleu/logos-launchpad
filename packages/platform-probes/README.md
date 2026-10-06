@@ -23,7 +23,7 @@ The 13 [authority host tests](authority/tests/authority_policy.rs) pass and use 
 
 The authority guest builds and its [four guest tests](authority/tests/authority_guest.rs) pass. They inspect real `ProgramOutput` journals and call public `validate_execution`. Initialization returns a PDA claim with both components initialized; there is no separate component-claim instruction. Later calls use controlled claimed-owner fixtures and authorization flags. Transaction signatures, actual claim application and rollback through `V03State` remain unverified. This is not proof of atomic production namespace creation.
 
-The [event tests](events/tests/event_roundtrip.rs) pass three cases. A real guest emits `Plan::event`; the public transition returns its emitter, eight-byte selector and Borsh payload. The probe decoder rejects unsupported schema versions and truncated payloads. A later chained failure discards the earlier event: direct execution returns an error, and metered validation reports execution work but returns no events. This fails LP-0012 pre-failure retention. The probe payload contains no private participant identifier; its version byte is a probe schema choice, not a platform wire-version guarantee.
+The [event tests](events/tests/event_roundtrip.rs) pass four cases. A real guest emits `Plan::event`; the public transition returns its emitter, eight-byte selector and Borsh payload. The probe decoder rejects unsupported schema versions and truncated payloads. A later chained failure discards the earlier event: direct execution returns an error, and metered validation reports execution work but returns no events. This departs from LP-0012 pre-failure retention; [ADR 0027](../../docs/adr/0027-events-and-history.md) now permits it. Signed execution also verifies nonce-only changes after metered failure and rejection of replay. The probe payload contains no private participant identifier; its version byte is a probe schema choice, not a platform wire-version guarantee.
 
 Root regression checks pass 196 tests. Locked root host and guest builds and nine settlement guest tests also pass. Guest execution uses `RISC0_DEV_MODE=1`; these results are not cryptographic proof generation or deployed-node tests. New behavior used failing tests before implementation. Extra clock checks passed against behavior already supplied by the public decoder and existing probe; they are regression checks, not separate red/green claims.
 
@@ -40,12 +40,18 @@ cargo test --manifest-path packages/platform-probes/authority/Cargo.toml --locke
 RISC0_BUILD_LOCKED=1 cargo build --manifest-path packages/platform-probes/authority/methods/Cargo.toml --release --locked
 RISC0_DEV_MODE=1 cargo test --manifest-path packages/platform-probes/authority/Cargo.toml --release --locked --features guest-tests --test authority_guest
 RISC0_BUILD_LOCKED=1 cargo build --manifest-path packages/platform-probes/events/methods/Cargo.toml --release --locked
-RISC0_BUILD_LOCKED=1 RISC0_DEV_MODE=1 cargo test --manifest-path packages/platform-probes/events/Cargo.toml --release --locked --features guest-tests --test event_roundtrip
+RISC0_BUILD_LOCKED=1 RISC0_DEV_MODE=1 cargo test --manifest-path packages/platform-probes/events/Cargo.toml --release --locked --features guest-tests
 ```
 
 ## Curve integration follow-up
 
 The curve now embeds the actual admin component through its public manual-dispatch APIs, with a licensed local getter patch and public-field account adapter. Separate [signed namespace tests](../../crates/launchpad-client/tests/namespace_admin.rs) verify runtime claims, signer acceptance, rollback and actual owner-program PDA child calls. These tests do not change the isolated probe evidence above. The curve follow-up passes the full pinned build script and IDL checks. See [ADR 0006](../../docs/adr/0006-namespaces-and-authority.md) for scope and generic IDL limits.
+
+## Candidate compatibility follow-up
+
+On 2026-10-06, all nine candidate tests passed with development receipts. The [NFT tests](events/tests/compatibility.rs) mint and transfer a real Authority NFT master, check the trusted token shard, and reject the former holder with full rollback. The [PDA tests](events/tests/pda_admission.rs) show that the unchanged legacy ownership check rejects a runtime-authorized PDA. The accepted candidate policy keeps address and seed checks and requires owner-program approval in the same transaction. The probe uses that evidence with the real administration library's authorized-signer branch, without inventing a legacy owner field. A direct call without owner approval is rejected and preserves state. This covers successor admission, not the full administration or emergency lifecycle.
+
+Root adoption is blocked by client encoding. Installed scaffold `f919fd03b064a91a4f261093cf2b0b4f8150e27c` uses SPEL CLI `0cb7e0980535af619482cf1c823f4d394b3ebd61`. Its `collect-fees` dry run emits `08000000`; candidate Borsh encoding for that unit variant is `08`. Its submission path also lacks candidate shard selectors. A compatible tool revision or a separately approved client interface is needed before changing root pins. Candidate clock guards, further authority rejection cases, foreign-state checks, child-write rollback and freeze integration remain unverified.
 
 ## Open gaps
 

@@ -3,6 +3,26 @@
 version = 4
 
 [[package]]
+name = "admin-authority"
+version = "0.1.4"
+dependencies = [
+ "admin-authority-macros",
+ "borsh",
+ "serde",
+ "spel-authority",
+ "spel-framework",
+]
+
+[[package]]
+name = "admin-authority-macros"
+version = "0.1.4"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "ahash"
 version = "0.8.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -28,6 +48,16 @@ name = "allocator-api2"
 version = "0.2.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
+
+[[package]]
+name = "amm_core"
+version = "0.1.0"
+source = "git+https://github.com/logos-blockchain/logos-execution-zone.git?rev=c31a6bca60537ec08f595cf786f1ae6275ab7f43#c31a6bca60537ec08f595cf786f1ae6275ab7f43"
+dependencies = [
+ "borsh",
+ "lee_core 0.1.0 (git+https://github.com/logos-blockchain/logos-execution-zone.git?rev=c31a6bca60537ec08f595cf786f1ae6275ab7f43)",
+ "risc0-zkvm",
+]
 
 [[package]]
 name = "android_system_properties"
@@ -271,6 +301,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d3fb67a6e08acf24fdeccbac2cb6ac4305825bd1f117462e0e6f2f193345ad56"
 
 [[package]]
+name = "associated_token_account_core"
+version = "0.1.0"
+source = "git+https://github.com/logos-blockchain/logos-execution-zone.git?rev=c31a6bca60537ec08f595cf786f1ae6275ab7f43#c31a6bca60537ec08f595cf786f1ae6275ab7f43"
+dependencies = [
+ "borsh",
+ "lee_core 0.1.0 (git+https://github.com/logos-blockchain/logos-execution-zone.git?rev=c31a6bca60537ec08f595cf786f1ae6275ab7f43)",
+ "risc0-zkvm",
+ "token_core",
+]
+
+[[package]]
 name = "autocfg"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -385,6 +426,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "bridge_core"
+version = "0.1.0"
+source = "git+https://github.com/logos-blockchain/logos-execution-zone.git?rev=c31a6bca60537ec08f595cf786f1ae6275ab7f43#c31a6bca60537ec08f595cf786f1ae6275ab7f43"
+dependencies = [
+ "borsh",
+ "lee_core 0.1.0 (git+https://github.com/logos-blockchain/logos-execution-zone.git?rev=c31a6bca60537ec08f595cf786f1ae6275ab7f43)",
+ "risc0-zkvm",
+]
+
+[[package]]
+name = "bridge_lock_core"
+version = "0.1.0"
+source = "git+https://github.com/logos-blockchain/logos-execution-zone.git?rev=c31a6bca60537ec08f595cf786f1ae6275ab7f43#c31a6bca60537ec08f595cf786f1ae6275ab7f43"
+dependencies = [
+ "borsh",
+ "lee_core 0.1.0 (git+https://github.com/logos-blockchain/logos-execution-zone.git?rev=c31a6bca60537ec08f595cf786f1ae6275ab7f43)",
+ "risc0-zkvm",
+]
+
+[[package]]
 name = "bs58"
 version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -481,7 +542,7 @@ dependencies = [
  "semver",
  "serde",
  "serde_json",
- "thiserror",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -541,6 +602,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "clock_core"
+version = "0.1.0"
+source = "git+https://github.com/logos-blockchain/logos-execution-zone.git?rev=c31a6bca60537ec08f595cf786f1ae6275ab7f43#c31a6bca60537ec08f595cf786f1ae6275ab7f43"
+dependencies = [
+ "borsh",
+ "lee_core 0.1.0 (git+https://github.com/logos-blockchain/logos-execution-zone.git?rev=c31a6bca60537ec08f595cf786f1ae6275ab7f43)",
+]
+
+[[package]]
 name = "cmov"
 version = "0.5.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -552,7 +622,7 @@ version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0fa961b519f0b462e3a3b4a34b64d119eeaca1d59af726fe450bbba07a9fc0a1"
 dependencies = [
- "thiserror",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -628,6 +698,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "cross_zone_inbox_core"
+version = "0.1.0"
+source = "git+https://github.com/logos-blockchain/logos-execution-zone.git?rev=c31a6bca60537ec08f595cf786f1ae6275ab7f43#c31a6bca60537ec08f595cf786f1ae6275ab7f43"
+dependencies = [
+ "borsh",
+ "lee_core 0.1.0 (git+https://github.com/logos-blockchain/logos-execution-zone.git?rev=c31a6bca60537ec08f595cf786f1ae6275ab7f43)",
+ "risc0-zkvm",
+ "serde",
+]
+
+[[package]]
+name = "cross_zone_outbox_core"
+version = "0.1.0"
+source = "git+https://github.com/logos-blockchain/logos-execution-zone.git?rev=c31a6bca60537ec08f595cf786f1ae6275ab7f43#c31a6bca60537ec08f595cf786f1ae6275ab7f43"
+dependencies = [
+ "borsh",
+ "lee_core 0.1.0 (git+https://github.com/logos-blockchain/logos-execution-zone.git?rev=c31a6bca60537ec08f595cf786f1ae6275ab7f43)",
+ "risc0-zkvm",
+]
+
+[[package]]
 name = "crypto-bigint"
 version = "0.5.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -667,6 +758,32 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7d5515a3834141de9eafb9717ad39eea8247b5674e6066c404e8c4b365d2a29e"
 dependencies = [
  "cmov",
+]
+
+[[package]]
+name = "curve25519-dalek"
+version = "4.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "97fb8b7c4503de7d6ae7b42ab72a5a59857b4c937ec27a3d4539dba95b5ab2be"
+dependencies = [
+ "cfg-if",
+ "cpufeatures 0.2.17",
+ "curve25519-dalek-derive",
+ "digest 0.10.7",
+ "fiat-crypto",
+ "rustc_version",
+ "subtle",
+]
+
+[[package]]
+name = "curve25519-dalek-derive"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f46882e17999c6cc590af592290432be3bce0428cb0d5f8b6715e4dc7b383eb3"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -766,7 +883,7 @@ version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "10d60334b3b2e7c9d91ef8150abfb6fa4c1c39ebbcf4a81c2e346aad939fee3e"
 dependencies = [
- "thiserror",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -941,6 +1058,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "ed25519"
+version = "2.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "115531babc129696a58c64a4fef0a8bf9e9698629fb97e9e40767d235cfbcd53"
+dependencies = [
+ "signature",
+]
+
+[[package]]
+name = "ed25519-dalek"
+version = "2.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "70e796c081cee67dc755e1a36a0a172b897fab85fc3f6bc48307991f64e4eca9"
+dependencies = [
+ "curve25519-dalek",
+ "ed25519",
+ "sha2",
+ "subtle",
+]
+
+[[package]]
 name = "educe"
 version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1051,10 +1189,13 @@ dependencies = [
 name = "event-probe"
 version = "0.1.0"
 dependencies = [
+ "admin-authority",
  "borsh",
  "event-probe-methods",
  "lee",
- "lee_core",
+ "lee_core 0.1.0 (git+https://github.com/logos-blockchain/logos-execution-zone.git?rev=c31a6bca60537ec08f595cf786f1ae6275ab7f43)",
+ "programs",
+ "token_core",
 ]
 
 [[package]]
@@ -1071,6 +1212,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "da7c62ceae207dd37ea5b845da6a0696c799f85e97da1ab5b7910be3c1c80223"
 
 [[package]]
+name = "fee_core"
+version = "0.1.0"
+source = "git+https://github.com/logos-blockchain/logos-execution-zone.git?rev=c31a6bca60537ec08f595cf786f1ae6275ab7f43#c31a6bca60537ec08f595cf786f1ae6275ab7f43"
+dependencies = [
+ "borsh",
+ "lee_core 0.1.0 (git+https://github.com/logos-blockchain/logos-execution-zone.git?rev=c31a6bca60537ec08f595cf786f1ae6275ab7f43)",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "ff"
 version = "0.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1079,6 +1230,12 @@ dependencies = [
  "rand_core 0.6.4",
  "subtle",
 ]
+
+[[package]]
+name = "fiat-crypto"
+version = "0.2.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "28dea519a9695b9977216879a3ebfddf92f1c08c05d984f8996aecd6ecdc811d"
 
 [[package]]
 name = "find-msvc-tools"
@@ -1517,7 +1674,7 @@ dependencies = [
  "build_utils",
  "hex",
  "k256",
- "lee_core",
+ "lee_core 0.1.0 (git+https://github.com/logos-blockchain/logos-execution-zone.git?rev=c31a6bca60537ec08f595cf786f1ae6275ab7f43)",
  "log",
  "program_loader_core",
  "rand 0.8.8",
@@ -1526,7 +1683,24 @@ dependencies = [
  "risc0-zkvm",
  "serde_with",
  "sha2",
- "thiserror",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "lee_core"
+version = "0.1.0"
+source = "git+https://github.com/logos-blockchain/logos-execution-zone.git?tag=v0.2.4#47eba256479f6f785acbd138834340703cd03401"
+dependencies = [
+ "base58",
+ "borsh",
+ "bytemuck",
+ "bytesize",
+ "chacha20",
+ "ml-kem",
+ "risc0-zkvm",
+ "serde",
+ "serde_with",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -1543,7 +1717,7 @@ dependencies = [
  "risc0-zkvm",
  "serde",
  "serde_with",
- "thiserror",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -1783,6 +1957,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 
 [[package]]
+name = "ping_core"
+version = "0.1.0"
+source = "git+https://github.com/logos-blockchain/logos-execution-zone.git?rev=c31a6bca60537ec08f595cf786f1ae6275ab7f43#c31a6bca60537ec08f595cf786f1ae6275ab7f43"
+dependencies = [
+ "borsh",
+ "lee_core 0.1.0 (git+https://github.com/logos-blockchain/logos-execution-zone.git?rev=c31a6bca60537ec08f595cf786f1ae6275ab7f43)",
+]
+
+[[package]]
 name = "pkcs1"
 version = "0.7.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1879,9 +2062,31 @@ version = "0.1.0"
 source = "git+https://github.com/logos-blockchain/logos-execution-zone.git?rev=c31a6bca60537ec08f595cf786f1ae6275ab7f43#c31a6bca60537ec08f595cf786f1ae6275ab7f43"
 dependencies = [
  "borsh",
- "lee_core",
+ "lee_core 0.1.0 (git+https://github.com/logos-blockchain/logos-execution-zone.git?rev=c31a6bca60537ec08f595cf786f1ae6275ab7f43)",
  "risc0-binfmt",
  "risc0-zkos-v1compat",
+]
+
+[[package]]
+name = "programs"
+version = "0.1.0"
+source = "git+https://github.com/logos-blockchain/logos-execution-zone.git?rev=c31a6bca60537ec08f595cf786f1ae6275ab7f43#c31a6bca60537ec08f595cf786f1ae6275ab7f43"
+dependencies = [
+ "amm_core",
+ "associated_token_account_core",
+ "borsh",
+ "bridge_core",
+ "bridge_lock_core",
+ "build_utils",
+ "clock_core",
+ "cross_zone_inbox_core",
+ "cross_zone_outbox_core",
+ "fee_core",
+ "lee",
+ "ping_core",
+ "sequencer_stake_core",
+ "token_core",
+ "wrapped_token_core",
 ]
 
 [[package]]
@@ -2019,7 +2224,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "60dc65c0ff1a7ae1294b0c67b9f14baf70b644404010370171787bfac1038fc0"
 dependencies = [
  "libredox",
- "thiserror",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -2388,7 +2593,7 @@ dependencies = [
  "sha2",
  "strum",
  "tempfile",
- "thiserror",
+ "thiserror 2.0.21",
  "toml",
  "yaml-rust2",
 ]
@@ -2446,6 +2651,17 @@ checksum = "8a7852d02fc848982e0c167ef163aaff9cd91dc640ba85e263cb1ce46fae51cd"
 dependencies = [
  "serde",
  "serde_core",
+]
+
+[[package]]
+name = "sequencer_stake_core"
+version = "0.1.0"
+source = "git+https://github.com/logos-blockchain/logos-execution-zone.git?rev=c31a6bca60537ec08f595cf786f1ae6275ab7f43#c31a6bca60537ec08f595cf786f1ae6275ab7f43"
+dependencies = [
+ "borsh",
+ "ed25519-dalek",
+ "lee_core 0.1.0 (git+https://github.com/logos-blockchain/logos-execution-zone.git?rev=c31a6bca60537ec08f595cf786f1ae6275ab7f43)",
+ "serde",
 ]
 
 [[package]]
@@ -2599,6 +2815,58 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f9395f0f0eee849a9b707b2f06bb92a6a422090e2123bb2ef8e87a0e61892a8e"
 
 [[package]]
+name = "spel-authority"
+version = "0.1.2"
+source = "git+https://github.com/mmlado/spel-authority.git?tag=v0.1.2#97af481b29b5364589776beb4c088ebe234ad7ed"
+dependencies = [
+ "borsh",
+ "serde",
+ "spel-framework",
+]
+
+[[package]]
+name = "spel-framework"
+version = "0.6.0"
+source = "git+https://github.com/logos-co/spel.git?rev=d0bb659048c3fc6533f51c69e9f7f12382af6dd2#d0bb659048c3fc6533f51c69e9f7f12382af6dd2"
+dependencies = [
+ "borsh",
+ "lee_core 0.1.0 (git+https://github.com/logos-blockchain/logos-execution-zone.git?tag=v0.2.4)",
+ "serde_json",
+ "spel-framework-core",
+ "spel-framework-macros",
+]
+
+[[package]]
+name = "spel-framework-core"
+version = "0.6.0"
+source = "git+https://github.com/logos-co/spel.git?rev=d0bb659048c3fc6533f51c69e9f7f12382af6dd2#d0bb659048c3fc6533f51c69e9f7f12382af6dd2"
+dependencies = [
+ "base58",
+ "borsh",
+ "lee_core 0.1.0 (git+https://github.com/logos-blockchain/logos-execution-zone.git?tag=v0.2.4)",
+ "proc-macro2",
+ "serde",
+ "serde_json",
+ "sha2",
+ "syn 2.0.119",
+ "thiserror 1.0.69",
+ "toml",
+]
+
+[[package]]
+name = "spel-framework-macros"
+version = "0.6.0"
+source = "git+https://github.com/logos-co/spel.git?rev=d0bb659048c3fc6533f51c69e9f7f12382af6dd2#d0bb659048c3fc6533f51c69e9f7f12382af6dd2"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "serde_json",
+ "sha2",
+ "spel-framework-core",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "spin"
 version = "0.9.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2715,11 +2983,31 @@ dependencies = [
 
 [[package]]
 name = "thiserror"
+version = "1.0.69"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b6aaf5339b578ea85b50e080feb250a3e8ae8cfcdff9a461c9ec2904bc923f52"
+dependencies = [
+ "thiserror-impl 1.0.69",
+]
+
+[[package]]
+name = "thiserror"
 version = "2.0.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "09e52cb86a36cede5cb101bf8908837b3e4c6e5e59fe7fd85c23fb56200d189e"
 dependencies = [
- "thiserror-impl",
+ "thiserror-impl 2.0.21",
+]
+
+[[package]]
+name = "thiserror-impl"
+version = "1.0.69"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4fee6c4efc90059e10f81e6d42c60a18f76588c3d74cb83a0b242a2b6c7504c1"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -2768,6 +3056,16 @@ name = "tinyvec"
 version = "1.13.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fd3ca314f692efd6c868f8408f53fe444634a845f96c028b97d35f6a1f79f0ee"
+
+[[package]]
+name = "token_core"
+version = "0.1.0"
+source = "git+https://github.com/logos-blockchain/logos-execution-zone.git?rev=c31a6bca60537ec08f595cf786f1ae6275ab7f43#c31a6bca60537ec08f595cf786f1ae6275ab7f43"
+dependencies = [
+ "borsh",
+ "lee_core 0.1.0 (git+https://github.com/logos-blockchain/logos-execution-zone.git?rev=c31a6bca60537ec08f595cf786f1ae6275ab7f43)",
+ "serde",
+]
 
 [[package]]
 name = "toml"
@@ -3075,6 +3373,16 @@ name = "wit-bindgen"
 version = "0.57.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
+
+[[package]]
+name = "wrapped_token_core"
+version = "0.1.0"
+source = "git+https://github.com/logos-blockchain/logos-execution-zone.git?rev=c31a6bca60537ec08f595cf786f1ae6275ab7f43#c31a6bca60537ec08f595cf786f1ae6275ab7f43"
+dependencies = [
+ "borsh",
+ "lee_core 0.1.0 (git+https://github.com/logos-blockchain/logos-execution-zone.git?rev=c31a6bca60537ec08f595cf786f1ae6275ab7f43)",
+ "risc0-zkvm",
+]
 
 [[package]]
 name = "yaml-rust2"

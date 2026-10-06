@@ -9,7 +9,10 @@ edition = "2024"
 publish = false
 
 [dependencies]
+admin-authority = { path = "../../../../../third-party/spel-admin-authority/admin-authority" }
+spel-framework = { git = "https://github.com/logos-co/spel.git", rev = "d0bb659048c3fc6533f51c69e9f7f12382af6dd2" }
 event-probe = { path = "../.." }
+token_core = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", rev = "c31a6bca60537ec08f595cf786f1ae6275ab7f43" }
 lee_core = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", rev = "c31a6bca60537ec08f595cf786f1ae6275ab7f43", default-features = false }
 borsh = { version = "1.8", features = ["derive"] }
 risc0-zkvm = { version = "=3.0.5", default-features = false, features = ["std"] }
