@@ -41,8 +41,8 @@ Read [CONTEXT.md](../../CONTEXT.md) for terms and [repository layout](../archite
 | [0021](0021-modes-and-open-limits.md) | Modes, deferred ceiling and allowlist rules | Accepted internally; ceiling deferral: To be reviewed by Logos team; proof design open |
 | [0022](0022-verification-boundaries.md) | Explicit build, IDL and integration evidence | Accepted |
 | [0025](0025-sale-closing.md) | Mechanism-specific sale closing | Accepted internally; expiry-validation departure: To be reviewed by Logos team |
-| [0026](0026-lbp-clock-and-poke.md) | Fixed-total clock weights and timestamp-keyed buy/poke checkpoints | Accepted; clock integration unverified |
-| [0027](0027-events-and-history.md) | Platform events and existing history tooling | Accepted |
+| [0026](0026-lbp-clock-and-poke.md) | Fixed-total clock weights and timestamp-keyed buy/poke checkpoints | Accepted; clock reads verified; LBP integration unverified |
+| [0027](0027-events-and-history.md) | Platform events and existing history tooling | Accepted; candidate probes pass with compatibility gaps |
 | [0028](0028-token-custody-and-freeze.md) | Token custody and freeze boundaries | Accepted; platform checks outstanding |
 | [0029](0029-wallet-integration.md) | Integrate the LEZ Wallet Provider SDK | Accepted; awaits LP-0021 development |
 | [0030](0030-lbp-pricing-collateral.md) | Fee-neutral LBP pricing collateral and separate custody records | Accepted internally; custody/numerical verification pending; fee departures: To be reviewed by Logos team |
