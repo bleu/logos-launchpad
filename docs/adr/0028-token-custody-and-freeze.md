@@ -18,6 +18,8 @@ Treat RFP-002 pause and freeze integration as a separate concern. Reuse platform
 
 Implementation must separately test authority changes, vault custody, namespace administration, pause and freeze behavior. A successful admin-library integration does not prove token custody or freeze compatibility.
 
+The [historical authority experiment](https://github.com/bleu/logos-launchpad/blob/f1198315569cfc8ada9f6c39964cb77314e2520c/packages/platform-probes/authority/src/lib.rs) used freeze `a4743468bd3a87093931c48c965cc084aa4690c3` (v0.1.5) with the component stack recorded in [ADR 0006](0006-namespaces-and-authority.md). It checked fixed emergency authority, namespace isolation and swaps-only freeze admission. Fee collection, settlement and creator recovery remained available under their own checks. These were mock operations with saved creator/custody references, not real swaps or token transfers. Guest checks used controlled authorization flags and development receipts. The experiment is no longer maintained; lasting coverage belongs with the real curve controls. LBP integration remains unverified.
+
 ## Sources
 
 - [Curve proposal](https://github.com/logos-co/rfp/issues/118)
