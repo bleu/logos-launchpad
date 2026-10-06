@@ -51,7 +51,8 @@ This page explains technical shorthand used in this repository. [CONTEXT.md](../
 | Authority | Permission to perform a defined action. It is checked per action and role. |
 | App placement | Which mini-app presents a flow. The admin app presents namespace administration only, while the configured-sales app presents creator and participant flows. Placement does not change authority. |
 | `AccountId` | The account identifier used for namespace administration in the planned design. |
-| Authority NFT / NFT master | A unique transferable non-fungible-token master that can prove a role. Its token definition is the stable role identity and its current holder proves control. |
+| Role authority | A role's own `spel-admin-authority` state. Roles share library code, not permissions. Creator and direct pool-owner migration is pending. |
+| Authority NFT / NFT master | The legacy PoC role mechanism: a unique token whose holder can act. The selected design replaces it with role authority; existing code still needs migration. |
 | Token definition / mint authority | The token's defining record, and authority to create or manage that token definition when platform rules allow it. |
 | Custody / vault | Control of tokens, and an account that holds tokens for a program or sale. |
 | ATA | Associated token account: an account derived for an owner and token definition. |

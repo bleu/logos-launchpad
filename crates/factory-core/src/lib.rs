@@ -108,6 +108,7 @@ pub struct FactoryState {
     pub virtual_token_reserve: u128,
     pub virtual_collateral_reserve: u128,
     pub curve_program_id: ProgramId,
+    // TODO: Replace the NFT-based commitment with per-sale spel-admin-authority creator state.
     pub creator_commitment: [u8; 32],
     pub creator_escrow_id: AccountId,
     pub pool_id: AccountId,
@@ -769,6 +770,7 @@ pub fn continue_creation(
     (posts, calls)
 }
 
+// TODO: Use the sale's spel-admin-authority creator state for creation and settlement checks.
 fn validate_creator(
     factory: &AccountWithMetadata,
     creator: &AccountWithMetadata,
@@ -838,6 +840,7 @@ fn claim_creator_allocation(
         compute_factory_pda(state.namespace, factory_program_id, state.launch_salt),
         "Factory account ID does not match PDA"
     );
+    // TODO: Authorize allocation claims through the sale's spel-admin-authority creator state.
     assert!(creator.is_authorized, "Creator authorization is missing");
     curve_core::identity(&creator);
     assert_eq!(

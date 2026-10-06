@@ -2,7 +2,7 @@
 
 Status: Accepted; target-platform compatibility remains unverified
 
-Date: 2026-09-29; configuration review: 2026-10-01
+Date: 2026-09-29; configuration review: 2026-10-01; role-pattern review: 2026-10-06
 
 ## Context
 
@@ -18,7 +18,9 @@ Reuse the component's initialization, transfer and renounce lifecycle. Initializ
 
 Fee-rate and treasury changes are separate, explicit administration operations. A fee update preserves treasury and administrator; a treasury update preserves fee rate and administrator. Neither operation transfers administration. Use the selected lifecycle for admin transfer and renunciation. See the [shared namespace, custody, and fee contract](../product/namespace-fee-contract.md) for checks and acceptance cases.
 
-Creator and pool-owner authority remain separate roles. Where a creator role uses an Authority NFT, its holder checks remain explicit. Namespace administration does not grant creator rights or change creator NFT custody. Curve factory-created pools stay under curve factory program custody.
+Use separate `spel-admin-authority` state for namespace administration, each sale's creator role and each direct pool-owner role. Do not use Authority NFTs for these roles. One account may hold several roles, but namespace administration grants no creator or pool-owner rights. Curve factory-created pools stay under curve factory program custody.
+
+Creator and direct pool-owner migration is separate work. It must cover stored role state, transfer acceptance, client inputs and existing account compatibility. Decide whether these roles may renounce before enabling renunciation; it must not leave required settlement or recovery unavailable. Existing NFT checks remain until that migration is implemented and tested.
 
 Retain the reviewed curve factory's resumable creation and settlement. Pending curve pools cannot trade before funding is complete. Each curve stage rechecks the relevant authority and commits atomically with its child calls; the whole curve workflow can span transactions. This reviewed curve behavior does not define LBP creation stages, pending guards or custody.
 
@@ -26,7 +28,11 @@ Retain the reviewed curve factory's resumable creation and settlement. Pending c
 
 The singleton/genesis-admin, address-bound and namespace-admin NFT-holder models are superseded. Administration transfer must not bypass isolation or pending-state checks. The reviewed v0.1.4 commit `479adf86f85b664073f359cfd2fd0087489f63a0` is evidence for the selected library API, not a production dependency pin, integration proof or a compatibility claim. LBP implementation still needs separate evidence.
 
-The compatibility check on 2026-09-30 stopped before compilation. The reviewed component has no public getter for the current administrator, which `namespace-info` needs. Integration with the PoC's manual dispatcher also remains unverified. Do not read the component's private byte layout or store a second administrator field. The PoC still uses NFT-based namespace administration, replaces its whole configuration, and changes its stored admin directly. Separate setting operations and the selected transfer lifecycle remain unimplemented; its platform pins remain unchanged.
+The [historical authority experiments](https://github.com/bleu/logos-launchpad/blob/f1198315569cfc8ada9f6c39964cb77314e2520c/packages/platform-probes/README.md) exercised admin `479adf86f85b664073f359cfd2fd0087489f63a0` with SPEL `d0bb659048c3fc6533f51c69e9f7f12382af6dd2` and component LEZ `47eba256479f6f785acbd138834340703cd03401`. Host checks covered transfer acceptance, terminal renunciation and namespace isolation. Guest checks used controlled authorization fixtures, not signed transactions or real claim application. The upstream component has no public current-admin getter; the licensed local patch adds one. Do not decode private component bytes or store a second administrator field.
+
+On candidate LEZ `c31a6bca60537ec08f595cf786f1ae6275ab7f43`, the legacy PDA check rejected an authorized account because the old whole-account owner field was absent. A probe checked the derived address and owner-program approval in the same transaction, then used the library's authorized-signer branch. Direct calls without owner approval were rejected. This is limited compatibility evidence, not an adopted production adapter or a complete authority lifecycle. NFT-holder transfer checks also passed on that candidate, but do not justify retaining the rejected NFT role design.
+
+The experiments are no longer maintained. Results used development receipts, not production proofs or deployed nodes. Root pins are unchanged; namespace controls and creator/pool-owner migration remain separate implementation work. [ADR 0027](0027-events-and-history.md) records the candidate client blocker.
 
 ## Sources
 

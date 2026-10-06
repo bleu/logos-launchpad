@@ -10,6 +10,8 @@ pub const TOKEN_PROGRAM_ID: ProgramId = [
     2282739141, 348907455, 1046946228, 3735699860, 585462133, 3426087150, 772528164, 2090518099,
 ];
 
+// TODO: Replace creator and direct pool-owner NFTs with separate spel-admin-authority role state.
+// Keep namespace permissions separate and preserve factory PDA custody.
 /// Returns the stable identity of an authorized, indivisible NFT master.
 /// Printed copies, empty former holders, and unrelated program data grant no rights.
 pub fn identity(holder: &AccountWithMetadata) -> AccountId {

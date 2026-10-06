@@ -1092,7 +1092,6 @@ version = "0.1.0"
 dependencies = [
  "associated_token_account_core",
  "authenticated_transfer_core",
- "clock_core",
  "curve-core",
  "factory-core",
  "lee_core",

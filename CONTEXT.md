@@ -8,7 +8,8 @@ This is the shared language for both launchpads. The repository contains an impo
 | --- | --- |
 | Namespace | Independent launchpad identity with an `AccountId` administrator, protocol fee rate and treasury. Sales stay bound to their creation namespace. |
 | Namespace state | Logical per-namespace administration and configuration state used for creation validation and applicable runtime checks. It does not select a registry, shared physical schema or cross-factory account owner. |
-| Authority NFT | Unique transferable NFT master that grants a role. Its token definition is the stable role identity; its current holder proves control. It can support a creator or pool-owner role, but does not administer a namespace. Target-platform compatibility still needs verification. |
+| Role authority | Separate `spel-admin-authority` state for each namespace administrator, creator or direct pool-owner role. Sharing the library does not share permissions. Creator and pool-owner migration is not implemented. |
+| Authority NFT | Legacy PoC role mechanism, replaced in the selected design by role authority. Existing creator and direct pool-owner code still uses NFT holder checks pending migration. |
 | Treasury | Current namespace destination for collected protocol fees. |
 | Curve | Neutral bounded constant-product AMM with virtual reserves. Curve factory policy turns it into a token sale. |
 | Pool | Mechanism state and token custody. A curve pool is an ordered token pair with reserves, owner and lifecycle. Direct curve pools are internal primitives and test surfaces. |
