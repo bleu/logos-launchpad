@@ -15,4 +15,6 @@ token_core.workspace = true
 workspace = true
 
 [dev-dependencies]
+pool.workspace = true
+clock_core.workspace = true
 risc0-zkvm.workspace = true

@@ -1,0 +1,9 @@
+Source: https://github.com/mmlado/spel-freeze-authority
+Revision: a4743468bd3a87093931c48c965cc084aa4690c3 (v0.1.5)
+License: MIT OR Apache-2.0; see LICENSE-MIT and LICENSE-APACHE2.
+
+Local changes:
+- Keep the runtime library and its required macros crate; omit sample workspace members.
+- Use the adjacent licensed admin-authority copy for the shared dependency.
+- Add FreezeConfig::current_authority(), using AuthoritySlot::holder().
+- No authority validation or lifecycle algorithm changes.

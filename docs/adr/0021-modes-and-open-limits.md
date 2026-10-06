@@ -1,6 +1,6 @@
 # ADR 0021: Sale modes, allowlists and open limits
 
-Status: Product rules accepted internally; per-block limit deferral: `To be reviewed by Logos team`; allowlist proof design and verification open.
+Status: Product rules accepted internally; per-block limit deferral and creator-pause departure: `To be reviewed by Logos team`; allowlist proof design and verification open.
 
 Date: 2026-09-29; LBP mechanics review: 2026-10-02
 
@@ -18,7 +18,7 @@ Keep weighted and true fixed-price LBP modes. Both support exact-input buys with
 
 LBP schedules require `end > start`, with no product minimum duration. Resolve start-now at creation execution; scheduled starts cannot be in the past. [ADR 0026](0026-lbp-clock-and-poke.md) owns chain-time weights and permissionless `poke` checkpoints.
 
-Only the current creator authority holder can pause/resume before the original end, including before start. Authorized repeated calls succeed without another state change or event. Authority must still be checked. Pause does not stop weights or move the end, and resume cannot reopen an ended sale. This settles the previously open LBP pause authority; it does not grant sale control to namespace administrators or select platform freeze gates.
+[ADR 0028](0028-token-custody-and-freeze.md) supersedes the earlier creator pause/resume decision. Creators have no separate pause control. A fixed namespace emergency authority can stop swaps across both mechanisms; schedules and closing rules remain unchanged. This creator-pause departure is `To be reviewed by Logos team`.
 
 Defer the optional limit on tokens allocated in one block. This differs from the LBP RFP and is `To be reviewed by Logos team`. It is not implemented or removed from scope.
 

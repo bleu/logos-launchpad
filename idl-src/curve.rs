@@ -122,4 +122,68 @@ pub mod curve {
         #[account(mut)] pool_collateral_ata: AccountWithMetadata,
         #[account(mut)] treasury_collateral_atas: Vec<AccountWithMetadata>,
     ) {}
+
+    // Ordinal placeholder only; the pinned generic CLI cannot encode this wrapper.
+    #[instruction]
+    pub fn private(instruction: Box<curve_core::Instruction>) {}
+
+    #[instruction]
+    /// Omit role accounts that alias namespace_authority or an earlier accepted authority.
+    /// Admin and Signer emergency candidates must sign; PDA acceptance uses program and seed evidence.
+    /// None encodes Signer; Some contains 8 program words then 32 seed bytes as words.
+    pub fn initialize_namespace(
+        #[account(init)] config: AccountWithMetadata,
+        #[account(signer)] namespace_authority: AccountWithMetadata,
+        accepted_authorities: Vec<AccountWithMetadata>,
+        namespace: AccountId,
+        admin: AccountId,
+        protocol_fee_bps: u32,
+        treasury: AccountId,
+        emergency_authority: AccountId,
+        emergency_candidate: Option<[u32; 40]>,
+    ) {}
+
+    #[instruction]
+    pub fn update_fee(
+        #[account(mut)] config: AccountWithMetadata,
+        #[account(signer)] authority: AccountWithMetadata,
+        namespace: AccountId,
+        protocol_fee_bps: u32,
+    ) {}
+
+    #[instruction]
+    pub fn update_treasury(
+        #[account(mut)] config: AccountWithMetadata,
+        #[account(signer)] authority: AccountWithMetadata,
+        namespace: AccountId,
+        treasury: AccountId,
+    ) {}
+
+    #[instruction]
+    /// None encodes Signer; Some contains 8 program words then 32 seed bytes as words.
+    /// Signer candidates must sign; omit successor when it aliases authority.
+    pub fn transfer_admin(
+        #[account(mut)] config: AccountWithMetadata,
+        #[account(signer)] authority: AccountWithMetadata,
+        successor: Vec<AccountWithMetadata>,
+        namespace: AccountId,
+        new_admin: AccountId,
+        candidate: Option<[u32; 40]>,
+    ) {}
+
+    #[instruction]
+    /// PDA authorities authorize this call through their owner program.
+    pub fn freeze_namespace(
+        #[account(mut)] config: AccountWithMetadata,
+        #[account(signer)] emergency_authority: AccountWithMetadata,
+        namespace: AccountId,
+    ) {}
+
+    #[instruction]
+    /// PDA authorities authorize this call through their owner program.
+    pub fn unfreeze_namespace(
+        #[account(mut)] config: AccountWithMetadata,
+        #[account(signer)] emergency_authority: AccountWithMetadata,
+        namespace: AccountId,
+    ) {}
 }

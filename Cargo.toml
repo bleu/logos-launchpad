@@ -17,6 +17,8 @@ exclude = [
     "packages/weighted-math",
     "packages/launchpad/core/logic",
     "packages/launchpad/core/rust-lib",
+    "third-party/spel-admin-authority",
+    "third-party/spel-freeze-authority",
 ]
 
 [workspace.package]

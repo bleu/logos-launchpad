@@ -16,7 +16,8 @@ The admin mini-app serves namespace administrators only. The configured-sales mi
 | --- | --- | --- | --- | --- |
 | Namespace administrator | Manage a launchpad namespace | Admin app or CLI | Change the fee rate and current treasury through separate operations; manage admin authority | AccountId administration; creator rights remain separate ([0006](../adr/0006-namespaces-and-authority.md)) |
 | Creator | Create a curve sale | Configured-sales app or CLI | Choose a trade mode, fund allocations, and optionally set expiry and an adapter | See the [curve overview](curve-contract.md) for decisions and implementation status |
-| Creator | Create an LBP | Configured-sales app or CLI | Submit LBP inputs to the independent LBP factory, choose weighted or fixed-price mode, fund the sale, and set its schedule | Current creator authority alone controls pause/resume; the schedule continues. Mechanics are specified; handlers and allowlist proofs remain future work ([LBP contract](lbp-contract.md), [0021](../adr/0021-modes-and-open-limits.md), [0026](../adr/0026-lbp-clock-and-poke.md)) |
+| Creator | Create an LBP | Configured-sales app or CLI | Submit LBP inputs to the independent LBP factory, choose weighted or fixed-price mode, fund the sale, and set its schedule | Creators cannot pause. Mechanics are specified; handlers and allowlist proofs remain future work ([LBP contract](lbp-contract.md), [0028](../adr/0028-token-custody-and-freeze.md)) |
+| Emergency authority | Stop or restore namespace swaps | Curve guest supports signer and owner-program PDA control; CLI/IDL checks pending | Freeze or unfreeze swaps without blocking fee collection, settlement or recovery; LBP integration remains future work | Fixed at namespace creation; no transfer or renunciation. Time and closing rules stay unchanged ([0028](../adr/0028-token-custody-and-freeze.md)) |
 | Participant | Find a sale and trade | Configured-sales app or CLI | Inspect the sale, request a fresh quote and submit a buy with an explicit slippage limit; sell back to a curve when its mode permits | Execution uses current state; a quote does not reserve a price ([0017](../adr/0017-quotes-and-slippage.md)) |
 | Participant | Use the private route | Configured-sales app or CLI through the SDK | Deshield, trade through fresh public accounts, and return received tokens, unused input and unused gas to participant-controlled private accounts in one transaction | Actual fees are excluded; public effects stay visible. Whole-route execution and wallet support remain unverified ([0018](../adr/0018-private-participation.md)) |
 | Participant | Resolve an interrupted private trade | Configured-sales app or CLI through the SDK | Restore minimal local progress, reconcile the original attempt and synchronize confirmed private state | Unknown outcomes block replacement; confirmation and recovery support need provider verification ([private participation contract](../architecture/private-participation.md)) |
@@ -42,7 +43,7 @@ flowchart TB
     Closed --> Settle[Creator settles permitted proceeds and allocations]
 ```
 
-Trading can repeat while the sale is open and its mode permits it. Expiry does not require a final trade. Fee collection does not wait for settlement. Curve sales also support the adapter route listed above.
+Trading can repeat while the sale is open, its mode permits it and its namespace is not frozen. Expiry does not require a final trade. Fee collection does not wait for settlement. Curve sales also support the adapter route listed above.
 
 See the planned [curve pool creation](../architecture/sequence-diagrams/create-curve-pool.md) and [LBP pool creation](../architecture/sequence-diagrams/create-lbp-pool.md) sequences. They show logical stages only. A curve pool retains staged creation, a pending trading guard and factory custody. The LBP sequence does not assign those curve details to LBP creation.
 
@@ -52,7 +53,7 @@ See the planned [curve pool creation](../architecture/sequence-diagrams/create-c
 | --- | --- | --- |
 | Price | Constant-product pricing with virtual reserves and real-reserve limits | Execution-time linear weights with timestamp-keyed checkpoints, or exact rational fixed-price mode |
 | Buy forms | Exact input or exact output with an explicit limit | Both forms in both modes; no partial fills or exact-input rounding refunds |
-| Close | All `D` sold, or optional expiry, whichever occurs first | Original scheduled end, even while paused |
+| Close | All `D` sold, or optional expiry, whichever occurs first; freeze does not change these rules | Original scheduled end, even while frozen |
 | Minimum duration | No contract minimum for optional expiry; a frontend rule is undecided | No contract minimum; require `end > start` and no past scheduled start |
 | Protocol fee | Collateral deducted from buy input or sell output | Creator-borne collateral claim; full buyer input enters pricing |
 | Fee collection | Permissionless, anytime, to current treasury | Permissionless, anytime, to current treasury; pricing reserves unchanged |
@@ -65,7 +66,7 @@ See the planned [curve pool creation](../architecture/sequence-diagrams/create-c
 - LBP allowlist product policy is accepted: one purchase across both routes, approved-account control, one public collateral cap and a private roster. The proof method, enrollment details and compatible verifier remain open.
 - Privacy warnings are required before transaction approval. Acknowledgement frequency is deferred.
 - Integrate the LP-0021 Wallet Provider SDK once developed. Private-route support still needs verification; see [ADR 0029](../adr/0029-wallet-integration.md).
-- The per-block allocation ceiling is deferred. Live LBP fee rates, anytime LBP collection and omission of curve contract minimum-duration validation differ from the RFPs. The relevant ADRs are marked `To be reviewed by Logos team`.
+- The per-block allocation ceiling is deferred. Live LBP fee rates, anytime LBP collection and omission of curve contract minimum-duration validation differ from the RFPs. Replacing creator pause with [fixed namespace emergency control](../adr/0028-token-custody-and-freeze.md) is also an accepted RFP departure; curve core and signed guest tests pass within that ADR's limits. These departures are `To be reviewed by Logos team`.
 - Direct neutral pools are internal primitives, not a separate sale product.
 - Use the existing indexer and explorer tools. Do not add a separate indexer or the excluded derived analytics view.
 - Platform compatibility, checked numerical input/error guards and private-route implementation still need evidence. The [LBP overview](lbp-contract.md) summarizes mechanics; it does not claim a working LBP program.

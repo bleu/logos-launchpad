@@ -33,7 +33,7 @@ This page explains technical shorthand used in this repository. [CONTEXT.md](../
 | Graduation hook | A call to another program after a sale closes. Its rules are in [ADR 0020](adr/0020-settlement-and-graduation.md). |
 | Expiry / end timestamp | A configured time that can end a curve sale or the scheduled end of an LBP. |
 | `poke` | A permissionless LBP call that records a time checkpoint without changing the price schedule. |
-| Pause / freeze | Controls that stop specified actions. Their platform integration and policy remain separate from namespace administration. |
+| Emergency freeze | A namespace-wide stop on curve and LBP swaps. Time and closing rules stay unchanged; fee collection, settlement and recovery remain available under their normal rules. See [ADR 0028](adr/0028-token-custody-and-freeze.md) for the accepted policy and pending production integration. |
 | Allowlist / proof / nullifier | A list of permitted participants, evidence that a participant is permitted, and a value used to prevent proof reuse. LBP allowlist product rules are accepted; the proof method remains open. |
 | Purchase allowance | Permission for one successful LBP buy per approved participant per sale, shared across public and private routes when an allowlist is enabled. |
 | Dust / oversized trade / input envelope | Very small trades, trades that are too large, and the tested range of values that an implementation accepts safely. |
@@ -42,10 +42,11 @@ This page explains technical shorthand used in this repository. [CONTEXT.md](../
 
 | Term | Plain-English meaning |
 | --- | --- |
-| Namespace | An independent launchpad identity with its own administrator, fee rate and treasury. Sales remain bound to their creation namespace. |
+| Namespace | An independent launchpad identity with its own administrator, fixed emergency authority, fee rate and treasury. Sales remain bound to their creation namespace. |
 | Namespace state | Logical per-namespace administration and configuration state used for creation validation and applicable runtime checks. This term does not select a registry, shared physical schema or cross-factory account owner. |
 | Namespace administrator | The holder of namespace-configuration rights. This role does not receive creator rights or approve every permitted creator action. |
-| Creator | The sale authority holder with permitted creation and lifecycle actions. |
+| Emergency authority | The fixed per-namespace account that controls emergency freeze. It cannot transfer or renounce this role. Creator or administrator rights alone do not grant it. See [ADR 0028](adr/0028-token-custody-and-freeze.md). |
+| Creator | The sale authority holder with permitted creation and lifecycle actions, but no separate pause control. |
 | Participant | A person or client that uses a configured sale to inspect, quote or trade. |
 | Pool owner | A separate authority role for an applicable pool. |
 | Authority | Permission to perform a defined action. It is checked per action and role. |

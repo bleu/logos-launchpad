@@ -71,6 +71,8 @@ pub enum ClientError {
     #[error("reading the live curve configuration")]
     #[strum(serialize = "read_curve_config")]
     ReadCurveConfig(#[source] Box<dyn Error + Send + Sync>),
+    #[error("namespace config belongs to another program")]
+    ConfigProgramMismatch,
     #[error("decoding the live curve configuration")]
     #[strum(serialize = "decode_curve_config")]
     DecodeCurveConfig(#[source] std::io::Error),

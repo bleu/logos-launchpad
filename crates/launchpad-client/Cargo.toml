@@ -25,6 +25,10 @@ required-features = ["guest-tests"]
 name = "settlement"
 required-features = ["guest-tests"]
 
+[[test]]
+name = "namespace_admin"
+required-features = ["guest-tests"]
+
 [dependencies]
 associated_token_account_core.workspace = true
 thiserror.workspace = true
