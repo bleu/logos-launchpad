@@ -545,6 +545,165 @@ fn permissionless_hook_transfers_only_reserved_tokens_and_recorded_collateral() 
 }
 
 #[test]
+fn deposited_tokens_reject_direct_transfers_without_custody_authority() {
+    let mut fixture = HookFixture::new(100, 200);
+    fixture.mark_ready();
+    let pool = curve_core::compute_pool_pda(
+        fixture.sale.namespace,
+        fixture.sale.curve_program_id,
+        fixture.token,
+        fixture.collateral,
+        fixture.factory,
+    );
+    let attacker = id(20);
+    let recipient = id(100);
+    fixture
+        .chain
+        .accounts
+        .insert(recipient, holding(fixture.token, 0));
+    let saved = fixture.chain.accounts.clone();
+    for owner in [fixture.factory, pool] {
+        let source = ata(owner, fixture.token);
+        for (claimed_owner, signers, expected_error) in [
+            (
+                attacker,
+                vec![attacker],
+                "ATA account ID does not match expected derivation",
+            ),
+            (owner, vec![], "Owner authorization is missing"),
+        ] {
+            let error = fixture
+                .chain
+                .try_public(launchpad_client::PublicInvocation {
+                    program_id: programs::ata().id(),
+                    account_ids: vec![claimed_owner, source, ata(attacker, fixture.token)],
+                    signer_accounts: signers,
+                    instruction: associated_token_account_core::Instruction::Transfer {
+                        ata_program_id: programs::ata().id(),
+                        amount: 1,
+                    },
+                })
+                .unwrap_err();
+            assert!(
+                matches!(error, lee::error::LeeError::ProgramExecutionFailed(ref message) if message.contains(expected_error)),
+                "{error:?}"
+            );
+            assert_eq!(fixture.chain.accounts, saved);
+        }
+        let error = fixture
+            .chain
+            .try_public(launchpad_client::PublicInvocation {
+                program_id: programs::token().id(),
+                account_ids: vec![source, recipient],
+                signer_accounts: vec![recipient],
+                instruction: token_core::Instruction::Transfer {
+                    amount_to_transfer: 1,
+                },
+            })
+            .unwrap_err();
+        assert!(
+            matches!(error, lee::error::LeeError::ProgramExecutionFailed(ref message) if message.contains("Sender authorization is missing")),
+            "{error:?}"
+        );
+        assert_eq!(fixture.chain.accounts, saved);
+    }
+    assert_eq!(
+        fixture.chain.balance(ata(fixture.factory, fixture.token)),
+        100
+    );
+    assert_eq!(fixture.chain.balance(ata(pool, fixture.token)), 600);
+    assert_eq!(fixture.chain.balance(ata(attacker, fixture.token)), 200);
+    assert_eq!(fixture.chain.balance(recipient), 0);
+    fixture.advance_to_hook_ready();
+    fixture.chain.run(fixture.graduation());
+    let custody = factory_core::compute_graduation_pda(fixture.adapter.id(), fixture.factory);
+    assert_eq!(
+        fixture.state().settlement_stage,
+        factory_core::SettlementStage::Graduated
+    );
+    assert_eq!(fixture.chain.balance(ata(custody, fixture.token)), 100);
+    assert_eq!(fixture.chain.balance(ata(custody, fixture.collateral)), 12);
+    assert_eq!(
+        fixture.chain.balance(ata(fixture.factory, fixture.token)),
+        0
+    );
+    assert_eq!(fixture.chain.balance(ata(pool, fixture.token)), 0);
+    assert_eq!(fixture.chain.balance(ata(attacker, fixture.token)), 200);
+    assert_eq!(fixture.chain.balance(recipient), 0);
+}
+
+#[test]
+fn settlement_rejects_other_owner_and_wrong_token_accounts() {
+    let mut fixture = HookFixture::new(100, 200);
+    fixture.mark_ready();
+    fixture.chain.run(fixture.graduation());
+    assert_eq!(
+        fixture.state().settlement_stage,
+        factory_core::SettlementStage::Ready
+    );
+    let saved = fixture.chain.accounts.clone();
+    for manual in [false, true] {
+        for wrong_owner in [false, true] {
+            let mut invocation = if manual {
+                launchpad_client::build_withdraw_factory_proceeds_invocation(
+                    fixture.sale,
+                    id(99),
+                    id(6),
+                )
+            } else {
+                fixture.graduation()
+            };
+            if wrong_owner {
+                invocation.account_ids[7] = ata(id(20), fixture.token);
+            } else {
+                invocation.account_ids.swap(7, 8);
+            }
+            let error = fixture.chain.try_public(invocation).unwrap_err();
+            assert!(
+                matches!(error, lee::error::LeeError::ProgramExecutionFailed(ref message) if message.contains("ATA account ID does not match expected derivation")),
+                "{error:?}"
+            );
+            assert_eq!(fixture.chain.accounts, saved);
+            assert_eq!(
+                fixture.state().settlement_stage,
+                factory_core::SettlementStage::Ready
+            );
+        }
+    }
+    fixture.chain.run(
+        launchpad_client::build_withdraw_factory_proceeds_invocation(fixture.sale, id(99), id(6)),
+    );
+    assert_eq!(
+        fixture.state().settlement_stage,
+        factory_core::SettlementStage::Withdrawn {
+            unsold: 600,
+            collateral_due: 12,
+        }
+    );
+    let pool = curve_core::compute_pool_pda(
+        fixture.sale.namespace,
+        fixture.sale.curve_program_id,
+        fixture.token,
+        fixture.collateral,
+        fixture.factory,
+    );
+    assert_eq!(fixture.chain.balance(ata(pool, fixture.token)), 0);
+    assert_eq!(fixture.chain.balance(ata(pool, fixture.collateral)), 0);
+    assert_eq!(
+        fixture.chain.balance(ata(fixture.factory, fixture.token)),
+        700
+    );
+    assert_eq!(
+        fixture
+            .chain
+            .balance(ata(fixture.factory, fixture.collateral)),
+        12
+    );
+    assert_eq!(fixture.chain.balance(ata(id(6), fixture.collateral)), 2);
+    assert_eq!(fixture.chain.balance(ata(id(20), fixture.token)), 200);
+}
+
+#[test]
 fn failed_hook_rolls_back_final_payout_and_can_retry_after_adapter_readiness_changes() {
     let mut fixture = HookFixture::new(100, 200);
     fixture.mark_ready();
