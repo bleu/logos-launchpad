@@ -7,11 +7,11 @@ An LBP sells launch tokens for collateral during a fixed time window. The weight
 - Weighted: price depends on reserves and scheduled weights. Constant weights still allow the price to change as reserves change.
 - Fixed price: one exact collateral-per-token price, with each token's decimals handled separately.
 
-The creator chooses the mode at creation. See [ADR 0021](../adr/0021-modes-and-open-limits.md) for mode, pause and allowlist decisions.
+The creator chooses the mode at creation. See [ADR 0021](../adr/0021-modes-and-open-limits.md) for modes and allowlists. Under [ADR 0028](../adr/0028-token-custody-and-freeze.md), creators cannot pause; a fixed namespace emergency authority controls the swaps-only freeze for both curves and LBPs. This accepted policy replaces the RFP-016 creator pause and is `To be reviewed by Logos team`; production integration remains unbuilt.
 
 ## Clock and linear weights
 
-Chain time determines current weights. Checkpoints help observers; a buy does not need a prior poke. Pause stops buys without stopping the schedule. See [ADR 0026](../adr/0026-lbp-clock-and-poke.md) for clock and checkpoint rules, and [ADR 0025](../adr/0025-sale-closing.md) for closing and withdrawal.
+Chain time determines current weights. Checkpoints help observers; a buy does not need a prior poke. Emergency freeze does not stop the schedule or change the original end. See [ADR 0026](../adr/0026-lbp-clock-and-poke.md) for clock and checkpoint rules, and [ADR 0025](../adr/0025-sale-closing.md) for closing and withdrawal.
 
 ## Buys
 

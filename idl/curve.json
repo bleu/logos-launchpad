@@ -509,6 +509,220 @@
         }
       ],
       "args": []
+    },
+    {
+      "name": "private",
+      "accounts": [],
+      "args": [
+        {
+          "name": "instruction",
+          "type": {
+            "defined": "Box"
+          }
+        }
+      ]
+    },
+    {
+      "name": "initialize_namespace",
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "signer": false,
+          "init": true
+        },
+        {
+          "name": "namespace_authority",
+          "writable": false,
+          "signer": true,
+          "init": false
+        },
+        {
+          "name": "accepted_authorities",
+          "writable": false,
+          "signer": false,
+          "init": false,
+          "rest": true
+        }
+      ],
+      "args": [
+        {
+          "name": "namespace",
+          "type": "account_id"
+        },
+        {
+          "name": "admin",
+          "type": "account_id"
+        },
+        {
+          "name": "protocol_fee_bps",
+          "type": "u32"
+        },
+        {
+          "name": "treasury",
+          "type": "account_id"
+        },
+        {
+          "name": "emergency_authority",
+          "type": "account_id"
+        },
+        {
+          "name": "emergency_candidate",
+          "type": {
+            "option": {
+              "array": [
+                "u32",
+                40
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "update_fee",
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "authority",
+          "writable": false,
+          "signer": true,
+          "init": false
+        }
+      ],
+      "args": [
+        {
+          "name": "namespace",
+          "type": "account_id"
+        },
+        {
+          "name": "protocol_fee_bps",
+          "type": "u32"
+        }
+      ]
+    },
+    {
+      "name": "update_treasury",
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "authority",
+          "writable": false,
+          "signer": true,
+          "init": false
+        }
+      ],
+      "args": [
+        {
+          "name": "namespace",
+          "type": "account_id"
+        },
+        {
+          "name": "treasury",
+          "type": "account_id"
+        }
+      ]
+    },
+    {
+      "name": "transfer_admin",
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "authority",
+          "writable": false,
+          "signer": true,
+          "init": false
+        },
+        {
+          "name": "successor",
+          "writable": false,
+          "signer": false,
+          "init": false,
+          "rest": true
+        }
+      ],
+      "args": [
+        {
+          "name": "namespace",
+          "type": "account_id"
+        },
+        {
+          "name": "new_admin",
+          "type": "account_id"
+        },
+        {
+          "name": "candidate",
+          "type": {
+            "option": {
+              "array": [
+                "u32",
+                40
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "freeze_namespace",
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "emergency_authority",
+          "writable": false,
+          "signer": true,
+          "init": false
+        }
+      ],
+      "args": [
+        {
+          "name": "namespace",
+          "type": "account_id"
+        }
+      ]
+    },
+    {
+      "name": "unfreeze_namespace",
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "emergency_authority",
+          "writable": false,
+          "signer": true,
+          "init": false
+        }
+      ],
+      "args": [
+        {
+          "name": "namespace",
+          "type": "account_id"
+        }
+      ]
     }
   ],
   "instruction_type": "curve_core::Instruction"

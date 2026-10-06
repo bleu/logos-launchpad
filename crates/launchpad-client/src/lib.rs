@@ -12,6 +12,8 @@
 mod error;
 pub use error::{ClientError, Result};
 
+pub use curve_core::{AdminCandidate, EmergencyCandidate};
+
 pub use factory_core::{CreationStage, GraduationHook, SettlementStage, TradeMode};
 
 mod types;
@@ -208,7 +210,7 @@ pub async fn submit_private_buy(
     })
 }
 
-/// Builds the curve configuration initialization/update call.
+/// Builds the retired wire instruction. The program rejects this call.
 #[must_use]
 pub fn build_update_config_invocation(
     namespace: AccountId,
@@ -570,7 +572,7 @@ pub async fn load_curve_config(
         .get_account_public(config_id)
         .await
         .map_err(|source| ClientError::ReadCurveConfig(source.into_boxed_dyn_error()))?;
-    Config::try_from(&account.data).map_err(ClientError::DecodeCurveConfig)
+    read_curve_config(&account, curve_program_id)
 }
 
 /// Reads the immutable launch policy and current factory lifecycle flags for a sale.
@@ -1107,4 +1109,146 @@ pub async fn collect_pool_fees(
         );
     }
     Ok(hashes)
+}
+
+/// Builds namespace initialization with administrator acceptance and an explicit emergency authority.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "namespace creation sets both roles"
+)]
+pub fn build_initialize_namespace_invocation(
+    namespace: AccountId,
+    program: ProgramId,
+    namespace_authority: AccountId,
+    admin: AccountId,
+    fee: u16,
+    treasury: AccountId,
+    emergency_authority: AccountId,
+    emergency_candidate: EmergencyCandidate,
+) -> PublicInvocation<CurveInstruction> {
+    let mut accounts = vec![compute_config_pda(namespace, program), namespace_authority];
+    if !accounts.contains(&admin) {
+        accounts.push(admin);
+    }
+    let mut signers = vec![namespace_authority];
+    if !signers.contains(&admin) {
+        signers.push(admin);
+    }
+    if !accounts.contains(&emergency_authority) {
+        accounts.push(emergency_authority);
+    }
+    if matches!(emergency_candidate, EmergencyCandidate::Signer)
+        && !signers.contains(&emergency_authority)
+    {
+        signers.push(emergency_authority);
+    }
+    PublicInvocation {
+        program_id: program,
+        account_ids: accounts,
+        signer_accounts: signers,
+        instruction: CurveInstruction::InitializeNamespace {
+            namespace,
+            admin,
+            protocol_fee_bps: fee.into(),
+            treasury,
+            emergency_authority,
+            emergency_candidate,
+        },
+    }
+}
+
+/// Builds an emergency-authorized namespace freeze.
+/// PDA emergency authorities must call through their owner program with PDA authorization; direct wallet submission requires a signing account.
+pub fn build_freeze_namespace_invocation(
+    namespace: AccountId,
+    program: ProgramId,
+    emergency_authority: AccountId,
+) -> PublicInvocation<CurveInstruction> {
+    PublicInvocation {
+        program_id: program,
+        account_ids: vec![compute_config_pda(namespace, program), emergency_authority],
+        signer_accounts: vec![emergency_authority],
+        instruction: CurveInstruction::FreezeNamespace { namespace },
+    }
+}
+
+/// Builds an emergency-authorized namespace unfreeze.
+/// PDA emergency authorities must call through their owner program with PDA authorization; direct wallet submission requires a signing account.
+pub fn build_unfreeze_namespace_invocation(
+    namespace: AccountId,
+    program: ProgramId,
+    emergency_authority: AccountId,
+) -> PublicInvocation<CurveInstruction> {
+    PublicInvocation {
+        program_id: program,
+        account_ids: vec![compute_config_pda(namespace, program), emergency_authority],
+        signer_accounts: vec![emergency_authority],
+        instruction: CurveInstruction::UnfreezeNamespace { namespace },
+    }
+}
+
+/// Builds a fee-only namespace update.
+pub fn build_update_fee_invocation(
+    namespace: AccountId,
+    program: ProgramId,
+    admin: AccountId,
+    fee: u16,
+) -> PublicInvocation<CurveInstruction> {
+    let mut call = build_renounce_admin_invocation(namespace, program, admin);
+    call.instruction = CurveInstruction::UpdateFee {
+        namespace,
+        protocol_fee_bps: fee.into(),
+    };
+    call
+}
+
+/// Builds a treasury-only namespace update.
+pub fn build_update_treasury_invocation(
+    namespace: AccountId,
+    program: ProgramId,
+    admin: AccountId,
+    treasury: AccountId,
+) -> PublicInvocation<CurveInstruction> {
+    let mut call = build_renounce_admin_invocation(namespace, program, admin);
+    call.instruction = CurveInstruction::UpdateTreasury {
+        namespace,
+        treasury,
+    };
+    call
+}
+
+/// Builds an accepted signer or program-owned PDA administration transfer.
+pub fn build_transfer_admin_invocation(
+    namespace: AccountId,
+    program: ProgramId,
+    admin: AccountId,
+    successor: AccountId,
+    candidate: curve_core::AdminCandidate,
+) -> PublicInvocation<CurveInstruction> {
+    let mut call = build_renounce_admin_invocation(namespace, program, admin);
+    if !call.account_ids.contains(&successor) {
+        call.account_ids.push(successor);
+    }
+    if matches!(candidate, curve_core::AdminCandidate::Signer)
+        && !call.signer_accounts.contains(&successor)
+    {
+        call.signer_accounts.push(successor);
+    }
+    call.instruction = CurveInstruction::TransferAdmin {
+        namespace,
+        new_admin: successor,
+        candidate,
+    };
+    call
+}
+
+/// Reads a namespace config snapshot after checking its program owner.
+pub fn read_curve_config(
+    account: &lee_core::account::Account,
+    program: ProgramId,
+) -> Result<Config> {
+    if account.program_owner != program {
+        return Err(ClientError::ConfigProgramMismatch);
+    }
+    Config::try_from(&account.data).map_err(ClientError::DecodeCurveConfig)
 }

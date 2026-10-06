@@ -12,7 +12,6 @@ use crate::{
     pool_create::create_pool,
     pool_lifecycle::{close_pool, withdraw_reserves},
     pool_swap::{swap_exact_input, swap_exact_output},
-    update_config::update_config,
 };
 
 fn wire_depletion_side(side: u8) -> pool::TokenSide {
@@ -47,30 +46,70 @@ pub fn process_instruction(
     let original = pre_states.clone();
     let (mut posts, mut calls) = match instruction {
         Instruction::Private { .. } => panic!("nested execution mode wrapper"),
-        Instruction::UpdateConfig {
+        Instruction::InitializeNamespace {
             namespace,
             admin,
             protocol_fee_bps,
             treasury,
-        } => {
-            let [config, authority] = pre_states
-                .try_into()
-                .expect("UpdateConfig requires exactly two accounts");
-            (
-                update_config(
-                    namespace,
-                    config,
-                    authority,
-                    admin,
-                    protocol_fee_bps
-                        .try_into()
-                        .expect("Protocol fee must fit in u16"),
-                    treasury,
-                    self_program_id,
-                ),
-                vec![],
-            )
+            emergency_authority,
+            emergency_candidate,
+        } => (
+            crate::update_config::initialize_namespace(
+                pre_states,
+                namespace,
+                admin,
+                protocol_fee_bps,
+                treasury,
+                emergency_authority,
+                emergency_candidate,
+                self_program_id,
+            ),
+            vec![],
+        ),
+        Instruction::FreezeNamespace { namespace } => (
+            crate::update_config::freeze_namespace(pre_states, namespace, self_program_id),
+            vec![],
+        ),
+        Instruction::UnfreezeNamespace { namespace } => (
+            crate::update_config::unfreeze_namespace(pre_states, namespace, self_program_id),
+            vec![],
+        ),
+        Instruction::UpdateConfig { .. } => {
+            panic!("UpdateConfig is retired; use explicit namespace operations")
         }
+        Instruction::UpdateFee {
+            namespace,
+            protocol_fee_bps,
+        } => (
+            crate::update_config::update_fee(
+                pre_states,
+                namespace,
+                protocol_fee_bps,
+                self_program_id,
+            ),
+            vec![],
+        ),
+        Instruction::UpdateTreasury {
+            namespace,
+            treasury,
+        } => (
+            crate::update_config::update_treasury(pre_states, namespace, treasury, self_program_id),
+            vec![],
+        ),
+        Instruction::TransferAdmin {
+            namespace,
+            new_admin,
+            candidate,
+        } => (
+            crate::update_config::transfer_admin(
+                pre_states,
+                namespace,
+                new_admin,
+                candidate,
+                self_program_id,
+            ),
+            vec![],
+        ),
         Instruction::RenounceAdmin { namespace } => {
             let [config, authority] = pre_states
                 .try_into()

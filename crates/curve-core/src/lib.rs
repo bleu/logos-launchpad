@@ -37,7 +37,7 @@ mod tests;
 /// Curve program instruction. Token accounts are supplied by the guest/token adapter.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Instruction {
-    /// Creates the config PDA on the first call, replaces it whole after.
+    /// Retired wire tag. Always rejects; use explicit namespace operations.
     ///
     /// Required accounts:
     /// - Config PDA
@@ -113,7 +113,46 @@ pub enum Instruction {
     CollectFees,
     /// Select the pinned privacy circuit's transaction-wide PDA authorization rules.
     Private { instruction: Box<Instruction> },
+    /// Creates namespace settings and both authority roles atomically.
+    InitializeNamespace {
+        namespace: AccountId,
+        admin: AccountId,
+        protocol_fee_bps: u32,
+        treasury: AccountId,
+        emergency_authority: AccountId,
+        emergency_candidate: EmergencyCandidate,
+    },
+    UpdateFee {
+        namespace: AccountId,
+        protocol_fee_bps: u32,
+    },
+    UpdateTreasury {
+        namespace: AccountId,
+        treasury: AccountId,
+    },
+    TransferAdmin {
+        namespace: AccountId,
+        new_admin: AccountId,
+        candidate: AdminCandidate,
+    },
+    /// Emergency-authority-only stop for namespace swaps.
+    FreezeNamespace { namespace: AccountId },
+    /// Removes the namespace swap stop without changing sale closing rules.
+    UnfreezeNamespace { namespace: AccountId },
 }
+
+/// Acceptance evidence for a namespace administrator.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AdminCandidate {
+    Signer,
+    Pda {
+        program_id: ProgramId,
+        seed: [u8; 32],
+    },
+}
+
+/// Acceptance evidence for the fixed namespace emergency authority.
+pub type EmergencyCandidate = AdminCandidate;
 
 /// The protocol fee denominator. A fee at this rate consumes its buy-side input,
 /// so the swap state machine rejects it as untradeable.
@@ -132,20 +171,113 @@ pub const ASSOCIATED_TOKEN_ACCOUNT_PROGRAM_ID: ProgramId = [
     0xf800_15d5,
 ];
 
-/// The protocol settings of one namespace, read live by its trades.
-/// Created and replaced whole by `update_config`.
-#[derive(Clone, Default, BorshSerialize, BorshDeserialize)]
+/// Live namespace settings with embedded administration and emergency components.
+#[derive(Clone, BorshSerialize, BorshDeserialize)]
 pub struct Config {
-    pub admin: AccountId,
+    format: [u8; 8],
+    version: u16,
+    administration: admin_authority::AdminConfig,
     pub protocol_fee_bps: u16,
     pub treasury: AccountId,
+    emergency: freeze_authority::FreezeConfig,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            format: *b"LZNSCONF",
+            version: 2,
+            administration: Default::default(),
+            protocol_fee_bps: 0,
+            treasury: AccountId::default(),
+            emergency: Default::default(),
+        }
+    }
+}
+
+impl Config {
+    pub(crate) const ADMIN_OFFSET: usize = 10;
+    pub(crate) const FREEZE_OFFSET: usize = Self::ADMIN_OFFSET
+        + <admin_authority::AdminConfig as spel_framework::FixedBorshSize>::SIZE
+        + 2
+        + 32;
+
+    /// Constructs a config value; namespace creation must also validate account evidence.
+    pub fn new(
+        admin: AccountId,
+        protocol_fee_bps: u16,
+        treasury: AccountId,
+        emergency_authority: AccountId,
+    ) -> Self {
+        use spel_framework::prelude as spel;
+
+        let emergency_account = spel::AccountWithMetadata {
+            account_id: spel::AccountId::new(emergency_authority.to_bytes()),
+            is_authorized: true,
+            account: spel::Account::default(),
+        };
+        let mut embedded = emergency_account.clone();
+        freeze_authority::FreezeConfig::bootstrap(
+            &mut embedded,
+            freeze_authority::FreezeCandidate::Signer,
+            &emergency_account,
+        )
+        .expect("Non-default emergency authority");
+        Self {
+            administration: admin_authority::AdminConfig::initialize(
+                spel_framework::prelude::AccountId::new(admin.to_bytes()),
+            )
+            .expect("Non-default initial administrator"),
+            emergency: freeze_authority::FreezeConfig::from_account(&embedded)
+                .expect("Initialized emergency state"),
+            protocol_fee_bps,
+            treasury,
+            ..Self::default()
+        }
+    }
+
+    /// Returns no administrator after terminal renunciation.
+    pub fn current_admin(&self) -> Option<AccountId> {
+        self.administration
+            .current_admin()
+            .map(|id| AccountId::new(id.to_bytes()))
+    }
+
+    /// Absent only in an uninitialized config, which the account reader rejects.
+    pub fn emergency_authority(&self) -> Option<AccountId> {
+        self.emergency
+            .current_authority()
+            .map(|id| AccountId::new(id.to_bytes()))
+    }
+
+    pub fn is_frozen(&self) -> bool {
+        self.emergency.is_frozen
+    }
+
+    pub(crate) fn assert_admin(&self, account: &lee_core::account::AccountWithMetadata) {
+        self.administration
+            .assert_admin(&update_config::adapt(account))
+            .expect("Namespace administrator authorization failed");
+    }
 }
 
 impl TryFrom<&Data> for Config {
     type Error = std::io::Error;
 
     fn try_from(data: &Data) -> Result<Self, Self::Error> {
-        Self::try_from_slice(data.as_ref())
+        let config = Self::try_from_slice(data.as_ref())?;
+        if config.format != *b"LZNSCONF"
+            || config.version != 2
+            || config.emergency_authority().is_none()
+            || config.protocol_fee_bps >= MAX_FEE_BPS
+            || config.treasury == AccountId::default()
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "Unsupported or invalid namespace config",
+            ));
+        }
+        Ok(config)
     }
 }
 

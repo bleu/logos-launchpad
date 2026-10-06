@@ -53,6 +53,30 @@ struct Cli {
 
 impl Cli {
     fn validate_route(&self) -> Result<()> {
+        if matches!(
+            self.command,
+            Command::InitializeNamespace(_)
+                | Command::UpdateFee(_)
+                | Command::UpdateTreasury(_)
+                | Command::TransferAdmin(_)
+                | Command::RenounceAdmin(_)
+        ) && (self.authority_router_path.is_some()
+            || self.namespace.is_some_and(AccountLocation::is_private))
+        {
+            eyre::bail!(
+                "namespace administration supports public execution only; private-admin routing is unsupported"
+            );
+        }
+        if matches!(
+            self.command,
+            Command::FreezeNamespace(_) | Command::UnfreezeNamespace(_)
+        ) && (self.authority_router_path.is_some()
+            || self.namespace.is_some_and(AccountLocation::is_private))
+        {
+            eyre::bail!(
+                "namespace emergency controls support public execution only; PDA authorities must call through their owner program"
+            );
+        }
         if matches!(self.command, Command::Graduate(_))
             && (self.authority_router_path.is_some()
                 || self.namespace.is_some_and(AccountLocation::is_private))
@@ -85,11 +109,18 @@ enum Command {
     SaleInfo(LaunchReadArgs),
     /// Collect one or more pools in this namespace (sequential, resumable).
     CollectFees(CollectFeesArgs),
-    Configure(ConfigArgs),
+    InitializeNamespace(ConfigArgs),
+    UpdateFee(UpdateFeeArgs),
+    UpdateTreasury(UpdateTreasuryArgs),
+    TransferAdmin(TransferAdminArgs),
     CreateAuthority(CreateAuthorityArgs),
     TransferAuthority(TransferAuthorityArgs),
     NamespaceInfo(NamespaceReadArgs),
     RenounceAdmin(NamespaceAdminArgs),
+    /// Freeze namespace swaps with a signing account. PDAs must call through their owner program.
+    FreezeNamespace(NamespaceEmergencyArgs),
+    /// Unfreeze namespace swaps with a signing account. PDAs must call through their owner program.
+    UnfreezeNamespace(NamespaceEmergencyArgs),
 }
 
 #[derive(Debug, Args)]
@@ -116,8 +147,41 @@ struct NamespaceReadArgs {
 struct NamespaceAdminArgs {
     #[arg(long)]
     curve_program_path: PathBuf,
-    #[arg(long, value_parser = parse_account_location)]
-    admin: AccountLocation,
+    #[arg(long, value_parser = parse_namespace_account)]
+    admin: lee::AccountId,
+}
+#[derive(Debug, Args)]
+struct NamespaceEmergencyArgs {
+    #[arg(long)]
+    curve_program_path: PathBuf,
+    #[arg(long, value_parser = parse_namespace_account)]
+    emergency_authority: lee::AccountId,
+}
+
+#[derive(Debug, Args)]
+struct UpdateFeeArgs {
+    #[command(flatten)]
+    authority: NamespaceAdminArgs,
+    #[arg(long)]
+    protocol_fee_bps: u16,
+}
+#[derive(Debug, Args)]
+struct UpdateTreasuryArgs {
+    #[command(flatten)]
+    authority: NamespaceAdminArgs,
+    #[arg(long, value_parser = parse_namespace_account)]
+    treasury: lee::AccountId,
+}
+#[derive(Debug, Args)]
+struct TransferAdminArgs {
+    #[command(flatten)]
+    authority: NamespaceAdminArgs,
+    #[arg(long, value_parser = parse_namespace_account)]
+    new_admin: lee::AccountId,
+    #[arg(long, value_parser = parse_program_id, requires = "successor_seed")]
+    successor_program_id: Option<lee::ProgramId>,
+    #[arg(long, value_parser = parse_launch_salt, requires = "successor_program_id")]
+    successor_seed: Option<[u8; 32]>,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -357,17 +421,29 @@ struct PriceArgs {
 
 #[derive(Debug, Args)]
 struct ConfigArgs {
-    /// Replace administration with the NFT held by this Public/ or Private/ account.
-    #[arg(long, value_parser = parse_account_location)]
-    new_admin: Option<AccountLocation>,
-    #[arg(long, value_parser = parse_account_location)]
-    admin: AccountLocation,
+    #[arg(long, value_parser = parse_namespace_account)]
+    namespace_authority: lee::AccountId,
+    #[arg(long, value_parser = parse_namespace_account)]
+    emergency_authority: lee::AccountId,
+    #[arg(long, value_parser = parse_program_id, requires = "emergency_seed")]
+    emergency_program_id: Option<lee::ProgramId>,
+    #[arg(long, value_parser = parse_launch_salt, requires = "emergency_program_id")]
+    emergency_seed: Option<[u8; 32]>,
+    #[arg(long, value_parser = parse_namespace_account)]
+    admin: lee::AccountId,
     #[arg(long, default_value_t = 0)]
     protocol_fee_bps: u16,
-    #[arg(long, value_parser = parse_account_location)]
-    treasury: AccountLocation,
-    #[arg(long = "curve-program-path")]
+    #[arg(long, value_parser = parse_namespace_account)]
+    treasury: lee::AccountId,
+    #[arg(long)]
     curve_program_path: PathBuf,
+}
+
+fn parse_namespace_account(raw: &str) -> Result<lee::AccountId, String> {
+    match parse_account_location(raw)? {
+        AccountLocation::Public(id) => Ok(id),
+        AccountLocation::Private(_) => Err("namespace administration requires public accounts; private-admin routing is unsupported".to_owned()),
+    }
 }
 
 fn parse_account_location(raw: &str) -> Result<AccountLocation, String> {
@@ -518,6 +594,17 @@ struct SaleSnapshot {
 }
 
 #[derive(Serialize)]
+struct NamespaceSnapshot {
+    namespace: String,
+    admin: Option<String>,
+    administration: &'static str,
+    protocol_fee_bps: u16,
+    treasury: String,
+    emergency_authority: Option<String>,
+    frozen: bool,
+}
+
+#[derive(Serialize)]
 struct PriceQuote {
     namespace: String,
     protocol_fee_bps: u16,
@@ -633,43 +720,115 @@ async fn run(json: bool, cli: Cli) -> Result<()> {
         Command::Status(args) | Command::SaleInfo(args) => {
             sale_snapshot(namespace, json, args).await
         }
-        Command::Configure(args) => configure(namespace, json, args, router).await,
+        Command::InitializeNamespace(args) => {
+            let program = load_program(&args.curve_program_path)?;
+            let candidate = match (args.emergency_program_id, args.emergency_seed) {
+                (Some(program_id), Some(seed)) => {
+                    launchpad_client::EmergencyCandidate::Pda { program_id, seed }
+                }
+                (None, None) => launchpad_client::EmergencyCandidate::Signer,
+                _ => eyre::bail!("PDA emergency authority requires program ID and seed"),
+            };
+            let call = launchpad_client::build_initialize_namespace_invocation(
+                namespace,
+                program.id(),
+                args.namespace_authority,
+                args.admin,
+                args.protocol_fee_bps,
+                args.treasury,
+                args.emergency_authority,
+                candidate,
+            );
+            submit_namespace_call(&program, call).await
+        }
+        Command::UpdateFee(args) => {
+            let program = load_program(&args.authority.curve_program_path)?;
+            let call = launchpad_client::build_update_fee_invocation(
+                namespace,
+                program.id(),
+                args.authority.admin,
+                args.protocol_fee_bps,
+            );
+            submit_namespace_call(&program, call).await
+        }
+        Command::UpdateTreasury(args) => {
+            let program = load_program(&args.authority.curve_program_path)?;
+            let call = launchpad_client::build_update_treasury_invocation(
+                namespace,
+                program.id(),
+                args.authority.admin,
+                args.treasury,
+            );
+            submit_namespace_call(&program, call).await
+        }
+        Command::TransferAdmin(args) => {
+            let program = load_program(&args.authority.curve_program_path)?;
+            let candidate = match (args.successor_program_id, args.successor_seed) {
+                (Some(program_id), Some(seed)) => {
+                    launchpad_client::AdminCandidate::Pda { program_id, seed }
+                }
+                (None, None) => launchpad_client::AdminCandidate::Signer,
+                _ => eyre::bail!("PDA successor requires program ID and seed"),
+            };
+            let call = launchpad_client::build_transfer_admin_invocation(
+                namespace,
+                program.id(),
+                args.authority.admin,
+                args.new_admin,
+                candidate,
+            );
+            submit_namespace_call(&program, call).await
+        }
         Command::CreateAuthority(_) | Command::TransferAuthority(_) => unreachable!(),
         Command::NamespaceInfo(args) => {
             let program = load_program(&args.curve_program_path)?;
             let wallet = WalletCore::from_env()
                 .map_err(|error| eyre::eyre!(error.into_boxed_dyn_error()))?;
             let config = load_curve_config(namespace, &wallet, program.id()).await?;
-            println!(
-                "{}",
-                serde_json::json!({"namespace": namespace.to_string(), "admin": config.admin.to_string(), "protocol_fee_bps": config.protocol_fee_bps, "treasury": config.treasury.to_string()})
-            );
+            let snapshot = NamespaceSnapshot {
+                namespace: namespace.to_string(),
+                admin: config.current_admin().map(|admin| admin.to_string()),
+                administration: if config.current_admin().is_some() {
+                    "active"
+                } else {
+                    "renounced"
+                },
+                protocol_fee_bps: config.protocol_fee_bps,
+                treasury: config.treasury.to_string(),
+                emergency_authority: config
+                    .emergency_authority()
+                    .map(|authority| authority.to_string()),
+                frozen: config.is_frozen(),
+            };
+            println!("{}", serde_json::to_string(&snapshot)?);
             Ok(())
+        }
+        Command::FreezeNamespace(args) => {
+            let program = load_program(&args.curve_program_path)?;
+            let call = launchpad_client::build_freeze_namespace_invocation(
+                namespace,
+                program.id(),
+                args.emergency_authority,
+            );
+            submit_namespace_call(&program, call).await
+        }
+        Command::UnfreezeNamespace(args) => {
+            let program = load_program(&args.curve_program_path)?;
+            let call = launchpad_client::build_unfreeze_namespace_invocation(
+                namespace,
+                program.id(),
+                args.emergency_authority,
+            );
+            submit_namespace_call(&program, call).await
         }
         Command::RenounceAdmin(args) => {
             let program = load_program(&args.curve_program_path)?;
-            let mut wallet = WalletCore::from_env()
-                .map_err(|error| eyre::eyre!(error.into_boxed_dyn_error()))?;
-            let hash = submit_role(
-                &mut wallet,
-                &program,
-                vec![],
+            let call = launchpad_client::build_renounce_admin_invocation(
+                namespace,
+                program.id(),
                 args.admin,
-                router,
-                |holder| {
-                    Ok(launchpad_client::build_renounce_admin_invocation(
-                        namespace,
-                        program.id(),
-                        holder,
-                    ))
-                },
-            )
-            .await?;
-            println!(
-                "{}",
-                serde_json::json!({"namespace": namespace.to_string(), "transaction_hash": hex::encode(hash)})
             );
-            Ok(())
+            submit_namespace_call(&program, call).await
         }
     }
 }
@@ -698,54 +857,17 @@ fn error_category(error: &eyre::Report) -> ErrorCategory {
     }
 }
 
-async fn configure(
-    namespace: lee::AccountId,
-    json: bool,
-    args: ConfigArgs,
-    router: Option<&Path>,
+async fn submit_namespace_call<I: Serialize>(
+    program: &lee::program::Program,
+    call: launchpad_client::PublicInvocation<I>,
 ) -> Result<()> {
-    let curve_program = load_program(&args.curve_program_path)?;
-    let treasury = args.treasury.account_id();
-    let mut wallet =
+    let wallet =
         WalletCore::from_env().map_err(|error| eyre::eyre!(error.into_boxed_dyn_error()))?;
-    let current_authority = launchpad_client::load_authority_identity(&wallet, args.admin).await?;
-    let next_authority = match args.new_admin {
-        Some(holder) => launchpad_client::load_authority_identity(&wallet, holder).await?,
-        None => current_authority,
-    };
-    let build = |holder| {
-        Ok(launchpad_client::build_update_config_invocation(
-            namespace,
-            curve_program.id(),
-            holder,
-            next_authority,
-            args.protocol_fee_bps,
-            treasury,
-        ))
-    };
-    let transaction_hash = submit_role(
-        &mut wallet,
-        &curve_program,
-        vec![],
-        args.admin,
-        router,
-        build,
-    )
-    .await?;
-    if json {
-        println!(
-            "{}",
-            serde_json::json!({
-                "status": "submitted",
-                "transaction_hash": hex::encode(transaction_hash),
-            })
-        );
-    } else {
-        println!(
-            "submitted curve configuration: tx_hash={}",
-            hex::encode(transaction_hash)
-        );
-    }
+    let hash = submit_public_invocation(&wallet, program, call).await?;
+    println!(
+        "{}",
+        serde_json::json!({"status": "submitted", "transaction_hash": hex::encode(hash)})
+    );
     Ok(())
 }
 
@@ -1347,6 +1469,169 @@ mod tests {
     use clap::{CommandFactory, Parser};
 
     #[test]
+    fn initialization_requires_an_explicit_emergency_account() {
+        let mut args = vec![
+            "launchpad",
+            "initialize-namespace",
+            "--curve-program-path",
+            "curve.bin",
+            "--namespace-authority",
+            "11111111111111111111111111111111",
+            "--admin",
+            "11111111111111111111111111111111",
+            "--treasury",
+            "11111111111111111111111111111111",
+        ];
+        assert!(Cli::try_parse_from(&args).is_err());
+        args.extend(["--emergency-authority", "11111111111111111111111111111111"]);
+        assert!(Cli::try_parse_from(args).is_ok());
+    }
+
+    #[test]
+    fn initialization_accepts_only_paired_emergency_pda_evidence() {
+        let base = vec![
+            "launchpad",
+            "initialize-namespace",
+            "--curve-program-path",
+            "curve.bin",
+            "--namespace-authority",
+            "11111111111111111111111111111111",
+            "--admin",
+            "11111111111111111111111111111111",
+            "--treasury",
+            "11111111111111111111111111111111",
+            "--emergency-authority",
+            "11111111111111111111111111111111",
+        ];
+        let program = "01000000".repeat(8);
+        let seed = "ff".repeat(32);
+        let mut paired = base.clone();
+        paired.extend([
+            "--emergency-program-id",
+            &program,
+            "--emergency-seed",
+            &seed,
+        ]);
+        assert!(Cli::try_parse_from(paired).is_ok());
+        for (flag, value) in [
+            ("--emergency-program-id", &program),
+            ("--emergency-seed", &seed),
+        ] {
+            let mut incomplete = base.clone();
+            incomplete.extend([flag, value]);
+            assert!(Cli::try_parse_from(incomplete).is_err());
+        }
+    }
+
+    #[test]
+    fn freeze_namespace_accepts_public_emergency_authority_only() {
+        let base = vec![
+            "launchpad",
+            "freeze-namespace",
+            "--curve-program-path",
+            "curve.bin",
+            "--emergency-authority",
+            "11111111111111111111111111111111",
+        ];
+        assert!(Cli::try_parse_from(&base).unwrap().validate_route().is_ok());
+        let mut routed = base.clone();
+        routed.extend(["--authority-router-path", "router.bin"]);
+        assert!(
+            Cli::try_parse_from(routed)
+                .unwrap()
+                .validate_route()
+                .is_err()
+        );
+        let mut private = base;
+        private[5] = "Private/11111111111111111111111111111111";
+        assert!(Cli::try_parse_from(private).is_err());
+    }
+
+    #[test]
+    fn unfreeze_namespace_accepts_public_emergency_authority_only() {
+        let base = vec![
+            "launchpad",
+            "unfreeze-namespace",
+            "--curve-program-path",
+            "curve.bin",
+            "--emergency-authority",
+            "11111111111111111111111111111111",
+        ];
+        assert!(Cli::try_parse_from(&base).unwrap().validate_route().is_ok());
+        let mut private = base;
+        private.extend(["--namespace", "Private/11111111111111111111111111111111"]);
+        assert!(
+            Cli::try_parse_from(private)
+                .unwrap()
+                .validate_route()
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn namespace_info_json_reports_fixed_emergency_role_and_freeze_state() {
+        for frozen in [false, true] {
+            let output = serde_json::to_value(NamespaceSnapshot {
+                namespace: "namespace".into(),
+                admin: None,
+                administration: "renounced",
+                protocol_fee_bps: 30,
+                treasury: "treasury".into(),
+                emergency_authority: Some("emergency".into()),
+                frozen,
+            })
+            .unwrap();
+            assert_eq!(
+                output,
+                serde_json::json!({
+                    "namespace": "namespace", "admin": null, "administration": "renounced",
+                    "protocol_fee_bps": 30, "treasury": "treasury",
+                    "emergency_authority": "emergency", "frozen": frozen,
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn namespace_administration_rejects_private_router_inputs() {
+        let cli = Cli::try_parse_from([
+            "launchpad",
+            "--namespace",
+            "Public/11111111111111111111111111111111",
+            "--authority-router-path",
+            "router.bin",
+            "update-fee",
+            "--curve-program-path",
+            "curve.bin",
+            "--admin",
+            "Public/11111111111111111111111111111111",
+            "--protocol-fee-bps",
+            "30",
+        ])
+        .unwrap();
+        assert!(cli.validate_route().is_err());
+    }
+
+    #[test]
+    fn namespace_commands_are_explicit_and_configure_is_retired() {
+        let help = Cli::command().render_help().to_string();
+        for name in [
+            "initialize-namespace",
+            "update-fee",
+            "update-treasury",
+            "transfer-admin",
+            "renounce-admin",
+        ] {
+            assert!(help.contains(name), "missing command {name}");
+        }
+        assert!(
+            !Cli::command()
+                .get_subcommands()
+                .any(|c| c.get_name() == "configure")
+        );
+    }
+
+    #[test]
     fn authority_commands_support_private_holders_and_nft_issuance() {
         assert!(
             Cli::try_parse_from([
@@ -1366,7 +1651,11 @@ mod tests {
                 "11111111111111111111111111111111",
                 "--authority-router-path",
                 "private_authority.bin",
-                "configure",
+                "initialize-namespace",
+                "--namespace-authority",
+                "Public/11111111111111111111111111111111",
+                "--emergency-authority",
+                "Public/11111111111111111111111111111111",
                 "--curve-program-path",
                 "curve.bin",
                 "--admin",
@@ -1374,7 +1663,7 @@ mod tests {
                 "--treasury",
                 "Public/11111111111111111111111111111111"
             ])
-            .is_ok()
+            .is_err()
         );
         assert!(
             Cli::try_parse_from([
@@ -1395,12 +1684,14 @@ mod tests {
             "launchpad",
             "--namespace",
             "Public/11111111111111111111111111111111",
-            "configure",
+            "initialize-namespace",
             "--curve-program-path",
             "curve.bin",
             "--admin",
             "Public/11111111111111111111111111111111",
-            "--new-admin",
+            "--namespace-authority",
+            "Public/11111111111111111111111111111111",
+            "--emergency-authority",
             "Public/11111111111111111111111111111111",
             "--protocol-fee-bps",
             "0",
@@ -1409,10 +1700,10 @@ mod tests {
         ])
         .unwrap();
         assert!(matches!(cli.namespace, Some(AccountLocation::Public(_))));
-        let Command::Configure(config) = cli.command else {
+        let Command::InitializeNamespace(config) = cli.command else {
             panic!("configure command")
         };
-        assert!(matches!(config.new_admin, Some(AccountLocation::Public(_))));
+        assert_eq!(config.admin, config.namespace_authority);
         for command in ["namespace-info", "renounce-admin"] {
             let mut args = vec![
                 "launchpad",
@@ -1877,7 +2168,11 @@ mod tests {
         let cli = Cli::try_parse_from([
             "launchpad",
             "--json",
-            "configure",
+            "initialize-namespace",
+            "--namespace-authority",
+            "Public/11111111111111111111111111111111",
+            "--emergency-authority",
+            "Public/11111111111111111111111111111111",
             "--admin",
             "Public/11111111111111111111111111111111",
             "--treasury",
@@ -1886,7 +2181,7 @@ mod tests {
             "curve.bin",
         ])
         .expect("configure command should parse");
-        assert!(matches!(cli.command, Command::Configure(_)));
+        assert!(matches!(cli.command, Command::InitializeNamespace(_)));
     }
 
     #[test]

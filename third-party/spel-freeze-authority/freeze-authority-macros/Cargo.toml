@@ -1,0 +1,20 @@
+[package]
+name = "freeze-authority-macros"
+version.workspace = true
+rust-version = "1.88"
+description = "Proc-macro attributes for the freeze-authority SPEL extension"
+repository = "https://github.com/mmlado/spel-freeze-authority"
+readme = "README.md"
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2 = "1.0"
+quote = "1.0"
+syn = { version = "2.0", features = ["full"] }
