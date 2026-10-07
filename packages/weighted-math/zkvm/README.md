@@ -1,14 +1,14 @@
-# RISC0 guest checks and local proof
+# RISC0 guest checks
 
-This is a separate Cargo workspace. The kernel and independent host harness use Rust 1.94.0 without RISC0 dependencies. This workspace builds the same kernel as a guest. It checks host/guest bit parity and guest cycles. An explicit command also proves one weighted buy. These checks do not establish full LBP program or LEZ compatibility. The kernel remains unaudited.
+This is a separate Cargo workspace. The kernel and independent host harness use Rust 1.94.0 without RISC0 dependencies. This workspace builds the same kernel as a guest. It checks host/guest bit parity and guest cycles. These checks do not establish full LBP program or LEZ compatibility. The kernel remains unaudited.
 
-The independent mpmath oracle and numerical checks are in `../crates/harness`. Matching host and guest results do not replace those checks. See [current qualification and proof evidence](../docs/qualification.md) and the [historical cycle measurements](../docs/zkvm-cycles.md).
+The independent mpmath oracle and numerical checks are in `../crates/harness`. Matching host and guest results do not replace those checks. See the [qualification and historical proof evidence](../docs/qualification.md) and the [historical cycle measurements](../docs/zkvm-cycles.md).
 
 ## Layout
 
 - `methods/guest` reads the word protocol, calls the kernel and commits each result and its cycle count. Its release profile enables overflow checks.
 - `methods` builds and embeds the guest ELF and image ID.
-- `host` runs fixture parity and cycle checks by default. It exits with an error on a mismatch. `--prove-buy` instead makes one local composite proof and verifies it.
+- `host` runs fixture parity and cycle checks. It exits with an error on a mismatch.
 
 The guest protocol is unchanged: input starts with the operation and case count, then four little-endian `u32` words per `u128` operand. Each journal record has a 16-byte little-endian result and an 8-byte little-endian cycle count.
 
@@ -48,7 +48,7 @@ RISC0_BUILD_LOCKED=1 cargo +1.94.0 test --manifest-path packages/weighted-math/z
 RISC0_BUILD_LOCKED=1 cargo +1.94.0 build --release --manifest-path packages/weighted-math/zkvm/Cargo.toml --locked -p zkvm-host
 ```
 
-The command tests reject unknown arguments, extra arguments and development proving before a prover starts. Regular tests do not generate a proof.
+The command test rejects unknown arguments before guest execution. Regular tests do not generate a proof.
 
 ## Guest parity
 
@@ -58,21 +58,4 @@ RISC0_EXECUTOR=ipc "$CARGO_TARGET_DIR/release/zkvm-host"
 
 The default command executes each fixture in the guest and compares it with a host kernel call. It prints per-call and whole-session cycles. Padded executor segment cycles describe proof workload, not measured proof time. This command creates no proof.
 
-## One real proof
-
-Build before starting the time budget. With GNU `timeout` installed as `gtimeout` on macOS:
-
-```sh
-unset RISC0_DEV_MODE
-gtimeout --signal=KILL 1800s "$CARGO_TARGET_DIR/release/zkvm-host" --prove-buy
-```
-
-The command accepts no extra arguments. It requires `RISC0_DEV_MODE` to be unset or exactly `0`. It uses a local `r0vm` subprocess directly, so `RISC0_PROVER` and Bonsai settings cannot select a remote prover. It disables development proving and verification, rejects Fake receipts, checks the guest image ID and compares the verified journal result with the host result.
-
-The example has a collateral reserve of `10^12`, launch-token reserve of `10^24`, weights `(4 * 2^60, 2^60)` and collateral input `10^8`. With collateral decimals 6 and launch-token decimals 18, this is a 100-token buy against one million tokens in each reserve. The proof covers this pure weighted-math call. It contains no fees, custody, clock, authority or LBP lifecycle handlers.
-
-The output records the inputs, host result, image ID, receipt kind, journal result, kernel cycles and session cycles. `prove_seconds` includes local IPC and the prover's receipt-integrity check. `verify_seconds` measures the separate image-ID and journal verification. Record a failed or timed-out run as such. Development receipts and executor-only runs do not count as real proofs.
-
-On 2026-10-02, the local attempt on an Apple M3 Pro with 11 logical CPUs and 18 GiB RAM succeeded within the 30-minute cap. The composite proof took 5.908625 seconds; the separate verification took 0.013822 seconds. The verified output was `399900019995567609920`. The proved image ID was `8ba0ec41bd7dd3af32d861b84679967807c644d2ec95f223dcd586c58916513a`. The call used 11,243 kernel cycles and 15,325 whole-guest user cycles. Its one segment had 65,536 total cycles, including 28,919 paging cycles and 21,292 reserved cycles. These are one-run kernel measurements, not full LBP-handler costs or performance guarantees.
-
-Integrating main's newer locked-build, release-strip and path-remap settings changed the final embedded image ID to `3ea031f8c4b2c1c2a57290441b99a5c033348616988c1cbae1650f0db6962eae`. The recorded receipt does not verify this final image. No second proof attempt was made. Keep original proof evidence separate from final-build executor checks in the [qualification record](../docs/qualification.md).
+The [qualification record](../docs/qualification.md) retains the historical fixed-input proof result. It does not verify the current guest image and is not a supported proof workflow.
