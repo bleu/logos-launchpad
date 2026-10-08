@@ -52,6 +52,7 @@ jobs:
     timeout-minutes: 120
     env:
       CARGO_BUILD_JOBS: 2
+      LOGOS_SCAFFOLD_CACHE_ROOT: ${{ runner.temp }}/logos-scaffold
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -89,6 +90,13 @@ jobs:
           rzup install cpp "$RISC0_CPP_VERSION"
           rzup install r0vm "$RISC0_TOOLS_VERSION"
           rzup install cargo-risczero "$RISC0_TOOLS_VERSION"
+      - name: Build pinned IDL tool
+        run: |
+          read -r source pin < <(python3 -c 'import tomllib; repo = tomllib.load(open("scaffold.toml", "rb"))["repos"]["spel"]; print(repo["source"], repo["pin"])')
+          spel="$LOGOS_SCAFFOLD_CACHE_ROOT/repos/spel/$pin"
+          git clone "$source" "$spel"
+          git -C "$spel" checkout --detach "$pin"
+          cargo build --manifest-path "$spel/Cargo.toml" --release --locked -p spel
       - name: Check installed tool versions
         run: bash verify/check-builds.sh --preflight
       - name: Check authority build inputs
