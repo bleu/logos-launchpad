@@ -20,7 +20,6 @@ use pool::Pool;
 use serde::{Deserialize, Serialize};
 
 mod authority;
-mod deployment;
 mod dispatch;
 mod emergency;
 mod pool_create;
@@ -28,8 +27,9 @@ mod pool_lifecycle;
 mod pool_swap;
 mod update_config;
 
+include!(concat!(env!("OUT_DIR"), "/emergency_authority.rs"));
+
 pub use authority::{TOKEN_PROGRAM_ID, identity};
-pub use deployment::INITIAL_EMERGENCY_AUTHORITY;
 pub use dispatch::{process_instruction, use_public_authorizations};
 pub use emergency::{AuthorityError, FreezeConfig};
 pub use pool_create::after_ata_creation;

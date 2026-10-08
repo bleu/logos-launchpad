@@ -58,6 +58,8 @@ jobs:
           persist-credentials: false
       - name: Set up pinned Rust
         run: rustup show active-toolchain
+      - name: Set local test authority
+        run: printf 'CURVE_EMERGENCY_AUTHORITY=%s\n' "$(< crates/curve-core/tests/fixtures/emergency-authority.hex)" >> "$GITHUB_ENV"
       - name: Install host prerequisites
         run: |
           sudo apt-get update
@@ -89,6 +91,10 @@ jobs:
           rzup install cargo-risczero "$RISC0_TOOLS_VERSION"
       - name: Check installed tool versions
         run: bash verify/check-builds.sh --preflight
+      - name: Check authority build inputs
+        run: |
+          bash verify/tests/check-emergency-authority.sh
+          bash verify/tests/check-emergency-authority.sh authority-cache
       - name: Run locked builds and tests
         run: bash verify/check-builds.sh
       - name: Check generated program interfaces

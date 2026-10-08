@@ -1,4 +1,4 @@
-// Adapted from SPEL authority and freeze helpers; see third-party/spel-emergency/PROVENANCE.
+// Adapted from SPEL authority and freeze helpers; see docs/adr/0028-token-custody-and-freeze.md.
 // Copyright (c) 2026 mmlado. Licensed under MIT.
 
 use borsh::{BorshDeserialize, BorshSerialize};

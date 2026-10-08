@@ -335,6 +335,50 @@ impl Chain {
     }
 }
 #[test]
+fn signed_namespace_creation_uses_build_authority() {
+    let expected = AccountId::new(
+        hex::decode(std::env::var("CURVE_EMERGENCY_AUTHORITY").expect("build authority input"))
+            .unwrap()
+            .try_into()
+            .unwrap(),
+    );
+    let mut chain = Chain::new();
+    println!("curve image ID: {:?}", chain.curve.id());
+    for (namespace, holder) in [(id(1), id(99)), (id(2), id(100))] {
+        chain.initialize_namespace(namespace, holder);
+        let config_id = curve_core::compute_config_pda(namespace, chain.curve.id());
+        let state = curve_core::Config::try_from(&chain.accounts[&config_id].data).unwrap();
+        assert_eq!(state.emergency.authority(), expected);
+        assert!(!state.emergency.is_frozen);
+    }
+    if expected != id(101) {
+        chain.accounts.insert(
+            id(101),
+            Account {
+                program_owner: [77; 8],
+                ..Account::default()
+            },
+        );
+        let saved = chain.accounts.clone();
+        let error = chain
+            .try_public(chain.emergency_call(
+                id(1),
+                id(101),
+                curve_core::Instruction::SetFrozen {
+                    namespace: id(1),
+                    frozen: true,
+                },
+            ))
+            .unwrap_err();
+        assert!(
+            matches!(error, lee::error::LeeError::ProgramExecutionFailed(ref message) if message.contains("signer is not the current authority")),
+            "{error:?}"
+        );
+        assert_eq!(chain.accounts, saved);
+    }
+}
+
+#[test]
 fn signed_emergency_controls_reject_other_roles_and_transfer_without_acceptance() {
     let mut chain = Chain::new();
     let namespace = id(1);

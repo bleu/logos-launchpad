@@ -2,6 +2,7 @@
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+export CURVE_EMERGENCY_AUTHORITY="$(< "$root/crates/curve-core/tests/fixtures/emergency-authority.hex")"
 tmp="$(mktemp -d)"
 release_parent=''
 fixture_lock=''
@@ -17,8 +18,12 @@ copy_source() {
   mkdir -p "$destination"
   {
     git -C "$root" ls-files -z
-    printf '%s\0' verify/check-builds.sh verify/build-tools.env verify/tests/check-builds.sh methods/tests/release_overflow.rs methods/guest/examples/release_overflow.rs
-  } | (cd "$root" && tar -cf - --null -T -) | (cd "$destination" && tar -xf -)
+    printf '%s\0' verify/check-builds.sh verify/build-tools.env verify/tests/check-builds.sh methods/tests/release_overflow.rs methods/guest/examples/release_overflow.rs crates/curve-core/build.rs crates/curve-core/tests/fixtures/emergency-authority.hex verify/tests/check-emergency-authority.sh
+  } | while IFS= read -r -d '' path; do
+    if [ -e "$root/$path" ] || [ -L "$root/$path" ]; then
+      printf '%s\0' "$path"
+    fi
+  done | (cd "$root" && tar -cf - --null -T -) | (cd "$destination" && tar -xf -)
 }
 
 missing_tool() {
