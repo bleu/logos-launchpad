@@ -10,6 +10,7 @@ This is the shared language for both launchpads. The repository contains an impo
 | Namespace state | Logical per-namespace administration and configuration state used for creation validation and applicable runtime checks. It does not select a registry, shared physical schema or cross-factory account owner. |
 | Role authority | Separate `spel-admin-authority` state for each namespace administrator, creator or direct pool-owner role. Sharing the library does not share permissions. Creator and pool-owner migration is not implemented. |
 | Authority NFT | Legacy PoC role mechanism, replaced in the selected design by role authority. Existing creator and direct pool-owner code still uses NFT holder checks pending migration. |
+| Emergency authority | Deployment-selected role for one namespace. It can freeze swaps, unfreeze and transfer its role immediately. It is separate from namespace administration. See [ADR 0028](docs/adr/0028-token-custody-and-freeze.md#namespace-emergency-control). |
 | Treasury | Current namespace destination for collected protocol fees. |
 | Curve | Neutral bounded constant-product AMM with virtual reserves. Curve factory policy turns it into a token sale. |
 | Pool | Mechanism state and token custody. A curve pool is an ordered token pair with reserves, owner and lifecycle. Direct curve pools are internal primitives and test surfaces. |
