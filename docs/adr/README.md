@@ -39,11 +39,11 @@ Read [CONTEXT.md](../../CONTEXT.md) for terms and [repository layout](../archite
 | [0019](0019-product-packages.md) | Two QML mini-apps and a non-UI shared core | Accepted |
 | [0020](0020-settlement-and-graduation.md) | Manual settlement and optional adapter hook | Accepted and implemented; production readiness and live DEX integration pending |
 | [0021](0021-modes-and-open-limits.md) | Modes, deferred ceiling and allowlist rules | Accepted internally; ceiling deferral: To be reviewed by Logos team; proof design open |
-| [0022](0022-verification-boundaries.md) | Explicit build, IDL and integration evidence; M1/M2 interface boundary | Accepted; M1 scope reviewed, implementation evidence pending |
+| [0022](0022-verification-boundaries.md) | Verification and M1/M2 scope | Accepted |
 | [0025](0025-sale-closing.md) | Mechanism-specific sale closing | Accepted internally; expiry-validation departure: To be reviewed by Logos team |
 | [0026](0026-lbp-clock-and-poke.md) | Fixed-total clock weights and timestamp-keyed buy/poke checkpoints | Accepted; historical clock evidence; live freshness and LBP integration unverified |
 | [0027](0027-events-and-history.md) | Platform events and existing history tooling | Accepted internally; failed-event retention: To be reviewed by Logos team; candidate adoption blocked |
-| [0028](0028-token-custody-and-freeze.md) | Token custody and namespace emergency controls | Accepted; emergency transfer and platform checks outstanding |
+| [0028](0028-token-custody-and-freeze.md) | Token custody and namespace emergency controls | Accepted; implementation and platform checks pending |
 | [0029](0029-wallet-integration.md) | Integrate the LEZ Wallet Provider SDK | Accepted; awaits LP-0021 development |
 | [0030](0030-lbp-pricing-collateral.md) | Fee-neutral LBP pricing collateral and separate custody records | Accepted internally; custody/numerical verification pending; fee departures: To be reviewed by Logos team |
 

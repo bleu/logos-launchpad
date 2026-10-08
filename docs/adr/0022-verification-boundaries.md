@@ -18,11 +18,9 @@ For [curve settlement](0020-settlement-and-graduation.md), use handler tests for
 
 ### Milestone and interface boundary
 
-M1 owns program handlers, on-chain source IDLs, generated artifacts and local guest evidence for the public curve and LBP programs. Handler and guest checks must cover authority, custody, explicit trade limits, lifecycle, failure behavior and the [namespace emergency control](0028-token-custody-and-freeze.md#namespace-emergency-control). Record the tested layer and any missing coverage. Development receipts are local evidence, not production proofs.
+M1 owns public curve and LBP handlers, on-chain source IDLs, generated artifacts and local guest evidence. Checks must cover authority, custody, trade limits, lifecycle, failed calls and [emergency controls](0028-token-custody-and-freeze.md#namespace-emergency-control). Record missing coverage. Development receipts do not prove production readiness.
 
-When M1 changes an interface, update generated artifacts and existing callers so they still build and pass their current checks. Complete SDK and CLI journeys belong to M2. Private routes, allowlist proofs, event history, product apps, live deployment and production readiness remain outside M1. These limits assign delivery and evidence to milestones; they do not remove product requirements.
-
-M1 does not lock interfaces or promise compatibility with the imported PoC. Interfaces can change during development. A change needs matching handlers, source IDLs, generated artifacts and affected callers, plus a compatibility review that states any account-state or wire break. Do not use hand-edited generated output to hide drift. The [milestone plan](../../plans/m1-m4-replan.md) assigns program slices and later product journeys.
+Interfaces can change during development. Update handlers, source IDLs, generated artifacts and affected callers together. Review changes to stored accounts and wire formats. Existing callers must build and pass their checks. M2 owns complete SDK and CLI journeys. Private routes, allowlist proofs, event history, product apps, live deployment and production readiness are outside M1.
 
 ## Consequences
 
