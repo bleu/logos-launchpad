@@ -348,6 +348,7 @@ fn private_buy_execute_envelope_reaches_the_platform_call_limit() {
                     admin: namespace,
                     protocol_fee_bps: 0,
                     treasury: AccountId::new([98; 32]),
+                    ..curve_core::Config::default()
                 }),
                 ..Account::default()
             },

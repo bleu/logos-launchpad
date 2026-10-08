@@ -1,6 +1,6 @@
 # ADR 0028: Token custody and freeze boundaries
 
-Status: Accepted; platform compatibility and instruction gates remain unverified
+Status: Accepted; curve controls implemented with local guest evidence; LBP and broader platform checks pending
 
 Date: 2026-09-29; emergency-control review: 2026-10-08
 
@@ -28,7 +28,7 @@ This decision supersedes the [earlier freeze policy](https://github.com/bleu/log
 
 ## Consequences
 
-These rules still need implementation. Tests must cover the controls above and unchanged state after failed calls. Administration integration does not prove custody or freeze compatibility. See [M1 evidence requirements](0022-verification-boundaries.md#milestone-and-interface-boundary).
+Curve controls are implemented in namespace configuration with a compiled local-test initial authority. [Public dispatch tests](../../crates/curve-core/tests/emergency.rs), [signed guest tests](../../crates/launchpad-client/tests/settlement.rs) and [IDL wire tests](../../crates/launchpad-client/tests/idl_wire.rs) cover authorization, transfer, swap admission and unchanged accounts after failed calls. Signed guest tests also cover permitted fee collection, close, withdrawal, settlement and recovery with real token transfers. These use development receipts, not production proofs. LBP integration and broader platform compatibility remain unverified. See [M1 evidence requirements](0022-verification-boundaries.md#milestone-and-interface-boundary).
 
 The [historical authority experiment](https://github.com/bleu/logos-launchpad/blob/f1198315569cfc8ada9f6c39964cb77314e2520c/packages/platform-probes/authority/src/lib.rs) used freeze `a4743468bd3a87093931c48c965cc084aa4690c3` (v0.1.5) with the component stack recorded in [ADR 0006](0006-namespaces-and-authority.md). It checked fixed emergency authority, namespace isolation and swaps-only freeze admission. Fee collection, settlement and creator recovery remained available under their own checks. These were mock operations with saved creator/custody references, not real swaps or token transfers. Guest checks used controlled authorization flags and development receipts. The experiment is no longer maintained; lasting coverage belongs with the real curve controls. LBP integration remains unverified.
 

@@ -20,14 +20,18 @@ use pool::Pool;
 use serde::{Deserialize, Serialize};
 
 mod authority;
+mod deployment;
 mod dispatch;
+mod emergency;
 mod pool_create;
 mod pool_lifecycle;
 mod pool_swap;
 mod update_config;
 
 pub use authority::{TOKEN_PROGRAM_ID, identity};
+pub use deployment::INITIAL_EMERGENCY_AUTHORITY;
 pub use dispatch::{process_instruction, use_public_authorizations};
+pub use emergency::{AuthorityError, FreezeConfig};
 pub use pool_create::after_ata_creation;
 pub use pool_swap::validated_config;
 
@@ -37,7 +41,7 @@ mod tests;
 /// Curve program instruction. Token accounts are supplied by the guest/token adapter.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Instruction {
-    /// Creates the config PDA on the first call, replaces it whole after.
+    /// Creates the config PDA on the first call, then updates administration settings.
     ///
     /// Required accounts:
     /// - Config PDA
@@ -111,6 +115,13 @@ pub enum Instruction {
     WithdrawReserves,
     /// Permissionless collection: pool, namespace config, pool token1 ATA, treasury token1 ATA.
     CollectFees,
+    /// Emergency-only swap gate. Accounts: config, current emergency authority.
+    SetFrozen { namespace: AccountId, frozen: bool },
+    /// Immediate emergency transfer. Accounts: config, current emergency authority.
+    TransferEmergencyAuthority {
+        namespace: AccountId,
+        new_authority: AccountId,
+    },
     /// Select the pinned privacy circuit's transaction-wide PDA authorization rules.
     Private { instruction: Box<Instruction> },
 }
@@ -132,13 +143,25 @@ pub const ASSOCIATED_TOKEN_ACCOUNT_PROGRAM_ID: ProgramId = [
     0xf800_15d5,
 ];
 
-/// The protocol settings of one namespace, read live by its trades.
-/// Created and replaced whole by `update_config`.
-#[derive(Clone, Default, BorshSerialize, BorshDeserialize)]
+/// The live settings and emergency state of one namespace.
+#[derive(Clone, BorshSerialize, BorshDeserialize)]
 pub struct Config {
     pub admin: AccountId,
     pub protocol_fee_bps: u16,
     pub treasury: AccountId,
+    pub emergency: FreezeConfig,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            admin: AccountId::default(),
+            protocol_fee_bps: 0,
+            treasury: AccountId::default(),
+            emergency: FreezeConfig::initialize(INITIAL_EMERGENCY_AUTHORITY)
+                .expect("Deployment emergency authority must not be the default key"),
+        }
+    }
 }
 
 impl TryFrom<&Data> for Config {

@@ -122,4 +122,20 @@ pub mod curve {
         #[account(mut)] pool_collateral_ata: AccountWithMetadata,
         #[account(mut)] treasury_collateral_atas: Vec<AccountWithMetadata>,
     ) {}
+
+    #[instruction]
+    pub fn set_frozen(
+        #[account(mut)] config: AccountWithMetadata,
+        #[account(signer)] authority: AccountWithMetadata,
+        namespace: AccountId,
+        frozen: bool,
+    ) {}
+
+    #[instruction]
+    pub fn transfer_emergency_authority(
+        #[account(mut)] config: AccountWithMetadata,
+        #[account(signer)] authority: AccountWithMetadata,
+        namespace: AccountId,
+        new_authority: AccountId,
+    ) {}
 }

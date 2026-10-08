@@ -1577,6 +1577,7 @@ mod tests {
                     admin: AccountId::new([0xAD; 32]),
                     protocol_fee_bps: 0,
                     treasury: AccountId::new([2; 32]),
+                    ..curve_core::Config::default()
                 }),
                 ..Account::default()
             },

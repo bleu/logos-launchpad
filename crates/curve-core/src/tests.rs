@@ -61,6 +61,7 @@ fn initialized_config(admin: AccountId) -> AccountWithMetadata {
             admin,
             protocol_fee_bps: 100,
             treasury: new_treasury(),
+            ..Config::default()
         }),
         ..Account::default()
     };
@@ -628,6 +629,7 @@ fn namespace_fee_can_be_lowered_from_a_legacy_hundred_percent_rate() {
         admin: new_admin(),
         protocol_fee_bps: 10_000,
         treasury: new_treasury(),
+        ..Config::default()
     });
     let pre_states = vec![legacy_config, signer(new_admin())];
     let (post_states, _) = process_instruction(
@@ -1399,6 +1401,7 @@ fn exact_output_handler_caps_fee_inclusive_input_in_the_reverse_direction() {
                 admin: new_admin(),
                 protocol_fee_bps: 1_000,
                 treasury: new_treasury(),
+                ..Config::default()
             }),
             ..Account::default()
         },
@@ -1470,6 +1473,7 @@ fn exact_output_dispatch_settles_fee_inclusive_input_and_requested_output_atomic
                 admin: new_admin(),
                 protocol_fee_bps: 1_000,
                 treasury: new_treasury(),
+                ..Config::default()
             }),
             ..Account::default()
         },
@@ -1608,11 +1612,19 @@ fn instruction_wire_format_matches_the_idl_order() {
         Instruction::ActivatePool,
         Instruction::WithdrawReserves,
         Instruction::CollectFees,
+        Instruction::SetFrozen {
+            namespace: AccountId::new([0xAD; 32]),
+            frozen: true,
+        },
+        Instruction::TransferEmergencyAuthority {
+            namespace: AccountId::new([0xAD; 32]),
+            new_authority: new_admin(),
+        },
         Instruction::Private {
             instruction: Box::new(Instruction::ClosePool),
         },
     ];
-    for (tag, instruction) in (0_u32..=9).zip(instructions) {
+    for (tag, instruction) in (0_u32..=11).zip(instructions) {
         let words = risc0_zkvm::serde::to_vec(&instruction).expect("instruction serialises");
         assert_eq!(words.first().copied(), Some(tag));
         let back: Instruction = risc0_zkvm::serde::from_slice(&words).expect("wire words parse");

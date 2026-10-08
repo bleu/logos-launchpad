@@ -1,0 +1,8 @@
+The authority and freeze helper subset in crates/curve-core/src/emergency.rs is adapted from:
+
+- https://github.com/mmlado/spel-authority at 97af481b29b5364589776beb4c088ebe234ad7ed, src/lib.rs: AuthoritySlot initialization, holder checks, and transfer.
+- https://github.com/mmlado/spel-freeze-authority at a4743468bd3a87093931c48c965cc084aa4690c3, freeze-authority/src/config.rs: FreezeConfig initialization and flag control.
+
+Both sources are Copyright (c) 2026 mmlado. This subset uses their MIT license, retained in LICENSE-MIT. Imports use the repository-pinned lee_core account types. SPEL macros, candidate checks, byte-window helpers, and unrelated APIs are omitted.
+
+The curve uses explicit namespace handlers under docs/adr/0028-token-custody-and-freeze.md. It rejects upstream automatic instruction wrapping and per-account freezes because only swaps stop. It rejects administrator-selected emergency initialization, administrator-controlled transfer or recovery, and emergency renunciation because these grant the wrong role permission. It rejects successor-signature checks because emergency transfer needs only the current authority. Authorized repeat toggles remain valid.

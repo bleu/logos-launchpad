@@ -187,6 +187,139 @@ impl Chain {
         }
         Ok(())
     }
+    fn initialize_namespace(&mut self, namespace: AccountId, holder: AccountId) {
+        self.accounts.insert(
+            holder,
+            Account {
+                program_owner: programs::token().id(),
+                data: Data::from(&TokenHolding::NftMaster {
+                    definition_id: namespace,
+                    print_balance: 1,
+                }),
+                ..Account::default()
+            },
+        );
+        self.run_public(launchpad_client::PublicInvocation {
+            program_id: self.curve.id(),
+            account_ids: vec![
+                curve_core::compute_config_pda(namespace, self.curve.id()),
+                holder,
+            ],
+            signer_accounts: vec![holder],
+            instruction: curve_core::Instruction::UpdateConfig {
+                namespace,
+                admin: namespace,
+                protocol_fee_bps: 500,
+                treasury: id(6),
+            },
+        });
+    }
+    fn emergency_call(
+        &self,
+        namespace: AccountId,
+        authority: AccountId,
+        instruction: curve_core::Instruction,
+    ) -> launchpad_client::PublicInvocation<curve_core::Instruction> {
+        launchpad_client::PublicInvocation {
+            program_id: self.curve.id(),
+            account_ids: vec![
+                curve_core::compute_config_pda(namespace, self.curve.id()),
+                authority,
+            ],
+            signer_accounts: vec![authority],
+            instruction,
+        }
+    }
+    fn create_direct_pool(
+        &mut self,
+        namespace: AccountId,
+        holder: AccountId,
+        defer_funding: bool,
+    ) -> AccountId {
+        let pool =
+            curve_core::compute_pool_pda(namespace, self.curve.id(), id(4), id(5), namespace);
+        for definition in [id(4), id(5)] {
+            self.accounts.insert(
+                definition,
+                Account {
+                    program_owner: programs::token().id(),
+                    data: Data::from(&token_core::TokenDefinition::Fungible {
+                        name: "Token".into(),
+                        total_supply: 10_000,
+                        metadata_id: None,
+                    }),
+                    ..Account::default()
+                },
+            );
+            self.accounts
+                .insert(ata(holder, definition), holding(definition, 1_000));
+            self.accounts
+                .insert(ata(id(20), definition), holding(definition, 1_000));
+        }
+        self.accounts.insert(
+            id(20),
+            Account {
+                program_owner: [77; 8],
+                ..Account::default()
+            },
+        );
+        self.run_public(launchpad_client::PublicInvocation {
+            program_id: self.curve.id(),
+            account_ids: vec![
+                pool,
+                holder,
+                id(4),
+                id(5),
+                ata(holder, id(4)),
+                ata(holder, id(5)),
+                ata(pool, id(4)),
+                ata(pool, id(5)),
+                clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID,
+                curve_core::compute_config_pda(namespace, self.curve.id()),
+            ],
+            signer_accounts: vec![holder],
+            instruction: curve_core::Instruction::CreatePool {
+                allowed_input_token: None,
+                defer_funding,
+                namespace,
+                token0_amount: 800,
+                token1_amount: 100,
+                virtual_reserve0: 1_000,
+                virtual_reserve1: 100,
+                close_timestamp: Some(42),
+                close_on_depletion: None,
+                owner: namespace,
+                owner_program_id: None,
+                owner_program_seed: None,
+                curve_program_id: self.curve.id(),
+            },
+        });
+        pool
+    }
+    fn direct_swap(
+        &self,
+        namespace: AccountId,
+        pool: AccountId,
+        token_in: AccountId,
+        instruction: curve_core::Instruction,
+    ) -> launchpad_client::PublicInvocation<curve_core::Instruction> {
+        let token_out = if token_in == id(4) { id(5) } else { id(4) };
+        launchpad_client::PublicInvocation {
+            program_id: self.curve.id(),
+            account_ids: vec![
+                pool,
+                curve_core::compute_config_pda(namespace, self.curve.id()),
+                id(20),
+                ata(id(20), token_in),
+                ata(pool, token_in),
+                ata(pool, token_out),
+                ata(id(20), token_out),
+                clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID,
+            ],
+            signer_accounts: vec![id(20)],
+            instruction,
+        }
+    }
     fn balance(&self, account: AccountId) -> u128 {
         if self
             .accounts
@@ -201,6 +334,798 @@ impl Chain {
         }
     }
 }
+#[test]
+fn signed_emergency_controls_reject_other_roles_and_transfer_without_acceptance() {
+    let mut chain = Chain::new();
+    let namespace = id(1);
+    chain.initialize_namespace(namespace, id(99));
+    chain.initialize_namespace(id(2), id(100));
+    for authority in [id(101), id(102), id(20)] {
+        chain.accounts.insert(
+            authority,
+            Account {
+                program_owner: [77; 8],
+                ..Account::default()
+            },
+        );
+    }
+    let config_id = curve_core::compute_config_pda(namespace, chain.curve.id());
+    let state = curve_core::Config::try_from(&chain.accounts[&config_id].data).unwrap();
+    assert_eq!(
+        (state.emergency.authority(), state.emergency.is_frozen),
+        (id(101), false)
+    );
+    for frozen in [true, true, false, false, true] {
+        chain.run_public(chain.emergency_call(
+            namespace,
+            id(101),
+            curve_core::Instruction::SetFrozen { namespace, frozen },
+        ));
+        let saved = chain.accounts.clone();
+        for authority in [id(99), id(20)] {
+            for requested in [false, true] {
+                let error = chain
+                    .try_public(chain.emergency_call(
+                        namespace,
+                        authority,
+                        curve_core::Instruction::SetFrozen {
+                            namespace,
+                            frozen: requested,
+                        },
+                    ))
+                    .unwrap_err();
+                assert!(
+                    matches!(error, lee::error::LeeError::ProgramExecutionFailed(ref message) if message.contains("signer is not the current authority")),
+                    "{error:?}"
+                );
+                assert_eq!(chain.accounts, saved);
+            }
+        }
+        let mut unsigned = chain.emergency_call(
+            namespace,
+            id(101),
+            curve_core::Instruction::SetFrozen { namespace, frozen },
+        );
+        unsigned.signer_accounts.clear();
+        let error = chain.try_public(unsigned).unwrap_err();
+        assert!(
+            matches!(error, lee::error::LeeError::ProgramExecutionFailed(ref message) if message.contains("authority signature missing")),
+            "{error:?}"
+        );
+        assert_eq!(chain.accounts, saved);
+    }
+    chain.run_public(chain.emergency_call(
+        namespace,
+        id(101),
+        curve_core::Instruction::TransferEmergencyAuthority {
+            namespace,
+            new_authority: id(101),
+        },
+    ));
+    let saved = chain.accounts.clone();
+    let error = chain
+        .try_public(chain.emergency_call(
+            namespace,
+            id(101),
+            curve_core::Instruction::TransferEmergencyAuthority {
+                namespace,
+                new_authority: AccountId::default(),
+            },
+        ))
+        .unwrap_err();
+    assert!(
+        matches!(error, lee::error::LeeError::ProgramExecutionFailed(ref message) if message.contains("invalid authority candidate")),
+        "{error:?}"
+    );
+    assert_eq!(chain.accounts, saved);
+    chain.run_public(chain.emergency_call(
+        namespace,
+        id(101),
+        curve_core::Instruction::TransferEmergencyAuthority {
+            namespace,
+            new_authority: id(102),
+        },
+    ));
+    let state = curve_core::Config::try_from(&chain.accounts[&config_id].data).unwrap();
+    assert_eq!(
+        (state.emergency.authority(), state.emergency.is_frozen),
+        (id(102), true)
+    );
+    let saved = chain.accounts.clone();
+    for authority in [id(101), id(99)] {
+        for instruction in [
+            curve_core::Instruction::SetFrozen {
+                namespace,
+                frozen: true,
+            },
+            curve_core::Instruction::TransferEmergencyAuthority {
+                namespace,
+                new_authority: authority,
+            },
+        ] {
+            let error = chain
+                .try_public(chain.emergency_call(namespace, authority, instruction))
+                .unwrap_err();
+            assert!(
+                matches!(error, lee::error::LeeError::ProgramExecutionFailed(ref message) if message.contains("signer is not the current authority")),
+                "{error:?}"
+            );
+            assert_eq!(chain.accounts, saved);
+        }
+    }
+    chain.run_public(chain.emergency_call(
+        namespace,
+        id(102),
+        curve_core::Instruction::SetFrozen {
+            namespace,
+            frozen: false,
+        },
+    ));
+    let other_id = curve_core::compute_config_pda(id(2), chain.curve.id());
+    let other = curve_core::Config::try_from(&chain.accounts[&other_id].data).unwrap();
+    assert_eq!(
+        (other.emergency.authority(), other.emergency.is_frozen),
+        (id(101), false)
+    );
+}
+
+#[test]
+fn signed_freeze_blocks_all_swap_forms_without_writes_and_keeps_other_namespaces_open() {
+    let mut chain = Chain::new();
+    let namespace = id(1);
+    chain.initialize_namespace(namespace, id(99));
+    chain.initialize_namespace(id(2), id(100));
+    chain.accounts.insert(
+        id(101),
+        Account {
+            program_owner: [77; 8],
+            ..Account::default()
+        },
+    );
+    chain.run_public(chain.emergency_call(
+        namespace,
+        id(101),
+        curve_core::Instruction::SetFrozen {
+            namespace,
+            frozen: true,
+        },
+    ));
+    let pool = chain.create_direct_pool(namespace, id(99), false);
+    let other_pool = chain.create_direct_pool(id(2), id(100), false);
+    let trades = [
+        (
+            id(5),
+            curve_core::Instruction::SwapExactInput {
+                token_in: id(5),
+                amount_in: 25,
+                min_amount_out: 0,
+            },
+        ),
+        (
+            id(4),
+            curve_core::Instruction::SwapExactInput {
+                token_in: id(4),
+                amount_in: 250,
+                min_amount_out: 0,
+            },
+        ),
+        (
+            id(5),
+            curve_core::Instruction::SwapExactOutput {
+                token_in: id(5),
+                amount_out: 200,
+                max_amount_in: 100,
+            },
+        ),
+    ];
+    let saved = chain.accounts.clone();
+    for (token_in, instruction) in &trades {
+        let error = chain
+            .try_public(chain.direct_swap(namespace, pool, *token_in, instruction.clone()))
+            .unwrap_err();
+        assert!(
+            matches!(error, lee::error::LeeError::ProgramExecutionFailed(ref message) if message.contains("Namespace swaps are frozen")),
+            "{error:?}"
+        );
+        assert_eq!(chain.accounts, saved);
+    }
+    chain.run_public(chain.direct_swap(id(2), other_pool, id(5), trades[0].1.clone()));
+    assert_eq!(chain.accounts[&pool], saved[&pool]);
+    assert_eq!(chain.balance(ata(pool, id(4))), 800);
+    assert_eq!(chain.balance(ata(pool, id(5))), 100);
+    assert_eq!(chain.balance(ata(other_pool, id(4))), 614);
+    assert_eq!(chain.balance(ata(other_pool, id(5))), 125);
+    chain.run_public(chain.emergency_call(
+        namespace,
+        id(101),
+        curve_core::Instruction::SetFrozen {
+            namespace,
+            frozen: false,
+        },
+    ));
+    for (token_in, instruction) in trades {
+        let token_out = if token_in == id(4) { id(5) } else { id(4) };
+        let before_in = chain.balance(ata(id(20), token_in));
+        let before_out = chain.balance(ata(id(20), token_out));
+        chain.run_public(chain.direct_swap(namespace, pool, token_in, instruction));
+        assert!(chain.balance(ata(id(20), token_in)) < before_in);
+        assert!(chain.balance(ata(id(20), token_out)) > before_out);
+        let state = curve_core::PoolAccount::try_from(&chain.accounts[&pool].data).unwrap();
+        assert_eq!(chain.balance(ata(pool, id(4))), state.pool.real_reserve0);
+        assert_eq!(
+            chain.balance(ata(pool, id(5))),
+            state.pool.real_reserve1 + state.pool.fees_accrued
+        );
+    }
+}
+
+#[test]
+fn signed_freeze_keeps_fee_collection_close_and_reserve_withdrawal_available() {
+    let mut chain = Chain::new();
+    let namespace = id(1);
+    chain.initialize_namespace(namespace, id(99));
+    chain.accounts.insert(
+        id(101),
+        Account {
+            program_owner: [77; 8],
+            ..Account::default()
+        },
+    );
+    let pool = chain.create_direct_pool(namespace, id(99), false);
+    chain.accounts.insert(ata(id(6), id(5)), holding(id(5), 0));
+    chain.run_public(chain.direct_swap(
+        namespace,
+        pool,
+        id(5),
+        curve_core::Instruction::SwapExactOutput {
+            token_in: id(5),
+            amount_out: 200,
+            max_amount_in: 27,
+        },
+    ));
+    chain.run_public(chain.emergency_call(
+        namespace,
+        id(101),
+        curve_core::Instruction::SetFrozen {
+            namespace,
+            frozen: true,
+        },
+    ));
+    let config_id = curve_core::compute_config_pda(namespace, chain.curve.id());
+    let frozen_config = chain.accounts[&config_id].clone();
+    chain.run_public(launchpad_client::build_collect_fees_invocation(
+        namespace,
+        chain.curve.id(),
+        pool,
+        id(5),
+        id(6),
+    ));
+    assert_eq!(chain.balance(ata(id(6), id(5))), 2);
+    assert_eq!(chain.balance(ata(pool, id(5))), 125);
+    let withdrawal = launchpad_client::PublicInvocation {
+        program_id: chain.curve.id(),
+        account_ids: vec![
+            pool,
+            id(99),
+            ata(id(99), id(4)),
+            ata(id(99), id(5)),
+            ata(pool, id(4)),
+            ata(pool, id(5)),
+            clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID,
+            config_id,
+            ata(id(6), id(5)),
+        ],
+        signer_accounts: vec![id(99)],
+        instruction: curve_core::Instruction::WithdrawReserves,
+    };
+    let saved = chain.accounts.clone();
+    assert!(chain.try_public(withdrawal.clone()).is_err());
+    assert_eq!(chain.accounts, saved);
+    assert!(
+        chain
+            .try_public(launchpad_client::PublicInvocation {
+                program_id: chain.curve.id(),
+                account_ids: vec![pool, id(20), clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID],
+                signer_accounts: vec![id(20)],
+                instruction: curve_core::Instruction::ClosePool,
+            })
+            .is_err()
+    );
+    assert_eq!(chain.accounts, saved);
+    chain.run_public(launchpad_client::PublicInvocation {
+        program_id: chain.curve.id(),
+        account_ids: vec![pool, id(99), clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID],
+        signer_accounts: vec![id(99)],
+        instruction: curve_core::Instruction::ClosePool,
+    });
+    chain.run_public(withdrawal);
+    assert_eq!(chain.balance(ata(id(99), id(4))), 800);
+    assert_eq!(chain.balance(ata(id(99), id(5))), 1_025);
+    assert_eq!(chain.balance(ata(pool, id(4))), 0);
+    assert_eq!(chain.balance(ata(pool, id(5))), 0);
+    assert_eq!(chain.balance(ata(id(6), id(5))), 2);
+    assert_eq!(chain.accounts[&config_id], frozen_config);
+    let state = curve_core::PoolAccount::try_from(&chain.accounts[&pool].data).unwrap();
+    assert_eq!(state.pool.lifecycle, pool::PoolLifecycle::Withdrawn);
+    chain.run_public(chain.emergency_call(
+        namespace,
+        id(101),
+        curve_core::Instruction::SetFrozen {
+            namespace,
+            frozen: false,
+        },
+    ));
+    let saved = chain.accounts.clone();
+    let error = chain
+        .try_public(chain.direct_swap(
+            namespace,
+            pool,
+            id(5),
+            curve_core::Instruction::SwapExactInput {
+                token_in: id(5),
+                amount_in: 25,
+                min_amount_out: 0,
+            },
+        ))
+        .unwrap_err();
+    assert!(
+        matches!(error, lee::error::LeeError::ProgramExecutionFailed(ref message) if message.contains("the pool is closed")),
+        "{error:?}"
+    );
+    assert_eq!(chain.accounts, saved);
+}
+
+#[test]
+fn signed_freeze_keeps_factory_settlement_and_failed_hook_recovery_available() {
+    for recover in [false, true] {
+        let mut fixture = HookFixture::new(100, 200);
+        let namespace = fixture.sale.namespace;
+        fixture.chain.accounts.insert(
+            id(101),
+            Account {
+                program_owner: [77; 8],
+                ..Account::default()
+            },
+        );
+        fixture.chain.run_public(fixture.chain.emergency_call(
+            namespace,
+            id(101),
+            curve_core::Instruction::SetFrozen {
+                namespace,
+                frozen: true,
+            },
+        ));
+        let config_id = curve_core::compute_config_pda(namespace, fixture.sale.curve_program_id);
+        let frozen_config = fixture.chain.accounts[&config_id].clone();
+        let saved = fixture.chain.accounts.clone();
+        assert!(
+            fixture
+                .chain
+                .try_public(
+                    launchpad_client::build_withdraw_factory_proceeds_invocation(
+                        fixture.sale,
+                        id(20),
+                        id(6)
+                    )
+                )
+                .is_err()
+        );
+        assert_eq!(fixture.chain.accounts, saved);
+        fixture
+            .chain
+            .run_public(launchpad_client::build_claim_creator_allocation_invocation(
+                fixture.sale,
+                id(99),
+            ));
+        assert_eq!(fixture.chain.balance(ata(id(99), fixture.token)), 100);
+        fixture.set_readiness(!recover);
+        fixture.advance_to_hook_ready();
+        assert_eq!(fixture.chain.balance(ata(id(6), fixture.collateral)), 2);
+        if recover {
+            let saved = fixture.chain.accounts.clone();
+            let error = fixture.chain.try_public(fixture.graduation()).unwrap_err();
+            assert!(
+                matches!(error, lee::error::LeeError::ProgramExecutionFailed(ref message) if message.contains("Adapter is not ready")),
+                "{error:?}"
+            );
+            assert_eq!(fixture.chain.accounts, saved);
+            for _ in 0..2 {
+                if fixture.state().settlement_stage == factory_core::SettlementStage::Complete {
+                    break;
+                }
+                fixture.chain.run_public(
+                    launchpad_client::build_withdraw_factory_proceeds_invocation(
+                        fixture.sale,
+                        id(99),
+                        id(6),
+                    ),
+                );
+            }
+            assert_eq!(
+                fixture.state().settlement_stage,
+                factory_core::SettlementStage::Complete
+            );
+            assert_eq!(fixture.chain.balance(ata(id(99), fixture.token)), 200);
+            assert_eq!(fixture.chain.balance(ata(id(99), fixture.collateral)), 12);
+        } else {
+            fixture.chain.run_public(fixture.graduation());
+            assert_eq!(
+                fixture.state().settlement_stage,
+                factory_core::SettlementStage::Graduated
+            );
+            let custody =
+                factory_core::compute_graduation_pda(fixture.adapter.id(), fixture.factory);
+            assert_eq!(fixture.chain.balance(ata(custody, fixture.token)), 100);
+            assert_eq!(fixture.chain.balance(ata(custody, fixture.collateral)), 12);
+        }
+        assert_eq!(fixture.chain.accounts[&config_id], frozen_config);
+    }
+}
+
+#[test]
+fn signed_admin_updates_and_renunciation_keep_transferred_emergency_state() {
+    let mut chain = Chain::new();
+    let namespace = id(1);
+    chain.initialize_namespace(namespace, id(99));
+    chain.initialize_namespace(id(2), id(100));
+    for authority in [id(101), id(102)] {
+        chain.accounts.insert(
+            authority,
+            Account {
+                program_owner: [77; 8],
+                ..Account::default()
+            },
+        );
+    }
+    chain.run_public(chain.emergency_call(
+        namespace,
+        id(101),
+        curve_core::Instruction::SetFrozen {
+            namespace,
+            frozen: true,
+        },
+    ));
+    chain.run_public(chain.emergency_call(
+        namespace,
+        id(101),
+        curve_core::Instruction::TransferEmergencyAuthority {
+            namespace,
+            new_authority: id(102),
+        },
+    ));
+    let config_id = curve_core::compute_config_pda(namespace, chain.curve.id());
+    for (authority, instruction, admin) in [
+        (
+            id(99),
+            curve_core::Instruction::UpdateConfig {
+                namespace,
+                admin: id(2),
+                protocol_fee_bps: 999,
+                treasury: id(7),
+            },
+            id(2),
+        ),
+        (
+            id(100),
+            curve_core::Instruction::RenounceAdmin { namespace },
+            AccountId::default(),
+        ),
+    ] {
+        chain.run_public(chain.emergency_call(namespace, authority, instruction));
+        let state = curve_core::Config::try_from(&chain.accounts[&config_id].data).unwrap();
+        assert_eq!(
+            (
+                state.admin,
+                state.protocol_fee_bps,
+                state.treasury,
+                state.emergency.authority(),
+                state.emergency.is_frozen
+            ),
+            (admin, 999, id(7), id(102), true)
+        );
+    }
+    chain.run_public(chain.emergency_call(
+        namespace,
+        id(102),
+        curve_core::Instruction::SetFrozen {
+            namespace,
+            frozen: false,
+        },
+    ));
+    let state = curve_core::Config::try_from(&chain.accounts[&config_id].data).unwrap();
+    assert_eq!(
+        (state.emergency.authority(), state.emergency.is_frozen),
+        (id(102), false)
+    );
+}
+
+#[test]
+fn signed_emergency_calls_reject_wrong_namespace_owner_and_config_schema_without_writes() {
+    let mut chain = Chain::new();
+    let namespace = id(1);
+    chain.initialize_namespace(namespace, id(99));
+    chain.initialize_namespace(id(2), id(100));
+    chain.accounts.insert(
+        id(101),
+        Account {
+            program_owner: [77; 8],
+            ..Account::default()
+        },
+    );
+    let config_id = curve_core::compute_config_pda(namespace, chain.curve.id());
+    let original = chain.accounts.clone();
+    for instruction in [
+        curve_core::Instruction::SetFrozen {
+            namespace,
+            frozen: true,
+        },
+        curve_core::Instruction::TransferEmergencyAuthority {
+            namespace,
+            new_authority: id(102),
+        },
+    ] {
+        for case in 0..4 {
+            chain.accounts = original.clone();
+            let mut call = chain.emergency_call(namespace, id(101), instruction.clone());
+            let expected = match case {
+                0 => {
+                    call.account_ids[0] = curve_core::compute_config_pda(id(2), chain.curve.id());
+                    "Config account ID does not match PDA"
+                }
+                1 => {
+                    chain.accounts.get_mut(&config_id).unwrap().program_owner = [77; 8];
+                    "Config owner does not match program"
+                }
+                2 => {
+                    chain.accounts.get_mut(&config_id).unwrap().data =
+                        Data::try_from(vec![1]).unwrap();
+                    "Config account holds invalid data"
+                }
+                _ => {
+                    chain.accounts.get_mut(&config_id).unwrap().data =
+                        Data::try_from(vec![0; 66]).unwrap();
+                    "Config account holds invalid data"
+                }
+            };
+            let saved = chain.accounts.clone();
+            let error = chain.try_public(call).unwrap_err();
+            assert!(
+                matches!(error, lee::error::LeeError::ProgramExecutionFailed(ref message) if message.contains(expected)),
+                "{error:?}"
+            );
+            assert_eq!(chain.accounts, saved);
+        }
+    }
+}
+
+#[test]
+fn signed_frozen_namespace_keeps_deferred_pool_activation_available() {
+    let mut chain = Chain::new();
+    let namespace = id(1);
+    chain.initialize_namespace(namespace, id(99));
+    chain.accounts.insert(
+        id(101),
+        Account {
+            program_owner: [77; 8],
+            ..Account::default()
+        },
+    );
+    chain.run_public(chain.emergency_call(
+        namespace,
+        id(101),
+        curve_core::Instruction::SetFrozen {
+            namespace,
+            frozen: true,
+        },
+    ));
+    let pool = chain.create_direct_pool(namespace, id(99), true);
+    let config_id = curve_core::compute_config_pda(namespace, chain.curve.id());
+    let frozen_config = chain.accounts[&config_id].clone();
+    assert!(
+        !curve_core::PoolAccount::try_from(&chain.accounts[&pool].data)
+            .unwrap()
+            .funded
+    );
+    assert_eq!(chain.balance(ata(id(99), id(4))), 1_000);
+    assert_eq!(chain.balance(ata(id(99), id(5))), 1_000);
+    assert_eq!(chain.balance(ata(pool, id(4))), 0);
+    assert_eq!(chain.balance(ata(pool, id(5))), 0);
+    let trades = [
+        (
+            id(5),
+            curve_core::Instruction::SwapExactInput {
+                token_in: id(5),
+                amount_in: 25,
+                min_amount_out: 0,
+            },
+        ),
+        (
+            id(4),
+            curve_core::Instruction::SwapExactInput {
+                token_in: id(4),
+                amount_in: 250,
+                min_amount_out: 0,
+            },
+        ),
+        (
+            id(5),
+            curve_core::Instruction::SwapExactOutput {
+                token_in: id(5),
+                amount_out: 200,
+                max_amount_in: 30,
+            },
+        ),
+    ];
+    for frozen in [true, false, true] {
+        chain.run_public(chain.emergency_call(
+            namespace,
+            id(101),
+            curve_core::Instruction::SetFrozen { namespace, frozen },
+        ));
+        let saved = chain.accounts.clone();
+        for (token_in, instruction) in &trades {
+            let error = chain
+                .try_public(chain.direct_swap(namespace, pool, *token_in, instruction.clone()))
+                .unwrap_err();
+            let expected = if frozen {
+                "Namespace swaps are frozen"
+            } else {
+                "Pool funding is pending"
+            };
+            assert!(
+                matches!(error, lee::error::LeeError::ProgramExecutionFailed(ref message) if message.contains(expected)),
+                "{error:?}"
+            );
+            assert_eq!(chain.accounts, saved);
+        }
+    }
+    let mut activation = launchpad_client::PublicInvocation {
+        program_id: chain.curve.id(),
+        account_ids: vec![
+            pool,
+            id(99),
+            id(4),
+            id(5),
+            ata(id(99), id(4)),
+            ata(id(99), id(5)),
+            ata(pool, id(4)),
+            ata(pool, id(5)),
+            clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID,
+            config_id,
+        ],
+        signer_accounts: vec![id(99)],
+        instruction: curve_core::Instruction::ActivatePool,
+    };
+    let saved = chain.accounts.clone();
+    activation.signer_accounts.clear();
+    assert!(chain.try_public(activation.clone()).is_err());
+    assert_eq!(chain.accounts, saved);
+    activation.signer_accounts.push(id(99));
+    chain.run_public(activation);
+    assert!(
+        curve_core::PoolAccount::try_from(&chain.accounts[&pool].data)
+            .unwrap()
+            .funded
+    );
+    assert_eq!(chain.accounts[&config_id], frozen_config);
+    assert_eq!(chain.balance(ata(id(99), id(4))), 200);
+    assert_eq!(chain.balance(ata(id(99), id(5))), 900);
+    assert_eq!(chain.balance(ata(pool, id(4))), 800);
+    assert_eq!(chain.balance(ata(pool, id(5))), 100);
+    let saved = chain.accounts.clone();
+    for (token_in, instruction) in &trades {
+        let error = chain
+            .try_public(chain.direct_swap(namespace, pool, *token_in, instruction.clone()))
+            .unwrap_err();
+        assert!(
+            matches!(error, lee::error::LeeError::ProgramExecutionFailed(ref message) if message.contains("Namespace swaps are frozen")),
+            "{error:?}"
+        );
+        assert_eq!(chain.accounts, saved);
+    }
+    chain.run_public(chain.emergency_call(
+        namespace,
+        id(101),
+        curve_core::Instruction::SetFrozen {
+            namespace,
+            frozen: false,
+        },
+    ));
+    chain.run_public(chain.direct_swap(namespace, pool, id(5), trades[0].1.clone()));
+    assert_eq!(chain.balance(ata(pool, id(4))), 614);
+    assert_eq!(chain.balance(ata(pool, id(5))), 125);
+}
+
+#[test]
+fn signed_unfreeze_does_not_reopen_closed_or_expired_pools() {
+    for expired in [false, true] {
+        let mut chain = Chain::new();
+        let namespace = id(1);
+        chain.initialize_namespace(namespace, id(99));
+        chain.accounts.insert(
+            id(101),
+            Account {
+                program_owner: [77; 8],
+                ..Account::default()
+            },
+        );
+        let pool = chain.create_direct_pool(namespace, id(99), false);
+        chain.run_public(chain.emergency_call(
+            namespace,
+            id(101),
+            curve_core::Instruction::SetFrozen {
+                namespace,
+                frozen: true,
+            },
+        ));
+        if expired {
+            chain
+                .accounts
+                .get_mut(&clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID)
+                .unwrap()
+                .data = Data::try_from(
+                clock_core::ClockAccountData {
+                    block_id: 2,
+                    timestamp: 42,
+                }
+                .to_bytes(),
+            )
+            .unwrap();
+        } else {
+            chain.run_public(launchpad_client::PublicInvocation {
+                program_id: chain.curve.id(),
+                account_ids: vec![pool, id(99), clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID],
+                signer_accounts: vec![id(99)],
+                instruction: curve_core::Instruction::ClosePool,
+            });
+        }
+        chain.run_public(chain.emergency_call(
+            namespace,
+            id(101),
+            curve_core::Instruction::SetFrozen {
+                namespace,
+                frozen: false,
+            },
+        ));
+        let saved = chain.accounts.clone();
+        for (token_in, instruction) in [
+            (
+                id(5),
+                curve_core::Instruction::SwapExactInput {
+                    token_in: id(5),
+                    amount_in: 25,
+                    min_amount_out: 0,
+                },
+            ),
+            (
+                id(4),
+                curve_core::Instruction::SwapExactInput {
+                    token_in: id(4),
+                    amount_in: 250,
+                    min_amount_out: 0,
+                },
+            ),
+            (
+                id(5),
+                curve_core::Instruction::SwapExactOutput {
+                    token_in: id(5),
+                    amount_out: 200,
+                    max_amount_in: 30,
+                },
+            ),
+        ] {
+            let error = chain
+                .try_public(chain.direct_swap(namespace, pool, token_in, instruction))
+                .unwrap_err();
+            assert!(
+                matches!(error, lee::error::LeeError::ProgramExecutionFailed(ref message) if message.contains("the pool is closed")),
+                "{error:?}"
+            );
+            assert_eq!(chain.accounts, saved);
+        }
+    }
+}
+
 #[test]
 fn fee_accrual_collection_and_withdrawal_preserve_vault_liabilities() {
     for public_mode in [false, true] {
@@ -246,6 +1171,7 @@ fn fee_accrual_collection_and_withdrawal_preserve_vault_liabilities() {
                         admin: namespace,
                         treasury,
                         protocol_fee_bps: if sell { 500 } else { 1000 },
+                        ..curve_core::Config::default()
                     }),
                     ..Account::default()
                 },
@@ -438,6 +1364,7 @@ fn public_creation_saves_immutable_hook_configuration() {
                 admin: namespace,
                 treasury: id(6),
                 protocol_fee_bps: 1000,
+                ..curve_core::Config::default()
             }),
             ..Account::default()
         },
@@ -984,6 +1911,7 @@ impl HookFixture {
                     admin: namespace,
                     treasury: id(6),
                     protocol_fee_bps: 1000,
+                    ..curve_core::Config::default()
                 }),
                 ..Account::default()
             },
@@ -1289,6 +2217,7 @@ fn private_sale_resumes_creation_and_settlement_with_fresh_payout_holders() {
                         admin: namespace,
                         treasury: id(6),
                         protocol_fee_bps: 0,
+                        ..curve_core::Config::default()
                     }),
                     ..Account::default()
                 },
