@@ -2,7 +2,7 @@
 
 Status: Accepted
 
-Date: 2026-09-29
+Date: 2026-09-29; milestone-boundary review: 2026-10-08
 
 ## Context
 
@@ -15,6 +15,12 @@ Keep local tests with each package. Put cross-package build, pin, IDL and integr
 Repair stale E2E commands before execution and use disposable state. Report ignored, unavailable and opt-in checks. Verify each mechanism's qualified math limits, rounding and trade guards, plus namespace isolation, custody, clock, events, administration, freeze authority, private-route failure behavior and Basecamp packaging.
 
 For [curve settlement](0020-settlement-and-graduation.md), use handler tests for account guards, stages and emitted calls. Real guest tests must check payout balances, callback execution, rollback, retry and manual recovery. Record zero-amount and replay coverage at the tested layer; every host guard need not be repeated in guest tests. Emitted calls alone do not prove rollback. Current results and limits belong in the [curve evidence record](../product/curve-contract.md#acceptance-evidence).
+
+### Milestone and interface boundary
+
+M1 owns public curve and LBP handlers, on-chain source IDLs, generated artifacts and local guest evidence. Checks must cover authority, custody, trade limits, lifecycle, failed calls and [emergency controls](0028-token-custody-and-freeze.md#namespace-emergency-control). Record missing coverage. Development receipts do not prove production readiness.
+
+Interfaces can change during development. Update handlers, source IDLs, generated artifacts and affected callers together. Review changes to stored accounts and wire formats. Existing callers must build and pass their checks. M2 owns complete SDK and CLI journeys. Private routes, allowlist proofs, event history, product apps, live deployment and production readiness are outside M1.
 
 ## Consequences
 
