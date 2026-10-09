@@ -208,25 +208,82 @@ pub async fn submit_private_buy(
     })
 }
 
-/// Builds the curve configuration initialization/update call.
+/// Creates namespace settings with the namespace account's signature.
 #[must_use]
-pub fn build_update_config_invocation(
+pub fn build_initialize_namespace_invocation(
     namespace: AccountId,
     curve_program_id: ProgramId,
-    authority: AccountId,
-    admin: AccountId,
     protocol_fee_bps: u16,
     treasury: AccountId,
 ) -> PublicInvocation<CurveInstruction> {
     PublicInvocation {
         program_id: curve_program_id,
-        account_ids: vec![compute_config_pda(namespace, curve_program_id), authority],
-        signer_accounts: vec![authority],
-        instruction: CurveInstruction::UpdateConfig {
+        account_ids: vec![compute_config_pda(namespace, curve_program_id), namespace],
+        signer_accounts: vec![namespace],
+        instruction: CurveInstruction::InitializeNamespace {
             namespace,
-            admin,
             protocol_fee_bps: protocol_fee_bps.into(),
             treasury,
+        },
+    }
+}
+
+/// Changes the namespace fee rate without changing its treasury.
+#[must_use]
+pub fn build_update_fee_invocation(
+    namespace: AccountId,
+    curve_program_id: ProgramId,
+    admin: AccountId,
+    protocol_fee_bps: u16,
+) -> PublicInvocation<CurveInstruction> {
+    let mut invocation = build_renounce_admin_invocation(namespace, curve_program_id, admin);
+    invocation.instruction = CurveInstruction::UpdateFee {
+        namespace,
+        protocol_fee_bps: protocol_fee_bps.into(),
+    };
+    invocation
+}
+
+/// Changes the namespace treasury without changing its fee rate.
+#[must_use]
+pub fn build_update_treasury_invocation(
+    namespace: AccountId,
+    curve_program_id: ProgramId,
+    admin: AccountId,
+    treasury: AccountId,
+) -> PublicInvocation<CurveInstruction> {
+    let mut invocation = build_renounce_admin_invocation(namespace, curve_program_id, admin);
+    invocation.instruction = CurveInstruction::UpdateTreasury {
+        namespace,
+        treasury,
+    };
+    invocation
+}
+
+/// Transfers namespace administration with the successor's required evidence.
+#[must_use]
+pub fn build_transfer_admin_invocation(
+    namespace: AccountId,
+    curve_program_id: ProgramId,
+    admin: AccountId,
+    new_admin: AccountId,
+    candidate: curve_core::AdminCandidate,
+) -> PublicInvocation<CurveInstruction> {
+    PublicInvocation {
+        program_id: curve_program_id,
+        account_ids: vec![
+            compute_config_pda(namespace, curve_program_id),
+            admin,
+            new_admin,
+        ],
+        signer_accounts: match candidate {
+            curve_core::AdminCandidate::Signer => vec![admin, new_admin],
+            curve_core::AdminCandidate::Pda { .. } => vec![admin],
+        },
+        instruction: CurveInstruction::TransferAdmin {
+            namespace,
+            new_admin,
+            candidate,
         },
     }
 }

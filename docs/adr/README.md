@@ -13,7 +13,7 @@ Read [CONTEXT.md](../../CONTEXT.md) for terms and [repository layout](../archite
 | [0003](0003-source-reuse-and-licenses.md) | Direct source reuse and licenses | Accepted |
 | [0004](0004-upstream-patterns.md) | Adopt AMM patterns without a fork | Accepted |
 | [0005](0005-mechanism-boundaries.md) | Separate mechanisms, pools and factory policy | Accepted |
-| [0006](0006-namespaces-and-authority.md) | Separate roles using AccountId authority | Accepted; creator/pool-owner migration and platform checks pending |
+| [0006](0006-namespaces-and-authority.md) | Separate roles using AccountId authority | Accepted; curve namespace has local guest evidence; creator/pool-owner migration and broader platform checks pending |
 | [0007](0007-typed-sale-inputs.md) | Typed immutable sale inputs | Accepted internally; To be reviewed by Logos team |
 | [0008](0008-curve-allocation-and-close.md) | Curve allocations | Accepted internally; To be reviewed by Logos team |
 | [0009](0009-curve-arithmetic.md) | Checked curve pricing and reserve solvency | Accepted baseline |

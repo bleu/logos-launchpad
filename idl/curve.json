@@ -3,41 +3,6 @@
   "name": "curve",
   "instructions": [
     {
-      "name": "update_config",
-      "accounts": [
-        {
-          "name": "config",
-          "writable": true,
-          "signer": false,
-          "init": false
-        },
-        {
-          "name": "authority",
-          "writable": false,
-          "signer": true,
-          "init": false
-        }
-      ],
-      "args": [
-        {
-          "name": "namespace",
-          "type": "account_id"
-        },
-        {
-          "name": "admin",
-          "type": "account_id"
-        },
-        {
-          "name": "protocol_fee_bps",
-          "type": "u32"
-        },
-        {
-          "name": "treasury",
-          "type": "account_id"
-        }
-      ]
-    },
-    {
       "name": "renounce_admin",
       "accounts": [
         {
@@ -561,6 +526,135 @@
         {
           "name": "new_authority",
           "type": "account_id"
+        }
+      ]
+    },
+    {
+      "name": "initialize_namespace",
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "signer": false,
+          "init": true
+        },
+        {
+          "name": "creator",
+          "writable": false,
+          "signer": true,
+          "init": false
+        }
+      ],
+      "args": [
+        {
+          "name": "namespace",
+          "type": "account_id"
+        },
+        {
+          "name": "protocol_fee_bps",
+          "type": "u32"
+        },
+        {
+          "name": "treasury",
+          "type": "account_id"
+        }
+      ]
+    },
+    {
+      "name": "update_fee",
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "authority",
+          "writable": false,
+          "signer": true,
+          "init": false
+        }
+      ],
+      "args": [
+        {
+          "name": "namespace",
+          "type": "account_id"
+        },
+        {
+          "name": "protocol_fee_bps",
+          "type": "u32"
+        }
+      ]
+    },
+    {
+      "name": "update_treasury",
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "authority",
+          "writable": false,
+          "signer": true,
+          "init": false
+        }
+      ],
+      "args": [
+        {
+          "name": "namespace",
+          "type": "account_id"
+        },
+        {
+          "name": "treasury",
+          "type": "account_id"
+        }
+      ]
+    },
+    {
+      "name": "transfer_admin",
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "authority",
+          "writable": false,
+          "signer": true,
+          "init": false
+        },
+        {
+          "name": "successor",
+          "writable": false,
+          "signer": false,
+          "init": false
+        }
+      ],
+      "args": [
+        {
+          "name": "namespace",
+          "type": "account_id"
+        },
+        {
+          "name": "new_admin",
+          "type": "account_id"
+        },
+        {
+          "name": "candidate",
+          "type": {
+            "option": {
+              "array": [
+                "u32",
+                40
+              ]
+            }
+          }
         }
       ]
     }

@@ -9,6 +9,28 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
+name = "admin-authority"
+version = "0.1.4"
+source = "git+https://github.com/mmlado/spel-admin-authority?rev=479adf86f85b664073f359cfd2fd0087489f63a0#479adf86f85b664073f359cfd2fd0087489f63a0"
+dependencies = [
+ "admin-authority-macros",
+ "borsh",
+ "serde",
+ "spel-authority",
+ "spel-framework",
+]
+
+[[package]]
+name = "admin-authority-macros"
+version = "0.1.4"
+source = "git+https://github.com/mmlado/spel-admin-authority?rev=479adf86f85b664073f359cfd2fd0087489f63a0#479adf86f85b664073f359cfd2fd0087489f63a0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "aead"
 version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -76,7 +98,7 @@ version = "0.1.0"
 source = "git+https://github.com/logos-blockchain/logos-execution-zone.git?rev=a58fbce2ff48c58b7bb5001b1a27e64b9596ee3a#a58fbce2ff48c58b7bb5001b1a27e64b9596ee3a"
 dependencies = [
  "borsh",
- "lee_core",
+ "lee_core 0.1.0 (git+https://github.com/logos-blockchain/logos-execution-zone.git?rev=a58fbce2ff48c58b7bb5001b1a27e64b9596ee3a)",
  "risc0-zkvm",
  "serde",
 ]
@@ -437,7 +459,7 @@ name = "associated_token_account_core"
 version = "0.1.0"
 source = "git+https://github.com/logos-blockchain/logos-execution-zone.git?rev=a58fbce2ff48c58b7bb5001b1a27e64b9596ee3a#a58fbce2ff48c58b7bb5001b1a27e64b9596ee3a"
 dependencies = [
- "lee_core",
+ "lee_core 0.1.0 (git+https://github.com/logos-blockchain/logos-execution-zone.git?rev=a58fbce2ff48c58b7bb5001b1a27e64b9596ee3a)",
  "risc0-zkvm",
  "serde",
 ]
@@ -837,7 +859,7 @@ name = "bridge_core"
 version = "0.1.0"
 source = "git+https://github.com/logos-blockchain/logos-execution-zone.git?rev=a58fbce2ff48c58b7bb5001b1a27e64b9596ee3a#a58fbce2ff48c58b7bb5001b1a27e64b9596ee3a"
 dependencies = [
- "lee_core",
+ "lee_core 0.1.0 (git+https://github.com/logos-blockchain/logos-execution-zone.git?rev=a58fbce2ff48c58b7bb5001b1a27e64b9596ee3a)",
  "serde",
 ]
 
@@ -1069,7 +1091,7 @@ version = "0.1.0"
 source = "git+https://github.com/logos-blockchain/logos-execution-zone.git?rev=a58fbce2ff48c58b7bb5001b1a27e64b9596ee3a#a58fbce2ff48c58b7bb5001b1a27e64b9596ee3a"
 dependencies = [
  "borsh",
- "lee_core",
+ "lee_core 0.1.0 (git+https://github.com/logos-blockchain/logos-execution-zone.git?rev=a58fbce2ff48c58b7bb5001b1a27e64b9596ee3a)",
 ]
 
 [[package]]
@@ -1115,7 +1137,7 @@ dependencies = [
  "clock_core",
  "hex",
  "lee",
- "lee_core",
+ "lee_core 0.1.0 (git+https://github.com/logos-blockchain/logos-execution-zone.git?rev=a58fbce2ff48c58b7bb5001b1a27e64b9596ee3a)",
  "log",
  "logos-blockchain-common-http-client",
  "programs",
@@ -1345,15 +1367,17 @@ dependencies = [
 name = "curve-core"
 version = "0.1.0"
 dependencies = [
+ "admin-authority",
  "associated_token_account_core",
  "borsh",
  "clock_core",
  "lee",
- "lee_core",
+ "lee_core 0.1.0 (git+https://github.com/logos-blockchain/logos-execution-zone.git?rev=a58fbce2ff48c58b7bb5001b1a27e64b9596ee3a)",
  "pool",
  "programs",
  "risc0-zkvm",
  "serde",
+ "spel-framework",
  "token_core",
 ]
 
@@ -1936,7 +1960,7 @@ dependencies = [
  "borsh",
  "clock_core",
  "curve-core",
- "lee_core",
+ "lee_core 0.1.0 (git+https://github.com/logos-blockchain/logos-execution-zone.git?rev=a58fbce2ff48c58b7bb5001b1a27e64b9596ee3a)",
  "pool",
  "risc0-zkvm",
  "serde",
@@ -1954,7 +1978,7 @@ name = "faucet_core"
 version = "0.1.0"
 source = "git+https://github.com/logos-blockchain/logos-execution-zone.git?rev=a58fbce2ff48c58b7bb5001b1a27e64b9596ee3a#a58fbce2ff48c58b7bb5001b1a27e64b9596ee3a"
 dependencies = [
- "lee_core",
+ "lee_core 0.1.0 (git+https://github.com/logos-blockchain/logos-execution-zone.git?rev=a58fbce2ff48c58b7bb5001b1a27e64b9596ee3a)",
  "serde",
 ]
 
@@ -3329,7 +3353,7 @@ dependencies = [
  "itertools 0.14.0",
  "k256",
  "lee",
- "lee_core",
+ "lee_core 0.1.0 (git+https://github.com/logos-blockchain/logos-execution-zone.git?rev=a58fbce2ff48c58b7bb5001b1a27e64b9596ee3a)",
  "ml-kem",
  "rand 0.8.7",
  "serde",
@@ -3381,7 +3405,7 @@ dependencies = [
  "factory-core",
  "hex",
  "lee",
- "lee_core",
+ "lee_core 0.1.0 (git+https://github.com/logos-blockchain/logos-execution-zone.git?rev=a58fbce2ff48c58b7bb5001b1a27e64b9596ee3a)",
  "pool",
  "private-flow-core",
  "programs",
@@ -3439,7 +3463,7 @@ dependencies = [
  "build_utils",
  "hex",
  "k256",
- "lee_core",
+ "lee_core 0.1.0 (git+https://github.com/logos-blockchain/logos-execution-zone.git?rev=a58fbce2ff48c58b7bb5001b1a27e64b9596ee3a)",
  "log",
  "rand 0.8.7",
  "risc0-binfmt",
@@ -3447,6 +3471,23 @@ dependencies = [
  "serde",
  "serde_with",
  "sha2",
+ "thiserror 2.0.20",
+]
+
+[[package]]
+name = "lee_core"
+version = "0.1.0"
+source = "git+https://github.com/logos-blockchain/logos-execution-zone.git?tag=v0.2.4#47eba256479f6f785acbd138834340703cd03401"
+dependencies = [
+ "base58",
+ "borsh",
+ "bytemuck",
+ "bytesize",
+ "chacha20",
+ "ml-kem",
+ "risc0-zkvm",
+ "serde",
+ "serde_with",
  "thiserror 2.0.20",
 ]
 
@@ -5454,7 +5495,7 @@ name = "private-flow-core"
 version = "0.1.0"
 dependencies = [
  "curve-core",
- "lee_core",
+ "lee_core 0.1.0 (git+https://github.com/logos-blockchain/logos-execution-zone.git?rev=a58fbce2ff48c58b7bb5001b1a27e64b9596ee3a)",
  "risc0-zkvm",
  "serde",
  "token_core",
@@ -6685,7 +6726,7 @@ dependencies = [
  "common",
  "hex",
  "lee",
- "lee_core",
+ "lee_core 0.1.0 (git+https://github.com/logos-blockchain/logos-execution-zone.git?rev=a58fbce2ff48c58b7bb5001b1a27e64b9596ee3a)",
  "serde_with",
 ]
 
@@ -6995,6 +7036,58 @@ dependencies = [
 ]
 
 [[package]]
+name = "spel-authority"
+version = "0.1.2"
+source = "git+https://github.com/mmlado/spel-authority.git?tag=v0.1.2#97af481b29b5364589776beb4c088ebe234ad7ed"
+dependencies = [
+ "borsh",
+ "serde",
+ "spel-framework",
+]
+
+[[package]]
+name = "spel-framework"
+version = "0.6.0"
+source = "git+https://github.com/logos-co/spel.git?rev=d0bb659048c3fc6533f51c69e9f7f12382af6dd2#d0bb659048c3fc6533f51c69e9f7f12382af6dd2"
+dependencies = [
+ "borsh",
+ "lee_core 0.1.0 (git+https://github.com/logos-blockchain/logos-execution-zone.git?tag=v0.2.4)",
+ "serde_json",
+ "spel-framework-core",
+ "spel-framework-macros",
+]
+
+[[package]]
+name = "spel-framework-core"
+version = "0.6.0"
+source = "git+https://github.com/logos-co/spel.git?rev=d0bb659048c3fc6533f51c69e9f7f12382af6dd2#d0bb659048c3fc6533f51c69e9f7f12382af6dd2"
+dependencies = [
+ "base58",
+ "borsh",
+ "lee_core 0.1.0 (git+https://github.com/logos-blockchain/logos-execution-zone.git?tag=v0.2.4)",
+ "proc-macro2",
+ "serde",
+ "serde_json",
+ "sha2",
+ "syn 2.0.119",
+ "thiserror 1.0.69",
+ "toml",
+]
+
+[[package]]
+name = "spel-framework-macros"
+version = "0.6.0"
+source = "git+https://github.com/logos-co/spel.git?rev=d0bb659048c3fc6533f51c69e9f7f12382af6dd2#d0bb659048c3fc6533f51c69e9f7f12382af6dd2"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "serde_json",
+ "sha2",
+ "spel-framework-core",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "spin"
 version = "0.9.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7192,7 +7285,7 @@ dependencies = [
  "bridge_core",
  "clock_core",
  "faucet_core",
- "lee_core",
+ "lee_core 0.1.0 (git+https://github.com/logos-blockchain/logos-execution-zone.git?rev=a58fbce2ff48c58b7bb5001b1a27e64b9596ee3a)",
  "programs",
 ]
 
@@ -7239,7 +7332,7 @@ source = "git+https://github.com/logos-blockchain/logos-execution-zone.git?rev=a
 dependencies = [
  "key_protocol",
  "lee",
- "lee_core",
+ "lee_core 0.1.0 (git+https://github.com/logos-blockchain/logos-execution-zone.git?rev=a58fbce2ff48c58b7bb5001b1a27e64b9596ee3a)",
  "programs",
  "serde",
  "system_accounts",
@@ -7364,7 +7457,7 @@ version = "0.1.0"
 source = "git+https://github.com/logos-blockchain/logos-execution-zone.git?rev=a58fbce2ff48c58b7bb5001b1a27e64b9596ee3a#a58fbce2ff48c58b7bb5001b1a27e64b9596ee3a"
 dependencies = [
  "borsh",
- "lee_core",
+ "lee_core 0.1.0 (git+https://github.com/logos-blockchain/logos-execution-zone.git?rev=a58fbce2ff48c58b7bb5001b1a27e64b9596ee3a)",
  "serde",
 ]
 
@@ -7992,7 +8085,7 @@ name = "vault_core"
 version = "0.1.0"
 source = "git+https://github.com/logos-blockchain/logos-execution-zone.git?rev=a58fbce2ff48c58b7bb5001b1a27e64b9596ee3a#a58fbce2ff48c58b7bb5001b1a27e64b9596ee3a"
 dependencies = [
- "lee_core",
+ "lee_core 0.1.0 (git+https://github.com/logos-blockchain/logos-execution-zone.git?rev=a58fbce2ff48c58b7bb5001b1a27e64b9596ee3a)",
  "risc0-zkvm",
  "serde",
 ]
@@ -8048,7 +8141,7 @@ dependencies = [
  "key_protocol",
  "keycard_wallet",
  "lee",
- "lee_core",
+ "lee_core 0.1.0 (git+https://github.com/logos-blockchain/logos-execution-zone.git?rev=a58fbce2ff48c58b7bb5001b1a27e64b9596ee3a)",
  "log",
  "optfield",
  "programs",

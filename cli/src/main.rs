@@ -40,11 +40,11 @@ struct Cli {
     /// Emit stable machine-readable output.
     #[arg(long, global = true)]
     json: bool,
-    /// Namespace identity (the authority NFT definition ID used at initialization).
+    /// Stable namespace AccountId used at initialization.
     #[arg(long, global = true)]
     #[arg(value_parser = parse_account_location)]
     namespace: Option<AccountLocation>,
-    /// Router guest for using a Private/ NFT holder with any role operation.
+    /// Router guest for creator operations with a Private/ NFT holder.
     #[arg(long, global = true)]
     authority_router_path: Option<PathBuf>,
     #[command(subcommand)]
@@ -53,6 +53,23 @@ struct Cli {
 
 impl Cli {
     fn validate_route(&self) -> Result<()> {
+        if matches!(
+            self.command,
+            Command::Configure(_) | Command::RenounceAdmin(_) | Command::NamespaceInfo(_)
+        ) && (self.authority_router_path.is_some()
+            || self.namespace.is_some_and(AccountLocation::is_private))
+        {
+            eyre::bail!(
+                "namespace administration supports public AccountId signatures only; no private namespace or authority router"
+            );
+        }
+        if let Command::Configure(args) = &self.command
+            && self
+                .namespace
+                .is_some_and(|namespace| namespace.account_id() != args.admin)
+        {
+            eyre::bail!("--admin must equal --namespace for namespace initialization");
+        }
         if matches!(self.command, Command::Graduate(_))
             && (self.authority_router_path.is_some()
                 || self.namespace.is_some_and(AccountLocation::is_private))
@@ -85,6 +102,7 @@ enum Command {
     SaleInfo(LaunchReadArgs),
     /// Collect one or more pools in this namespace (sequential, resumable).
     CollectFees(CollectFeesArgs),
+    /// Initialize a namespace once, using its signing AccountId as administrator.
     Configure(ConfigArgs),
     CreateAuthority(CreateAuthorityArgs),
     TransferAuthority(TransferAuthorityArgs),
@@ -116,8 +134,8 @@ struct NamespaceReadArgs {
 struct NamespaceAdminArgs {
     #[arg(long)]
     curve_program_path: PathBuf,
-    #[arg(long, value_parser = parse_account_location)]
-    admin: AccountLocation,
+    #[arg(long, value_parser = parse_public_account_id)]
+    admin: lee::AccountId,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -357,15 +375,13 @@ struct PriceArgs {
 
 #[derive(Debug, Args)]
 struct ConfigArgs {
-    /// Replace administration with the NFT held by this Public/ or Private/ account.
-    #[arg(long, value_parser = parse_account_location)]
-    new_admin: Option<AccountLocation>,
-    #[arg(long, value_parser = parse_account_location)]
-    admin: AccountLocation,
+    /// Signing namespace AccountId; must equal --namespace.
+    #[arg(long, value_parser = parse_public_account_id)]
+    admin: lee::AccountId,
     #[arg(long, default_value_t = 0)]
     protocol_fee_bps: u16,
-    #[arg(long, value_parser = parse_account_location)]
-    treasury: AccountLocation,
+    #[arg(long, value_parser = parse_public_account_id)]
+    treasury: lee::AccountId,
     #[arg(long = "curve-program-path")]
     curve_program_path: PathBuf,
 }
@@ -378,7 +394,7 @@ fn parse_account_location(raw: &str) -> Result<AccountLocation, String> {
 fn parse_public_account_id(raw: &str) -> Result<lee::AccountId, String> {
     match parse_account_location(raw)? {
         AccountLocation::Public(id) => Ok(id),
-        AccountLocation::Private(_) => Err("graduation requires public accounts".to_owned()),
+        AccountLocation::Private(_) => Err("this command requires public accounts".to_owned()),
     }
 }
 
@@ -595,9 +611,7 @@ async fn run(json: bool, cli: Cli) -> Result<()> {
     let router = cli.authority_router_path.as_deref();
     let namespace = cli
         .namespace
-        .ok_or_else(|| {
-            eyre::eyre!("--namespace is required; use the authority NFT definition ID used to initialize the namespace")
-        })?
+        .ok_or_else(|| eyre::eyre!("--namespace is required; use the stable namespace AccountId"))?
         .account_id();
     match cli.command {
         Command::CreateSale(args) => create_sale(namespace, json, args, router).await,
@@ -633,7 +647,7 @@ async fn run(json: bool, cli: Cli) -> Result<()> {
         Command::Status(args) | Command::SaleInfo(args) => {
             sale_snapshot(namespace, json, args).await
         }
-        Command::Configure(args) => configure(namespace, json, args, router).await,
+        Command::Configure(args) => configure(namespace, json, args).await,
         Command::CreateAuthority(_) | Command::TransferAuthority(_) => unreachable!(),
         Command::NamespaceInfo(args) => {
             let program = load_program(&args.curve_program_path)?;
@@ -642,29 +656,20 @@ async fn run(json: bool, cli: Cli) -> Result<()> {
             let config = load_curve_config(namespace, &wallet, program.id()).await?;
             println!(
                 "{}",
-                serde_json::json!({"namespace": namespace.to_string(), "admin": config.admin.to_string(), "protocol_fee_bps": config.protocol_fee_bps, "treasury": config.treasury.to_string()})
+                serde_json::json!({"namespace": namespace.to_string(), "protocol_fee_bps": config.protocol_fee_bps, "treasury": config.treasury.to_string()})
             );
             Ok(())
         }
         Command::RenounceAdmin(args) => {
             let program = load_program(&args.curve_program_path)?;
-            let mut wallet = WalletCore::from_env()
+            let wallet = WalletCore::from_env()
                 .map_err(|error| eyre::eyre!(error.into_boxed_dyn_error()))?;
-            let hash = submit_role(
-                &mut wallet,
-                &program,
-                vec![],
+            let invocation = launchpad_client::build_renounce_admin_invocation(
+                namespace,
+                program.id(),
                 args.admin,
-                router,
-                |holder| {
-                    Ok(launchpad_client::build_renounce_admin_invocation(
-                        namespace,
-                        program.id(),
-                        holder,
-                    ))
-                },
-            )
-            .await?;
+            );
+            let hash = submit_public_invocation(&wallet, &program, invocation).await?;
             println!(
                 "{}",
                 serde_json::json!({"namespace": namespace.to_string(), "transaction_hash": hex::encode(hash)})
@@ -698,40 +703,17 @@ fn error_category(error: &eyre::Report) -> ErrorCategory {
     }
 }
 
-async fn configure(
-    namespace: lee::AccountId,
-    json: bool,
-    args: ConfigArgs,
-    router: Option<&Path>,
-) -> Result<()> {
+async fn configure(namespace: lee::AccountId, json: bool, args: ConfigArgs) -> Result<()> {
     let curve_program = load_program(&args.curve_program_path)?;
-    let treasury = args.treasury.account_id();
-    let mut wallet =
+    let wallet =
         WalletCore::from_env().map_err(|error| eyre::eyre!(error.into_boxed_dyn_error()))?;
-    let current_authority = launchpad_client::load_authority_identity(&wallet, args.admin).await?;
-    let next_authority = match args.new_admin {
-        Some(holder) => launchpad_client::load_authority_identity(&wallet, holder).await?,
-        None => current_authority,
-    };
-    let build = |holder| {
-        Ok(launchpad_client::build_update_config_invocation(
-            namespace,
-            curve_program.id(),
-            holder,
-            next_authority,
-            args.protocol_fee_bps,
-            treasury,
-        ))
-    };
-    let transaction_hash = submit_role(
-        &mut wallet,
-        &curve_program,
-        vec![],
-        args.admin,
-        router,
-        build,
-    )
-    .await?;
+    let invocation = launchpad_client::build_initialize_namespace_invocation(
+        namespace,
+        curve_program.id(),
+        args.protocol_fee_bps,
+        args.treasury,
+    );
+    let transaction_hash = submit_public_invocation(&wallet, &curve_program, invocation).await?;
     if json {
         println!(
             "{}",
@@ -742,7 +724,7 @@ async fn configure(
         );
     } else {
         println!(
-            "submitted curve configuration: tx_hash={}",
+            "submitted namespace initialization: tx_hash={}",
             hex::encode(transaction_hash)
         );
     }
@@ -1347,7 +1329,7 @@ mod tests {
     use clap::{CommandFactory, Parser};
 
     #[test]
-    fn authority_commands_support_private_holders_and_nft_issuance() {
+    fn authority_commands_keep_nft_transfers_and_reject_private_namespace_admin() {
         assert!(
             Cli::try_parse_from([
                 "launchpad",
@@ -1374,7 +1356,7 @@ mod tests {
                 "--treasury",
                 "Public/11111111111111111111111111111111"
             ])
-            .is_ok()
+            .is_err()
         );
         assert!(
             Cli::try_parse_from([
@@ -1390,7 +1372,7 @@ mod tests {
     }
 
     #[test]
-    fn namespace_admin_commands_accept_explicit_identity_and_transfer() {
+    fn namespace_admin_commands_accept_public_initialization_and_renunciation() {
         let cli = Cli::try_parse_from([
             "launchpad",
             "--namespace",
@@ -1400,8 +1382,6 @@ mod tests {
             "curve.bin",
             "--admin",
             "Public/11111111111111111111111111111111",
-            "--new-admin",
-            "Public/11111111111111111111111111111111",
             "--protocol-fee-bps",
             "0",
             "--treasury",
@@ -1409,10 +1389,11 @@ mod tests {
         ])
         .unwrap();
         assert!(matches!(cli.namespace, Some(AccountLocation::Public(_))));
+        assert!(cli.validate_route().is_ok());
         let Command::Configure(config) = cli.command else {
             panic!("configure command")
         };
-        assert!(matches!(config.new_admin, Some(AccountLocation::Public(_))));
+        assert_eq!(config.admin, cli.namespace.unwrap().account_id());
         for command in ["namespace-info", "renounce-admin"] {
             let mut args = vec![
                 "launchpad",

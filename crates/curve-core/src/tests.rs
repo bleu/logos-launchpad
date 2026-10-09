@@ -14,12 +14,11 @@ use token_core::{TokenDefinition, TokenHolding};
 
 use crate::dispatch::process_instruction;
 use crate::{
-    ASSOCIATED_TOKEN_ACCOUNT_PROGRAM_ID, Config, Instruction, PoolAccount, compute_config_pda,
-    compute_config_pda_seed, compute_pool_pda,
+    ASSOCIATED_TOKEN_ACCOUNT_PROGRAM_ID, AdminCandidate, Config, Instruction, PoolAccount,
+    compute_config_pda, compute_pool_pda,
     pool_create::create_pool,
     pool_lifecycle::{close_pool, withdraw_reserves},
     pool_swap::{swap_exact_input, swap_exact_output},
-    update_config::update_config,
 };
 
 const NAMESPACE_CREATOR: AccountId = AccountId::new([0xAD; 32]);
@@ -50,19 +49,22 @@ fn signer(account_id: AccountId) -> AccountWithMetadata {
     }
 }
 
+fn admin_signer(account_id: AccountId) -> AccountWithMetadata {
+    AccountWithMetadata {
+        account: Account::default(),
+        is_authorized: true,
+        account_id,
+    }
+}
+
 fn namespace_creator_signer() -> AccountWithMetadata {
-    signer(NAMESPACE_CREATOR)
+    admin_signer(NAMESPACE_CREATOR)
 }
 
 fn initialized_config(admin: AccountId) -> AccountWithMetadata {
     let account = Account {
         program_owner: CURVE_PROGRAM_ID,
-        data: Data::from(&Config {
-            admin,
-            protocol_fee_bps: 100,
-            treasury: new_treasury(),
-            ..Config::default()
-        }),
+        data: Data::from(&Config::new(admin, 100, new_treasury())),
         ..Account::default()
     };
     AccountWithMetadata {
@@ -491,105 +493,35 @@ fn zero_initial_reserve_creates_its_ata_without_emitting_a_zero_transfer() {
     ));
 }
 
-#[should_panic(expected = "Authority is not the config admin")]
-#[test]
-fn init_rejects_an_authority_other_than_the_namespace_creator() {
-    let _post_states = update_config(
-        AccountId::new([0xAD; 32]),
-        uninitialized_config(),
-        intruder_signer(),
-        new_admin(),
-        100,
-        new_treasury(),
-        CURVE_PROGRAM_ID,
-    );
-}
-
-#[should_panic(expected = "Authority authorization is missing")]
-#[test]
-fn update_config_rejects_an_unauthorized_authority() {
-    let unsigned_namespace_creator = AccountWithMetadata {
-        is_authorized: false,
-        ..namespace_creator_signer()
-    };
-    let _post_states = update_config(
-        AccountId::new([0xAD; 32]),
-        uninitialized_config(),
-        unsigned_namespace_creator,
-        new_admin(),
-        100,
-        new_treasury(),
-        CURVE_PROGRAM_ID,
-    );
-}
-
-// Component-backed transfer still needs compatibility evidence; see ADR 0006.
-#[test]
-fn stored_admin_rotates_the_admin_to_a_new_key() {
-    let rotated_to = AccountId::new([3; 32]);
-    let pre_states = vec![initialized_config(new_admin()), signer(new_admin())];
-    let (post_states, _) = process_instruction(
-        pre_states.clone(),
-        Instruction::UpdateConfig {
-            namespace: AccountId::new([0xAD; 32]),
-            admin: rotated_to,
-            protocol_fee_bps: 40,
-            treasury: new_treasury(),
-        },
-        CURVE_PROGRAM_ID,
-    );
-    lee_core::program::validate_execution(&pre_states, &post_states, CURVE_PROGRAM_ID)
-        .expect("configuration must pass runtime account validation");
-
-    let [config_post, authority_post]: [_; 2] =
-        post_states.try_into().expect("exactly two post states");
-    assert_eq!(authority_post.account(), &pre_states[1].account);
-    let config =
-        Config::try_from(&config_post.account().data).expect("post state holds a valid Config");
-    assert_eq!(config.admin, rotated_to);
-    assert_eq!(config.protocol_fee_bps, 40);
-    assert_eq!(
-        config_post.required_claim(),
-        None,
-        "updating an existing config must not re-claim the PDA"
-    );
-}
-
-#[should_panic(expected = "Authority is not the config admin")]
-#[test]
-fn update_rejects_the_rotated_out_admin() {
-    // The config's stored admin is `new_admin`; the genesis admin was rotated out at
-    // init and holds no power anymore.
-    let _post_states = update_config(
-        AccountId::new([0xAD; 32]),
-        initialized_config(new_admin()),
-        namespace_creator_signer(),
-        new_admin(),
-        100,
-        new_treasury(),
-        CURVE_PROGRAM_ID,
-    );
-}
-
 #[test]
 fn namespace_fee_rate_is_below_one_hundred_percent_on_creation_and_update() {
-    for (config, authority) in [
-        (uninitialized_config(), namespace_creator_signer()),
+    for (config, authority, initialize) in [
+        (uninitialized_config(), namespace_creator_signer(), true),
         (
             namespace_config(NAMESPACE_CREATOR, 100, new_treasury()),
             namespace_creator_signer(),
+            false,
         ),
     ] {
         let pre_states = vec![config, authority];
+        let instruction = |protocol_fee_bps| {
+            if initialize {
+                Instruction::InitializeNamespace {
+                    namespace: NAMESPACE_CREATOR,
+                    protocol_fee_bps,
+                    treasury: new_treasury(),
+                }
+            } else {
+                Instruction::UpdateFee {
+                    namespace: NAMESPACE_CREATOR,
+                    protocol_fee_bps,
+                }
+            }
+        };
         for protocol_fee_bps in [0, 9_999] {
             let (post_states, _) = process_instruction(
                 pre_states.clone(),
-                Instruction::UpdateConfig {
-                    namespace: NAMESPACE_CREATOR,
-                    admin: NAMESPACE_CREATOR,
-                    protocol_fee_bps,
-                    treasury: new_treasury(),
-                },
+                instruction(protocol_fee_bps),
                 CURVE_PROGRAM_ID,
             );
             lee_core::program::validate_execution(&pre_states, &post_states, CURVE_PROGRAM_ID)
@@ -605,12 +537,7 @@ fn namespace_fee_rate_is_below_one_hundred_percent_on_creation_and_update() {
             let result = std::panic::catch_unwind(|| {
                 process_instruction(
                     pre_states.clone(),
-                    Instruction::UpdateConfig {
-                        namespace: NAMESPACE_CREATOR,
-                        admin: NAMESPACE_CREATOR,
-                        protocol_fee_bps,
-                        treasury: new_treasury(),
-                    },
+                    instruction(protocol_fee_bps),
                     CURVE_PROGRAM_ID,
                 )
             });
@@ -625,20 +552,13 @@ fn namespace_fee_rate_is_below_one_hundred_percent_on_creation_and_update() {
 #[test]
 fn namespace_fee_can_be_lowered_from_a_legacy_hundred_percent_rate() {
     let mut legacy_config = initialized_config(new_admin());
-    legacy_config.account.data = Data::from(&Config {
-        admin: new_admin(),
-        protocol_fee_bps: 10_000,
-        treasury: new_treasury(),
-        ..Config::default()
-    });
-    let pre_states = vec![legacy_config, signer(new_admin())];
+    legacy_config.account.data = Data::from(&Config::new(new_admin(), 10_000, new_treasury()));
+    let pre_states = vec![legacy_config, admin_signer(new_admin())];
     let (post_states, _) = process_instruction(
         pre_states.clone(),
-        Instruction::UpdateConfig {
+        Instruction::UpdateFee {
             namespace: NAMESPACE_CREATOR,
-            admin: new_admin(),
             protocol_fee_bps: 9_999,
-            treasury: new_treasury(),
         },
         CURVE_PROGRAM_ID,
     );
@@ -647,87 +567,6 @@ fn namespace_fee_can_be_lowered_from_a_legacy_hundred_percent_rate() {
     let config =
         Config::try_from(&post_states[0].account().data).expect("post state holds a valid Config");
     assert_eq!(config.protocol_fee_bps, 9_999);
-}
-
-// The default key is indistinguishable from unset, and the token program would
-// happily auto-initialize a holding for it. Reject it for both key fields.
-#[should_panic(expected = "Admin must not be the default key")]
-#[test]
-fn update_config_rejects_a_default_admin() {
-    let _post_states = update_config(
-        AccountId::new([0xAD; 32]),
-        uninitialized_config(),
-        namespace_creator_signer(),
-        AccountId::default(),
-        100,
-        new_treasury(),
-        CURVE_PROGRAM_ID,
-    );
-}
-
-#[should_panic(expected = "Treasury must not be the default key")]
-#[test]
-fn update_config_rejects_a_default_treasury() {
-    let _post_states = update_config(
-        AccountId::new([0xAD; 32]),
-        uninitialized_config(),
-        namespace_creator_signer(),
-        new_admin(),
-        100,
-        AccountId::default(),
-        CURVE_PROGRAM_ID,
-    );
-}
-
-#[should_panic(expected = "Config account ID does not match PDA")]
-#[test]
-fn update_config_rejects_a_forged_config_account() {
-    let forged_config = AccountWithMetadata {
-        account_id: AccountId::new([66; 32]),
-        ..uninitialized_config()
-    };
-    let _post_states = update_config(
-        AccountId::new([0xAD; 32]),
-        forged_config,
-        namespace_creator_signer(),
-        new_admin(),
-        100,
-        new_treasury(),
-        CURVE_PROGRAM_ID,
-    );
-}
-
-#[test]
-fn first_update_config_initializes_the_config() {
-    let pre_states = vec![uninitialized_config(), namespace_creator_signer()];
-    let (post_states, _) = process_instruction(
-        pre_states.clone(),
-        Instruction::UpdateConfig {
-            namespace: AccountId::new([0xAD; 32]),
-            admin: new_admin(),
-            protocol_fee_bps: 100,
-            treasury: new_treasury(),
-        },
-        CURVE_PROGRAM_ID,
-    );
-    lee_core::program::validate_execution(&pre_states, &post_states, CURVE_PROGRAM_ID)
-        .expect("configuration must pass runtime account validation");
-
-    let [config_post, authority_post]: [_; 2] =
-        post_states.try_into().expect("exactly two post states");
-    assert_eq!(authority_post.account(), &pre_states[1].account);
-    let config =
-        Config::try_from(&config_post.account().data).expect("post state holds a valid Config");
-    assert_eq!(config.admin, new_admin());
-    assert_eq!(config.protocol_fee_bps, 100);
-    assert_eq!(config.treasury, new_treasury());
-    assert_eq!(
-        config_post.required_claim(),
-        Some(Claim::Pda(compute_config_pda_seed(AccountId::new(
-            [0xAD; 32]
-        )))),
-        "creation must claim the config PDA"
-    );
 }
 
 #[test]
@@ -1397,12 +1236,7 @@ fn exact_output_handler_caps_fee_inclusive_input_in_the_reverse_direction() {
     let config = AccountWithMetadata {
         account: Account {
             program_owner: CURVE_PROGRAM_ID,
-            data: Data::from(&Config {
-                admin: new_admin(),
-                protocol_fee_bps: 1_000,
-                treasury: new_treasury(),
-                ..Config::default()
-            }),
+            data: Data::from(&Config::new(new_admin(), 1_000, new_treasury())),
             ..Account::default()
         },
         is_authorized: false,
@@ -1469,12 +1303,7 @@ fn exact_output_dispatch_settles_fee_inclusive_input_and_requested_output_atomic
     let config = AccountWithMetadata {
         account: Account {
             program_owner: CURVE_PROGRAM_ID,
-            data: Data::from(&Config {
-                admin: new_admin(),
-                protocol_fee_bps: 1_000,
-                treasury: new_treasury(),
-                ..Config::default()
-            }),
+            data: Data::from(&Config::new(new_admin(), 1_000, new_treasury())),
             ..Account::default()
         },
         is_authorized: false,
@@ -1574,12 +1403,6 @@ fn exact_output_dispatch_settles_fee_inclusive_input_and_requested_output_atomic
 fn instruction_wire_format_matches_the_idl_order() {
     // `read_lee_inputs::<Instruction>()` in the guest deserialises with risc0's serde.
     let instructions = [
-        Instruction::UpdateConfig {
-            namespace: AccountId::new([0xAD; 32]),
-            admin: new_admin(),
-            protocol_fee_bps: 100,
-            treasury: new_treasury(),
-        },
         Instruction::RenounceAdmin {
             namespace: AccountId::new([0xAD; 32]),
         },
@@ -1620,11 +1443,29 @@ fn instruction_wire_format_matches_the_idl_order() {
             namespace: AccountId::new([0xAD; 32]),
             new_authority: new_admin(),
         },
+        Instruction::InitializeNamespace {
+            namespace: AccountId::new([0xAD; 32]),
+            protocol_fee_bps: 100,
+            treasury: new_treasury(),
+        },
+        Instruction::UpdateFee {
+            namespace: AccountId::new([0xAD; 32]),
+            protocol_fee_bps: 100,
+        },
+        Instruction::UpdateTreasury {
+            namespace: AccountId::new([0xAD; 32]),
+            treasury: new_treasury(),
+        },
+        Instruction::TransferAdmin {
+            namespace: AccountId::new([0xAD; 32]),
+            new_admin: new_admin(),
+            candidate: AdminCandidate::Signer,
+        },
         Instruction::Private {
             instruction: Box::new(Instruction::ClosePool),
         },
     ];
-    for (tag, instruction) in (0_u32..=11).zip(instructions) {
+    for (tag, instruction) in (0_u32..=14).zip(instructions) {
         let words = risc0_zkvm::serde::to_vec(&instruction).expect("instruction serialises");
         assert_eq!(words.first().copied(), Some(tag));
         let back: Instruction = risc0_zkvm::serde::from_slice(&words).expect("wire words parse");
@@ -1659,9 +1500,8 @@ fn wire_values_reject_unrepresentable_fee_invalid_depletion_and_incomplete_owner
     let result = std::panic::catch_unwind(|| {
         process_instruction(
             vec![uninitialized_config(), namespace_creator_signer()],
-            Instruction::UpdateConfig {
+            Instruction::InitializeNamespace {
                 namespace: NAMESPACE_CREATOR,
-                admin: NAMESPACE_CREATOR,
                 protocol_fee_bps: u32::from(u16::MAX) + 1,
                 treasury: new_treasury(),
             },
@@ -1673,9 +1513,8 @@ fn wire_values_reject_unrepresentable_fee_invalid_depletion_and_incomplete_owner
     let result = std::panic::catch_unwind(|| {
         process_instruction(
             vec![uninitialized_config(), namespace_creator_signer()],
-            Instruction::UpdateConfig {
+            Instruction::InitializeNamespace {
                 namespace: NAMESPACE_CREATOR,
-                admin: NAMESPACE_CREATOR,
                 protocol_fee_bps: u32::from(crate::MAX_FEE_BPS) + 1,
                 treasury: new_treasury(),
             },
@@ -1870,10 +1709,9 @@ fn namespace_config(namespace: AccountId, fee: u16, treasury: AccountId) -> Acco
         account_id: compute_config_pda(namespace, CURVE_PROGRAM_ID),
     };
     let (posts, calls) = process_instruction(
-        vec![empty, signer(namespace)],
-        Instruction::UpdateConfig {
+        vec![empty, admin_signer(namespace)],
+        Instruction::InitializeNamespace {
             namespace,
-            admin: namespace,
             protocol_fee_bps: u32::from(fee),
             treasury,
         },
@@ -1951,18 +1789,29 @@ fn permissionless_namespaces_have_independent_addresses_fees_and_updates() {
     let before_b = quote(pool_b.clone(), config_b.clone());
     assert_eq!(quote(pool_a.clone(), config_a.clone()).protocol_fee, 1);
     assert_eq!(before_b.protocol_fee, 3);
-    let posts = update_config(
-        a,
-        config_a.clone(),
-        signer(a),
-        a,
-        2000,
-        AccountId::new([63; 32]),
+    let (posts, _) = process_instruction(
+        vec![config_a.clone(), admin_signer(a)],
+        Instruction::UpdateFee {
+            namespace: a,
+            protocol_fee_bps: 2000,
+        },
         CURVE_PROGRAM_ID,
     );
     let updated_a = AccountWithMetadata {
         account: posts[0].account().clone(),
         ..config_a
+    };
+    let (posts, _) = process_instruction(
+        vec![updated_a.clone(), admin_signer(a)],
+        Instruction::UpdateTreasury {
+            namespace: a,
+            treasury: AccountId::new([63; 32]),
+        },
+        CURVE_PROGRAM_ID,
+    );
+    let updated_a = AccountWithMetadata {
+        account: posts[0].account().clone(),
+        ..updated_a
     };
     let after_a = quote(pool_a, updated_a);
     assert_eq!(after_a.protocol_fee, 5);
@@ -1985,33 +1834,21 @@ fn swap_rejects_another_namespaces_config() {
 }
 
 #[test]
-#[should_panic(expected = "Authority is not the config admin")]
-fn namespace_admin_cannot_modify_another_namespace() {
-    let a = AccountId::new([51; 32]);
-    let b = AccountId::new([52; 32]);
-    let _ = update_config(
-        b,
-        namespace_config(b, 0, new_treasury()),
-        signer(a),
-        a,
-        100,
-        new_treasury(),
-        CURVE_PROGRAM_ID,
-    );
-}
-
-#[test]
 fn transfer_then_renounce_preserves_trading_but_permanently_removes_admin_power() {
     let namespace = AccountId::new([51; 32]);
     let successor = AccountId::new([52; 32]);
     let config = namespace_config(namespace, 100, new_treasury());
-    let posts = update_config(
-        namespace,
-        config.clone(),
-        signer(namespace),
-        successor,
-        100,
-        new_treasury(),
+    let (posts, _) = process_instruction(
+        vec![
+            config.clone(),
+            admin_signer(namespace),
+            admin_signer(successor),
+        ],
+        Instruction::TransferAdmin {
+            namespace,
+            new_admin: successor,
+            candidate: AdminCandidate::Signer,
+        },
         CURVE_PROGRAM_ID,
     );
     let transferred = AccountWithMetadata {
@@ -2019,18 +1856,17 @@ fn transfer_then_renounce_preserves_trading_but_permanently_removes_admin_power(
         ..config
     };
     assert!(
-        std::panic::catch_unwind(|| update_config(
-            namespace,
-            transferred.clone(),
-            signer(namespace),
-            namespace,
-            0,
-            new_treasury(),
+        std::panic::catch_unwind(|| process_instruction(
+            vec![transferred.clone(), admin_signer(namespace)],
+            Instruction::UpdateFee {
+                namespace,
+                protocol_fee_bps: 0,
+            },
             CURVE_PROGRAM_ID
         ))
         .is_err()
     );
-    let pre_states = vec![transferred.clone(), signer(successor)];
+    let pre_states = vec![transferred.clone(), admin_signer(successor)];
     let (posts, _) = process_instruction(
         pre_states.clone(),
         Instruction::RenounceAdmin { namespace },
@@ -2042,10 +1878,8 @@ fn transfer_then_renounce_preserves_trading_but_permanently_removes_admin_power(
         account: posts[0].account().clone(),
         ..transferred
     };
-    assert_eq!(
-        Config::try_from(&renounced.account.data).unwrap().admin,
-        AccountId::default()
-    );
+    let state = Config::try_from(&renounced.account.data).unwrap();
+    assert!(std::panic::catch_unwind(|| state.assert_admin(&admin_signer(successor))).is_err());
     assert_eq!(
         swap_exact_input(
             namespace_pool(namespace),
@@ -2062,13 +1896,12 @@ fn transfer_then_renounce_preserves_trading_but_permanently_removes_admin_power(
     );
     for actor in [namespace, successor, AccountId::default()] {
         assert!(
-            std::panic::catch_unwind(|| update_config(
-                namespace,
-                renounced.clone(),
-                signer(actor),
-                actor,
-                0,
-                new_treasury(),
+            std::panic::catch_unwind(|| process_instruction(
+                vec![renounced.clone(), admin_signer(actor)],
+                Instruction::UpdateFee {
+                    namespace,
+                    protocol_fee_bps: 0,
+                },
                 CURVE_PROGRAM_ID
             ))
             .is_err()
@@ -2103,13 +1936,12 @@ fn execution_fee_update_respects_buy_and_sell_slippage() {
         CURVE_PROGRAM_ID,
     )
     .1;
-    let posts = update_config(
-        namespace,
-        config.clone(),
-        signer(namespace),
-        namespace,
-        1000,
-        new_treasury(),
+    let (posts, _) = process_instruction(
+        vec![config.clone(), admin_signer(namespace)],
+        Instruction::UpdateFee {
+            namespace,
+            protocol_fee_bps: 1000,
+        },
         CURVE_PROGRAM_ID,
     );
     let updated = AccountWithMetadata {
@@ -2347,86 +2179,6 @@ fn pool_creation_binds_namespace_and_rejects_a_different_config() {
         std::panic::catch_unwind(|| process_instruction(accounts, instruction, CURVE_PROGRAM_ID))
             .is_err()
     );
-}
-
-#[test]
-fn namespace_authority_follows_the_nft_between_holders() {
-    let namespace = AccountId::new([81; 32]);
-    let holder = |id| AccountWithMetadata {
-        account_id: AccountId::new([id; 32]),
-        is_authorized: true,
-        account: Account {
-            program_owner: programs::token().id(),
-            data: Data::from(&TokenHolding::NftMaster {
-                definition_id: namespace,
-                print_balance: 1,
-            }),
-            ..Account::default()
-        },
-    };
-    let mut config = AccountWithMetadata {
-        account_id: compute_config_pda(namespace, CURVE_PROGRAM_ID),
-        account: Account::default(),
-        is_authorized: false,
-    };
-    for (id, fee) in [(82, 100), (83, 200)] {
-        let pre = vec![config.clone(), holder(id)];
-        let (post, _) = process_instruction(
-            pre.clone(),
-            Instruction::UpdateConfig {
-                namespace,
-                admin: namespace,
-                protocol_fee_bps: fee,
-                treasury: new_treasury(),
-            },
-            CURVE_PROGRAM_ID,
-        );
-        lee_core::program::validate_execution(&pre, &post, CURVE_PROGRAM_ID).unwrap();
-        config.account = post[0].account().clone();
-        config.account.program_owner = CURVE_PROGRAM_ID;
-        assert_eq!(
-            Config::try_from(&config.account.data)
-                .unwrap()
-                .protocol_fee_bps,
-            u16::try_from(fee).expect("test fee fits in u16")
-        );
-    }
-}
-
-#[test]
-fn namespace_rejects_spent_copied_forged_and_unsigned_authority() {
-    let namespace = NAMESPACE_CREATOR;
-    let config = initialized_config(namespace);
-    let mut invalid = vec![];
-    let mut spent = signer(namespace);
-    spent.account.data = Data::from(&TokenHolding::NftMaster {
-        definition_id: namespace,
-        print_balance: 0,
-    });
-    invalid.push(spent);
-    let mut copy = signer(namespace);
-    copy.account.data = Data::from(&TokenHolding::NftPrintedCopy {
-        definition_id: namespace,
-        owned: true,
-    });
-    invalid.push(copy);
-    let mut forged = signer(namespace);
-    forged.account.program_owner = [99; 8];
-    invalid.push(forged);
-    let mut unsigned = signer(namespace);
-    unsigned.is_authorized = false;
-    invalid.push(unsigned);
-    for authority in invalid {
-        assert!(
-            std::panic::catch_unwind(|| process_instruction(
-                vec![config.clone(), authority],
-                Instruction::RenounceAdmin { namespace },
-                CURVE_PROGRAM_ID
-            ))
-            .is_err()
-        );
-    }
-    assert_eq!(crate::authority::TOKEN_PROGRAM_ID, programs::token().id());
 }
 
 #[test]

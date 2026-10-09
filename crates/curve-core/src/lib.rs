@@ -41,18 +41,6 @@ mod tests;
 /// Curve program instruction. Token accounts are supplied by the guest/token adapter.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Instruction {
-    /// Creates the config PDA on the first call, then updates administration settings.
-    ///
-    /// Required accounts:
-    /// - Config PDA
-    /// - Authority (authorized): the namespace identity on the first call, the stored
-    ///   admin after
-    UpdateConfig {
-        namespace: AccountId,
-        admin: AccountId,
-        protocol_fee_bps: u32,
-        treasury: AccountId,
-    },
     /// Permanently disables namespace administration; swaps retain the last settings.
     RenounceAdmin { namespace: AccountId },
     /// Creates a bounded pool over an ordered token pair.
@@ -122,8 +110,40 @@ pub enum Instruction {
         namespace: AccountId,
         new_authority: AccountId,
     },
+    /// Creates namespace settings and assigns the signing namespace account as admin.
+    InitializeNamespace {
+        namespace: AccountId,
+        protocol_fee_bps: u32,
+        treasury: AccountId,
+    },
+    /// Changes only the live namespace fee rate.
+    UpdateFee {
+        namespace: AccountId,
+        protocol_fee_bps: u32,
+    },
+    /// Changes only the live namespace treasury.
+    UpdateTreasury {
+        namespace: AccountId,
+        treasury: AccountId,
+    },
+    /// Transfers administration using the package's successor evidence.
+    TransferAdmin {
+        namespace: AccountId,
+        new_admin: AccountId,
+        candidate: AdminCandidate,
+    },
     /// Select the pinned privacy circuit's transaction-wide PDA authorization rules.
     Private { instruction: Box<Instruction> },
+}
+
+/// Acceptance evidence for a namespace administrator.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AdminCandidate {
+    Signer,
+    Pda {
+        program_id: ProgramId,
+        seed: [u8; 32],
+    },
 }
 
 /// The protocol fee denominator. A fee at this rate consumes its buy-side input,
@@ -146,7 +166,9 @@ pub const ASSOCIATED_TOKEN_ACCOUNT_PROGRAM_ID: ProgramId = [
 /// The live settings and emergency state of one namespace.
 #[derive(Clone, BorshSerialize, BorshDeserialize)]
 pub struct Config {
-    pub admin: AccountId,
+    format: [u8; 8],
+    version: u16,
+    administration: admin_authority::AdminConfig,
     pub protocol_fee_bps: u16,
     pub treasury: AccountId,
     pub emergency: FreezeConfig,
@@ -155,7 +177,9 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            admin: AccountId::default(),
+            format: *b"LZNSCONF",
+            version: 2,
+            administration: Default::default(),
             protocol_fee_bps: 0,
             treasury: AccountId::default(),
             emergency: FreezeConfig::initialize(INITIAL_EMERGENCY_AUTHORITY)
@@ -164,11 +188,43 @@ impl Default for Config {
     }
 }
 
+impl Config {
+    pub(crate) const ADMIN_OFFSET: usize = 10;
+
+    /// Constructs state; namespace creation also validates the signing account.
+    pub fn new(admin: AccountId, protocol_fee_bps: u16, treasury: AccountId) -> Self {
+        Self {
+            administration: admin_authority::AdminConfig::initialize(
+                spel_framework::prelude::AccountId::new(admin.to_bytes()),
+            )
+            .expect("Non-default initial administrator"),
+            protocol_fee_bps,
+            treasury,
+            ..Self::default()
+        }
+    }
+
+    /// Checks administrator authorization using execution-validated account metadata.
+    /// Panics if the account is unsigned, is not the administrator, or administration was renounced.
+    pub fn assert_admin(&self, account: &lee_core::account::AccountWithMetadata) {
+        self.administration
+            .assert_admin(&update_config::adapt(account))
+            .expect("Namespace administrator authorization failed");
+    }
+}
+
 impl TryFrom<&Data> for Config {
     type Error = std::io::Error;
 
     fn try_from(data: &Data) -> Result<Self, Self::Error> {
-        Self::try_from_slice(data.as_ref())
+        let config = Self::try_from_slice(data.as_ref())?;
+        if config.format != *b"LZNSCONF" || config.version != 2 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "Unsupported namespace config",
+            ));
+        }
+        Ok(config)
     }
 }
 

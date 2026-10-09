@@ -7,16 +7,6 @@
 #[lez_program(instruction = "curve_core::Instruction")]
 pub mod curve {
     #[instruction]
-    pub fn update_config(
-        #[account(mut)] config: AccountWithMetadata,
-        #[account(signer)] authority: AccountWithMetadata,
-        namespace: AccountId,
-        admin: AccountId,
-        protocol_fee_bps: u32,
-        treasury: AccountId,
-    ) {}
-
-    #[instruction]
     pub fn renounce_admin(
         #[account(mut)] config: AccountWithMetadata,
         #[account(signer)] authority: AccountWithMetadata,
@@ -137,5 +127,41 @@ pub mod curve {
         #[account(signer)] authority: AccountWithMetadata,
         namespace: AccountId,
         new_authority: AccountId,
+    ) {}
+
+    #[instruction]
+    pub fn initialize_namespace(
+        #[account(init)] config: AccountWithMetadata,
+        #[account(signer)] creator: AccountWithMetadata,
+        namespace: AccountId,
+        protocol_fee_bps: u32,
+        treasury: AccountId,
+    ) {}
+
+    #[instruction]
+    pub fn update_fee(
+        #[account(mut)] config: AccountWithMetadata,
+        #[account(signer)] authority: AccountWithMetadata,
+        namespace: AccountId,
+        protocol_fee_bps: u32,
+    ) {}
+
+    #[instruction]
+    pub fn update_treasury(
+        #[account(mut)] config: AccountWithMetadata,
+        #[account(signer)] authority: AccountWithMetadata,
+        namespace: AccountId,
+        treasury: AccountId,
+    ) {}
+
+    #[instruction]
+    /// None requires the successor's signature; Some contains eight program words and 32 seed bytes as words.
+    pub fn transfer_admin(
+        #[account(mut)] config: AccountWithMetadata,
+        #[account(signer)] authority: AccountWithMetadata,
+        successor: AccountWithMetadata,
+        namespace: AccountId,
+        new_admin: AccountId,
+        candidate: Option<[u32; 40]>,
     ) {}
 }

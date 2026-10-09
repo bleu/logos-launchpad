@@ -25,18 +25,21 @@ fn ata(owner: AccountId, definition: AccountId) -> AccountId {
 }
 
 #[test]
-fn private_namespace_action_returns_authority_and_rejects_foreign_nft() {
+fn private_authority_envelope_returns_nft_and_rejects_wrong_role_signer() {
     let router = guest("private_authority");
     let curve = guest("curve");
     let nsk = [4; 32];
     let npk = lee_core::NullifierPublicKey::from(&nsk);
     let source_id = AccountId::for_regular_private_account(&npk, 0);
     let namespace = AccountId::new([81; 32]);
+    let transient_id = AccountId::new([82; 32]);
+    let treasury = AccountId::new([83; 32]);
+    let nft = AccountId::new([84; 32]);
     let source = AccountWithMetadata::new(
         Account {
             program_owner: programs::token().id(),
             data: Data::from(&TokenHolding::NftMaster {
-                definition_id: namespace,
+                definition_id: nft,
                 print_balance: 1,
             }),
             nonce: Nonce::private_account_nonce_init(&source_id),
@@ -60,16 +63,23 @@ fn private_namespace_action_returns_authority_and_rejects_foreign_nft() {
         InputAccountIdentity::Public,
     ];
     let config_id = curve_core::compute_config_pda(namespace, curve.id());
+    // The stored transient signer is a controlled envelope fixture, not a private admin flow.
     let pre = vec![
         source.clone(),
-        AccountWithMetadata::new(Account::default(), false, config_id),
-        AccountWithMetadata::new(Account::default(), true, AccountId::new([82; 32])),
+        AccountWithMetadata::new(
+            Account {
+                program_owner: curve.id(),
+                data: Data::from(&curve_core::Config::new(transient_id, 0, treasury)),
+                ..Account::default()
+            },
+            false,
+            config_id,
+        ),
+        AccountWithMetadata::new(Account::default(), true, transient_id),
     ];
-    let action = curve_core::Instruction::UpdateConfig {
+    let action = curve_core::Instruction::UpdateFee {
         namespace,
-        admin: namespace,
         protocol_fee_bps: 25,
-        treasury: AccountId::new([83; 32]),
     };
     let instruction = private_flow_core::PrivateAuthorityInstruction {
         program_id: curve.id(),
@@ -89,7 +99,7 @@ fn private_namespace_action_returns_authority_and_rejects_foreign_nft() {
         identities.clone(),
         &graph,
     )
-    .expect("atomic private authority action");
+    .expect("atomic private authority envelope");
     let (_, returned) = EncryptionScheme::decrypt(
         &output.encrypted_private_post_states[0].ciphertext,
         &ssk,
@@ -100,7 +110,7 @@ fn private_namespace_action_returns_authority_and_rejects_foreign_nft() {
     assert_eq!(
         TokenHolding::try_from(&returned.data).unwrap(),
         TokenHolding::NftMaster {
-            definition_id: namespace,
+            definition_id: nft,
             print_balance: 1
         }
     );
@@ -110,10 +120,11 @@ fn private_namespace_action_returns_authority_and_rejects_foreign_nft() {
         curve_core::Config::try_from(&post.data).is_ok_and(|config| config.protocol_fee_bps == 25)
     }));
     let mut bad_pre = pre;
-    bad_pre[0].account.data = Data::from(&TokenHolding::NftMaster {
-        definition_id: AccountId::new([84; 32]),
-        print_balance: 1,
-    });
+    bad_pre[1].account.data = Data::from(&curve_core::Config::new(
+        AccountId::new([85; 32]),
+        0,
+        treasury,
+    ));
     assert!(
         execute_and_prove(
             bad_pre,
@@ -344,12 +355,11 @@ fn private_buy_execute_envelope_reaches_the_platform_call_limit() {
         AccountWithMetadata::new(
             Account {
                 program_owner: curve.id(),
-                data: Data::from(&curve_core::Config {
-                    admin: namespace,
-                    protocol_fee_bps: 0,
-                    treasury: AccountId::new([98; 32]),
-                    ..curve_core::Config::default()
-                }),
+                data: Data::from(&curve_core::Config::new(
+                    namespace,
+                    0,
+                    AccountId::new([98; 32]),
+                )),
                 ..Account::default()
             },
             false,

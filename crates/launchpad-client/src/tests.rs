@@ -8,8 +8,8 @@ use super::{
     FactorySale, PoolFeeTarget, PrivateAccountId, PrivateBuyRequest, build_buy_invocation,
     build_buy_with_collateral_invocation, build_claim_creator_allocation_invocation,
     build_collect_fees_invocation, build_create_authority_invocation, build_create_sale_invocation,
-    build_private_authority_instruction, build_sell_invocation,
-    build_transfer_authority_invocation, build_update_config_invocation,
+    build_initialize_namespace_invocation, build_private_authority_instruction,
+    build_sell_invocation, build_transfer_authority_invocation, build_update_fee_invocation,
     build_withdraw_factory_proceeds_invocation, parse_account_id, quote_buy,
     quote_buy_with_collateral, quote_sell, validate_factory_state, validate_private_buy_request,
 };
@@ -61,12 +61,7 @@ fn pool_snapshot() -> (curve_core::PoolAccount, curve_core::Config) {
         })
         .unwrap(),
     };
-    let config = curve_core::Config {
-        admin: AccountId::new([3; 32]),
-        protocol_fee_bps: 0,
-        treasury: AccountId::new([4; 32]),
-        ..curve_core::Config::default()
-    };
+    let config = curve_core::Config::new(AccountId::new([3; 32]), 0, AccountId::new([4; 32]));
     (pool, config)
 }
 
@@ -289,35 +284,28 @@ fn creation_and_trade_builders_use_one_factory_sale_context() {
 }
 
 #[test]
-fn config_initialization_uses_the_curve_config_pda_and_admin_signature() {
-    let admin = AccountId::new([9; 32]);
+fn config_initialization_uses_the_curve_config_pda_and_namespace_signature() {
+    let namespace = sale().namespace;
     let treasury = AccountId::new([4; 32]);
-    let invocation = build_update_config_invocation(
-        sale().namespace,
-        CURVE_PROGRAM_ID,
-        admin,
-        admin,
-        75,
-        treasury,
-    );
+    let invocation =
+        build_initialize_namespace_invocation(namespace, CURVE_PROGRAM_ID, 75, treasury);
 
     assert_eq!(invocation.program_id, CURVE_PROGRAM_ID);
     assert_eq!(
         invocation.account_ids,
         vec![
-            curve_core::compute_config_pda(sale().namespace, CURVE_PROGRAM_ID),
-            admin,
+            curve_core::compute_config_pda(namespace, CURVE_PROGRAM_ID),
+            namespace,
         ]
     );
-    assert_eq!(invocation.signer_accounts, vec![admin]);
+    assert_eq!(invocation.signer_accounts, vec![namespace]);
     assert!(matches!(
         invocation.instruction,
-        curve_core::Instruction::UpdateConfig {
-            admin: actual_admin,
+        curve_core::Instruction::InitializeNamespace {
+            namespace: actual_namespace,
             protocol_fee_bps: 75,
             treasury: actual_treasury,
-            ..
-        } if actual_admin == admin && actual_treasury == treasury
+        } if actual_namespace == namespace && actual_treasury == treasury
     ));
 }
 
@@ -361,14 +349,7 @@ fn authority_creation_and_transfer_use_all_required_signers() {
 #[test]
 fn private_authority_builder_preserves_action_and_locates_holder() {
     let holder = AccountId::new([61; 32]);
-    let action = build_update_config_invocation(
-        sale().namespace,
-        CURVE_PROGRAM_ID,
-        holder,
-        sale().namespace,
-        50,
-        AccountId::new([63; 32]),
-    );
+    let action = build_update_fee_invocation(sale().namespace, CURVE_PROGRAM_ID, holder, 50);
     let routed = build_private_authority_instruction(&action, holder).unwrap();
 
     assert_eq!(routed.authority_index, 1);
