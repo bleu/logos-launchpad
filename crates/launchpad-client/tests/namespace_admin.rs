@@ -168,7 +168,6 @@ fn signed_namespace_creation_assigns_creator_and_applies_config_claim() {
         ))
         .unwrap();
     let config = chain.config(namespace);
-    assert_eq!(config.current_admin(), Some(namespace));
     assert_eq!(config.protocol_fee_bps, 30);
     assert_eq!(config.treasury, id(4));
     assert_eq!(
@@ -176,6 +175,16 @@ fn signed_namespace_creation_assigns_creator_and_applies_config_claim() {
         curve_core::INITIAL_EMERGENCY_AUTHORITY
     );
     assert!(!config.emergency.is_frozen);
+    chain
+        .run(chain.call(
+            namespace,
+            namespace,
+            Instruction::UpdateFee {
+                namespace,
+                protocol_fee_bps: 30,
+            },
+        ))
+        .unwrap();
 }
 
 #[test]
@@ -197,7 +206,6 @@ fn signed_setting_changes_preserve_other_namespace_fields() {
     let config = chain.config(namespace);
     assert_eq!(config.protocol_fee_bps, 9_999);
     assert_eq!(config.treasury, id(4));
-    assert_eq!(config.current_admin(), Some(namespace));
     assert_eq!(config.emergency, initial.emergency);
     chain
         .run(chain.call(
@@ -212,7 +220,6 @@ fn signed_setting_changes_preserve_other_namespace_fields() {
     let config = chain.config(namespace);
     assert_eq!(config.protocol_fee_bps, 9_999);
     assert_eq!(config.treasury, id(5));
-    assert_eq!(config.current_admin(), Some(namespace));
     assert_eq!(config.emergency, initial.emergency);
     chain
         .run(chain.call(
@@ -227,7 +234,6 @@ fn signed_setting_changes_preserve_other_namespace_fields() {
     let config = chain.config(namespace);
     assert_eq!(config.protocol_fee_bps, 0);
     assert_eq!(config.treasury, id(5));
-    assert_eq!(config.current_admin(), Some(namespace));
     assert_eq!(config.emergency, initial.emergency);
 }
 
@@ -274,7 +280,6 @@ fn signed_namespace_creation_rejects_invalid_inputs_without_claims() {
     let initialized = chain.accounts.clone();
     assert!(chain.run(initialize).is_err());
     assert_eq!(chain.accounts, initialized);
-    assert_eq!(chain.config(id(1)).current_admin(), Some(id(1)));
 }
 
 #[test]
@@ -398,7 +403,6 @@ fn signed_admin_transfer_requires_acceptance_and_rejects_old_signer() {
     assert_eq!(chain.accounts, saved);
     chain.run(transfer).unwrap();
     let config = chain.config(namespace);
-    assert_eq!(config.current_admin(), Some(successor));
     assert_eq!(config.protocol_fee_bps, 30);
     assert_eq!(config.treasury, id(4));
     assert_eq!(config.emergency, initial.emergency);
@@ -479,7 +483,6 @@ fn signed_renunciation_is_terminal_and_preserves_settings_and_emergency_control(
         ))
         .unwrap();
     let config = chain.config(namespace);
-    assert_eq!(config.current_admin(), None);
     assert_eq!(config.protocol_fee_bps, 75);
     assert_eq!(config.treasury, id(5));
     assert_eq!(config.emergency, before.emergency);
@@ -531,7 +534,6 @@ fn signed_renunciation_is_terminal_and_preserves_settings_and_emergency_control(
         ))
         .unwrap();
     let config = chain.config(namespace);
-    assert_eq!(config.current_admin(), None);
     assert_eq!(config.protocol_fee_bps, 75);
     assert_eq!(config.treasury, id(5));
     assert_eq!(config.emergency.authority(), id(3));
@@ -586,7 +588,6 @@ fn program_owned_administrator_requires_its_owner_program_call() {
     assert_eq!(chain.accounts, claimed);
     chain.run(transfer).unwrap();
     let before = chain.config(namespace);
-    assert_eq!(before.current_admin(), Some(pda));
     let action = Instruction::UpdateFee {
         namespace,
         protocol_fee_bps: 90,
@@ -609,7 +610,6 @@ fn program_owned_administrator_requires_its_owner_program_call() {
     assert_eq!(chain.accounts, transferred);
     chain.run(call).unwrap();
     let after = chain.config(namespace);
-    assert_eq!(after.current_admin(), Some(pda));
     assert_eq!(after.protocol_fee_bps, 90);
     assert_eq!(after.treasury, before.treasury);
     assert_eq!(after.emergency, before.emergency);

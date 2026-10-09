@@ -864,48 +864,58 @@ fn signed_admin_updates_and_renunciation_keep_transferred_emergency_state() {
     ] {
         chain.run_public(chain.emergency_call(namespace, namespace, instruction));
         let state = curve_core::Config::try_from(&chain.accounts[&config_id].data).unwrap();
-        assert_eq!(state.current_admin(), Some(namespace));
         assert_eq!(
             (state.emergency.authority(), state.emergency.is_frozen),
             (id(102), true)
         );
     }
-    for (call, admin) in [
+    chain.run_public(launchpad_client::PublicInvocation {
+        program_id: chain.curve.id(),
+        account_ids: vec![config_id, namespace, id(100)],
+        signer_accounts: vec![namespace, id(100)],
+        instruction: curve_core::Instruction::TransferAdmin {
+            namespace,
+            new_admin: id(100),
+            candidate: curve_core::AdminCandidate::Signer,
+        },
+    });
+    let state = curve_core::Config::try_from(&chain.accounts[&config_id].data).unwrap();
+    assert_eq!(
         (
-            launchpad_client::PublicInvocation {
-                program_id: chain.curve.id(),
-                account_ids: vec![config_id, namespace, id(100)],
-                signer_accounts: vec![namespace, id(100)],
-                instruction: curve_core::Instruction::TransferAdmin {
-                    namespace,
-                    new_admin: id(100),
-                    candidate: curve_core::AdminCandidate::Signer,
-                },
-            },
-            Some(id(100)),
+            state.protocol_fee_bps,
+            state.treasury,
+            state.emergency.authority(),
+            state.emergency.is_frozen
         ),
+        (999, id(7), id(102), true)
+    );
+    let fee_update = chain.emergency_call(
+        namespace,
+        id(100),
+        curve_core::Instruction::UpdateFee {
+            namespace,
+            protocol_fee_bps: 999,
+        },
+    );
+    chain.run_public(fee_update.clone());
+    chain.run_public(chain.emergency_call(
+        namespace,
+        id(100),
+        curve_core::Instruction::RenounceAdmin { namespace },
+    ));
+    let state = curve_core::Config::try_from(&chain.accounts[&config_id].data).unwrap();
+    assert_eq!(
         (
-            chain.emergency_call(
-                namespace,
-                id(100),
-                curve_core::Instruction::RenounceAdmin { namespace },
-            ),
-            None,
+            state.protocol_fee_bps,
+            state.treasury,
+            state.emergency.authority(),
+            state.emergency.is_frozen
         ),
-    ] {
-        chain.run_public(call);
-        let state = curve_core::Config::try_from(&chain.accounts[&config_id].data).unwrap();
-        assert_eq!(
-            (
-                state.current_admin(),
-                state.protocol_fee_bps,
-                state.treasury,
-                state.emergency.authority(),
-                state.emergency.is_frozen
-            ),
-            (admin, 999, id(7), id(102), true)
-        );
-    }
+        (999, id(7), id(102), true)
+    );
+    let renounced = chain.accounts.clone();
+    assert!(chain.try_public(fee_update).is_err());
+    assert_eq!(chain.accounts, renounced);
     chain.run_public(chain.emergency_call(
         namespace,
         id(102),

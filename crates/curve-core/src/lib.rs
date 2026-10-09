@@ -204,14 +204,9 @@ impl Config {
         }
     }
 
-    /// Returns no administrator after terminal renunciation.
-    pub fn current_admin(&self) -> Option<AccountId> {
-        self.administration
-            .current_admin()
-            .map(|id| AccountId::new(id.to_bytes()))
-    }
-
-    pub(crate) fn assert_admin(&self, account: &lee_core::account::AccountWithMetadata) {
+    /// Checks administrator authorization using execution-validated account metadata.
+    /// Panics if the account is unsigned, is not the administrator, or administration was renounced.
+    pub fn assert_admin(&self, account: &lee_core::account::AccountWithMetadata) {
         self.administration
             .assert_admin(&update_config::adapt(account))
             .expect("Namespace administrator authorization failed");

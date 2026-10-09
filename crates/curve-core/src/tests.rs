@@ -1878,12 +1878,8 @@ fn transfer_then_renounce_preserves_trading_but_permanently_removes_admin_power(
         account: posts[0].account().clone(),
         ..transferred
     };
-    assert_eq!(
-        Config::try_from(&renounced.account.data)
-            .unwrap()
-            .current_admin(),
-        None
-    );
+    let state = Config::try_from(&renounced.account.data).unwrap();
+    assert!(std::panic::catch_unwind(|| state.assert_admin(&admin_signer(successor))).is_err());
     assert_eq!(
         swap_exact_input(
             namespace_pool(namespace),

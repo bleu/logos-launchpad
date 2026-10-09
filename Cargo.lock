@@ -11,6 +11,7 @@ checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 [[package]]
 name = "admin-authority"
 version = "0.1.4"
+source = "git+https://github.com/mmlado/spel-admin-authority?rev=479adf86f85b664073f359cfd2fd0087489f63a0#479adf86f85b664073f359cfd2fd0087489f63a0"
 dependencies = [
  "admin-authority-macros",
  "borsh",
@@ -22,6 +23,7 @@ dependencies = [
 [[package]]
 name = "admin-authority-macros"
 version = "0.1.4"
+source = "git+https://github.com/mmlado/spel-admin-authority?rev=479adf86f85b664073f359cfd2fd0087489f63a0#479adf86f85b664073f359cfd2fd0087489f63a0"
 dependencies = [
  "proc-macro2",
  "quote",

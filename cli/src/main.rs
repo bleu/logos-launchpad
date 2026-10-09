@@ -656,7 +656,7 @@ async fn run(json: bool, cli: Cli) -> Result<()> {
             let config = load_curve_config(namespace, &wallet, program.id()).await?;
             println!(
                 "{}",
-                serde_json::json!({"namespace": namespace.to_string(), "admin": config.current_admin().map(|admin| admin.to_string()), "protocol_fee_bps": config.protocol_fee_bps, "treasury": config.treasury.to_string()})
+                serde_json::json!({"namespace": namespace.to_string(), "protocol_fee_bps": config.protocol_fee_bps, "treasury": config.treasury.to_string()})
             );
             Ok(())
         }

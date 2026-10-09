@@ -482,15 +482,15 @@ fn emergency_transfer_is_immediate_without_successor_acceptance_and_keeps_freeze
             },
         );
         let state = Config::try_from(&transferred.account.data).unwrap();
+        state.assert_admin(&administrator(namespace));
         assert_eq!(
             (
-                state.current_admin(),
                 state.protocol_fee_bps,
                 state.treasury,
                 state.emergency.authority(),
                 state.emergency.is_frozen
             ),
-            (Some(namespace), 500, id(6), successor, frozen),
+            (500, id(6), successor, frozen),
         );
         for instruction in [
             Instruction::SetFrozen { namespace, frozen },
@@ -623,15 +623,15 @@ fn administrator_updates_preserve_transferred_emergency_authority_and_freeze() {
         );
         let updated = transfer_admin(namespace, updated, administrator(namespace), id(7));
         let state = Config::try_from(&updated.account.data).unwrap();
+        state.assert_admin(&signer(id(7)));
         assert_eq!(
             (
-                state.current_admin(),
                 state.protocol_fee_bps,
                 state.treasury,
                 state.emergency.authority(),
                 state.emergency.is_frozen
             ),
-            (Some(id(7)), 999, id(8), id(102), frozen),
+            (999, id(8), id(102), frozen),
         );
     }
 }
@@ -661,15 +661,15 @@ fn administrator_renunciation_preserves_emergency_control() {
         Instruction::RenounceAdmin { namespace },
     );
     let state = Config::try_from(&renounced.account.data).unwrap();
+    assert!(std::panic::catch_unwind(|| state.assert_admin(&administrator(namespace))).is_err());
     assert_eq!(
         (
-            state.current_admin(),
             state.protocol_fee_bps,
             state.treasury,
             state.emergency.authority(),
             state.emergency.is_frozen
         ),
-        (None, 500, id(6), id(102), true),
+        (500, id(6), id(102), true),
     );
     let unfrozen = control(
         renounced.clone(),
@@ -736,13 +736,10 @@ fn one_account_can_hold_both_roles_and_admin_transfer_keeps_emergency_power() {
         },
     );
     let state = Config::try_from(&config.account.data).unwrap();
+    state.assert_admin(&signer(id(7)));
     assert_eq!(
-        (
-            state.current_admin(),
-            state.emergency.authority(),
-            state.emergency.is_frozen
-        ),
-        (Some(id(7)), dual_holder.account_id, false)
+        (state.emergency.authority(), state.emergency.is_frozen),
+        (dual_holder.account_id, false)
     );
 }
 
@@ -812,15 +809,15 @@ fn emergency_authority_freezes_without_changing_namespace_settings() {
         },
     );
     let state = Config::try_from(&config.account.data).unwrap();
+    state.assert_admin(&administrator(namespace));
     assert_eq!(
         (
-            state.current_admin(),
             state.protocol_fee_bps,
             state.treasury,
             state.emergency.authority(),
             state.emergency.is_frozen,
         ),
-        (Some(namespace), 500, id(6), emergency_authority(), true),
+        (500, id(6), emergency_authority(), true),
     );
 }
 

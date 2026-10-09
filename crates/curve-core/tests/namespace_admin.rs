@@ -59,7 +59,7 @@ fn namespace_signer_creates_its_config_without_an_authority_nft() {
         PROGRAM,
     );
     let state = Config::try_from(&posts[0].account().data).unwrap();
-    assert_eq!(state.current_admin(), Some(namespace));
+    state.assert_admin(&signer(namespace));
     assert_eq!(state.protocol_fee_bps, 500);
     assert_eq!(state.treasury, id(6));
     assert_eq!(state.emergency.authority(), INITIAL_EMERGENCY_AUTHORITY);
@@ -102,7 +102,7 @@ fn administrator_changes_only_the_fee_while_frozen() {
     let state = Config::try_from(&config.account.data).unwrap();
     assert_eq!(state.protocol_fee_bps, 123);
     assert_eq!(state.treasury, id(6));
-    assert_eq!(state.current_admin(), Some(namespace));
+    state.assert_admin(&signer(namespace));
     assert_eq!(state.emergency.authority(), INITIAL_EMERGENCY_AUTHORITY);
     assert!(state.emergency.is_frozen);
 }
@@ -129,7 +129,7 @@ fn administrator_changes_only_the_treasury_while_frozen() {
     let state = Config::try_from(&config.account.data).unwrap();
     assert_eq!(state.treasury, id(7));
     assert_eq!(state.protocol_fee_bps, 500);
-    assert_eq!(state.current_admin(), Some(namespace));
+    state.assert_admin(&signer(namespace));
     assert_eq!(state.emergency.authority(), INITIAL_EMERGENCY_AUTHORITY);
     assert!(state.emergency.is_frozen);
 }
@@ -157,7 +157,7 @@ fn cosigned_transfer_moves_admin_power_without_changing_settings() {
     assert!(calls.is_empty());
     let config = AccountWithMetadata::new(posts[0].account().clone(), false, config.account_id);
     let state = Config::try_from(&config.account.data).unwrap();
-    assert_eq!(state.current_admin(), Some(id(2)));
+    state.assert_admin(&signer(id(2)));
     assert_eq!(state.protocol_fee_bps, 500);
     assert_eq!(state.treasury, id(6));
     assert_eq!(state.emergency.authority(), INITIAL_EMERGENCY_AUTHORITY);
@@ -208,7 +208,7 @@ fn renunciation_is_terminal_and_keeps_fees_treasury_and_emergency_control() {
         Instruction::RenounceAdmin { namespace },
     );
     let state = Config::try_from(&config.account.data).unwrap();
-    assert_eq!(state.current_admin(), None);
+    assert!(std::panic::catch_unwind(|| state.assert_admin(&signer(namespace))).is_err());
     assert_eq!(state.protocol_fee_bps, 500);
     assert_eq!(state.treasury, id(6));
     assert_eq!(state.emergency.authority(), INITIAL_EMERGENCY_AUTHORITY);
@@ -617,7 +617,7 @@ fn admin_transfer_accepts_a_deployed_pda_without_successor_signature() {
     let config =
         AccountWithMetadata::new(posts[0].account().clone(), false, accounts[0].account_id);
     let state = Config::try_from(&config.account.data).unwrap();
-    assert_eq!(state.current_admin(), Some(successor.account_id));
+    state.assert_admin(&signer(successor.account_id));
     assert_eq!(state.protocol_fee_bps, 500);
     assert_eq!(state.treasury, id(6));
     assert_eq!(state.emergency.authority(), INITIAL_EMERGENCY_AUTHORITY);
