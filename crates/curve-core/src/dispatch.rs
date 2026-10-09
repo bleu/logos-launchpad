@@ -12,7 +12,6 @@ use crate::{
     pool_create::create_pool,
     pool_lifecycle::{close_pool, withdraw_reserves},
     pool_swap::{swap_exact_input, swap_exact_output},
-    update_config::update_config,
 };
 
 fn wire_depletion_side(side: u8) -> pool::TokenSide {
@@ -47,24 +46,70 @@ pub fn process_instruction(
     let original = pre_states.clone();
     let (mut posts, mut calls) = match instruction {
         Instruction::Private { .. } => panic!("nested execution mode wrapper"),
-        Instruction::UpdateConfig {
+        Instruction::TransferAdmin {
             namespace,
-            admin,
+            new_admin,
+            candidate,
+        } => (
+            crate::update_config::transfer_admin(
+                pre_states,
+                namespace,
+                new_admin,
+                candidate,
+                self_program_id,
+            ),
+            vec![],
+        ),
+        Instruction::UpdateTreasury {
+            namespace,
+            treasury,
+        } => {
+            let [config, admin] = pre_states
+                .try_into()
+                .expect("UpdateTreasury requires exactly two accounts");
+            (
+                crate::update_config::update_treasury(
+                    namespace,
+                    config,
+                    admin,
+                    treasury,
+                    self_program_id,
+                ),
+                vec![],
+            )
+        }
+        Instruction::UpdateFee {
+            namespace,
+            protocol_fee_bps,
+        } => {
+            let [config, admin] = pre_states
+                .try_into()
+                .expect("UpdateFee requires exactly two accounts");
+            (
+                crate::update_config::update_fee(
+                    namespace,
+                    config,
+                    admin,
+                    protocol_fee_bps,
+                    self_program_id,
+                ),
+                vec![],
+            )
+        }
+        Instruction::InitializeNamespace {
+            namespace,
             protocol_fee_bps,
             treasury,
         } => {
-            let [config, authority] = pre_states
+            let [config, creator] = pre_states
                 .try_into()
-                .expect("UpdateConfig requires exactly two accounts");
+                .expect("InitializeNamespace requires exactly two accounts");
             (
-                update_config(
+                crate::update_config::initialize_namespace(
                     namespace,
                     config,
-                    authority,
-                    admin,
-                    protocol_fee_bps
-                        .try_into()
-                        .expect("Protocol fee must fit in u16"),
+                    creator,
+                    protocol_fee_bps,
                     treasury,
                     self_program_id,
                 ),

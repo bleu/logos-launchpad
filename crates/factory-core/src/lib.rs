@@ -1573,12 +1573,11 @@ mod tests {
         AccountWithMetadata {
             account: Account {
                 program_owner: CURVE_PROGRAM_ID,
-                data: Data::from(&curve_core::Config {
-                    admin: AccountId::new([0xAD; 32]),
-                    protocol_fee_bps: 0,
-                    treasury: AccountId::new([2; 32]),
-                    ..curve_core::Config::default()
-                }),
+                data: Data::from(&curve_core::Config::new(
+                    AccountId::new([0xAD; 32]),
+                    0,
+                    AccountId::new([2; 32]),
+                )),
                 ..Account::default()
             },
             account_id: curve_core::compute_config_pda(

@@ -55,10 +55,10 @@ CI excludes the separate launchpad core workspaces, mini-app builds and installa
 Client tests that execute guest programs use the non-default `guest-tests` feature. Build the guest artifacts with `RISC0_BUILD_LOCKED=1 cargo build --manifest-path methods/Cargo.toml --release --locked`. The nested guest lock needs `RISC0_BUILD_LOCKED=1`; outer Cargo `--locked` alone does not lock it. The `r0vm` executable must be on `PATH`, or `RISC0_SERVER_PATH` must point to it. Then run:
 
 ```sh
-RISC0_DEV_MODE=1 cargo test -p launchpad-client --release --features guest-tests --test private_authority --test settlement --locked
+RISC0_DEV_MODE=1 cargo test -p launchpad-client --release --features guest-tests --test namespace_admin --test private_authority --test settlement --locked
 ```
 
-This lane checks private-authority, private-buy and settlement execution. Missing artifacts are failures when the lane is selected. Host-only tests do not execute it. All-feature clippy compiles these test targets without running their guests.
+This lane checks namespace administration, private-authority, private-buy and settlement execution. Missing artifacts are failures when the lane is selected. Host-only tests do not execute it. All-feature clippy compiles these test targets without running their guests.
 
 ## Known limits
 

@@ -1,7 +1,7 @@
 use associated_token_account_core::{compute_ata_seed, get_associated_token_account_id};
 use curve_core::{
-    ASSOCIATED_TOKEN_ACCOUNT_PROGRAM_ID, Config, Instruction, PoolAccount, TOKEN_PROGRAM_ID,
-    compute_config_pda, compute_pool_pda, process_instruction,
+    ASSOCIATED_TOKEN_ACCOUNT_PROGRAM_ID, AdminCandidate, Config, Instruction, PoolAccount,
+    TOKEN_PROGRAM_ID, compute_config_pda, compute_pool_pda, process_instruction,
 };
 use lee_core::{
     account::{Account, AccountId, AccountWithMetadata, Data},
@@ -23,18 +23,7 @@ fn emergency_authority() -> AccountId {
 }
 
 fn administrator(namespace: AccountId) -> AccountWithMetadata {
-    AccountWithMetadata::new(
-        Account {
-            program_owner: TOKEN_PROGRAM_ID,
-            data: Data::from(&TokenHolding::NftMaster {
-                definition_id: namespace,
-                print_balance: 1,
-            }),
-            ..Account::default()
-        },
-        true,
-        id(20),
-    )
+    signer(namespace)
 }
 
 fn initialize(namespace: AccountId) -> AccountWithMetadata {
@@ -47,9 +36,8 @@ fn initialize(namespace: AccountId) -> AccountWithMetadata {
             ),
             administrator(namespace),
         ],
-        Instruction::UpdateConfig {
+        Instruction::InitializeNamespace {
             namespace,
-            admin: namespace,
             protocol_fee_bps: 500,
             treasury: id(6),
         },
@@ -82,6 +70,28 @@ fn control(
     );
     assert!(calls.is_empty());
     assert_eq!(posts[1].account(), &authority.account);
+    AccountWithMetadata::new(posts[0].account().clone(), false, config.account_id)
+}
+
+fn transfer_admin(
+    namespace: AccountId,
+    config: AccountWithMetadata,
+    current: AccountWithMetadata,
+    successor: AccountId,
+) -> AccountWithMetadata {
+    let successor = signer(successor);
+    let (posts, calls) = process_instruction(
+        vec![config.clone(), current.clone(), successor.clone()],
+        Instruction::TransferAdmin {
+            namespace,
+            new_admin: successor.account_id,
+            candidate: AdminCandidate::Signer,
+        },
+        PROGRAM,
+    );
+    assert!(calls.is_empty());
+    assert_eq!(posts[1].account(), &current.account);
+    assert_eq!(posts[2].account(), &successor.account);
     AccountWithMetadata::new(posts[0].account().clone(), false, config.account_id)
 }
 
@@ -474,13 +484,13 @@ fn emergency_transfer_is_immediate_without_successor_acceptance_and_keeps_freeze
         let state = Config::try_from(&transferred.account.data).unwrap();
         assert_eq!(
             (
-                state.admin,
+                state.current_admin(),
                 state.protocol_fee_bps,
                 state.treasury,
                 state.emergency.authority(),
                 state.emergency.is_frozen
             ),
-            (namespace, 500, id(6), successor, frozen),
+            (Some(namespace), 500, id(6), successor, frozen),
         );
         for instruction in [
             Instruction::SetFrozen { namespace, frozen },
@@ -598,23 +608,30 @@ fn administrator_updates_preserve_transferred_emergency_authority_and_freeze() {
         let updated = control(
             config,
             administrator(namespace),
-            Instruction::UpdateConfig {
+            Instruction::UpdateFee {
                 namespace,
-                admin: id(7),
                 protocol_fee_bps: 999,
+            },
+        );
+        let updated = control(
+            updated,
+            administrator(namespace),
+            Instruction::UpdateTreasury {
+                namespace,
                 treasury: id(8),
             },
         );
+        let updated = transfer_admin(namespace, updated, administrator(namespace), id(7));
         let state = Config::try_from(&updated.account.data).unwrap();
         assert_eq!(
             (
-                state.admin,
+                state.current_admin(),
                 state.protocol_fee_bps,
                 state.treasury,
                 state.emergency.authority(),
                 state.emergency.is_frozen
             ),
-            (id(7), 999, id(8), id(102), frozen),
+            (Some(id(7)), 999, id(8), id(102), frozen),
         );
     }
 }
@@ -646,13 +663,13 @@ fn administrator_renunciation_preserves_emergency_control() {
     let state = Config::try_from(&renounced.account.data).unwrap();
     assert_eq!(
         (
-            state.admin,
+            state.current_admin(),
             state.protocol_fee_bps,
             state.treasury,
             state.emergency.authority(),
             state.emergency.is_frozen
         ),
-        (AccountId::default(), 500, id(6), id(102), true),
+        (None, 500, id(6), id(102), true),
     );
     let unfrozen = control(
         renounced.clone(),
@@ -670,15 +687,13 @@ fn administrator_renunciation_preserves_emergency_control() {
     );
     let error = rejection(
         vec![renounced, administrator(namespace)],
-        Instruction::UpdateConfig {
+        Instruction::UpdateFee {
             namespace,
-            admin: namespace,
             protocol_fee_bps: 0,
-            treasury: id(6),
         },
     );
     assert!(
-        error.contains("Namespace administration is renounced"),
+        error.contains("Namespace administrator authorization failed: Renounced"),
         "{error}"
     );
 }
@@ -703,22 +718,13 @@ fn one_account_can_hold_both_roles_and_admin_transfer_keeps_emergency_power() {
             frozen: true,
         },
     );
-    let config = control(
-        config,
-        dual_holder.clone(),
-        Instruction::UpdateConfig {
-            namespace,
-            admin: id(7),
-            protocol_fee_bps: 500,
-            treasury: id(6),
-        },
-    );
+    let config = transfer_admin(namespace, config, dual_holder.clone(), id(7));
     let error = rejection(
         vec![config.clone(), dual_holder.clone()],
         Instruction::RenounceAdmin { namespace },
     );
     assert!(
-        error.contains("Authority is not the config admin"),
+        error.contains("Namespace renunciation failed: NotAdmin"),
         "{error}"
     );
     let config = control(
@@ -732,11 +738,11 @@ fn one_account_can_hold_both_roles_and_admin_transfer_keeps_emergency_power() {
     let state = Config::try_from(&config.account.data).unwrap();
     assert_eq!(
         (
-            state.admin,
+            state.current_admin(),
             state.emergency.authority(),
             state.emergency.is_frozen
         ),
-        (id(7), dual_holder.account_id, false)
+        (Some(id(7)), dual_holder.account_id, false)
     );
 }
 
@@ -808,13 +814,13 @@ fn emergency_authority_freezes_without_changing_namespace_settings() {
     let state = Config::try_from(&config.account.data).unwrap();
     assert_eq!(
         (
-            state.admin,
+            state.current_admin(),
             state.protocol_fee_bps,
             state.treasury,
             state.emergency.authority(),
             state.emergency.is_frozen,
         ),
-        (namespace, 500, id(6), emergency_authority(), true),
+        (Some(namespace), 500, id(6), emergency_authority(), true),
     );
 }
 

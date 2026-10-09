@@ -1,0 +1,8 @@
+Source: https://github.com/mmlado/spel-admin-authority
+Revision: 479adf86f85b664073f359cfd2fd0087489f63a0 (v0.1.4)
+License: MIT OR Apache-2.0; see LICENSE-MIT and LICENSE-APACHE2.
+
+Local changes:
+- Keep the runtime library and its required macros crate; omit sample workspace members.
+- Add AdminConfig::current_admin(), using AuthoritySlot::holder(), with a public lifecycle test.
+- No authority validation or lifecycle algorithm changes.

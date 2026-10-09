@@ -126,7 +126,15 @@ mod authority_tests {
         };
         let config = AccountWithMetadata {
             account_id: curve_core::compute_config_pda(namespace, [7; 8]),
-            account: Account::default(),
+            account: Account {
+                program_owner: [7; 8],
+                data: Data::from(&curve_core::Config::new(
+                    AccountId::new([33; 32]),
+                    0,
+                    AccountId::new([34; 32]),
+                )),
+                ..Account::default()
+            },
             is_authorized: false,
         };
         let transient = AccountWithMetadata {
@@ -138,11 +146,9 @@ mod authority_tests {
         let instruction = PrivateAuthorityInstruction {
             program_id: [7; 8],
             authority_index: 1,
-            instruction_data: risc0_zkvm::serde::to_vec(&curve_core::Instruction::UpdateConfig {
+            instruction_data: risc0_zkvm::serde::to_vec(&curve_core::Instruction::UpdateFee {
                 namespace,
-                admin: namespace,
                 protocol_fee_bps: 25,
-                treasury: AccountId::new([34; 32]),
             })
             .unwrap(),
         };

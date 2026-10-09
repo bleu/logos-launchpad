@@ -1,20 +1,20 @@
 # ADR 0006: Namespace isolation and AccountId administration
 
-Status: Accepted; target-platform compatibility remains unverified
+Status: Accepted; curve namespace integration tested locally on pinned LEZ
 
-Date: 2026-09-29; configuration review: 2026-10-01; role-pattern review: 2026-10-06
+Date: 2026-09-29; configuration review: 2026-10-01; role-pattern review: 2026-10-06; namespace integration: 2026-10-09
 
 ## Context
 
-Independent operators need separate fee settings and treasuries. Moving a namespace administrator or creator role must not change namespace or sale identity. The confirmed `spel-admin-authority` component provides a standard `AccountId` administration lifecycle, but its compatibility with the selected platform is unverified.
+Independent operators need separate fee settings and treasuries. Moving a namespace administrator or creator role must not change namespace or sale identity. The selected `spel-admin-authority` component provides an `AccountId` administration lifecycle. Each role needs its own platform checks.
 
 ## Decision
 
 Use permissionless namespaces with stable identities. Bind each sale to its namespace at creation. Keep namespace-scoped account derivation and isolated custody through associated token accounts. Namespace state is logical per-namespace state. This decision does not select a namespace registry, shared physical schema or cross-factory namespace account owner.
 
-Embed one `#[admin_authority]` administration state in each namespace and use `#[require_admin]` for namespace administration. Initialize that state with namespace creation. Do not replace per-namespace state with a single global `admin_config` PDA. Namespace-derived account validation and every administration transfer path require platform verification before implementation claims compatibility.
+Embed one library `AdminConfig` in each namespace. Initialize it with namespace creation. Do not use a single global `admin_config` PDA. The curve's handwritten dispatcher calls the library's embedded-account API. The automatic `#[admin_authority]` and `#[require_admin]` expansion needs a `#[lez_program]` dispatcher, which the curve does not use. An explicit account adapter connects the library and root LEZ crate identities.
 
-Reuse the component's initialization, transfer and renounce lifecycle. Initialization assigns the namespace's current administrator and must not leave a publicly claimable initialization window. A current administrator authorizes transfer, and the successor must accept it under the library's transfer rules. Renounce is irreversible.
+Reuse the component's initialization, transfer and renounce lifecycle. The authorized namespace account creates its config and becomes the first administrator in the same operation. Creation must not leave a publicly claimable initialization window. Key-to-key transfer requires both signatures in one transaction. A program-owned successor uses the library's PDA candidate checks. Renounce is irreversible and has no fee, active-pool or freeze guard. These operations preserve the separate deployment-set emergency role.
 
 Fee-rate and treasury changes are separate, explicit administration operations. A fee update preserves treasury and administrator; a treasury update preserves fee rate and administrator. Neither operation transfers administration. Use the selected lifecycle for admin transfer and renunciation. See the [shared namespace, custody, and fee contract](../product/namespace-fee-contract.md) for checks and acceptance cases.
 
@@ -26,13 +26,13 @@ Retain the reviewed curve factory's resumable creation and settlement. Pending c
 
 ## Consequences
 
-The singleton/genesis-admin, address-bound and namespace-admin NFT-holder models are superseded. Administration transfer must not bypass isolation or pending-state checks. The reviewed v0.1.4 commit `479adf86f85b664073f359cfd2fd0087489f63a0` is evidence for the selected library API, not a production dependency pin, integration proof or a compatibility claim. LBP implementation still needs separate evidence.
+The singleton/genesis-admin, address-bound and namespace-admin NFT-holder models are superseded. The curve uses the licensed v0.1.4 package at `479adf86f85b664073f359cfd2fd0087489f63a0`, with only a public current-admin getter added. Namespace config has a new format marker; old development state and the combined `UpdateConfig` instruction are removed. LBP implementation still needs separate evidence.
 
 The [historical authority experiments](https://github.com/bleu/logos-launchpad/blob/f1198315569cfc8ada9f6c39964cb77314e2520c/packages/platform-probes/README.md) exercised admin `479adf86f85b664073f359cfd2fd0087489f63a0` with SPEL `d0bb659048c3fc6533f51c69e9f7f12382af6dd2` and component LEZ `47eba256479f6f785acbd138834340703cd03401`. Host checks covered transfer acceptance, terminal renunciation and namespace isolation. Guest checks used controlled authorization fixtures, not signed transactions or real claim application. The upstream component has no public current-admin getter; the licensed local patch adds one. Do not decode private component bytes or store a second administrator field.
 
 On candidate LEZ `c31a6bca60537ec08f595cf786f1ae6275ab7f43`, the legacy PDA check rejected an authorized account because the old whole-account owner field was absent. A probe checked the derived address and owner-program approval in the same transaction, then used the library's authorized-signer branch. Direct calls without owner approval were rejected. This is limited compatibility evidence, not an adopted production adapter or a complete authority lifecycle. NFT-holder transfer checks also passed on that candidate, but do not justify retaining the rejected NFT role design.
 
-The experiments are no longer maintained. Results used development receipts, not production proofs or deployed nodes. Root pins are unchanged; namespace controls and creator/pool-owner migration remain separate implementation work. [ADR 0027](0027-events-and-history.md) records the candidate client blocker.
+The experiments are no longer maintained. Current [signed namespace guest tests](../../crates/launchpad-client/tests/namespace_admin.rs) cover real signatures, runtime config claims, separate settings, isolation, co-signed transfer, program-owned administration and terminal renunciation on pinned LEZ. They use development receipts, not production proofs or deployed nodes. Root LEZ pins are unchanged. Creator and pool-owner migration remain separate work. [ADR 0027](0027-events-and-history.md) records the candidate client blocker.
 
 ## Sources
 

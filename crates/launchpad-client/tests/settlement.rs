@@ -15,7 +15,7 @@ fn guest(name: &str) -> Program {
     launchpad_client::load_program(&root.join(format!("{name}.bin"))).unwrap()
 }
 fn id(n: u8) -> AccountId {
-    if n == 3 || n == 20 || n >= 99 {
+    if n == 3 || n == 20 || n >= 97 {
         AccountId::from(&lee::PublicKey::new_from_private_key(
             &lee::PrivateKey::try_new([n; 32]).unwrap(),
         ))
@@ -187,13 +187,22 @@ impl Chain {
         }
         Ok(())
     }
-    fn initialize_namespace(&mut self, namespace: AccountId, holder: AccountId) {
+    fn initialize_namespace(
+        &mut self,
+        namespace: AccountId,
+        holder: AccountId,
+        owner_nft: AccountId,
+    ) {
+        self.accounts.entry(namespace).or_insert_with(|| Account {
+            program_owner: [77; 8],
+            ..Account::default()
+        });
         self.accounts.insert(
             holder,
             Account {
                 program_owner: programs::token().id(),
                 data: Data::from(&TokenHolding::NftMaster {
-                    definition_id: namespace,
+                    definition_id: owner_nft,
                     print_balance: 1,
                 }),
                 ..Account::default()
@@ -203,12 +212,11 @@ impl Chain {
             program_id: self.curve.id(),
             account_ids: vec![
                 curve_core::compute_config_pda(namespace, self.curve.id()),
-                holder,
-            ],
-            signer_accounts: vec![holder],
-            instruction: curve_core::Instruction::UpdateConfig {
                 namespace,
-                admin: namespace,
+            ],
+            signer_accounts: vec![namespace],
+            instruction: curve_core::Instruction::InitializeNamespace {
+                namespace,
                 protocol_fee_bps: 500,
                 treasury: id(6),
             },
@@ -236,8 +244,14 @@ impl Chain {
         holder: AccountId,
         defer_funding: bool,
     ) -> AccountId {
-        let pool =
-            curve_core::compute_pool_pda(namespace, self.curve.id(), id(4), id(5), namespace);
+        let TokenHolding::NftMaster {
+            definition_id: owner,
+            ..
+        } = TokenHolding::try_from(&self.accounts[&holder].data).unwrap()
+        else {
+            panic!("pool owner NFT")
+        };
+        let pool = curve_core::compute_pool_pda(namespace, self.curve.id(), id(4), id(5), owner);
         for definition in [id(4), id(5)] {
             self.accounts.insert(
                 definition,
@@ -288,7 +302,7 @@ impl Chain {
                 virtual_reserve1: 100,
                 close_timestamp: Some(42),
                 close_on_depletion: None,
-                owner: namespace,
+                owner,
                 owner_program_id: None,
                 owner_program_seed: None,
                 curve_program_id: self.curve.id(),
@@ -344,8 +358,8 @@ fn signed_namespace_creation_uses_build_authority() {
     );
     let mut chain = Chain::new();
     println!("curve image ID: {:?}", chain.curve.id());
-    for (namespace, holder) in [(id(1), id(99)), (id(2), id(100))] {
-        chain.initialize_namespace(namespace, holder);
+    for (namespace, holder, owner_nft) in [(id(97), id(99), id(1)), (id(98), id(100), id(2))] {
+        chain.initialize_namespace(namespace, holder, owner_nft);
         let config_id = curve_core::compute_config_pda(namespace, chain.curve.id());
         let state = curve_core::Config::try_from(&chain.accounts[&config_id].data).unwrap();
         assert_eq!(state.emergency.authority(), expected);
@@ -362,10 +376,10 @@ fn signed_namespace_creation_uses_build_authority() {
         let saved = chain.accounts.clone();
         let error = chain
             .try_public(chain.emergency_call(
-                id(1),
+                id(97),
                 id(101),
                 curve_core::Instruction::SetFrozen {
-                    namespace: id(1),
+                    namespace: id(97),
                     frozen: true,
                 },
             ))
@@ -381,9 +395,9 @@ fn signed_namespace_creation_uses_build_authority() {
 #[test]
 fn signed_emergency_controls_reject_other_roles_and_transfer_without_acceptance() {
     let mut chain = Chain::new();
-    let namespace = id(1);
-    chain.initialize_namespace(namespace, id(99));
-    chain.initialize_namespace(id(2), id(100));
+    let namespace = id(97);
+    chain.initialize_namespace(namespace, id(99), id(1));
+    chain.initialize_namespace(id(98), id(100), id(2));
     for authority in [id(101), id(102), id(20)] {
         chain.accounts.insert(
             authority,
@@ -406,7 +420,7 @@ fn signed_emergency_controls_reject_other_roles_and_transfer_without_acceptance(
             curve_core::Instruction::SetFrozen { namespace, frozen },
         ));
         let saved = chain.accounts.clone();
-        for authority in [id(99), id(20)] {
+        for authority in [namespace, id(99), id(20)] {
             for requested in [false, true] {
                 let error = chain
                     .try_public(chain.emergency_call(
@@ -476,7 +490,7 @@ fn signed_emergency_controls_reject_other_roles_and_transfer_without_acceptance(
         (id(102), true)
     );
     let saved = chain.accounts.clone();
-    for authority in [id(101), id(99)] {
+    for authority in [id(101), namespace, id(99)] {
         for instruction in [
             curve_core::Instruction::SetFrozen {
                 namespace,
@@ -505,7 +519,7 @@ fn signed_emergency_controls_reject_other_roles_and_transfer_without_acceptance(
             frozen: false,
         },
     ));
-    let other_id = curve_core::compute_config_pda(id(2), chain.curve.id());
+    let other_id = curve_core::compute_config_pda(id(98), chain.curve.id());
     let other = curve_core::Config::try_from(&chain.accounts[&other_id].data).unwrap();
     assert_eq!(
         (other.emergency.authority(), other.emergency.is_frozen),
@@ -516,9 +530,9 @@ fn signed_emergency_controls_reject_other_roles_and_transfer_without_acceptance(
 #[test]
 fn signed_freeze_blocks_all_swap_forms_without_writes_and_keeps_other_namespaces_open() {
     let mut chain = Chain::new();
-    let namespace = id(1);
-    chain.initialize_namespace(namespace, id(99));
-    chain.initialize_namespace(id(2), id(100));
+    let namespace = id(97);
+    chain.initialize_namespace(namespace, id(99), id(1));
+    chain.initialize_namespace(id(98), id(100), id(2));
     chain.accounts.insert(
         id(101),
         Account {
@@ -535,7 +549,7 @@ fn signed_freeze_blocks_all_swap_forms_without_writes_and_keeps_other_namespaces
         },
     ));
     let pool = chain.create_direct_pool(namespace, id(99), false);
-    let other_pool = chain.create_direct_pool(id(2), id(100), false);
+    let other_pool = chain.create_direct_pool(id(98), id(100), false);
     let trades = [
         (
             id(5),
@@ -573,7 +587,7 @@ fn signed_freeze_blocks_all_swap_forms_without_writes_and_keeps_other_namespaces
         );
         assert_eq!(chain.accounts, saved);
     }
-    chain.run_public(chain.direct_swap(id(2), other_pool, id(5), trades[0].1.clone()));
+    chain.run_public(chain.direct_swap(id(98), other_pool, id(5), trades[0].1.clone()));
     assert_eq!(chain.accounts[&pool], saved[&pool]);
     assert_eq!(chain.balance(ata(pool, id(4))), 800);
     assert_eq!(chain.balance(ata(pool, id(5))), 100);
@@ -606,8 +620,8 @@ fn signed_freeze_blocks_all_swap_forms_without_writes_and_keeps_other_namespaces
 #[test]
 fn signed_freeze_keeps_fee_collection_close_and_reserve_withdrawal_available() {
     let mut chain = Chain::new();
-    let namespace = id(1);
-    chain.initialize_namespace(namespace, id(99));
+    let namespace = id(97);
+    chain.initialize_namespace(namespace, id(99), id(1));
     chain.accounts.insert(
         id(101),
         Account {
@@ -809,9 +823,9 @@ fn signed_freeze_keeps_factory_settlement_and_failed_hook_recovery_available() {
 #[test]
 fn signed_admin_updates_and_renunciation_keep_transferred_emergency_state() {
     let mut chain = Chain::new();
-    let namespace = id(1);
-    chain.initialize_namespace(namespace, id(99));
-    chain.initialize_namespace(id(2), id(100));
+    let namespace = id(97);
+    chain.initialize_namespace(namespace, id(99), id(1));
+    chain.initialize_namespace(id(98), id(100), id(2));
     for authority in [id(101), id(102)] {
         chain.accounts.insert(
             authority,
@@ -838,28 +852,52 @@ fn signed_admin_updates_and_renunciation_keep_transferred_emergency_state() {
         },
     ));
     let config_id = curve_core::compute_config_pda(namespace, chain.curve.id());
-    for (authority, instruction, admin) in [
+    for instruction in [
+        curve_core::Instruction::UpdateFee {
+            namespace,
+            protocol_fee_bps: 999,
+        },
+        curve_core::Instruction::UpdateTreasury {
+            namespace,
+            treasury: id(7),
+        },
+    ] {
+        chain.run_public(chain.emergency_call(namespace, namespace, instruction));
+        let state = curve_core::Config::try_from(&chain.accounts[&config_id].data).unwrap();
+        assert_eq!(state.current_admin(), Some(namespace));
+        assert_eq!(
+            (state.emergency.authority(), state.emergency.is_frozen),
+            (id(102), true)
+        );
+    }
+    for (call, admin) in [
         (
-            id(99),
-            curve_core::Instruction::UpdateConfig {
-                namespace,
-                admin: id(2),
-                protocol_fee_bps: 999,
-                treasury: id(7),
+            launchpad_client::PublicInvocation {
+                program_id: chain.curve.id(),
+                account_ids: vec![config_id, namespace, id(100)],
+                signer_accounts: vec![namespace, id(100)],
+                instruction: curve_core::Instruction::TransferAdmin {
+                    namespace,
+                    new_admin: id(100),
+                    candidate: curve_core::AdminCandidate::Signer,
+                },
             },
-            id(2),
+            Some(id(100)),
         ),
         (
-            id(100),
-            curve_core::Instruction::RenounceAdmin { namespace },
-            AccountId::default(),
+            chain.emergency_call(
+                namespace,
+                id(100),
+                curve_core::Instruction::RenounceAdmin { namespace },
+            ),
+            None,
         ),
     ] {
-        chain.run_public(chain.emergency_call(namespace, authority, instruction));
+        chain.run_public(call);
         let state = curve_core::Config::try_from(&chain.accounts[&config_id].data).unwrap();
         assert_eq!(
             (
-                state.admin,
+                state.current_admin(),
                 state.protocol_fee_bps,
                 state.treasury,
                 state.emergency.authority(),
@@ -886,9 +924,9 @@ fn signed_admin_updates_and_renunciation_keep_transferred_emergency_state() {
 #[test]
 fn signed_emergency_calls_reject_wrong_namespace_owner_and_config_schema_without_writes() {
     let mut chain = Chain::new();
-    let namespace = id(1);
-    chain.initialize_namespace(namespace, id(99));
-    chain.initialize_namespace(id(2), id(100));
+    let namespace = id(97);
+    chain.initialize_namespace(namespace, id(99), id(1));
+    chain.initialize_namespace(id(98), id(100), id(2));
     chain.accounts.insert(
         id(101),
         Account {
@@ -913,7 +951,7 @@ fn signed_emergency_calls_reject_wrong_namespace_owner_and_config_schema_without
             let mut call = chain.emergency_call(namespace, id(101), instruction.clone());
             let expected = match case {
                 0 => {
-                    call.account_ids[0] = curve_core::compute_config_pda(id(2), chain.curve.id());
+                    call.account_ids[0] = curve_core::compute_config_pda(id(98), chain.curve.id());
                     "Config account ID does not match PDA"
                 }
                 1 => {
@@ -945,8 +983,8 @@ fn signed_emergency_calls_reject_wrong_namespace_owner_and_config_schema_without
 #[test]
 fn signed_frozen_namespace_keeps_deferred_pool_activation_available() {
     let mut chain = Chain::new();
-    let namespace = id(1);
-    chain.initialize_namespace(namespace, id(99));
+    let namespace = id(97);
+    chain.initialize_namespace(namespace, id(99), id(1));
     chain.accounts.insert(
         id(101),
         Account {
@@ -1084,8 +1122,8 @@ fn signed_frozen_namespace_keeps_deferred_pool_activation_available() {
 fn signed_unfreeze_does_not_reopen_closed_or_expired_pools() {
     for expired in [false, true] {
         let mut chain = Chain::new();
-        let namespace = id(1);
-        chain.initialize_namespace(namespace, id(99));
+        let namespace = id(97);
+        chain.initialize_namespace(namespace, id(99), id(1));
         chain.accounts.insert(
             id(101),
             Account {
@@ -1177,7 +1215,7 @@ fn fee_accrual_collection_and_withdrawal_preserve_vault_liabilities() {
             let mut chain = Chain::new();
             chain.public_mode = public_mode;
             let (namespace, owner, trader, token0, token1, treasury) =
-                (id(1), id(2), id(3), id(4), id(5), id(6));
+                (id(97), id(2), id(3), id(4), id(5), id(6));
             let pool_id =
                 curve_core::compute_pool_pda(namespace, chain.curve.id(), token0, token1, owner);
             let pool = curve_core::PoolAccount {
@@ -1211,12 +1249,11 @@ fn fee_accrual_collection_and_withdrawal_preserve_vault_liabilities() {
                 config_id,
                 Account {
                     program_owner: chain.curve.id(),
-                    data: Data::from(&curve_core::Config {
-                        admin: namespace,
+                    data: Data::from(&curve_core::Config::new(
+                        namespace,
+                        if sell { 500 } else { 1000 },
                         treasury,
-                        protocol_fee_bps: if sell { 500 } else { 1000 },
-                        ..curve_core::Config::default()
-                    }),
+                    )),
                     ..Account::default()
                 },
             );
@@ -1384,7 +1421,7 @@ fn fee_accrual_collection_and_withdrawal_preserve_vault_liabilities() {
 fn public_creation_saves_immutable_hook_configuration() {
     let mut chain = Chain::new();
     chain.public_mode = true;
-    let namespace = id(1);
+    let namespace = id(97);
     let creator = id(99);
     let collateral = id(5);
     chain.private_source(id(2));
@@ -1404,12 +1441,7 @@ fn public_creation_saves_immutable_hook_configuration() {
         curve_core::compute_config_pda(namespace, chain.curve.id()),
         Account {
             program_owner: chain.curve.id(),
-            data: Data::from(&curve_core::Config {
-                admin: namespace,
-                treasury: id(6),
-                protocol_fee_bps: 1000,
-                ..curve_core::Config::default()
-            }),
+            data: Data::from(&curve_core::Config::new(namespace, 1000, id(6))),
             ..Account::default()
         },
     );
@@ -1932,7 +1964,7 @@ impl HookFixture {
         chain.public_mode = true;
         let adapter = guest("graduation_adapter");
         chain.additional_programs.push(adapter.clone());
-        let namespace = id(1);
+        let namespace = id(97);
         let collateral = id(5);
         chain.private_source(id(2));
         chain.accounts.insert(
@@ -1951,12 +1983,7 @@ impl HookFixture {
             curve_core::compute_config_pda(namespace, chain.curve.id()),
             Account {
                 program_owner: chain.curve.id(),
-                data: Data::from(&curve_core::Config {
-                    admin: namespace,
-                    treasury: id(6),
-                    protocol_fee_bps: 1000,
-                    ..curve_core::Config::default()
-                }),
+                data: Data::from(&curve_core::Config::new(namespace, 1000, id(6))),
                 ..Account::default()
             },
         );
@@ -2236,7 +2263,7 @@ fn private_sale_resumes_creation_and_settlement_with_fresh_payout_holders() {
         ] {
             let mut chain = Chain::new();
             chain.public_mode = public_mode;
-            let namespace = id(1);
+            let namespace = id(97);
             let nft = id(2);
             let collateral = id(5);
             let salt = [7; 32];
@@ -2257,12 +2284,7 @@ fn private_sale_resumes_creation_and_settlement_with_fresh_payout_holders() {
                 curve_core::compute_config_pda(namespace, chain.curve.id()),
                 Account {
                     program_owner: chain.curve.id(),
-                    data: Data::from(&curve_core::Config {
-                        admin: namespace,
-                        treasury: id(6),
-                        protocol_fee_bps: 0,
-                        ..curve_core::Config::default()
-                    }),
+                    data: Data::from(&curve_core::Config::new(namespace, 0, id(6))),
                     ..Account::default()
                 },
             );

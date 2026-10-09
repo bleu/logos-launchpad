@@ -59,12 +59,11 @@ fn creation() -> (Vec<AccountWithMetadata>, Instruction) {
     .unwrap();
     accounts[14].account_id = curve_core::compute_config_pda(namespace, CURVE);
     accounts[14].account.program_owner = CURVE;
-    accounts[14].account.data = Data::from(&curve_core::Config {
-        admin: AccountId::new([0xAD; 32]),
-        protocol_fee_bps: 17,
-        treasury: AccountId::new([20; 32]),
-        ..curve_core::Config::default()
-    });
+    accounts[14].account.data = Data::from(&curve_core::Config::new(
+        AccountId::new([0xAD; 32]),
+        17,
+        AccountId::new([20; 32]),
+    ));
     (
         accounts,
         Instruction::CreateFactoryPool {

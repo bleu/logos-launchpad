@@ -5,7 +5,11 @@ use std::{
 
 use curve_core::Instruction as CurveInstruction;
 use factory_core::Instruction as FactoryInstruction;
-use launchpad_client::{CreateSaleRequest, FactorySale, build_create_sale_invocation};
+use launchpad_client::{
+    CreateSaleRequest, FactorySale, build_create_sale_invocation,
+    build_initialize_namespace_invocation, build_transfer_admin_invocation,
+    build_update_fee_invocation, build_update_treasury_invocation,
+};
 use lee::{AccountId, program::Program};
 use private_flow_core::PrivateBuyInstruction;
 use serde::Serialize;
@@ -261,38 +265,130 @@ fn run_case<I: Serialize>(
 }
 
 #[test]
-fn curve_public_instruction_wire_matches_the_pinned_cli() {
+fn curve_namespace_initialization_wire_matches_the_pinned_cli() {
     let curve_program_id = program_id(10);
+    let invocation =
+        build_initialize_namespace_invocation(account(40), curve_program_id, 100, account(42));
+    assert_eq!(invocation.signer_accounts, vec![account(40)]);
     run_case(
         "curve",
-        "update-config",
+        "initialize-namespace",
         vec![
             ("--namespace", account_hex(40)),
-            ("--admin", account_hex(41)),
             ("--protocol-fee-bps", "100".into()),
             ("--treasury", account_hex(42)),
         ],
-        CurveInstruction::UpdateConfig {
-            namespace: account(40),
-            admin: account(41),
-            protocol_fee_bps: 100,
-            treasury: account(42),
-        },
-        vec![
-            AccountInput {
-                name: "config",
-                id: Some(curve_core::compute_config_pda(
-                    account(40),
-                    curve_program_id,
-                )),
-            },
-            AccountInput {
-                name: "authority",
-                id: Some(account(1)),
-            },
-        ],
-        &["namespace", "admin", "protocol_fee_bps", "treasury"],
+        invocation.instruction,
+        named_account_inputs(&["config", "creator"], invocation.account_ids),
+        &["namespace", "protocol_fee_bps", "treasury"],
     );
+}
+
+#[test]
+fn curve_fee_update_wire_matches_the_pinned_cli() {
+    let invocation = build_update_fee_invocation(account(40), program_id(10), account(41), 9999);
+    assert_eq!(invocation.signer_accounts, vec![account(41)]);
+    run_case(
+        "curve",
+        "update-fee",
+        vec![
+            ("--namespace", account_hex(40)),
+            ("--protocol-fee-bps", "9999".into()),
+        ],
+        invocation.instruction,
+        named_account_inputs(&["config", "authority"], invocation.account_ids),
+        &["namespace", "protocol_fee_bps"],
+    );
+}
+
+#[test]
+fn curve_treasury_update_wire_matches_the_pinned_cli() {
+    let invocation =
+        build_update_treasury_invocation(account(40), program_id(10), account(41), account(42));
+    assert_eq!(invocation.signer_accounts, vec![account(41)]);
+    run_case(
+        "curve",
+        "update-treasury",
+        vec![
+            ("--namespace", account_hex(40)),
+            ("--treasury", account_hex(42)),
+        ],
+        invocation.instruction,
+        named_account_inputs(&["config", "authority"], invocation.account_ids),
+        &["namespace", "treasury"],
+    );
+}
+
+#[test]
+fn curve_cosigned_admin_transfer_wire_matches_the_pinned_cli() {
+    let invocation = build_transfer_admin_invocation(
+        account(40),
+        program_id(10),
+        account(41),
+        account(42),
+        curve_core::AdminCandidate::Signer,
+    );
+    assert_eq!(invocation.signer_accounts, vec![account(41), account(42)]);
+    run_case(
+        "curve",
+        "transfer-admin",
+        vec![
+            ("--namespace", account_hex(40)),
+            ("--new-admin", account_hex(42)),
+            ("--candidate", "none".into()),
+        ],
+        invocation.instruction,
+        named_account_inputs(
+            &["config", "authority", "successor"],
+            invocation.account_ids,
+        ),
+        &["namespace", "new_admin", "candidate"],
+    );
+}
+
+#[test]
+fn curve_pda_admin_transfer_wire_does_not_request_a_successor_key_signature() {
+    let owner_program = program_id(80);
+    let seed = std::array::from_fn(|offset| 90 + u8::try_from(offset).unwrap());
+    let successor =
+        AccountId::for_public_pda(&owner_program, &lee_core::program::PdaSeed::new(seed));
+    let invocation = build_transfer_admin_invocation(
+        account(40),
+        program_id(10),
+        account(41),
+        successor,
+        curve_core::AdminCandidate::Pda {
+            program_id: owner_program,
+            seed,
+        },
+    );
+    assert_eq!(invocation.signer_accounts, vec![account(41)]);
+    let candidate = owner_program
+        .into_iter()
+        .chain(seed.map(u32::from))
+        .map(|word| word.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+    run_case(
+        "curve",
+        "transfer-admin",
+        vec![
+            ("--namespace", account_hex(40)),
+            ("--new-admin", account_id_hex(successor)),
+            ("--candidate", candidate),
+        ],
+        invocation.instruction,
+        named_account_inputs(
+            &["config", "authority", "successor"],
+            invocation.account_ids,
+        ),
+        &["namespace", "new_admin", "candidate"],
+    );
+}
+
+#[test]
+fn curve_public_instruction_wire_matches_the_pinned_cli() {
+    let curve_program_id = program_id(10);
     run_case(
         "curve",
         "renounce-admin",
