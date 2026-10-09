@@ -509,6 +509,60 @@
         }
       ],
       "args": []
+    },
+    {
+      "name": "set_frozen",
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "authority",
+          "writable": false,
+          "signer": true,
+          "init": false
+        }
+      ],
+      "args": [
+        {
+          "name": "namespace",
+          "type": "account_id"
+        },
+        {
+          "name": "frozen",
+          "type": "bool"
+        }
+      ]
+    },
+    {
+      "name": "transfer_emergency_authority",
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "authority",
+          "writable": false,
+          "signer": true,
+          "init": false
+        }
+      ],
+      "args": [
+        {
+          "name": "namespace",
+          "type": "account_id"
+        },
+        {
+          "name": "new_authority",
+          "type": "account_id"
+        }
+      ]
     }
   ],
   "instruction_type": "curve_core::Instruction"

@@ -1,4 +1,4 @@
-//! `update_config`: creates the config PDA on the first call, replaces it whole after.
+//! `update_config`: creates namespace state, then updates administration settings.
 
 use lee_core::{
     account::{Account, AccountId, AccountWithMetadata, Data},
@@ -33,25 +33,26 @@ pub fn update_config(
         "Namespace must not be the default key"
     );
     // On the first call the account is empty and the gate is the namespace identity; afterwards it is whatever admin the config stores.
-    let expected_admin = if config.account == Account::default() {
-        namespace
+    let mut state = if config.account == Account::default() {
+        Config {
+            admin: namespace,
+            ..Config::default()
+        }
     } else {
         assert_eq!(
             config.account.program_owner, curve_program_id,
             "Config owner does not match program"
         );
-        Config::try_from(&config.account.data)
-            .expect("Config account holds invalid data")
-            .admin
+        Config::try_from(&config.account.data).expect("Config account holds invalid data")
     };
     assert_ne!(
-        expected_admin,
+        state.admin,
         AccountId::default(),
         "Namespace administration is renounced"
     );
     assert_eq!(
         crate::authority::identity(&authority),
-        expected_admin,
+        state.admin,
         "Authority is not the config admin"
     );
 
@@ -70,12 +71,11 @@ pub fn update_config(
         "Treasury must not be the default key"
     );
 
+    state.admin = admin;
+    state.protocol_fee_bps = protocol_fee_bps;
+    state.treasury = treasury;
     let mut config_post = config.account;
-    config_post.data = Data::from(&Config {
-        admin,
-        protocol_fee_bps,
-        treasury,
-    });
+    config_post.data = Data::from(&state);
 
     vec![
         AccountPostState::new_claimed_if_default(

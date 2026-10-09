@@ -63,6 +63,7 @@ fn creation() -> (Vec<AccountWithMetadata>, Instruction) {
         admin: AccountId::new([0xAD; 32]),
         protocol_fee_bps: 17,
         treasury: AccountId::new([20; 32]),
+        ..curve_core::Config::default()
     });
     (
         accounts,

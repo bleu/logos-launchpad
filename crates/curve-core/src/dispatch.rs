@@ -80,6 +80,33 @@ pub fn process_instruction(
                 vec![],
             )
         }
+        Instruction::SetFrozen { namespace, frozen } => {
+            let [config, authority] = pre_states
+                .try_into()
+                .expect("SetFrozen requires exactly two accounts");
+            (
+                crate::emergency::set_frozen(namespace, config, authority, frozen, self_program_id),
+                vec![],
+            )
+        }
+        Instruction::TransferEmergencyAuthority {
+            namespace,
+            new_authority,
+        } => {
+            let [config, authority] = pre_states
+                .try_into()
+                .expect("TransferEmergencyAuthority requires exactly two accounts");
+            (
+                crate::emergency::transfer_emergency_authority(
+                    namespace,
+                    config,
+                    authority,
+                    new_authority,
+                    self_program_id,
+                ),
+                vec![],
+            )
+        }
         Instruction::CreatePool {
             allowed_input_token,
             defer_funding,

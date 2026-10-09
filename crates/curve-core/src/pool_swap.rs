@@ -32,8 +32,13 @@ pub fn swap_exact_input(
     token_in: AccountId,
     curve_program_id: ProgramId,
 ) -> (Vec<AccountPostState>, SwapSettlement) {
-    let mut pool_account = validated_pool(&pool, curve_program_id);
+    let mut pool_account = validated_pool_identity(&pool, curve_program_id);
     let config_data = validated_config(&config, pool_account.namespace, curve_program_id);
+    assert!(
+        !config_data.emergency.is_frozen,
+        "Namespace swaps are frozen"
+    );
+    assert!(pool_account.funded, "Pool funding is pending");
     let (side, token_out) = direction(&pool_account, token_in);
     let now = trusted_time(&pool_account, clock);
     let outcome = pool_account
@@ -76,8 +81,13 @@ pub fn swap_exact_output(
     token_in: AccountId,
     curve_program_id: ProgramId,
 ) -> (Vec<AccountPostState>, SwapSettlement) {
-    let mut pool_account = validated_pool(&pool, curve_program_id);
+    let mut pool_account = validated_pool_identity(&pool, curve_program_id);
     let config_data = validated_config(&config, pool_account.namespace, curve_program_id);
+    assert!(
+        !config_data.emergency.is_frozen,
+        "Namespace swaps are frozen"
+    );
+    assert!(pool_account.funded, "Pool funding is pending");
     let (side, token_out) = direction(&pool_account, token_in);
     let now = trusted_time(&pool_account, clock);
     let outcome = pool_account
@@ -131,13 +141,18 @@ pub(crate) fn validated_pool(
     pool: &AccountWithMetadata,
     curve_program_id: ProgramId,
 ) -> PoolAccount {
+    let pool_account = validated_pool_identity(pool, curve_program_id);
+    assert!(pool_account.funded, "Pool funding is pending");
+    pool_account
+}
+
+fn validated_pool_identity(pool: &AccountWithMetadata, curve_program_id: ProgramId) -> PoolAccount {
     assert_eq!(
         pool.account.program_owner, curve_program_id,
         "Pool owner does not match program"
     );
     let pool_account =
         PoolAccount::try_from(&pool.account.data).expect("Pool account holds invalid data");
-    assert!(pool_account.funded, "Pool funding is pending");
     assert_eq!(
         pool.account_id,
         compute_pool_pda(

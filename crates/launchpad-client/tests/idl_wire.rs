@@ -555,6 +555,54 @@ fn curve_public_instruction_wire_matches_the_pinned_cli() {
 }
 
 #[test]
+fn curve_freeze_instruction_wire_matches_the_pinned_cli() {
+    for frozen in [false, true] {
+        run_case(
+            "curve",
+            "set-frozen",
+            vec![
+                ("--namespace", account_hex(57)),
+                ("--frozen", frozen.to_string()),
+            ],
+            CurveInstruction::SetFrozen {
+                namespace: account(57),
+                frozen,
+            },
+            account_inputs(&["config", "authority"], 58),
+            &["namespace", "frozen"],
+        );
+    }
+    let idl: Value =
+        serde_json::from_slice(&std::fs::read(root().join("idl/curve.json")).unwrap()).unwrap();
+    let accounts = idl["instructions"][9]["accounts"].as_array().unwrap();
+    assert_eq!(accounts[0]["signer"], false);
+    assert_eq!(accounts[1]["signer"], true);
+}
+
+#[test]
+fn curve_emergency_transfer_wire_matches_the_pinned_cli() {
+    run_case(
+        "curve",
+        "transfer-emergency-authority",
+        vec![
+            ("--namespace", account_hex(57)),
+            ("--new-authority", account_hex(60)),
+        ],
+        CurveInstruction::TransferEmergencyAuthority {
+            namespace: account(57),
+            new_authority: account(60),
+        },
+        account_inputs(&["config", "authority"], 58),
+        &["namespace", "new_authority"],
+    );
+    let idl: Value =
+        serde_json::from_slice(&std::fs::read(root().join("idl/curve.json")).unwrap()).unwrap();
+    let accounts = idl["instructions"][10]["accounts"].as_array().unwrap();
+    assert_eq!(accounts[0]["signer"], false);
+    assert_eq!(accounts[1]["signer"], true);
+}
+
+#[test]
 fn factory_public_instruction_wire_matches_the_pinned_cli() {
     let curve_program_id = program_id(30);
     let sale = FactorySale {

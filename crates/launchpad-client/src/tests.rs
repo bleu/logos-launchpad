@@ -65,6 +65,7 @@ fn pool_snapshot() -> (curve_core::PoolAccount, curve_core::Config) {
         admin: AccountId::new([3; 32]),
         protocol_fee_bps: 0,
         treasury: AccountId::new([4; 32]),
+        ..curve_core::Config::default()
     };
     (pool, config)
 }

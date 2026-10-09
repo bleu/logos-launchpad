@@ -4,6 +4,14 @@ This repository contains the imported curve PoC and weighted-math library. They 
 
 ## Build contexts
 
+Curve host and guest builds require `CURVE_EMERGENCY_AUTHORITY`, a nonzero 64-character hex account ID. For local tests, run this from the repository root before the commands below:
+
+```sh
+export CURVE_EMERGENCY_AUTHORITY="$(< crates/curve-core/tests/fixtures/emergency-authority.hex)"
+```
+
+For deployment builds, supply the deployment's account instead. The built guest contains that selection; transaction callers cannot replace it. See [ADR 0028](../adr/0028-token-custody-and-freeze.md).
+
 | Workspace | Contents | Command from the repository root |
 | --- | --- | --- |
 | Root `Cargo.toml` | Curve math, pool, handlers, client and CLI | `cargo test --workspace --locked` |
