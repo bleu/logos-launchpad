@@ -52,6 +52,7 @@ jobs:
     timeout-minutes: 120
     env:
       CARGO_BUILD_JOBS: 2
+      CARGO_PROFILE_DEV_DEBUG: 0
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -98,12 +99,17 @@ jobs:
           git clone "$source" "$spel"
           git -C "$spel" checkout --detach "$pin"
           cargo build --manifest-path "$spel/Cargo.toml" --release --locked -p spel
+          cp "$spel/target/release/spel" "$RUNNER_TEMP/spel"
+          cargo clean --manifest-path "$spel/Cargo.toml"
+          mkdir -p "$spel/target/release"
+          mv "$RUNNER_TEMP/spel" "$spel/target/release/spel"
       - name: Check installed tool versions
         run: bash verify/check-builds.sh --preflight
       - name: Check authority build inputs
         run: |
           bash verify/tests/check-emergency-authority.sh
           bash verify/tests/check-emergency-authority.sh authority-cache
+          cargo clean --profile dev
       - name: Run locked builds and tests
         run: bash verify/check-builds.sh
       - name: Check generated program interfaces
