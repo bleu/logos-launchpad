@@ -1,0 +1,177 @@
+{
+  "version": "0.1.0",
+  "name": "lbp",
+  "instructions": [
+    {
+      "name": "prepare_fixed_price",
+      "accounts": [
+        {
+          "name": "pool",
+          "writable": true,
+          "signer": false,
+          "init": true
+        },
+        {
+          "name": "factory_owner",
+          "writable": false,
+          "signer": true,
+          "init": false
+        },
+        {
+          "name": "token_definition",
+          "writable": false,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "collateral_definition",
+          "writable": false,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "factory_token_ata",
+          "writable": false,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "pool_token_ata",
+          "writable": true,
+          "signer": false,
+          "init": true
+        },
+        {
+          "name": "pool_collateral_ata",
+          "writable": true,
+          "signer": false,
+          "init": true
+        },
+        {
+          "name": "clock",
+          "writable": false,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "config",
+          "writable": false,
+          "signer": false,
+          "init": false
+        }
+      ],
+      "args": [
+        {
+          "name": "namespace",
+          "type": "account_id"
+        },
+        {
+          "name": "namespace_program_id",
+          "type": "program_id"
+        },
+        {
+          "name": "factory_program_id",
+          "type": "program_id"
+        },
+        {
+          "name": "factory_seed",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "sale_inventory",
+          "type": "u128"
+        },
+        {
+          "name": "creator_allocation",
+          "type": "u128"
+        },
+        {
+          "name": "collateral_units",
+          "type": "u128"
+        },
+        {
+          "name": "token_units",
+          "type": "u128"
+        },
+        {
+          "name": "start_timestamp",
+          "type": "u64"
+        },
+        {
+          "name": "end_timestamp",
+          "type": "u64"
+        },
+        {
+          "name": "creator_allocation_release",
+          "type": "u32"
+        }
+      ]
+    },
+    {
+      "name": "activate_fixed_price",
+      "accounts": [
+        {
+          "name": "pool",
+          "writable": true,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "factory_owner",
+          "writable": false,
+          "signer": true,
+          "init": false
+        },
+        {
+          "name": "token_definition",
+          "writable": false,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "collateral_definition",
+          "writable": false,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "factory_token_ata",
+          "writable": true,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "pool_token_ata",
+          "writable": true,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "pool_collateral_ata",
+          "writable": false,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "clock",
+          "writable": false,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "config",
+          "writable": false,
+          "signer": false,
+          "init": false
+        }
+      ],
+      "args": []
+    }
+  ],
+  "instruction_type": "lbp_core::Instruction"
+}

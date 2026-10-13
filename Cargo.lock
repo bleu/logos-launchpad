@@ -1956,14 +1956,17 @@ dependencies = [
 name = "factory-core"
 version = "0.1.0"
 dependencies = [
+ "admin-authority",
  "associated_token_account_core",
  "borsh",
  "clock_core",
  "curve-core",
+ "lbp-core",
  "lee_core 0.1.0 (git+https://github.com/logos-blockchain/logos-execution-zone.git?rev=a58fbce2ff48c58b7bb5001b1a27e64b9596ee3a)",
  "pool",
  "risc0-zkvm",
  "serde",
+ "spel-framework",
  "token_core",
 ]
 
@@ -3404,6 +3407,7 @@ dependencies = [
  "curve-core",
  "factory-core",
  "hex",
+ "lbp-core",
  "lee",
  "lee_core 0.1.0 (git+https://github.com/logos-blockchain/logos-execution-zone.git?rev=a58fbce2ff48c58b7bb5001b1a27e64b9596ee3a)",
  "pool",
@@ -3451,6 +3455,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
 dependencies = [
  "spin",
+]
+
+[[package]]
+name = "lbp-core"
+version = "0.1.0"
+dependencies = [
+ "associated_token_account_core",
+ "borsh",
+ "clock_core",
+ "curve-core",
+ "lee_core 0.1.0 (git+https://github.com/logos-blockchain/logos-execution-zone.git?rev=a58fbce2ff48c58b7bb5001b1a27e64b9596ee3a)",
+ "risc0-zkvm",
+ "serde",
+ "token_core",
 ]
 
 [[package]]

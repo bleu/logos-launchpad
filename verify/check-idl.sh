@@ -4,7 +4,7 @@ set -euo pipefail
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$root"
 
-for program in curve factory private_buy; do
+for program in curve factory lbp private_buy; do
   generated=$(mktemp)
   trap 'rm -f "$generated"' EXIT
   lgs spel -- generate-idl "idl-src/${program}.rs" > "$generated"

@@ -11,16 +11,16 @@ This page explains technical shorthand used in this repository. [CONTEXT.md](../
 | Bonding curve / curve | A sale whose price follows a mathematical curve as tokens are bought or sold. |
 | AMM | Automated market maker: a program that prices trades from a formula and token balances. |
 | Pool | Mechanism state and token custody. A curve pool is state and custody for one ordered token pair. A direct curve pool is an internal primitive, not a separate sale product. |
-| Factory | A mechanism-specific launch adapter. The curve factory applies curve allocations, creator authority, closing and settlement policy. The LBP factory independently applies LBP creation validation, sale-to-namespace binding and LBP sale policy. |
+| Factory | Shared launch adapter that can create new tokens, set allocations, bind a sale to its namespace and validate setup where rules match. Curve and LBP pools keep separate pricing, custody, lifecycle and fee rules. |
 | Token0 / token1 | The ordered token roles in a curve pool. A curve factory sale uses the launch token as token0 and collateral as token1. |
 | Collateral | The token used to buy the sale token and pay protocol fees. |
 | Real reserve / virtual reserve | Real reserves are tokens that can fund swap output. Virtual reserves are pricing-only values. |
 | Invariant / `k` | A formula value that pricing must preserve under its stated rules. The curve's creation-time virtual-reserve product is `k`. |
 | `D` / `R` | `D` is the purchasable curve allocation. `R` is the curve allocation reserved for possible DEX seeding after close. |
 | Allocation / supply | Tokens assigned to a purpose in a sale, or the total tokens available for that purpose. |
-| LBP | Liquidity bootstrapping pool: a sale pool with time-derived weights for price discovery. Fixed-price mode is also planned. |
+| LBP | Liquidity bootstrapping pool. Fixed-price creation and funding have an accepted design; LBP trading, custody, lifecycle and fees remain future work. |
 | Weight / weight schedule | A pricing input that changes over time for an LBP. The schedule defines its start, end and progress. |
-| Fixed-price mode | A planned LBP mode that uses a set price instead of changing weights. |
+| Fixed-price mode | An LBP setup with a strictly positive exact price in collateral and launch-token smallest units; token decimals are for display. Locked local verification of its four-stage setup passed using development receipts; real proofs and deployment readiness remain pending. See [ADR 0032](adr/0032-fixed-price-lbp-setup.md). |
 | Quote | A price calculation from current state. It does not reserve that price for later execution. |
 | Exact-input / exact-output | A trade where the input is fixed and output is calculated, or where the desired output is fixed and required input is calculated. |
 | Slippage limit | A participant-selected execution bound, such as minimum output or maximum input, that rejects an unfavourable trade. |
@@ -45,7 +45,7 @@ This page explains technical shorthand used in this repository. [CONTEXT.md](../
 | Namespace | An independent launchpad identity with its own administrator, fee rate and treasury. Sales remain bound to their creation namespace. |
 | Namespace state | Logical per-namespace administration and configuration state used for creation validation and applicable runtime checks. This term does not select a registry, shared physical schema or cross-factory account owner. |
 | Namespace administrator | The holder of namespace-configuration rights. This role does not receive creator rights or approve every permitted creator action. |
-| Creator | The sale authority holder with permitted creation and lifecycle actions. |
+| Creator | The sale authority holder with permitted creation and lifecycle actions. Fixed-price LBP setup creates a separate embedded per-sale role for its creator. |
 | Participant | A person or client that uses a configured sale to inspect, quote or trade. |
 | Pool owner | A separate authority role for an applicable pool. |
 | Authority | Permission to perform a defined action. It is checked per action and role. |

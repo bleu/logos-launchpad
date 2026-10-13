@@ -62,11 +62,11 @@ run() {
   "$@" || fail "stage failed: $stage"
 }
 
-run 'curve guests (release, locked)' cargo build --manifest-path methods/Cargo.toml --release --locked
+run 'launchpad guests (release, locked)' cargo build --manifest-path methods/Cargo.toml --release --locked
 run 'weighted-math guest parity (execution only, release, locked)' cargo run --manifest-path packages/weighted-math/zkvm/Cargo.toml --release --locked
 run 'host, client and CLI (release, locked)' cargo build --workspace --release --locked
 run 'host, client and CLI tests (release, locked)' cargo test --workspace --release --locked
 run 'weighted-math host (release, locked)' cargo build --manifest-path packages/weighted-math/Cargo.toml --workspace --release --locked
 run 'weighted-math host tests (release, locked)' cargo test --manifest-path packages/weighted-math/Cargo.toml --workspace --release --locked
-run 'curve guest tests (development receipts, release, locked)' env RISC0_DEV_MODE=1 cargo test -p launchpad-client --release --features guest-tests --test private_authority --test settlement --test namespace_admin --locked
+run 'launchpad guest tests (development receipts, release, locked)' env RISC0_DEV_MODE=1 cargo test -p launchpad-client --release --features guest-tests --test private_authority --test settlement --test namespace_admin --test fixed_price_lbp --test fixed_price_budget --locked
 run 'release overflow tests (host and guest execution, locked)' cargo test --manifest-path methods/Cargo.toml --release --features overflow-tests --test release_overflow --locked

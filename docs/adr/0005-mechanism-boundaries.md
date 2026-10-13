@@ -8,6 +8,10 @@ Date: 2026-09-29
 
 Curve and LBP sales have different pricing, state, controls and fee behavior. The curve PoC already separates a neutral curve pool from its launch factory. Each mechanism needs its own factory and pool boundary without forcing a shared state or lifecycle model.
 
+## Partial supersession
+
+[ADR 0031](0031-shared-launch-factory.md) partially supersedes this record's separate-factory requirement for matching new-token creation, allocation, namespace binding and setup checks. The independent pool, pricing, custody, lifecycle and fee boundaries in this record remain in force.
+
 ## Amendment
 
 This amendment supersedes this record's earlier generic LBP-boundary wording. It makes the independent curve factory and pool, and independent LBP factory and pool, explicit. It retains the existing curve policy scope and does not assign new LBP permissions.

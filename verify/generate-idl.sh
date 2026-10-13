@@ -7,7 +7,7 @@ root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$root"
 mkdir -p idl
 
-for program in curve factory private_buy; do
+for program in curve factory lbp private_buy; do
   temp=$(mktemp)
   lgs spel -- generate-idl "idl-src/${program}.rs" > "$temp"
   mv "$temp" "idl/${program}.json"

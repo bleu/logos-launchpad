@@ -29,6 +29,14 @@ required-features = ["guest-tests"]
 name = "settlement"
 required-features = ["guest-tests"]
 
+[[test]]
+name = "fixed_price_budget"
+required-features = ["guest-tests"]
+
+[[test]]
+name = "fixed_price_lbp"
+required-features = ["guest-tests"]
+
 [dependencies]
 associated_token_account_core.workspace = true
 thiserror.workspace = true
@@ -53,6 +61,7 @@ tokio = { workspace = true, features = ["time"] }
 workspace = true
 
 [dev-dependencies]
+lbp-core.workspace = true
 risc0-zkvm.workspace = true
 serde_json.workspace = true
 weighted-math-core = { path = "../../packages/weighted-math/crates/weighted-math-core" }

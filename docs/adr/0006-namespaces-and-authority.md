@@ -8,6 +8,10 @@ Date: 2026-09-29; configuration review: 2026-10-01; role-pattern review: 2026-10
 
 Independent operators need separate fee settings and treasuries. Moving a namespace administrator or creator role must not change namespace or sale identity. The selected `spel-admin-authority` component provides an `AccountId` administration lifecycle. Each role needs its own platform checks.
 
+## Partial supersession
+
+[ADR 0032](0032-fixed-price-lbp-setup.md) partially supersedes this record's open fixed-price LBP setup gap. The curve stages, pending guard and factory custody remain curve-specific and do not define LBP behavior. Fixed-price LBP implementation and verification remain pending.
+
 ## Decision
 
 Use permissionless namespaces with stable identities. Bind each sale to its namespace at creation. Keep namespace-scoped account derivation and isolated custody through associated token accounts. Namespace state is logical per-namespace state. This decision does not select a namespace registry, shared physical schema or cross-factory namespace account owner.

@@ -1,0 +1,21 @@
+[package]
+name = "lbp-core"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license = "MIT"
+
+[dependencies]
+borsh.workspace = true
+serde.workspace = true
+lee_core.workspace = true
+curve-core.workspace = true
+token_core.workspace = true
+associated_token_account_core.workspace = true
+clock_core.workspace = true
+
+[dev-dependencies]
+risc0-zkvm.workspace = true
+
+[lints]
+workspace = true

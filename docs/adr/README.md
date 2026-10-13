@@ -12,8 +12,8 @@ Read [CONTEXT.md](../../CONTEXT.md) for terms and [repository layout](../archite
 | [0002](0002-in-repo-weighted-math.md) | Reusable weighted math inside the repo | Accepted |
 | [0003](0003-source-reuse-and-licenses.md) | Direct source reuse and licenses | Accepted |
 | [0004](0004-upstream-patterns.md) | Adopt AMM patterns without a fork | Accepted |
-| [0005](0005-mechanism-boundaries.md) | Separate mechanisms, pools and factory policy | Accepted |
-| [0006](0006-namespaces-and-authority.md) | Separate roles using AccountId authority | Accepted; curve namespace has local guest evidence; creator/pool-owner migration and broader platform checks pending |
+| [0005](0005-mechanism-boundaries.md) | Separate mechanism rules and pools; share matching launch setup | Accepted; partially superseded for shared setup by [0031](0031-shared-launch-factory.md) |
+| [0006](0006-namespaces-and-authority.md) | Separate roles using AccountId authority | Accepted; curve namespace has local guest evidence; creator/pool-owner migration pending; fixed-price LBP setup gap partially superseded by [0032](0032-fixed-price-lbp-setup.md) |
 | [0007](0007-typed-sale-inputs.md) | Typed immutable sale inputs | Accepted internally; To be reviewed by Logos team |
 | [0008](0008-curve-allocation-and-close.md) | Curve allocations | Accepted internally; To be reviewed by Logos team |
 | [0009](0009-curve-arithmetic.md) | Checked curve pricing and reserve solvency | Accepted baseline |
@@ -46,6 +46,8 @@ Read [CONTEXT.md](../../CONTEXT.md) for terms and [repository layout](../archite
 | [0028](0028-token-custody-and-freeze.md) | Token custody and namespace emergency controls | Accepted; curve controls have local guest evidence; LBP and broader platform checks pending |
 | [0029](0029-wallet-integration.md) | Integrate the LEZ Wallet Provider SDK | Accepted; awaits LP-0021 development |
 | [0030](0030-lbp-pricing-collateral.md) | Fee-neutral LBP pricing collateral and separate custody records | Accepted internally; custody/numerical verification pending; fee departures: To be reviewed by Logos team |
+| [0031](0031-shared-launch-factory.md) | Share matching launch setup without sharing mechanism rules | Shared fixed-price setup implementation; locked local verification passed using development receipts; real proofs and deployment readiness pending |
+| [0032](0032-fixed-price-lbp-setup.md) | Fixed-price LBP creation and funding setup | Four-stage implementation; locked local verification passed using development receipts; real proofs and deployment readiness pending |
 
 IDs 0023 and 0024 are intentionally unused.
 
