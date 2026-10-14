@@ -1071,7 +1071,7 @@ fn signed_continuations_reject_substituted_sale_and_token_custody() {
             (2, "Wrong mint PDA"),
             (4, "Wrong creator escrow"),
             (8, "ATA account ID does not match expected derivation"),
-            (9, "Wrong LBP pool"),
+            (9, "Wrong fixed-price pool"),
             (10, "ATA account ID does not match expected derivation"),
             (11, "ATA account ID does not match expected derivation"),
         ] {

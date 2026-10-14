@@ -182,7 +182,7 @@ pub(crate) fn create(
             collateral.account_id,
             factory.account_id
         ),
-        "Wrong LBP pool PDA"
+        "Wrong fixed-price pool PDA"
     );
     for (index, owner, token) in [
         (6, &creator, definition.account_id),
@@ -442,7 +442,7 @@ pub(crate) fn continue_creation(
         ),
         "Collateral must be fungible"
     );
-    assert_eq!(pre[9].account_id, state.pool_id, "Wrong LBP pool");
+    assert_eq!(pre[9].account_id, state.pool_id, "Wrong fixed-price pool");
     for (index, owner, token) in [
         (6, &creator, state.token_definition_id),
         (8, &factory, state.token_definition_id),

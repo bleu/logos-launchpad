@@ -9,11 +9,11 @@ The table defines architectural responsibilities. Ownership here means responsib
 | Path or component | Owns | Must not own |
 | --- | --- | --- |
 | `crates/curve-math/` | Checked constant-product arithmetic | Accounts, namespace policy, launch allocations |
-| `crates/pool/` | Neutral curve reserves, swaps, custody and pool lifecycle | Creator allocations, LBP lifecycle |
+| `crates/pool/` | Neutral curve reserves, swaps, custody and pool lifecycle | Creator allocations, fixed-price or weighted sale lifecycle |
 | `crates/curve-core/` | Curve wire and account state, namespace validation, factory custody and authorization | Product UI, curve factory allocation policy or a selected cross-factory namespace schema |
-| `crates/factory-core/` | Shared launch setup: new-token creation, allocations, namespace binding and matching setup checks; separate typed curve, fixed-price LBP and weighted LBP inputs | Generic pool lifecycle, pool pricing, custody or fee policy |
+| `crates/factory-core/` | Shared launch setup: new-token creation, allocations, namespace binding and matching setup checks; separate typed curve, fixed-price sale and weighted sale inputs | Generic pool lifecycle, pool pricing, custody or fee policy |
 | `crates/private-flow-core/` | Existing private helper and its on-chain validation | The complete SDK privacy or provider integration contract |
-| `crates/lbp-core/` | Fixed-price LBP pool state, token vault setup and allocation escrow; future LBP pricing, trading, lifecycle and fee rules remain separate | Curve semantics hidden behind a generic pool interface |
+| `crates/lbp-core/` | Fixed-price sale pool state, token vault setup and allocation escrow; future fixed-price sale pricing, trading, lifecycle and fee rules remain separate | Curve semantics hidden behind a generic pool interface |
 | `packages/weighted-math/` | Standalone math kernel, harness, fixtures, proof material, fuzz target and parity workspace | Custody, authorities or product flow |
 | `methods/guest/` | Thin dispatch entry points and guest-specific build profiles | A second copy of handler logic |
 | `crates/launchpad-client/` | Quotes, authoritative reads, transaction construction and the PoC single-transaction private-buy flow | QML state, direct indexer HTTP calls or duplicated pricing rules |
@@ -22,11 +22,11 @@ The table defines architectural responsibilities. Ownership here means responsib
 | `packages/launchpad/apps/admin/` | Namespace administration and indexed namespace monitoring only | Creator or participant operations |
 | `packages/launchpad/apps/configured-sales/` | Creator and participant flows within a configured namespace | Namespace administration or direct indexer HTTP calls |
 
-The LBP's live-rate and anytime current-treasury collection design is accepted internally. It is outside fixed-price setup scope. Its RFP departures have external status `To be reviewed by Logos team` in [ADR 0016](../adr/0016-lbp-live-fees.md).
+The fixed-price and weighted sale live-rate and anytime current-treasury collection design is accepted internally. It is outside fixed-price sale setup scope. Its RFP departures have external status `To be reviewed by Logos team` in [ADR 0016](../adr/0016-lbp-live-fees.md).
 
 Pure math is below state machines; program handlers add platform accounts and calls; thin guests dispatch handlers. Clients build invocations against these contracts. CLI and product interfaces call shared client/core logic. Planned QML workflows request indexed listings, history and monitoring through the planned shared-core backend module read API, not direct indexer HTTP calls. The indexed read boundary can use a different backend module only after implementation review; this layout does not select one. Shared utilities need matching behavior and error contracts before extraction. Separate mechanisms can share tools without sharing state models.
 
-Weighted math is an imported independent workspace under `packages/weighted-math/`. A future LBP can consume its `crates/weighted-math-core/` library by Cargo path. Root workspace configuration must exclude nested workspaces as needed. Keep lockfiles and toolchain pins for each build context; do not assume that a root `cargo test --workspace` covers nested math, guest or fuzz workspaces. See the [workspace guide](workspace-guide.md) for commands.
+Weighted math is an imported independent workspace under `packages/weighted-math/`. A future weighted sale can consume its `crates/weighted-math-core/` library by Cargo path. Root workspace configuration must exclude nested workspaces as needed. Keep lockfiles and toolchain pins for each build context; do not assume that a root `cargo test --workspace` covers nested math, guest or fuzz workspaces. See the [workspace guide](workspace-guide.md) for commands.
 
 ## Artifacts
 
@@ -35,7 +35,7 @@ Weighted math is an imported independent workspace under `packages/weighted-math
 | On-chain source IDLs in `idl-src/` | Program interface owner | On-chain program IDL generator | Handler and interface review |
 | Generated on-chain program IDLs in `idl/` | Existing source-IDL generation path | SDK, CLI and bindings | `verify/check-idl.sh` regeneration and drift check |
 | Guest binaries and program identities | Separate `methods/guest/` build | Deployment and client configuration | Pinned guest build and identity consistency |
-| Weighted kernel library | Math package | LBP program and test harness | Math tests, input qualification and guest parity |
+| Weighted kernel library | Math package | Weighted-sale program and test harness | Math tests, input qualification and guest parity |
 | Client library and CLI binary | `launchpad-client` and `cli` | Developers and operators | Include their tests, not only pure/core crates |
 | Core module `.lidl` contract | `packages/launchpad/core/` | Generated adapter | Module interface review |
 | Generated core module | `packages/launchpad/core/` native module build | Basecamp module API integration | Module compatibility checks |

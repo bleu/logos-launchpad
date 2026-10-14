@@ -6,7 +6,7 @@ Date: 2026-09-29
 
 ## Decision
 
-Integrations must obtain fresh quotes and set limits from the participant's selected slippage tolerance. Never silently use an unrestricted trade. The program checks limits against execution-time pricing because reserves, fees and LBP weights can change after a quote.
+Integrations must obtain fresh quotes and set limits from the participant's selected slippage tolerance. Never silently use an unrestricted trade. The program checks limits against execution-time pricing because reserves, fees and weighted-sale weights can change after a quote.
 
 For curves, exact-input `min_amount_out` limits the participant's receipt after any sell fee. Exact-output buy `max_amount_in` caps the full collateral debit, including fees. SDK quotes and public execution must enforce the same [trade mode](0021-modes-and-open-limits.md#sale-modes).
 

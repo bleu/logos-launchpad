@@ -1,4 +1,4 @@
-# Curve overview
+# Bonding-curve sale overview
 
 Trade modes and the optional adapter hook are implemented. This page links the governing decisions and checks; it does not claim production readiness. Use the terms in [CONTEXT.md](../../CONTEXT.md).
 

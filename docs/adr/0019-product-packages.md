@@ -29,4 +29,4 @@ A package split needs build, install and user-flow evidence. A working Rust libr
 ## Sources
 
 - [Curve proposal](https://github.com/logos-co/rfp/issues/118)
-- [LBP proposal](https://github.com/logos-co/rfp/issues/119)
+- [Fixed-price and weighted sale proposal](https://github.com/logos-co/rfp/issues/119)

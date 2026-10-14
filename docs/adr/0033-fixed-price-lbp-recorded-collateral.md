@@ -1,6 +1,6 @@
-# ADR 0033: Separate fixed-price LBP collateral accounting from vault balances
+# ADR 0033: Separate fixed-price sale collateral accounting from vault balances
 
-Status: Accepted; implemented for fixed-price setup. Trading and settlement remain future work.
+Status: Accepted; implemented for fixed-price sale creation and funding. Trading and settlement remain future work.
 
 Date: 2026-10-14
 
@@ -14,7 +14,7 @@ This record supersedes only the physical collateral-empty activation rule in [AD
 
 Keep recorded collateral separate from the actual collateral vault balance. Preparation initializes recorded collateral to zero. Activation requires that recorded amount to remain zero, but accepts a valid collateral vault containing unsolicited tokens. Funding leaves those tokens untouched and does not credit them to the sale. Canonical account, token-owner and definition checks still apply.
 
-Unsolicited transfers remain surplus. They do not increase sale inventory, pricing collateral, accrued fees or creator proceeds. Future buys, fee collection and settlement must update recorded amounts atomically with the corresponding custody operations and check sufficient backing. Accrued fees remain separate from creator proceeds. Weighted pricing and fee policy remain under [ADR 0030](0030-lbp-pricing-collateral.md) and [ADR 0016](0016-lbp-live-fees.md).
+Unsolicited transfers remain surplus. They do not increase sale inventory, pricing collateral, accrued fees or creator proceeds. Future buys, fee collection and settlement must update recorded amounts atomically with the corresponding custody operations and check sufficient backing. Accrued fees remain separate from creator proceeds. Weighted-sale pricing and fee policy remain under [ADR 0030](0030-lbp-pricing-collateral.md) and [ADR 0016](0016-lbp-live-fees.md).
 
 ## Consequences
 

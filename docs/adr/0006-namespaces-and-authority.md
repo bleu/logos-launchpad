@@ -10,7 +10,7 @@ Independent operators need separate fee settings and treasuries. Moving a namesp
 
 ## Partial supersession
 
-[ADR 0032](0032-fixed-price-lbp-setup.md) partially supersedes this record's open fixed-price LBP setup gap. The curve stages, pending guard and factory custody remain curve-specific and do not define LBP behavior. Fixed-price LBP implementation and verification remain pending.
+[ADR 0032](0032-fixed-price-lbp-setup.md) partially supersedes this record's open fixed-price sale creation and funding gap. The curve stages, pending guard and factory custody remain curve-specific and do not define fixed-price sale behavior. Fixed-price sale trading and verification remain pending.
 
 ## Decision
 
@@ -26,11 +26,11 @@ Use separate `spel-admin-authority` state for namespace administration, each sal
 
 Creator and direct pool-owner migration is separate work. It must cover stored role state, transfer acceptance, client inputs and existing account compatibility. Decide whether these roles may renounce before enabling renunciation; it must not leave required settlement or recovery unavailable. Existing NFT checks remain until that migration is implemented and tested.
 
-Retain the reviewed curve factory's resumable creation and settlement. Pending curve pools cannot trade before funding is complete. Each curve stage rechecks the relevant authority and commits atomically with its child calls; the whole curve workflow can span transactions. This reviewed curve behavior does not define LBP creation stages, pending guards or custody.
+Retain the reviewed curve factory's resumable creation and settlement. Pending curve pools cannot trade before funding is complete. Each curve stage rechecks the relevant authority and commits atomically with its child calls; the whole curve workflow can span transactions. This reviewed curve behavior does not define fixed-price or weighted-sale creation stages, pending guards or custody.
 
 ## Consequences
 
-The singleton/genesis-admin, address-bound and namespace-admin NFT-holder models are superseded. The curve uses the unmodified v0.1.4 package through a Git dependency pinned to `479adf86f85b664073f359cfd2fd0087489f63a0`. Tests check administrator authorization instead of reading the role holder. CLI `namespace-info` omits the administrator. Namespace config has a new format marker; old development state and the combined `UpdateConfig` instruction are removed. LBP implementation still needs separate evidence.
+The singleton/genesis-admin, address-bound and namespace-admin NFT-holder models are superseded. The curve uses the unmodified v0.1.4 package through a Git dependency pinned to `479adf86f85b664073f359cfd2fd0087489f63a0`. Tests check administrator authorization instead of reading the role holder. CLI `namespace-info` omits the administrator. Namespace config has a new format marker; old development state and the combined `UpdateConfig` instruction are removed. Fixed-price and weighted-sale work still needs separate evidence.
 
 The [historical authority experiments](https://github.com/bleu/logos-launchpad/blob/f1198315569cfc8ada9f6c39964cb77314e2520c/packages/platform-probes/README.md) exercised admin `479adf86f85b664073f359cfd2fd0087489f63a0` with SPEL `d0bb659048c3fc6533f51c69e9f7f12382af6dd2` and component LEZ `47eba256479f6f785acbd138834340703cd03401`. Host checks covered transfer acceptance, terminal renunciation and namespace isolation. Guest checks used controlled authorization fixtures, not signed transactions or real claim application. Do not decode private component bytes or store a second administrator field.
 

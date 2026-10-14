@@ -11,11 +11,11 @@ The private route uses a public pool. The current curve-buy PoC does not complet
 ## Changes
 
 - 2026-09-30: Replaced the three-transaction flow with one transaction.
-- 2026-10-01: Added complete private returns, participant-controlled destinations and recovery rules. LBP allowlist rules are in [ADR 0021](0021-modes-and-open-limits.md).
+- 2026-10-01: Added complete private returns, participant-controlled destinations and recovery rules. Fixed-price and weighted-sale allowlist rules are in [ADR 0021](0021-modes-and-open-limits.md).
 
 ## Decision
 
-Keep public trades and an SDK-managed private route for curve buys, allowed curve sells and LBP buys. Each private attempt uses fresh public accounts and one transaction to:
+Keep public trades and an SDK-managed private route for bonding-curve buys, allowed bonding-curve sells, and fixed-price and weighted-sale buys. Each private attempt uses fresh public accounts and one transaction to:
 
 1. Move private input and gas funds to those accounts.
 2. Trade within the participant's limits.
@@ -39,10 +39,10 @@ Explain public effects before transaction approval. How often to require a separ
 
 Pool changes, trade amounts and timing remain public. These SDK rules do not guarantee privacy for callers who build other transactions. A failed execution may still cost fees; no automatic refund or reversal is promised.
 
-Whole-route execution, complete returns, wallet recovery, private curve sells, LBP buys and allowlist proofs still need implementation and tests. The [full specification](../architecture/private-participation.md) defines the detailed rules and required test cases.
+Whole-route execution, complete returns, wallet recovery, private bonding-curve sells, fixed-price and weighted-sale buys, and allowlist proofs still need implementation and tests. The [full specification](../architecture/private-participation.md) defines the detailed rules and required test cases.
 
 ## Sources
 
 - [Curve proposal](https://github.com/logos-co/rfp/issues/118)
-- [LBP proposal](https://github.com/logos-co/rfp/issues/119)
+- [Fixed-price and weighted sale proposal](https://github.com/logos-co/rfp/issues/119)
 - [Earlier curve PoC decision](https://github.com/bleu/lez-bonding-curve-launchpad/blob/778f92169ac08edf3cff02bbf2e45d770f176283/docs/adr/0005-private-trade-boundary-and-verification.md)

@@ -1,4 +1,4 @@
-//! Fixed-price LBP setup and funding, separate from curve pricing and lifecycle.
+//! Fixed-price sale setup and funding, separate from curve pricing and lifecycle.
 
 use associated_token_account_core::Instruction as AtaInstruction;
 use borsh::{BorshDeserialize, BorshSerialize};

@@ -8,7 +8,7 @@ Date: 2026-09-29
 
 The curve factory keeps three allocations separate: purchasable `D`, owner-reserved `R` for DEX seeding, and the creator allocation. `R` remains untouched until close. This prevents trading from spending tokens reserved for settlement.
 
-Allocation policy belongs to the factory, not the neutral pool. [ADR 0025](0025-sale-closing.md) supersedes this record's earlier closing rules and governs unsold `D`. [ADR 0020](0020-settlement-and-graduation.md) governs post-close payouts, including manual settlement when `R` is not used for graduation. These rules do not define LBP allocations.
+Allocation policy belongs to the factory, not the neutral pool. [ADR 0025](0025-sale-closing.md) supersedes this record's earlier closing rules and governs unsold `D`. [ADR 0020](0020-settlement-and-graduation.md) governs post-close payouts, including manual settlement when `R` is not used for graduation. These rules do not define fixed-price or weighted-sale allocations.
 
 ## Sources
 

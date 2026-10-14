@@ -7,7 +7,7 @@ This is the required SDK-managed purchase route, not a verified implementation. 
 - The participant has selected the private route and explicit trade limits.
 - The sale is open and the requested trade can pass current mechanism checks.
 - Sources and private return targets have compatible account types, token definitions and participant control.
-- An allowlisted LBP buy satisfies the reviewed product policy; its proof method and cross-route enforcement still need verification.
+- An allowlisted fixed-price or weighted sale buy satisfies the reviewed product policy; its proof method and cross-route enforcement still need verification.
 - LP-0021 provider integration awaits SDK development. Its final API and support for the combined transaction and recovery remain unavailable for verification.
 
 ```mermaid
@@ -63,4 +63,4 @@ The SDK owns construction and progress. The provider owns account access, approv
 
 ## Open implementation details
 
-The [platform research](../../research/private-route-transaction-patterns.md) records the current route's call-budget, gas-source ownership and missing-return gaps. The selected provider must support all required accounts, approval, confirmation and recovery. Private curve sell and LBP runtime implementation remain future work; allowlist cryptographic construction is still open. See [ADR 0018](../../adr/0018-private-participation.md), [ADR 0021](../../adr/0021-modes-and-open-limits.md) and [ADR 0029](../../adr/0029-wallet-integration.md).
+The [platform research](../../research/private-route-transaction-patterns.md) records the current route's call-budget, gas-source ownership and missing-return gaps. The selected provider must support all required accounts, approval, confirmation and recovery. Private curve sell and fixed-price and weighted sale runtime implementation remain future work; allowlist cryptographic construction is still open. See [ADR 0018](../../adr/0018-private-participation.md), [ADR 0021](../../adr/0021-modes-and-open-limits.md) and [ADR 0029](../../adr/0029-wallet-integration.md).

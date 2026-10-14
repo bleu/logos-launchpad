@@ -18,7 +18,7 @@ Keep the invariant referee independent from kernel arithmetic by using harness-o
 
 ## Consequences
 
-The exact referee checks `(b_in + in)^w_in * (b_out - out)^w_out >= b_in^w_in * b_out^w_out`; equality is valid for zero-fee math. Host/guest parity checks deterministic execution, not numerical truth, LBP integration, production proving readiness, or an audit. The imported comparator and parity results are historical evidence. [Current qualification](../../packages/weighted-math/docs/qualification.md) records scale-52 rational trade guards, explicit rejection counts, expanded mixed-decimal/large-weight fixtures and one real standalone proof. That proof does not establish full LBP or LEZ compatibility. Report new checks, ignored tests and fuzz runs separately.
+The exact referee checks `(b_in + in)^w_in * (b_out - out)^w_out >= b_in^w_in * b_out^w_out`; equality is valid for zero-fee math. Host/guest parity checks deterministic execution, not numerical truth, weighted-sale integration, production proving readiness, or an audit. The imported comparator and parity results are historical evidence. [Current qualification](../../packages/weighted-math/docs/qualification.md) records scale-52 rational trade guards, explicit rejection counts, expanded mixed-decimal/large-weight fixtures and one real standalone proof. That proof does not establish full weighted-sale or LEZ compatibility. Report new checks, ignored tests and fuzz runs separately.
 
 ## Sources
 

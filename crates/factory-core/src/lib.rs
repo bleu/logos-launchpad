@@ -1,4 +1,4 @@
-//! Shared launch setup with separate curve and fixed-price LBP inputs.
+//! Shared launch setup with separate bonding-curve and fixed-price sale inputs.
 //!
 //! The factory creates one fixed-supply launch token, records the public split, and
 //! prepares and funds each pool across four resumable, individually atomic stages.

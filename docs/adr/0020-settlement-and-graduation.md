@@ -1,6 +1,6 @@
 # ADR 0020: Manual settlement and an optional adapter hook
 
-Status: Accepted and implemented; production-readiness limits remain; live DEX integration deferred
+Status: Accepted and implemented for bonding-curve settlement; fixed-price and weighted-sale settlement remain future work; production-readiness limits remain; live DEX integration deferred
 
 Date: 2026-09-29; amended 2026-10-01
 
@@ -24,7 +24,7 @@ The final transfers, callback and `Graduated` marker succeed or roll back togeth
 
 ## Consequences
 
-Settlement is atomic per transaction, not across the whole workflow. An immutable adapter cannot be replaced to repair a bad choice. These rules do not change LBP settlement. See the [curve overview](../product/curve-contract.md#release-compatibility) for release compatibility and [verification boundaries](0022-verification-boundaries.md) for required evidence.
+Settlement is atomic per transaction, not across the whole workflow. An immutable adapter cannot be replaced to repair a bad choice. These rules do not change fixed-price or weighted-sale settlement. See the [curve overview](../product/curve-contract.md#release-compatibility) for release compatibility and [verification boundaries](0022-verification-boundaries.md) for required evidence.
 
 ## Sources
 

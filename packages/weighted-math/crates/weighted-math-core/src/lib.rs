@@ -1,4 +1,4 @@
-//! Unaudited weighted pricing for LBP pools, tested against mpmath fixtures.
+//! Unaudited pricing for weighted-sale pools, tested against mpmath fixtures.
 //!
 //! This `no_std` arithmetic kernel has no dependencies. Domain violations
 //! use documented panics instead of typed errors to keep that boundary.

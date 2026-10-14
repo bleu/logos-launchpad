@@ -1,6 +1,6 @@
 # Overflow envelope
 
-Status: arithmetic argument and regression evidence for the unaudited kernel. The selected public scale is 52; the internal scale is 62. Fit arguments below distinguish inputs that cannot overflow from inputs that are rejected by release-active guards. This is not an audit or a proof of production LBP handler safety.
+Status: arithmetic argument and regression evidence for the unaudited kernel. The selected public scale is 52; the internal scale is 62. Fit arguments below distinguish inputs that cannot overflow from inputs that are rejected by release-active guards. This is not an audit or a proof of production weighted-sale handler safety.
 
 Release arithmetic can wrap when overflow checks are disabled. Correctness must therefore follow from bounded operands or explicit checked operations. The weighted workspace enables release overflow checks, but the regression suite also runs without them.
 
@@ -18,7 +18,7 @@ Release arithmetic can wrap when overflow checks are disabled. Correctness must 
 | Fixed-point division numerator fits | `numerator`. |
 | Positive padded power before exact-output inversion | `p62 > 0` assertion. |
 
-These guards panic in the raw kernel. The future LBP program must validate before calling it and return stable errors. It must also check post-buy reserve and vault additions: a representable payment alone does not establish that `balance_in + payment` fits.
+These guards panic in the raw kernel. The future weighted-sale program must validate before calling it and return stable errors. It must also check post-buy reserve and vault additions: a representable payment alone does not establish that `balance_in + payment` fits.
 
 ## Widening multiplication and ceiling carry
 
@@ -40,7 +40,7 @@ The same defect is reachable through public exact-output pricing at the selected
 
 The computed scale-62 payment ratio is `r62 = 4799918100812182583`. The final widened product divided by `2^62` has floor `340282366920938463463374607431768211455` and remainder `2366108921125422809`. Thus the floor fits, but the ceiling does not. With the old helper, the public call returned zero in unchecked release. With checked carry, it panics. The regression `exact_output_rejects_an_unrepresentable_ceiling` records both outcomes.
 
-This establishes raw-kernel reachability, not a valid settled LBP trade. The future handler must reject this payment and its unrepresentable post-buy collateral balance before any custody change. No production LBP handler exists to test that rejection yet.
+This establishes raw-kernel reachability, not a valid settled weighted sale trade. The future handler must reject this payment and its unrepresentable post-buy collateral balance before any custody change. No production weighted-sale handler exists to test that rejection yet.
 
 ## Exact-input ledger
 

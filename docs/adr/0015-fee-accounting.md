@@ -1,6 +1,6 @@
 # ADR 0015: Collateral fees and current-treasury collection
 
-Status: Accepted internally; LBP RFP departures: To be reviewed by Logos team
+Status: Accepted internally; fixed-price and weighted-sale RFP departures: To be reviewed by Logos team
 
 Date: 2026-09-29; fee-limit review: 2026-10-01
 
@@ -12,12 +12,12 @@ If the curve pool is the treasury, collection records and clears fees without a 
 
 Namespace fee rates must be integers from 0 through 9,999 basis points at creation and update. Reject 10,000 or more: a 100% fee consumes all curve buy input. Rounding can still consume a small trade below this limit, so trade guards remain necessary.
 
-Curve swaps use the live namespace rate. Deduct fees from buy input or sell output in token1, the factory's collateral token. [ADR 0016](0016-lbp-live-fees.md) owns the different creator-borne LBP model and its pending RFP review.
+Curve swaps use the live namespace rate. Deduct fees from buy input or sell output in token1, the factory's collateral token. [ADR 0016](0016-lbp-live-fees.md) owns the different creator-borne fixed-price and weighted-sale model and its pending RFP review.
 
-Fee-rate and treasury updates must be separate operations under [ADR 0006](0006-namespaces-and-authority.md). The curve PoC enforces the rate limit but still uses one combined configuration update. See the [shared contract](../product/namespace-fee-contract.md) for custody checks.
+Fee-rate and treasury updates must be separate operations under [ADR 0006](0006-namespaces-and-authority.md). The curve PoC enforces the rate limit but still uses one combined configuration update. Fixed-price and weighted-sale fee rules remain future work. See the [shared contract](../product/namespace-fee-contract.md) for custody checks.
 
 ## Sources
 
 - [Curve revised fee decision](https://github.com/bleu/lez-bonding-curve-launchpad/blob/778f92169ac08edf3cff02bbf2e45d770f176283/docs/adr/0005-dual-input-fees-and-monotonic-reserve-product.md)
 - [Curve proposal](https://github.com/logos-co/rfp/issues/118)
-- [LBP proposal](https://github.com/logos-co/rfp/issues/119)
+- [Fixed-price and weighted sale proposal](https://github.com/logos-co/rfp/issues/119)

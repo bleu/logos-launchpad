@@ -1,6 +1,6 @@
-# Create an LBP pool
+# Create a fixed-price sale pool
 
-This diagram describes the implemented four-transaction fixed-price LBP setup. Locked local verification passed using development receipts; real proofs and deployment readiness remain pending. See [ADR 0032](../../adr/0032-fixed-price-lbp-setup.md).
+This diagram describes the implemented four-transaction fixed-price sale setup. Locked local verification passed using development receipts; real proofs and deployment readiness remain pending. See [ADR 0032](../../adr/0032-fixed-price-lbp-setup.md).
 
 ## Preconditions
 
@@ -14,7 +14,7 @@ sequenceDiagram
     actor Creator
     participant Factory as Shared launch factory
     participant Namespace as NamespaceConfig
-    participant Pool as Fixed-price LBP pool
+    participant Pool as Fixed-price sale pool
 
     Creator->>Factory: Stage 1: claim exact mint and creator role
     Factory->>Namespace: Validate namespace binding
@@ -25,7 +25,7 @@ sequenceDiagram
     Creator->>Factory: Stage 3: prepare pool
     Factory->>Pool: Prepare pool, vaults and immediate recipient ATA
     Creator->>Factory: Stage 4: fund inventory and complete setup
-    Factory->>Pool: Fund sale inventory into LBP vault
+    Factory->>Pool: Fund sale inventory into fixed-price sale vault
     alt AfterSetup creator allocation
         Factory-->>Creator: Pay allocation atomically and mark Complete
     else AfterEnd creator allocation
@@ -37,8 +37,8 @@ sequenceDiagram
 
 The creator signer initializes the embedded creator role in the same claim. Namespace administration stays separate from that role. `StartNow` uses trusted creation time. A scheduled start cannot precede trusted current time, and the end must follow the selected start. Late final setup keeps the configured end and requires current time before it.
 
-Each stage is atomic. The workflow spans four transactions. Final setup can fund the LBP vault before a scheduled start. `AfterSetup` pays the creator allocation only after successful final funding. `AfterEnd` retains the already placed allocation in escrow; later settlement or payout is future work. The fixed-price setup does not use curve `R` allocation or curve factory custody.
+Each stage is atomic. The workflow spans four transactions. Final setup can fund the fixed-price sale vault before a scheduled start. `AfterSetup` pays the creator allocation only after successful final funding. `AfterEnd` retains the already placed allocation in escrow; later settlement or payout is future work. The fixed-price sale setup does not use curve `R` allocation or curve factory custody.
 
 ## Out of scope
 
-This flow does not add buys, sells, weighted accounting, fees, close, end payout, end hooks, delayed settlement, cancellation or expired-recovery handlers, private LBP, allowlists, full SDK or CLI flows. Event indexing, wallet integration and the final account schema need separate implementation and review.
+This flow does not add buys, sells, weighted accounting, fees, close, end payout, end hooks, delayed settlement, cancellation or expired-recovery handlers, private fixed-price sale flows, allowlists, full SDK or CLI flows. Event indexing, wallet integration and the final account schema need separate implementation and review.

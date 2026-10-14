@@ -1,4 +1,4 @@
-//! SPEL wire declaration for the fixed-price LBP guest.
+//! SPEL wire declaration for the fixed-price sale guest.
 
 #[lez_program(instruction = "lbp_core::Instruction")]
 pub mod lbp {

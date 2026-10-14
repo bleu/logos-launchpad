@@ -21,4 +21,4 @@ This repository owns launchpad behavior and maintenance. Shared platform convent
 ## Sources
 
 - [Curve proposal](https://github.com/logos-co/rfp/issues/118)
-- [LBP proposal](https://github.com/logos-co/rfp/issues/119)
+- [Fixed-price and weighted sale proposal](https://github.com/logos-co/rfp/issues/119)

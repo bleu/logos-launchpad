@@ -1,4 +1,4 @@
-//! LBP guest dispatch shim. Domain handlers live in `lbp-core`.
+//! Fixed-price sale guest dispatch shim. Domain handlers live in `lbp-core`.
 
 #![cfg_attr(not(test), warn(unused_crate_dependencies))]
 

@@ -18,7 +18,7 @@ const MAX_EXPONENT: i128 = 99 * (1i128 << SCALE);
 // Generators (danger zones oversampled, ADR 0014)
 // ---------------------------------------------------------------------------
 
-/// LBP-style normalised weight pair: ratio spans exactly 1/99 ..= 99.
+/// Weighted-sale normalised weight pair: ratio spans exactly 1/99 ..= 99.
 fn weights() -> impl Strategy<Value = (u128, u128)> {
     (1u128..=99).prop_map(|w| (w, 100 - w))
 }

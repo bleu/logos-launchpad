@@ -1,6 +1,6 @@
 # Weighted-math qualification
 
-Recorded on 2026-10-02, based on main `a80eb64`. This is evidence for the standalone, unaudited kernel at public scale 52 and internal scale 62, not a working LBP program.
+Recorded on 2026-10-02, based on main `a80eb64`. This is evidence for the standalone, unaudited kernel at public scale 52 and internal scale 62, not a working weighted-sale program.
 
 ## Accuracy
 
@@ -29,4 +29,4 @@ Final image: `3ea031f8c4b2c1c2a57290441b99a5c033348616988c1cbae1650f0db6962eae`.
 
 Main's newer build settings changed the image ID. Final-build execution checks passed, but the original receipt does not verify the final image. No second proof was attempted.
 
-See the [oracle guide](../crates/harness/oracle/README.md) and [zkVM guide](../zkvm/README.md) for commands. Checked LBP handlers, custody, clock integration and full-operation proof costs remain future work.
+See the [oracle guide](../crates/harness/oracle/README.md) and [zkVM guide](../zkvm/README.md) for commands. Checked weighted-sale handlers, custody, clock integration and full-operation proof costs remain future work.

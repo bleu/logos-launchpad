@@ -1,6 +1,6 @@
 # Namespace, custody, and fee contract
 
-M0 design contract for curve and LBP sales. Use the terms in [CONTEXT.md](../../CONTEXT.md).
+M0 design contract for fixed-price, bonding-curve and weighted sales. Use the terms in [CONTEXT.md](../../CONTEXT.md).
 
 ## Namespace rules
 
@@ -22,7 +22,7 @@ Each namespace has one administration record. The [administration module](../adr
 
 Sale and namespace accounts must have the correct addresses and program owners. Token account checks cover the owner, token definition, expected address, token-program data, and permission to use the account.
 
-Curve accounts must hold enough collateral for the real reserve and outstanding fees. LBP accounts must cover outstanding fees and remaining payouts. Fee records contain trade fees; extra deposits remain surplus. Token creation, fund transfers, namespace settings, and pause/freeze controls have separate authority checks. See [ADR 0028](../adr/0028-token-custody-and-freeze.md).
+Curve accounts must hold enough collateral for the real reserve and outstanding fees. Fixed-price and weighted sale accounts must cover outstanding fees and remaining payouts. Fee records contain trade fees; extra deposits remain surplus. Token creation, fund transfers, namespace settings, and pause/freeze controls have separate authority checks. See [ADR 0028](../adr/0028-token-custody-and-freeze.md).
 
 ## Fees and collection
 
@@ -32,7 +32,7 @@ Fees use collateral: token1 for curve factory sales. Namespace creation and upda
 | --- | --- | --- |
 | Curve buy | Full collateral input | Use input after the fee for pricing and the real reserve |
 | Curve sell | Collateral output before the fee | Pay the participant after the fee; remove the full output from the real reserve |
-| LBP buy | Full collateral input | Use full input for pricing; the creator pays the fee from proceeds |
+| Fixed-price or weighted sale buy | Full collateral input | Use full input for pricing; the creator pays the fee from proceeds |
 
 Execution checks trade amounts, rounding, price limits, and available funds. A fee change affects later trades; amounts already recorded stay fixed.
 
@@ -40,7 +40,7 @@ Fees can be collected at any time. Collection pays all outstanding fees, clears 
 
 Settlement collects remaining fees in the same transaction as the related reserve or proceeds payment. The payment uses the balance after collection. If that stage fails, its state and balances stay unchanged. Earlier stages stay complete. The full process can use several transactions. Completed payments and token burns are recorded so a retry is safe.
 
-LBP creator withdrawal waits for the original end timestamp. A pause keeps the schedule and weight changes active. See [ADR 0015](../adr/0015-fee-accounting.md), [ADR 0016](../adr/0016-lbp-live-fees.md), and [ADR 0020](../adr/0020-settlement-and-graduation.md).
+Fixed-price and weighted sale creator withdrawal waits for the original end timestamp. A pause keeps the schedule active; weighted-sale weights continue to change. See [ADR 0015](../adr/0015-fee-accounting.md), [ADR 0016](../adr/0016-lbp-live-fees.md), and [ADR 0020](../adr/0020-settlement-and-graduation.md).
 
 ## Events and errors
 

@@ -1,6 +1,6 @@
 # System overview
 
-This is the planned architecture. The full production implementation is not built. Fixed-price LBP setup has a four-stage implementation that passed locked local verification using development receipts; real proofs and deployment readiness remain pending.
+This is the planned architecture. The full production implementation is not built. Fixed-price sale setup has a four-stage implementation that passed locked local verification using development receipts; real proofs and deployment readiness remain pending.
 
 ## Components
 
@@ -16,19 +16,22 @@ flowchart TB
     subgraph Programs[On-chain components]
         Namespace[Namespace settings]
         LaunchFactory[Shared launch factory] -->|Curve-specific setup| CurvePool[Curve pool]
-        LaunchFactory -->|Fixed-price setup and funding| LBPPool[LBP pool]
+        LaunchFactory -->|Fixed-price sale setup and funding| FixedPriceSale[Fixed-price sale pool]
+        LaunchFactory -.->|Future weighted-sale setup| WeightedSale[Weighted sale pool]
         LaunchFactory -.-> Namespace
         CurvePool -.-> Namespace
-        LBPPool -.-> Namespace
+        FixedPriceSale -.-> Namespace
+        WeightedSale -.-> Namespace
     end
 
     LEZ -->|Namespace administration| Namespace
     LEZ -->|Curve creation and settlement| LaunchFactory
-    LEZ -->|Fixed-price LBP setup| LaunchFactory
+    LEZ -->|Fixed-price sale setup| LaunchFactory
     LEZ -->|Curve trades| CurvePool
-    LEZ -->|Future LBP operations| LBPPool
+    LEZ -.->|Future fixed-price sale operations| FixedPriceSale
+    LEZ -.->|Future weighted sale operations| WeightedSale
     Programs -->|Events| Indexer
-    LBPPool -.->|Library calls| Math[Weighted math]
+    WeightedSale -.->|Future library calls| Math[Weighted math]
 ```
 
 The admin app manages namespaces. Creators and participants use the sales app. Both apps read indexed data through the shared core. The CLI calls the SDK directly.
@@ -40,14 +43,14 @@ The curve branch of the shared launch factory can call a saved adapter through t
 ## Flows
 
 - [Create a curve pool](sequence-diagrams/create-curve-pool.md)
-- [Create an LBP pool](sequence-diagrams/create-lbp-pool.md)
+- [Create a fixed-price sale pool](sequence-diagrams/create-lbp-pool.md)
 - [Make a private purchase](sequence-diagrams/private-purchase.md)
 
 ## Details
 
 - [Factory and pool boundaries](../adr/0005-mechanism-boundaries.md)
 - [Shared launch setup](../adr/0031-shared-launch-factory.md)
-- [Fixed-price LBP setup](../adr/0032-fixed-price-lbp-setup.md)
+- [Fixed-price sale setup](../adr/0032-fixed-price-lbp-setup.md)
 - [Namespaces and authority](../adr/0006-namespaces-and-authority.md)
 - [App packages and interfaces](../adr/0019-product-packages.md)
 - [Wallet Provider SDK integration](../adr/0029-wallet-integration.md)

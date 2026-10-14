@@ -21,7 +21,7 @@ For deployment builds, supply the deployment's account instead. The built guest 
 | `packages/weighted-math/zkvm/` | Weighted-math host/guest parity | `RISC0_BUILD_LOCKED=1 cargo run --manifest-path packages/weighted-math/zkvm/Cargo.toml --release --locked` |
 | `packages/weighted-math/fuzz/` | Weighted trade invariant fuzz target | `cd packages/weighted-math/fuzz && cargo +nightly fuzz run trade_invariant` |
 
-Root workspace commands do not include the nested math, launchpad, guest or fuzz workspaces. Keep their lockfiles separate. Fixed-price LBP setup uses the root launch factory; no separate LBP workspace is selected. A future weighted LBP can depend on `packages/weighted-math/crates/weighted-math-core/` by Cargo path.
+Root workspace commands do not include the nested math, launchpad, guest or fuzz workspaces. Keep their lockfiles separate. Fixed-price sale setup uses the root launch factory; no separate fixed-price sale workspace is selected. A future weighted sale can depend on `packages/weighted-math/crates/weighted-math-core/` by Cargo path.
 
 The root and weighted-math host workspaces declare edition 2024 and a minimum Rust version of 1.94. The root and math zkVM `rust-toolchain.toml` files select Rust 1.94.0. Guest builds and parity also require the tool versions in [`verify/build-tools.env`](../../verify/build-tools.env). Check setup with `bash verify/check-builds.sh --preflight`. Fuzzing needs nightly Rust and `cargo-fuzz`.
 
@@ -46,7 +46,7 @@ bash verify/check-idl.sh
 
 [Root CI](../../.github/workflows/ci.yml) runs on pull requests, pushes to `main` and manual runs. It checks formatting across the root, curve guest and weighted-math workspaces, including fuzz source, and checks the fuzz lockfile without building it. It checks dependency pins, then runs `verify/check-builds.sh` and `verify/check-idl.sh` for locked builds, tests, guest execution, math parity and generated program interfaces. The Ubuntu 24.04 setup uses `rust-toolchain.toml` and `verify/build-tools.env`; the workflow contains the tool installation commands.
 
-The root weighted-math smoke test calls the local kernel's public trade functions. Run it with `cargo test -p launchpad-client --test weighted_math --locked`. It checks consumption from the root workspace, not an LBP program.
+The root weighted-math smoke test calls the local kernel's public trade functions. Run it with `cargo test -p launchpad-client --test weighted_math --locked`. It checks consumption from the root workspace, not a weighted-sale program.
 
 CI excludes the separate launchpad core workspaces, mini-app builds and installation, fuzz campaigns, live standalone-sequencer/E2E tests, concurrency and private-flow fault testing, and real-proof generation. Clippy remains a local check. Guest development receipts and standalone math parity do not establish production readiness.
 

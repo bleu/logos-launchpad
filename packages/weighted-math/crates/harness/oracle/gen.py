@@ -245,7 +245,7 @@ def out_given_in_cases():
     U127 = (1 << 127) - 1
     U128 = (1 << 128) - 1
     specs = [
-        # Sale start: LBP opens collateral-heavy, tiny trades, power ~ 1.
+        # Sale start: weighted sale opens collateral-heavy, tiny trades, power ~ 1.
         (10**18, 1, 10**27, 1, 99, "sale_start"),
         (10**18, 10**12, 10**27, 1, 99, "sale_start"),
         (10**18, 10**13, 10**27, 1, 99, "sale_start"),
