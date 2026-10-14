@@ -47,7 +47,8 @@ Read [CONTEXT.md](../../CONTEXT.md) for terms and [repository layout](../archite
 | [0029](0029-wallet-integration.md) | Integrate the LEZ Wallet Provider SDK | Accepted; awaits LP-0021 development |
 | [0030](0030-lbp-pricing-collateral.md) | Fee-neutral LBP pricing collateral and separate custody records | Accepted internally; custody/numerical verification pending; fee departures: To be reviewed by Logos team |
 | [0031](0031-shared-launch-factory.md) | Share matching launch setup without sharing mechanism rules | Shared fixed-price setup implementation; locked local verification passed using development receipts; real proofs and deployment readiness pending |
-| [0032](0032-fixed-price-lbp-setup.md) | Fixed-price LBP creation and funding setup | Four-stage implementation; locked local verification passed using development receipts; real proofs and deployment readiness pending |
+| [0032](0032-fixed-price-lbp-setup.md) | Fixed-price LBP creation and funding setup | Four-stage implementation; locked local verification passed using development receipts; real proofs and deployment readiness pending; collateral activation rule superseded by [0033](0033-fixed-price-lbp-recorded-collateral.md) |
+| [0033](0033-fixed-price-lbp-recorded-collateral.md) | Recorded fixed-price LBP collateral excludes unsolicited vault transfers | Accepted; implemented for fixed-price setup; trading and settlement remain future work |
 
 IDs 0023 and 0024 are intentionally unused.
 

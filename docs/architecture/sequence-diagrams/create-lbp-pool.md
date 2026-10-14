@@ -7,7 +7,7 @@ This diagram describes the implemented four-transaction fixed-price LBP setup. L
 - The creator signs the sale claim and can fund the positive sale inventory.
 - The target namespace has its curve-owned canonical `NamespaceConfig`.
 - The creator supplies a positive exact smallest-unit price, a positive sale inventory, an optional creator allocation, an immutable `AfterSetup` or `AfterEnd` release choice and a valid schedule.
-- The pool has zero initial collateral before final setup.
+- The pool has zero recorded collateral before final setup; unsolicited transfers remain surplus under [ADR 0033](../../adr/0033-fixed-price-lbp-recorded-collateral.md).
 
 ```mermaid
 sequenceDiagram

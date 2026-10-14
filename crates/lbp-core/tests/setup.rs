@@ -174,9 +174,12 @@ fn setup_requires_distinct_and_saved_definition_ids() {
 }
 
 #[test]
-fn setup_rejects_prefunded_launch_and_collateral_vaults() {
+fn setup_rejects_prefunded_launch_vaults_and_initial_collateral() {
     for prepared in [false, true] {
         for index in [5, 6] {
+            if prepared && index == 6 {
+                continue;
+            }
             for balance in [1, 800, u128::MAX] {
                 let mut setup = if prepared {
                     Setup::prepared()
@@ -189,6 +192,44 @@ fn setup_rejects_prefunded_launch_and_collateral_vaults() {
             }
         }
     }
+}
+
+#[test]
+fn activation_leaves_unsolicited_collateral_outside_sale_accounting() {
+    for balance in [1, 800, u128::MAX] {
+        let mut setup = Setup::prepared();
+        let definition = setup.accounts[3].account_id;
+        holding(&mut setup.accounts[6], definition, balance);
+        let collateral_vault = setup.accounts[6].account.clone();
+        let (posts, calls) =
+            process_instruction(setup.accounts, Instruction::ActivateFixedPrice, LBP);
+        let state = PoolAccount::try_from(&posts[0].account().data).unwrap();
+        assert!(state.funded);
+        assert_eq!(state.recorded_collateral, 0);
+        assert_eq!(state.sale_inventory, 800);
+        assert_eq!(posts[6].account(), &collateral_vault);
+        assert_eq!(calls.len(), 1);
+        let instruction: associated_token_account_core::Instruction =
+            risc0_zkvm::serde::from_slice(&calls[0].instruction_data).unwrap();
+        assert!(matches!(
+            instruction,
+            associated_token_account_core::Instruction::Transfer {
+                ata_program_id: curve_core::ASSOCIATED_TOKEN_ACCOUNT_PROGRAM_ID,
+                amount: 800,
+            }
+        ));
+    }
+}
+
+#[test]
+fn activation_rejects_recorded_collateral_in_a_pending_pool() {
+    let mut setup = Setup::prepared();
+    let mut state = PoolAccount::try_from(&setup.accounts[0].account.data).unwrap();
+    state.recorded_collateral = 1;
+    setup.accounts[0].account.data = Data::from(&state);
+    let definition = setup.accounts[3].account_id;
+    holding(&mut setup.accounts[6], definition, 1);
+    setup.rejects("Pending pool must have zero recorded collateral");
 }
 
 #[test]
@@ -440,6 +481,7 @@ fn activation_funds_only_the_saved_sale_inventory_and_preserves_the_terms() {
     let setup = Setup::prepared();
     let mut expected = PoolAccount::try_from(&setup.accounts[0].account.data).unwrap();
     expected.funded = true;
+    assert_eq!(expected.recorded_collateral, 0);
     let source = setup.accounts[4].clone();
     let vault = setup.accounts[5].clone();
     let (posts, calls) = process_instruction(setup.accounts, Instruction::ActivateFixedPrice, LBP);
@@ -496,6 +538,7 @@ fn preparation_saves_a_pending_fixed_price_pool_and_prepares_empty_vaults() {
         let state = PoolAccount::try_from(&posts[0].account().data).unwrap();
         assert_eq!(state.mode, PoolMode::FixedPrice);
         assert!(!state.funded);
+        assert_eq!(state.recorded_collateral, 0);
         assert_eq!(state.namespace, AccountId::new([40; 32]));
         assert_eq!(state.namespace_program_id, NAMESPACE_PROGRAM);
         assert_eq!(state.factory_owner, factory_owner);

@@ -399,6 +399,7 @@ fn signed_stages_fit_public_limits_with_measured_real_children() {
             assert_eq!(sale.balance(10), 800);
             assert_eq!(sale.balance(11), 0);
             assert_eq!(sale.balance(8), 0);
+            assert_eq!(sale.pool().recorded_collateral, 0);
         }
     }
 }
@@ -476,6 +477,7 @@ fn signed_prepare_claims_empty_vaults_and_keeps_inventory_in_factory_custody() {
     assert_eq!(sale.balance(11), 0);
     let pool = sale.pool();
     assert!(!pool.funded);
+    assert_eq!(pool.recorded_collateral, 0);
     assert_eq!(pool.namespace, signer(3));
     assert_eq!(pool.namespace_program_id, sale.curve.id());
     assert_eq!(pool.factory_owner, sale.ids[0]);
@@ -515,6 +517,7 @@ fn signed_activation_funds_only_inventory_and_keeps_delayed_allocation_locked() 
     );
     assert!(!sale.launch().creator_allocation_released);
     assert!(sale.pool().funded);
+    assert_eq!(sale.pool().recorded_collateral, 0);
     assert_eq!(sale.balance(10), 800);
     assert_eq!(sale.balance(11), 0);
     assert_eq!(sale.balance(8), 0);
@@ -707,61 +710,89 @@ fn signed_continuations_require_creator_role_and_reject_namespace_admin() {
 }
 
 #[test]
-fn signed_unsolicited_collateral_blocks_activation_without_releasing_custody() {
-    let mut sale = Sale::new();
-    sale.inputs.allocation_release = CreatorAllocationRelease::AfterSetup;
-    sale.create().unwrap();
-    sale.continue_creation(FixedPriceCreationStage::Minted)
+fn signed_unsolicited_collateral_does_not_block_activation_or_enter_sale_accounting() {
+    for release in [
+        CreatorAllocationRelease::AfterSetup,
+        CreatorAllocationRelease::AfterEnd,
+    ] {
+        let mut sale = Sale::new();
+        sale.inputs.allocation_release = release;
+        sale.create().unwrap();
+        sale.continue_creation(FixedPriceCreationStage::Minted)
+            .unwrap();
+        sale.continue_creation(FixedPriceCreationStage::Allocated)
+            .unwrap();
+        assert_eq!(sale.pool().recorded_collateral, 0);
+        let donor = signer(21);
+        sale.accounts.insert(
+            donor,
+            Account {
+                program_owner: programs::token().id(),
+                data: Data::from(&TokenHolding::Fungible {
+                    definition_id: sale.ids[7],
+                    balance: 1,
+                }),
+                ..Account::default()
+            },
+        );
+        let creator = sale.accounts[&signer(20)].clone();
+        sale.execute(
+            programs::token().id(),
+            vec![donor, sale.ids[11]],
+            &[21],
+            token_core::Instruction::Transfer {
+                amount_to_transfer: 1,
+            },
+        )
         .unwrap();
-    sale.continue_creation(FixedPriceCreationStage::Allocated)
-        .unwrap();
-    let donor = signer(21);
-    sale.accounts.insert(
-        donor,
-        Account {
-            program_owner: programs::token().id(),
-            data: Data::from(&TokenHolding::Fungible {
-                definition_id: sale.ids[7],
-                balance: 1,
-            }),
-            ..Account::default()
-        },
-    );
-    let creator = sale.accounts[&signer(20)].clone();
-    sale.execute(
-        programs::token().id(),
-        vec![donor, sale.ids[11]],
-        &[21],
-        token_core::Instruction::Transfer {
-            amount_to_transfer: 1,
-        },
-    )
-    .unwrap();
-    assert_eq!(sale.balance(11), 1);
-    assert_eq!(sale.accounts[&signer(20)], creator);
-    assert!(matches!(
-        TokenHolding::try_from(&sale.accounts[&donor].data).unwrap(),
-        TokenHolding::Fungible { balance: 0, .. }
-    ));
-    assert_eq!(sale.accounts[&donor].nonce.0, 1);
-    let saved = sale.accounts.clone();
-    assert_program_error(
+        assert_eq!(sale.balance(11), 1);
+        assert_eq!(sale.pool().recorded_collateral, 0);
+        assert_eq!(sale.accounts[&signer(20)], creator);
+        assert!(matches!(
+            TokenHolding::try_from(&sale.accounts[&donor].data).unwrap(),
+            TokenHolding::Fungible { balance: 0, .. }
+        ));
+        assert_eq!(sale.accounts[&donor].nonce.0, 1);
+        let collateral_vault = sale.accounts[&sale.ids[11]].clone();
+        let donor_account = sale.accounts[&donor].clone();
+        let mut expected_pool = sale.pool();
+        expected_pool.funded = true;
         sale.continue_creation(FixedPriceCreationStage::PoolPrepared)
-            .unwrap_err(),
-        "Pool vault must be empty",
-    );
-    assert_eq!(sale.accounts, saved);
-    assert_eq!(
-        sale.launch().creation_stage,
-        FixedPriceCreationStage::PoolPrepared
-    );
-    assert!(!sale.launch().creator_allocation_released);
-    assert!(!sale.pool().funded);
-    assert_eq!(sale.balance(8), 800);
-    assert_eq!(sale.balance(4), 200);
-    assert_eq!(sale.balance(6), 0);
-    assert_eq!(sale.balance(10), 0);
-    assert_eq!(sale.balance(11), 1);
+            .unwrap();
+        assert_eq!(
+            sale.launch().creation_stage,
+            FixedPriceCreationStage::Complete
+        );
+        assert_eq!(sale.pool(), expected_pool);
+        assert!(sale.pool().funded);
+        assert_eq!(sale.pool().recorded_collateral, 0);
+        assert_eq!(sale.accounts[&sale.ids[11]], collateral_vault);
+        assert_eq!(sale.accounts[&donor], donor_account);
+        assert_eq!(sale.balance(2), 0);
+        assert_eq!(sale.balance(8), 0);
+        assert_eq!(sale.balance(10), 800);
+        assert_eq!(sale.balance(11), 1);
+        match release {
+            CreatorAllocationRelease::AfterSetup => {
+                assert!(sale.launch().creator_allocation_released);
+                assert_eq!(sale.balance(4), 0);
+                assert_eq!(sale.balance(6), 200);
+            }
+            CreatorAllocationRelease::AfterEnd => {
+                assert!(!sale.launch().creator_allocation_released);
+                assert_eq!(sale.balance(4), 200);
+                assert_eq!(sale.accounts[&sale.ids[6]], Account::default());
+            }
+        }
+        let saved = sale.accounts.clone();
+        for replay in [
+            FixedPriceCreationStage::PoolPrepared,
+            FixedPriceCreationStage::Complete,
+        ] {
+            sale.continue_creation(replay).unwrap_err();
+            assert_eq!(sale.accounts, saved);
+        }
+    }
 }
 
 #[test]

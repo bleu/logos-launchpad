@@ -10,7 +10,7 @@ Collecting creator-borne fees from the vault must not change the next weighted b
 
 ## Decision
 
-Keep pricing collateral separate from actual vault collateral. Pricing collateral includes the seed and full successful buyer inputs; fee collection does not reduce it. Surplus does not enter pricing. Creator payouts use available vault collateral, not the pricing record. This applies to buy-only LBPs; curve accounting is unchanged.
+Keep pricing collateral separate from actual vault collateral. Pricing collateral includes the seed and full successful buyer inputs; fee collection does not reduce it. Surplus does not enter pricing. Creator payouts use recorded proceeds backed by available vault collateral, not the pricing record or unsolicited surplus; see [ADR 0033](0033-fixed-price-lbp-recorded-collateral.md). This applies to buy-only LBPs; curve accounting is unchanged.
 
 ## Consequences
 

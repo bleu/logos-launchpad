@@ -72,6 +72,7 @@ pub struct PoolAccount {
     pub start_timestamp: u64,
     pub end_timestamp: u64,
     pub creator_allocation_release: CreatorAllocationRelease,
+    pub recorded_collateral: u128,
 }
 
 impl TryFrom<&Data> for PoolAccount {
@@ -243,6 +244,10 @@ fn activate(
     let mut state = PoolAccount::try_from(&pool.account.data).expect("Invalid prepared pool");
     assert!(!state.funded, "Pool is already funded");
     assert_eq!(
+        state.recorded_collateral, 0,
+        "Pending pool must have zero recorded collateral"
+    );
+    assert_eq!(
         pool.account.program_owner, lbp_program_id,
         "Pool program owner is invalid"
     );
@@ -293,11 +298,7 @@ fn activate(
         0,
         "Pool vault must be empty"
     );
-    assert_eq!(
-        holding_balance(&collateral_vault, state.collateral_definition_id),
-        0,
-        "Pool vault must be empty"
-    );
+    holding_balance(&collateral_vault, state.collateral_definition_id);
     let call = ChainedCall::new(
         curve_core::ASSOCIATED_TOKEN_ACCOUNT_PROGRAM_ID,
         vec![factory_owner, source, vault],
@@ -411,6 +412,7 @@ fn prepare(
         start_timestamp: inputs.start_timestamp,
         end_timestamp: inputs.end_timestamp,
         creator_allocation_release: inputs.creator_allocation_release,
+        recorded_collateral: 0,
     };
     let mut pool_post = pool.account;
     pool_post.data = Data::from(&state);

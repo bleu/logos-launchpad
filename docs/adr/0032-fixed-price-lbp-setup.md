@@ -14,13 +14,13 @@ This record partially supersedes [ADR 0006](0006-namespaces-and-authority.md) by
 
 Reuse the curve-owned `NamespaceConfig` as the canonical namespace configuration for fixed-price LBP validation. Namespace role administration remains separate from a sale creator role. Each LBP sale embeds its own `AdminConfig`, initialized with the creator signer in the same creation claim. This leaves no public claim window. Readonly namespace account data exposes its format version, not a duplicate administrator or hidden role-authority bytes. This work does not migrate existing curve creator Authority NFTs.
 
-A fixed-price LBP creates a new launch token with a strictly positive sale inventory and an optional separate creator allocation. It has no curve `R` allocation and starts with zero collateral. Its price is a strictly positive exact rational ratio of collateral smallest units to launch-token smallest units. Token decimals affect display only.
+A fixed-price LBP creates a new launch token with a strictly positive sale inventory and an optional separate creator allocation. It has no curve `R` allocation and starts with zero recorded collateral under [ADR 0033](0033-fixed-price-lbp-recorded-collateral.md). Its price is a strictly positive exact rational ratio of collateral smallest units to launch-token smallest units. Token decimals affect display only.
 
 A `StartNow` schedule uses the trusted creation time. A scheduled start must be at or after trusted current time, and the end must be after the selected start. Late final setup does not change the configured end. Activation requires trusted current time before that end.
 
 Creation saves an immutable creator-allocation release choice: `AfterSetup` or `AfterEnd`. The implementation uses four atomic transactions: claim the exact mint and per-sale creator role; split supply into sale inventory and allocation escrow; prepare the pool, vaults and immediate recipient ATA; then fund inventory into the LBP vault, pay an `AfterSetup` allocation only on successful funding and mark the sale `Complete`. The workflow can span those transactions. `AfterEnd` retains the allocation in escrow; its later settlement or payout handler is future work. Any unpaid allocation or future proceeds belong to the current creator-role holder. This scope does not add creator-role transfer or renunciation.
 
-After `PoolPrepared`, an unrelated holder can donate collateral to the pool ATA. Final setup requires zero collateral and rejects that donation. The owner claim blocks an outsider from precreating the ATA with `Create`. This unresolved blocker has no recovery handler in this scope.
+[ADR 0033](0033-fixed-price-lbp-recorded-collateral.md) supersedes the original physical collateral-empty activation rule. Unsolicited collateral after `PoolPrepared` remains surplus and does not block activation. The owner claim still blocks an outsider from precreating the ATA with `Create`.
 
 ## Consequences
 
