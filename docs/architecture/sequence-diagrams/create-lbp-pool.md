@@ -1,53 +1,44 @@
-# Create an LBP pool
+# Create a fixed-price sale pool
 
-This is the planned logical LBP-sale creation flow. It keeps LBP factory and pool responsibilities separate from the curve mechanism. It does not define instruction names, account schemas, transaction count or transaction atomicity. LP-0021 provider integration awaits SDK development; its final API is unavailable. See [ADR 0029](../../adr/0029-wallet-integration.md).
+This diagram describes the implemented four-transaction fixed-price sale setup. Locked local verification passed using development receipts; real proofs and deployment readiness remain pending. See [ADR 0032](../../adr/0032-fixed-price-lbp-setup.md).
 
 ## Preconditions
 
-- The creator has the required creator authority and sale funding.
-- The target namespace exists with its per-namespace administration and configuration state.
-- The creator supplies typed LBP inputs for weighted or fixed-price mode and the applicable schedule.
-- LP-0021 provider integration awaits SDK development; its final API is unavailable.
+- The creator signs the sale claim and can fund the positive sale inventory.
+- The target namespace has its curve-owned canonical `NamespaceConfig`.
+- The creator supplies a positive exact smallest-unit price, a positive sale inventory, an optional creator allocation, an immutable `AfterSetup` or `AfterEnd` release choice and a valid schedule.
+- The pool has zero recorded collateral before final setup; unsolicited transfers remain surplus under [ADR 0033](../../adr/0033-fixed-price-lbp-recorded-collateral.md).
 
 ```mermaid
 sequenceDiagram
     actor Creator
-    participant App as Configured-sales app
-    participant SDK as Shared core and SDK
-    participant Wallet as LP-0021 wallet provider
-    participant Factory as LBP factory
-    participant Namespace as Namespace state
-    participant Pool as LBP pool and token custody
-    participant Indexer as Existing indexer
-    participant ReadAPI as Backend module read API
+    participant Factory as Shared launch factory
+    participant Namespace as NamespaceConfig
+    participant Pool as Fixed-price sale pool
 
-    Creator->>App: Configure LBP sale
-    App->>SDK: Validate and prepare creation
-    SDK->>Wallet: Request creation transaction approval
-    Note over Wallet: Account selection user approval signing and submission follow LP-0021; integration awaits SDK development
-    Wallet->>Factory: Submit creation request if supported
-    Factory->>Namespace: Check namespace binding and creation settings
-    Namespace-->>Factory: Namespace state
-    Factory->>Pool: Create LBP pool and mechanism state
-    Pool-->>Factory: LBP pool creation result
-    Factory-->>Indexer: Emit creation events
-    Factory-->>Wallet: Creation result
-    Wallet-->>SDK: Result from LP-0021 provider if available
-    SDK-->>App: Show creation result
-    App->>ReadAPI: Request indexed sale status
-    ReadAPI->>Indexer: Read indexed creation events
-    Indexer-->>ReadAPI: Indexed sale status
-    ReadAPI-->>App: Return indexed sale status
+    Creator->>Factory: Stage 1: claim exact mint and creator role
+    Factory->>Namespace: Validate namespace binding
+    Namespace-->>Factory: Namespace configuration
+    Factory->>Factory: Initialize embedded creator AdminConfig
+    Creator->>Factory: Stage 2: split minted supply
+    Factory->>Pool: Store sale inventory and allocation escrow
+    Creator->>Factory: Stage 3: prepare pool
+    Factory->>Pool: Prepare pool, vaults and immediate recipient ATA
+    Creator->>Factory: Stage 4: fund inventory and complete setup
+    Factory->>Pool: Fund sale inventory into fixed-price sale vault
+    alt AfterSetup creator allocation
+        Factory-->>Creator: Pay allocation atomically and mark Complete
+    else AfterEnd creator allocation
+        Pool->>Pool: Retain allocation escrow and mark Complete
+    end
 ```
 
 ## Notes
 
-The LBP factory owns LBP-specific creation validation and the sale-to-namespace binding. The LBP pool owns LBP runtime trading, custody and state rules. Namespace administration does not grant creator authority or require administrator approval for every creator action.
+The creator signer initializes the embedded creator role in the same claim. Namespace administration stays separate from that role. `StartNow` uses trusted creation time. A scheduled start cannot precede trusted current time, and the end must follow the selected start. Late final setup keeps the configured end and requires current time before it.
 
-The curve staged workflow, pending guard and factory-custody rule do not define LBP creation. This diagram makes no claim about LBP creation stages, permissions, transaction atomicity or final custody account layout.
+Each stage is atomic. The workflow spans four transactions. Final setup can fund the fixed-price sale vault before a scheduled start. `AfterSetup` pays the creator allocation only after successful final funding. `AfterEnd` retains the already placed allocation in escrow; later settlement or payout is future work. The fixed-price sale setup does not use curve `R` allocation or curve factory custody.
 
-The backend module read API exposes indexed status after events reach the existing indexer. It can lag. The factory and pool enforce authoritative current state.
+## Out of scope
 
-## Open details
-
-Final creation inputs, account schema, custody arrangement and transaction construction need mechanism and platform review. LP-0021 integration awaits SDK development and its final API is unavailable. LBP lifecycle permissions need mechanism review. The [private participation contract](../private-participation.md) and [allowlist product policy](../../adr/0021-modes-and-open-limits.md) are defined; runtime implementation, enrollment tooling and proof construction still need verification.
+This flow does not add buys, sells, weighted accounting, fees, close, end payout, end hooks, delayed settlement, cancellation or expired-recovery handlers, private fixed-price sale flows, allowlists, full SDK or CLI flows. Event indexing, wallet integration and the final account schema need separate implementation and review.

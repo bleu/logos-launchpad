@@ -18,7 +18,7 @@ One power uses one integer division, to form `t`. Range reduction uses a precomp
 
 ## Consequences
 
-Any change to a term count, constant, or evaluation order needs new accuracy and cycle evidence. The retained cycle table contains historical guest measurements and the series source records the historical truncation bounds. This unaudited decision does not make a performance or correctness claim for a production LBP.
+Any change to a term count, constant, or evaluation order needs new accuracy and cycle evidence. The retained cycle table contains historical guest measurements and the series source records the historical truncation bounds. This unaudited decision does not make a performance or correctness claim for a production weighted sale.
 
 ## Sources
 

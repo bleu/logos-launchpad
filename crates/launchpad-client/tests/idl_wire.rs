@@ -189,7 +189,7 @@ fn run_case<I: Serialize>(
     expected_instruction: I,
     accounts: Vec<AccountInput>,
     expected_argument_order: &[&str],
-) {
+) -> (Value, Value) {
     let idl_path = root().join("idl").join(format!("{program}.json"));
     let output = dry_run_command(program, instruction, arguments, &accounts)
         .output()
@@ -262,6 +262,350 @@ fn run_case<I: Serialize>(
                 .all(|account| account.get("pda").is_none())
         );
     }
+    (dry_run, idl_instruction.clone())
+}
+
+fn assert_account_flags((dry_run, idl_instruction): (Value, Value), expected: &[(&str, &[&str])]) {
+    let cli_accounts = dry_run["accounts"].as_array().unwrap();
+    let idl_accounts = idl_instruction["accounts"].as_array().unwrap();
+    assert_eq!(cli_accounts.len(), expected.len());
+    assert_eq!(idl_accounts.len(), expected.len());
+    for ((cli, idl), (name, flags)) in cli_accounts.iter().zip(idl_accounts).zip(expected) {
+        assert_eq!(cli["name"], *name);
+        assert_eq!(idl["name"], *name);
+        let actual_flags = cli["flags"].as_array().unwrap();
+        // The pinned CLI reports init only in the IDL, not in dry-run flags.
+        assert_eq!(
+            actual_flags.len(),
+            flags.iter().filter(|&&flag| flag != "init").count(),
+            "{name} flags",
+        );
+        for flag in ["writable", "signer", "init"] {
+            let enabled = flags.contains(&flag);
+            assert_eq!(idl[flag], enabled, "{name} IDL {flag}");
+            assert_eq!(
+                actual_flags.contains(&Value::String(flag.into())),
+                enabled && flag != "init",
+                "{name} CLI {flag}",
+            );
+        }
+    }
+}
+
+#[test]
+fn fixed_price_continuation_wire_matches_all_stage_ordinals_in_the_pinned_cli() {
+    use factory_core::FixedPriceCreationStage;
+    for (stage, argument, bytes, private_bytes) in [
+        (
+            FixedPriceCreationStage::Minted,
+            "0",
+            "0600000000000000",
+            "070000000600000000000000",
+        ),
+        (
+            FixedPriceCreationStage::Allocated,
+            "1",
+            "0600000001000000",
+            "070000000600000001000000",
+        ),
+        (
+            FixedPriceCreationStage::PoolPrepared,
+            "2",
+            "0600000002000000",
+            "070000000600000002000000",
+        ),
+        (
+            FixedPriceCreationStage::Complete,
+            "3",
+            "0600000003000000",
+            "070000000600000003000000",
+        ),
+    ] {
+        let instruction = FactoryInstruction::ContinueFixedPriceCreation {
+            expected_stage: stage,
+        };
+        assert_eq!(
+            words_hex(Program::serialize_instruction(&instruction).unwrap()),
+            bytes
+        );
+        assert_eq!(
+            words_hex(
+                Program::serialize_instruction(FactoryInstruction::Private {
+                    instruction: Box::new(instruction.clone()),
+                })
+                .unwrap()
+            ),
+            private_bytes,
+        );
+        let wire = run_case(
+            "factory",
+            "continue-fixed-price-creation",
+            vec![("--expected-stage", argument.into())],
+            instruction,
+            account_inputs(
+                &[
+                    "factory",
+                    "token_definition",
+                    "mint",
+                    "metadata",
+                    "creator_escrow",
+                    "creator",
+                    "creator_token_ata",
+                    "collateral_definition",
+                    "factory_token_ata",
+                    "pool",
+                    "pool_token_ata",
+                    "pool_collateral_ata",
+                    "clock",
+                    "config",
+                ],
+                50,
+            ),
+            &["expected_stage"],
+        );
+        assert_account_flags(
+            wire,
+            &[
+                ("factory", &["writable"]),
+                ("token_definition", &[]),
+                ("mint", &["writable"]),
+                ("metadata", &[]),
+                ("creator_escrow", &["writable"]),
+                ("creator", &["signer"]),
+                ("creator_token_ata", &["writable"]),
+                ("collateral_definition", &[]),
+                ("factory_token_ata", &["writable"]),
+                ("pool", &["writable"]),
+                ("pool_token_ata", &["writable"]),
+                ("pool_collateral_ata", &["writable"]),
+                ("clock", &[]),
+                ("config", &[]),
+            ],
+        );
+    }
+}
+
+#[test]
+fn fixed_price_creation_wire_matches_the_pinned_cli() {
+    use factory_core::{CreatorAllocationRelease, FixedPrice, FixedPriceInputs, SaleStart};
+    for (start, start_arg, release, release_arg) in [
+        (
+            SaleStart::Now,
+            "none",
+            CreatorAllocationRelease::AfterEnd,
+            "1",
+        ),
+        (
+            SaleStart::At { timestamp: 150 },
+            "150",
+            CreatorAllocationRelease::AfterSetup,
+            "0",
+        ),
+    ] {
+        let inputs = FixedPriceInputs {
+            namespace: account(40),
+            launch_salt: [41; 32],
+            name: "Launch".into(),
+            uri: "https://example.test/launch.json".into(),
+            sale_inventory: 800,
+            creator_allocation: 200,
+            price: FixedPrice {
+                collateral_units: 3,
+                token_units: 2,
+            },
+            start,
+            end_timestamp: 200,
+            allocation_release: release,
+            namespace_program_id: program_id(10),
+            lbp_program_id: program_id(20),
+        };
+        let wire = run_case(
+            "factory",
+            "create-fixed-price-lbp",
+            vec![
+                ("--namespace", account_hex(40)),
+                ("--launch-salt", hex::encode([41; 32])),
+                ("--name", "Launch".into()),
+                ("--uri", "https://example.test/launch.json".into()),
+                ("--sale-inventory", "800".into()),
+                ("--creator-allocation", "200".into()),
+                ("--collateral-units", "3".into()),
+                ("--token-units", "2".into()),
+                ("--start", start_arg.into()),
+                ("--end-timestamp", "200".into()),
+                ("--allocation-release", release_arg.into()),
+                ("--namespace-program-id", program_arg(program_id(10))),
+                ("--lbp-program-id", program_arg(program_id(20))),
+            ],
+            FactoryInstruction::CreateFixedPriceLbp { inputs },
+            account_inputs(
+                &[
+                    "factory",
+                    "token_definition",
+                    "mint",
+                    "metadata",
+                    "creator_escrow",
+                    "creator",
+                    "creator_token_ata",
+                    "collateral_definition",
+                    "factory_token_ata",
+                    "pool",
+                    "pool_token_ata",
+                    "pool_collateral_ata",
+                    "clock",
+                    "config",
+                ],
+                50,
+            ),
+            &[
+                "namespace",
+                "launch_salt",
+                "name",
+                "uri",
+                "sale_inventory",
+                "creator_allocation",
+                "collateral_units",
+                "token_units",
+                "start",
+                "end_timestamp",
+                "allocation_release",
+                "namespace_program_id",
+                "lbp_program_id",
+            ],
+        );
+        assert_account_flags(
+            wire,
+            &[
+                ("factory", &["writable", "init"]),
+                ("token_definition", &["writable", "init"]),
+                ("mint", &["writable", "init"]),
+                ("metadata", &["writable", "init"]),
+                ("creator_escrow", &["writable", "init"]),
+                ("creator", &["signer"]),
+                ("creator_token_ata", &["writable", "init"]),
+                ("collateral_definition", &[]),
+                ("factory_token_ata", &["writable", "init"]),
+                ("pool", &["writable", "init"]),
+                ("pool_token_ata", &["writable", "init"]),
+                ("pool_collateral_ata", &["writable", "init"]),
+                ("clock", &[]),
+                ("config", &[]),
+            ],
+        );
+    }
+}
+
+#[test]
+fn fixed_price_pool_setup_wire_matches_the_pinned_cli() {
+    let inputs = lbp_core::FixedPricePoolInputs {
+        namespace: account(40),
+        namespace_program_id: program_id(10),
+        factory_program_id: program_id(20),
+        factory_seed: [42; 32],
+        sale_inventory: 800,
+        creator_allocation: 200,
+        price: factory_core::FixedPrice {
+            collateral_units: 3,
+            token_units: 2,
+        },
+        start_timestamp: 100,
+        end_timestamp: 200,
+        creator_allocation_release: factory_core::CreatorAllocationRelease::AfterSetup,
+    };
+    let wire = run_case(
+        "lbp",
+        "prepare-fixed-price",
+        vec![
+            ("--namespace", account_hex(40)),
+            ("--namespace-program-id", program_arg(program_id(10))),
+            ("--factory-program-id", program_arg(program_id(20))),
+            ("--factory-seed", hex::encode([42; 32])),
+            ("--sale-inventory", "800".into()),
+            ("--creator-allocation", "200".into()),
+            ("--collateral-units", "3".into()),
+            ("--token-units", "2".into()),
+            ("--start-timestamp", "100".into()),
+            ("--end-timestamp", "200".into()),
+            ("--creator-allocation-release", "0".into()),
+        ],
+        lbp_core::Instruction::PrepareFixedPrice { inputs },
+        account_inputs(
+            &[
+                "pool",
+                "factory_owner",
+                "token_definition",
+                "collateral_definition",
+                "factory_token_ata",
+                "pool_token_ata",
+                "pool_collateral_ata",
+                "clock",
+                "config",
+            ],
+            50,
+        ),
+        &[
+            "namespace",
+            "namespace_program_id",
+            "factory_program_id",
+            "factory_seed",
+            "sale_inventory",
+            "creator_allocation",
+            "collateral_units",
+            "token_units",
+            "start_timestamp",
+            "end_timestamp",
+            "creator_allocation_release",
+        ],
+    );
+    assert_account_flags(
+        wire,
+        &[
+            ("pool", &["writable", "init"]),
+            ("factory_owner", &["signer"]),
+            ("token_definition", &[]),
+            ("collateral_definition", &[]),
+            ("factory_token_ata", &[]),
+            ("pool_token_ata", &["writable", "init"]),
+            ("pool_collateral_ata", &["writable", "init"]),
+            ("clock", &[]),
+            ("config", &[]),
+        ],
+    );
+    let wire = run_case(
+        "lbp",
+        "activate-fixed-price",
+        vec![],
+        lbp_core::Instruction::ActivateFixedPrice,
+        account_inputs(
+            &[
+                "pool",
+                "factory_owner",
+                "token_definition",
+                "collateral_definition",
+                "factory_token_ata",
+                "pool_token_ata",
+                "pool_collateral_ata",
+                "clock",
+                "config",
+            ],
+            50,
+        ),
+        &[],
+    );
+    assert_account_flags(
+        wire,
+        &[
+            ("pool", &["writable"]),
+            ("factory_owner", &["signer"]),
+            ("token_definition", &[]),
+            ("collateral_definition", &[]),
+            ("factory_token_ata", &["writable"]),
+            ("pool_token_ata", &["writable"]),
+            ("pool_collateral_ata", &[]),
+            ("clock", &[]),
+            ("config", &[]),
+        ],
+    );
 }
 
 #[test]

@@ -18,7 +18,7 @@ The 30% cap and payment representability are separate bounds. The cap protects t
 
 ## Consequences
 
-The cap is a precondition for this exact-output path, not a general price-quality guarantee. The retained overflow envelope documents the separate result-fit boundary. The 30% and exponent-99 corner has historical direction-only evidence because its sensitivity exceeds `u128`. This unaudited decision does not establish production LBP behavior.
+The cap is a precondition for this exact-output path, not a general price-quality guarantee. The retained overflow envelope documents the separate result-fit boundary. The 30% and exponent-99 corner has historical direction-only evidence because its sensitivity exceeds `u128`. This unaudited decision does not establish production weighted-sale behavior.
 
 ## Sources
 

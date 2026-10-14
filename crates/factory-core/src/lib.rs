@@ -1,7 +1,7 @@
-//! Launch policy layered over the neutral curve pool.
+//! Shared launch setup with separate bonding-curve and fixed-price sale inputs.
 //!
 //! The factory creates one fixed-supply launch token, records the public split, and
-//! prepares and funds the curve pool across four resumable, individually atomic stages.
+//! prepares and funds each pool across four resumable, individually atomic stages.
 //! The factory owns the token-definition PDA and exposes no mint or metadata-update
 //! instruction: this is the authority-revocation boundary for the pinned token API.
 //! The existing guest error API keeps hand-written implementations to avoid changing
@@ -88,7 +88,13 @@ pub struct GraduationRequest {
     pub configuration: Vec<u8>,
 }
 
+mod fixed_price;
 mod hook;
+
+pub use fixed_price::{
+    CreatorAllocationRelease, FixedPrice, FixedPriceCreationStage, FixedPriceInputs,
+    FixedPriceLaunchState, SaleStart,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct FactoryState {
@@ -130,10 +136,6 @@ impl From<&FactoryState> for Data {
     }
 }
 
-#[expect(
-    clippy::large_enum_variant,
-    reason = "the compact wire enum keeps guest serialization direct"
-)]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Instruction {
     CreateFactoryPool {
@@ -157,6 +159,12 @@ pub enum Instruction {
     WithdrawFactoryProceeds,
     ExecuteGraduationHook {
         remaining_accounts: u32,
+    },
+    CreateFixedPriceLbp {
+        inputs: FixedPriceInputs,
+    },
+    ContinueFixedPriceCreation {
+        expected_stage: FixedPriceCreationStage,
     },
     /// Select the pinned privacy circuit's transaction-wide PDA authorization rules.
     Private {
@@ -1401,6 +1409,14 @@ pub fn process_instruction(
         .map(|state| state.curve_program_id);
     let (mut posts, mut calls) = match instruction {
         Instruction::Private { .. } => panic!("nested execution mode wrapper"),
+        Instruction::ContinueFixedPriceCreation { expected_stage } => {
+            assert!(!private, "Fixed-price creation requires public execution");
+            fixed_price::continue_creation(pre_states, expected_stage, factory_program_id)
+        }
+        Instruction::CreateFixedPriceLbp { inputs } => {
+            assert!(!private, "Fixed-price creation requires public execution");
+            fixed_price::create(pre_states, inputs, factory_program_id)
+        }
         Instruction::CreateFactoryPool {
             trade_mode,
             graduation_hook_program_id,
@@ -1940,7 +1956,7 @@ mod tests {
             tag(Instruction::Private {
                 instruction: Box::new(Instruction::ContinueCreation),
             }),
-            Some(5)
+            Some(7)
         );
     }
 

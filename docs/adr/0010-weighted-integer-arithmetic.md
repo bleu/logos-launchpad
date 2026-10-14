@@ -18,7 +18,7 @@ The widening helper also supports the power argument product and public fixed-po
 
 ## Consequences
 
-The kernel has no general big-integer dependency or whole-kernel 256-bit representation. The retained overflow envelope states the input bounds and fit checks for this baseline. The cycle data is historical measurement evidence only. This unaudited decision does not establish behavior for a production LBP or another program.
+The kernel has no general big-integer dependency or whole-kernel 256-bit representation. The retained overflow envelope states the input bounds and fit checks for this baseline. The cycle data is historical measurement evidence only. This unaudited decision does not establish behavior for a production weighted sale or another program.
 
 ## Sources
 

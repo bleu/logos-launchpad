@@ -18,7 +18,7 @@ For [curve settlement](0020-settlement-and-graduation.md), use handler tests for
 
 ### Milestone and interface boundary
 
-M1 owns public curve and LBP handlers, on-chain source IDLs, generated artifacts and local guest evidence. Checks must cover authority, custody, trade limits, lifecycle, failed calls and [emergency controls](0028-token-custody-and-freeze.md#namespace-emergency-control). Record missing coverage. Development receipts do not prove production readiness.
+M1 owns public bonding-curve handlers and the planned fixed-price and weighted-sale handlers, on-chain source IDLs, generated artifacts and local guest evidence. Checks must cover authority, custody, trade limits, lifecycle, failed calls and [emergency controls](0028-token-custody-and-freeze.md#namespace-emergency-control). Record missing coverage. Development receipts do not prove production readiness.
 
 Interfaces can change during development. Update handlers, source IDLs, generated artifacts and affected callers together. Review changes to stored accounts and wire formats. Existing callers must build and pass their checks. M2 owns complete SDK and CLI journeys. Private routes, allowlist proofs, event history, product apps, live deployment and production readiness are outside M1.
 
@@ -29,5 +29,5 @@ Historical pins support reproduction; they do not select a production platform. 
 ## Sources
 
 - [Curve proposal](https://github.com/logos-co/rfp/issues/118)
-- [LBP proposal](https://github.com/logos-co/rfp/issues/119)
+- [Fixed-price and weighted sale proposal](https://github.com/logos-co/rfp/issues/119)
 - [Weighted-math evidence](https://github.com/bleu/lez-weighted-math/tree/f99195f4bcc375940171e4ee5373e67592622800)

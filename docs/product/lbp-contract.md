@@ -1,26 +1,15 @@
-# LBP mechanics
+# Fixed-price and weighted sale mechanics
 
-An LBP sells launch tokens for collateral during a fixed time window. The weighted-math kernel exists and is unaudited; the LBP factory and pool handlers remain to be built.
+Fixed-price and weighted sale pools do not yet provide full product behavior. Fixed-price sale setup has a four-transaction implementation. Locked local verification passed using development receipts; real proofs and deployment readiness remain pending. See [ADR 0032](../adr/0032-fixed-price-lbp-setup.md).
 
-## Modes
+## Fixed-price setup
 
-- Weighted: price depends on reserves and scheduled weights. Constant weights still allow the price to change as reserves change.
-- Fixed price: one exact collateral-per-token price, with each token's decimals handled separately.
+The shared launch factory can create a new launch token, set a positive sale inventory and optional creator allocation, bind the sale to the curve-owned canonical `NamespaceConfig`, and validate setup. Creation saves an immutable `AfterSetup` or `AfterEnd` allocation release choice. The pool starts with zero recorded collateral. The price is a positive exact ratio in smallest units; token decimals are display data. The schedule uses trusted time. The per-sale creator role initializes with the creator signer in the creation claim. Final setup funds sale inventory into the fixed-price sale vault. `AfterSetup` pays the creator allocation only with successful final setup; `AfterEnd` retains it in escrow. Its later settlement or payout handler is future work. Unsolicited collateral remains surplus and does not block activation or enter sale accounting. See [ADR 0033](../adr/0033-fixed-price-lbp-recorded-collateral.md). [ADR 0032](../adr/0032-fixed-price-lbp-setup.md) defines these rules and their review limits.
 
-The creator chooses the mode at creation. See [ADR 0021](../adr/0021-modes-and-open-limits.md) for mode, pause and allowlist decisions.
+## Scope
 
-## Clock and linear weights
+The implemented scope stops at creation and funding. It does not add buys, sells, weighted virtual accounting, fees, close, end payout, end hooks, delayed settlement, cancellation or expired-recovery handlers, private fixed-price or weighted sales, allowlists, or full SDK and CLI flows.
 
-Chain time determines current weights. Checkpoints help observers; a buy does not need a prior poke. Pause stops buys without stopping the schedule. See [ADR 0026](../adr/0026-lbp-clock-and-poke.md) for clock and checkpoint rules, and [ADR 0025](../adr/0025-sale-closing.md) for closing and withdrawal.
+## Future work
 
-## Buys
-
-Both modes support spending a chosen collateral amount with a minimum token output, or buying a chosen token amount with a maximum collateral payment. Requests succeed in full or fail. See [ADR 0021](../adr/0021-modes-and-open-limits.md) for fill and rounding policy, and [ADR 0017](../adr/0017-quotes-and-slippage.md) for quotes and limits.
-
-## Collateral and fees
-
-Pricing collateral and actual vault collateral are separate. Fee collection must not change weighted pricing; creator payouts use the actual available collateral. See [ADR 0030](../adr/0030-lbp-pricing-collateral.md) for accounting and [ADR 0016](../adr/0016-lbp-live-fees.md) for live fees and collection.
-
-## Implementation
-
-Code and tests should define arithmetic, validation, errors and atomic state changes. Use the weighted-math [error bounds](../../packages/weighted-math/docs/error-analysis.md) and [qualification evidence](../../packages/weighted-math/docs/qualification.md). Those checks do not establish working LBP custody or clock integration.
+Weighted-sale pricing, trading, clock checkpoints, pricing collateral, fees and lifecycle work remain separate. Their target design is recorded in [ADR 0021](../adr/0021-modes-and-open-limits.md), [ADR 0026](../adr/0026-lbp-clock-and-poke.md) and [ADR 0030](../adr/0030-lbp-pricing-collateral.md). The weighted-math kernel is unaudited and does not establish pool behavior.

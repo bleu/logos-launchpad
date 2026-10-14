@@ -1,6 +1,6 @@
 # System overview
 
-This is the planned architecture. The production code is not built yet.
+This is the planned architecture. The full production implementation is not built. Fixed-price sale setup has a four-stage implementation that passed locked local verification using development receipts; real proofs and deployment readiness remain pending.
 
 ## Components
 
@@ -15,38 +15,42 @@ flowchart TB
 
     subgraph Programs[On-chain components]
         Namespace[Namespace settings]
-        CurveFactory[Curve factory] -->|Create and manage| CurvePool[Curve pool]
-        LBPFactory[LBP factory] -->|Create| LBPPool[LBP pool]
-        CurveFactory -.-> Namespace
-        LBPFactory -.-> Namespace
+        LaunchFactory[Shared launch factory] -->|Curve-specific setup| CurvePool[Curve pool]
+        LaunchFactory -->|Fixed-price sale setup and funding| FixedPriceSale[Fixed-price sale pool]
+        LaunchFactory -.->|Future weighted-sale setup| WeightedSale[Weighted sale pool]
+        LaunchFactory -.-> Namespace
         CurvePool -.-> Namespace
-        LBPPool -.-> Namespace
+        FixedPriceSale -.-> Namespace
+        WeightedSale -.-> Namespace
     end
 
     LEZ -->|Namespace administration| Namespace
-    LEZ -->|Curve creation and settlement| CurveFactory
+    LEZ -->|Curve creation and settlement| LaunchFactory
+    LEZ -->|Fixed-price sale setup| LaunchFactory
     LEZ -->|Curve trades| CurvePool
-    LEZ -->|LBP creation| LBPFactory
-    LEZ -->|LBP operations| LBPPool
+    LEZ -.->|Future fixed-price sale operations| FixedPriceSale
+    LEZ -.->|Future weighted sale operations| WeightedSale
     Programs -->|Events| Indexer
-    LBPPool -.->|Library calls| Math[Weighted math]
+    WeightedSale -.->|Future library calls| Math[Weighted math]
 ```
 
 The admin app manages namespaces. Creators and participants use the sales app. Both apps read indexed data through the shared core. The CLI calls the SDK directly.
 
 The indexer provides listings and history. Its data can lag behind the chain. Programs check current state before they accept an action. Dashed lines show dependencies or an open integration.
 
-The curve factory can call a saved adapter through the SDK or CLI. See [ADR 0020](../adr/0020-settlement-and-graduation.md) for hook policy and the [curve overview](../product/curve-contract.md#acceptance-evidence) for implementation limits.
+The curve branch of the shared launch factory can call a saved adapter through the SDK or CLI. See [ADR 0020](../adr/0020-settlement-and-graduation.md) for hook policy and the [curve overview](../product/curve-contract.md#acceptance-evidence) for implementation limits.
 
 ## Flows
 
 - [Create a curve pool](sequence-diagrams/create-curve-pool.md)
-- [Create an LBP pool](sequence-diagrams/create-lbp-pool.md)
+- [Create a fixed-price sale pool](sequence-diagrams/create-lbp-pool.md)
 - [Make a private purchase](sequence-diagrams/private-purchase.md)
 
 ## Details
 
 - [Factory and pool boundaries](../adr/0005-mechanism-boundaries.md)
+- [Shared launch setup](../adr/0031-shared-launch-factory.md)
+- [Fixed-price sale setup](../adr/0032-fixed-price-lbp-setup.md)
 - [Namespaces and authority](../adr/0006-namespaces-and-authority.md)
 - [App packages and interfaces](../adr/0019-product-packages.md)
 - [Wallet Provider SDK integration](../adr/0029-wallet-integration.md)

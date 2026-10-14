@@ -1,6 +1,6 @@
-# ADR 0030: Fee-neutral LBP pricing collateral
+# ADR 0030: Fee-neutral weighted-sale pricing collateral
 
-Status: Accepted internally; custody and numerical verification pending.
+Status: Accepted internally; custody and numerical verification pending; weighted-sale execution remains future work.
 
 Date: 2026-10-02
 
@@ -10,7 +10,7 @@ Collecting creator-borne fees from the vault must not change the next weighted b
 
 ## Decision
 
-Keep pricing collateral separate from actual vault collateral. Pricing collateral includes the seed and full successful buyer inputs; fee collection does not reduce it. Surplus does not enter pricing. Creator payouts use available vault collateral, not the pricing record. This applies to buy-only LBPs; curve accounting is unchanged.
+Keep pricing collateral separate from actual vault collateral. Pricing collateral includes the seed and full successful buyer inputs; fee collection does not reduce it. Surplus does not enter pricing. Creator payouts use recorded proceeds backed by available vault collateral, not the pricing record or unsolicited surplus; see [ADR 0033](0033-fixed-price-lbp-recorded-collateral.md). This applies to buy-only weighted sales; bonding-curve accounting is unchanged.
 
 ## Consequences
 
@@ -19,4 +19,4 @@ Code and tests must check vault coverage, prevent duplicate payouts and keep pri
 ## Sources
 
 - [Collateral-denominated fees](0015-fee-accounting.md)
-- [LBP proposal](https://github.com/logos-co/rfp/issues/119)
+- [Fixed-price and weighted sale proposal](https://github.com/logos-co/rfp/issues/119)

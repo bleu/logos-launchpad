@@ -1,6 +1,6 @@
 # RISC0 guest checks
 
-This is a separate Cargo workspace. The kernel and independent host harness use Rust 1.94.0 without RISC0 dependencies. This workspace builds the same kernel as a guest. It checks host/guest bit parity and guest cycles. These checks do not establish full LBP program or LEZ compatibility. The kernel remains unaudited.
+This is a separate Cargo workspace. The kernel and independent host harness use Rust 1.94.0 without RISC0 dependencies. This workspace builds the same kernel as a guest. It checks host/guest bit parity and guest cycles. These checks do not establish full weighted-sale program or LEZ compatibility. The kernel remains unaudited.
 
 The independent mpmath oracle and numerical checks are in `../crates/harness`. Matching host and guest results do not replace those checks. See the [qualification and historical proof evidence](../docs/qualification.md) and the [historical cycle measurements](../docs/zkvm-cycles.md).
 

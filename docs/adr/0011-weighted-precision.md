@@ -18,7 +18,7 @@ Keep `1 - power` at internal scale until the final widened multiply. The baselin
 
 ## Consequences
 
-A change to either scale or the cancellation path requires new evidence for the error and overflow bounds. The oracle retains historical sweep inputs. The current [error analysis](../../packages/weighted-math/docs/error-analysis.md) corrects the baseline's truncation and scale claims, and [qualification evidence](../../packages/weighted-math/docs/qualification.md) records new scale-52 checks. This decision remains unaudited and does not claim precision for a production LBP or another implementation.
+A change to either scale or the cancellation path requires new evidence for the error and overflow bounds. The oracle retains historical sweep inputs. The current [error analysis](../../packages/weighted-math/docs/error-analysis.md) corrects the baseline's truncation and scale claims, and [qualification evidence](../../packages/weighted-math/docs/qualification.md) records new scale-52 checks. This decision remains unaudited and does not claim precision for a production weighted sale or another implementation.
 
 ## Sources
 

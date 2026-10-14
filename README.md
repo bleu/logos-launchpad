@@ -1,17 +1,18 @@
 # Logos launchpad
 
-Token sales on the Logos Execution Zone (LEZ), with two ways to set the sale price: a bonding curve and a liquidity bootstrapping pool (LBP).
+Token sales on the Logos Execution Zone (LEZ), with three sale types: fixed-price sale, bonding-curve sale and weighted sale.
 
-The target product lets creators launch sales and participants trade through clear, reusable tools. Independent namespaces give launchpad operators their own administration, fee settings and treasury. A future shared core can support both launch mechanisms without making them use the same sale rules.
+The target product lets creators launch sales and participants trade through clear, reusable tools. Independent namespaces give launchpad operators their own administration, fee settings and treasury. A future shared core can support all three sale types without making them use the same sale rules.
 
-This repository contains an imported PoC baseline and design documentation. The baseline keeps the root curve crates, CLI, methods and on-chain program IDLs. It does not implement the full production specification. The LBP state machine, shared core and QML apps remain future work.
+This repository contains an imported PoC baseline and design documentation. The baseline keeps the root curve crates, CLI, methods and on-chain program IDLs. Fixed-price creation and funding are implemented. The repository does not implement the full production specification. Fixed-price trading, weighted sales, shared core and QML apps remain future work.
 
-## Two sale mechanisms
+## Three sale types
 
-| Mechanism | How it works | When it ends |
+| Sale type | How it works | When it ends |
 | --- | --- | --- |
-| Bonding curve | Reserve-based pricing changes as participants buy or sell. Selling back is available when the sale mode permits it. | When all sale tokens are purchased, or at an optional expiry. |
-| LBP | Pool weights change over a chosen time schedule to support price discovery. Fixed-price mode is also planned. | At the scheduled end time. |
+| Fixed-price sale | Tokens sell at a set price in collateral. | At the scheduled end time. |
+| Bonding-curve sale | Reserve-based pricing changes as participants buy or sell. Selling back is available when the sale mode permits it. | When all sale tokens are purchased, or at an optional expiry. |
+| Weighted sale | Pool weights change over a chosen time schedule to support price discovery. | At the scheduled end time. |
 
 ## Product view
 
@@ -24,8 +25,9 @@ flowchart TB
     Participant[Participant] --> SalesApp[Configured-sales app]
     AdminApp --> Core[Shared core and SDK]
     SalesApp --> Core
+    Core --> FixedPrice[Fixed-price sales]
     Core --> Curve[Bonding-curve sales]
-    Core --> LBP[LBP sales]
+    Core --> Weighted[Weighted sales]
 ```
 
 This is the planned product view. The QML apps and shared core are future work. Participants will be able to inspect sales, get quotes, choose slippage limits and view trade history. The [private-route design](docs/architecture/private-participation.md) combines deshield, trade and return of received tokens, unused input and unused gas in one transaction. Actual fees are excluded, and pool state and trade effects remain public. Runtime implementation, wallet support and allowlist proofs still need verification.
@@ -35,12 +37,12 @@ This is the planned product view. The QML apps and shared core are future work. 
 | Product | Request | Proposal |
 | --- | --- | --- |
 | Bonding-curve launchpad | [RFP-015](https://github.com/logos-co/rfp/blob/master/RFPs/RFP-015-bonding-curve-launchpad.md) | [Proposal #118](https://github.com/logos-co/rfp/issues/118) |
-| LBP launchpad | [RFP-016](https://github.com/logos-co/rfp/blob/master/RFPs/RFP-016-lbp-launchpad.md) | [Proposal #119](https://github.com/logos-co/rfp/issues/119) |
+| Fixed-price and weighted sales | [RFP-016](https://github.com/logos-co/rfp/blob/master/RFPs/RFP-016-lbp-launchpad.md) | [Proposal #119](https://github.com/logos-co/rfp/issues/119) |
 
 ## Read more
 
 - [Product goals and use cases](docs/product/prd.md)
-- [Curve overview](docs/product/curve-contract.md)
+- [Bonding-curve overview](docs/product/curve-contract.md)
 - [Namespace, custody, and fee contract](docs/product/namespace-fee-contract.md)
 - [Architecture and interfaces](docs/architecture/system.md)
 - [Private participation and recovery](docs/architecture/private-participation.md)

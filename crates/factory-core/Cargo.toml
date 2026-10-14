@@ -6,6 +6,9 @@ rust-version.workspace = true
 license = "MIT"
 
 [dependencies]
+admin-authority = { git = "https://github.com/mmlado/spel-admin-authority", rev = "479adf86f85b664073f359cfd2fd0087489f63a0" }
+spel-framework = { git = "https://github.com/logos-co/spel.git", rev = "d0bb659048c3fc6533f51c69e9f7f12382af6dd2" }
+lbp-core.workspace = true
 associated_token_account_core.workspace = true
 borsh.workspace = true
 clock_core.workspace = true
