@@ -135,7 +135,7 @@ pub mod factory {
         collateral_units: u128,
         token_units: u128,
         start: Option<u64>,
-        end_timestamp: u64,
+        end_timestamp: Option<u64>,
         allocation_release: u32,
         namespace_program_id: ProgramId,
         lbp_program_id: ProgramId,

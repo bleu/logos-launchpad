@@ -136,7 +136,7 @@ impl Sale {
                 token_units: 2,
             },
             start: SaleStart::Now,
-            end_timestamp: 200,
+            end_timestamp: Some(200),
             allocation_release: CreatorAllocationRelease::AfterEnd,
             namespace_program_id: curve.id(),
             lbp_program_id: lbp.id(),
@@ -235,6 +235,120 @@ impl Sale {
             self.ids.clone(),
             &[20],
             Instruction::ContinueFixedPriceCreation { expected_stage },
+        )
+    }
+
+    fn prepare_buyer(&mut self, key: u8, collateral_balance: u128) -> (AccountId, AccountId) {
+        let participant = signer(key);
+        let collateral_ata = ata(participant, self.ids[7]);
+        let token_ata = ata(participant, self.ids[1]);
+        self.accounts.insert(
+            participant,
+            Account {
+                program_owner: [77; 8],
+                ..Account::default()
+            },
+        );
+        self.accounts.insert(
+            collateral_ata,
+            Account {
+                program_owner: programs::token().id(),
+                data: Data::from(&TokenHolding::Fungible {
+                    definition_id: self.ids[7],
+                    balance: collateral_balance,
+                }),
+                ..Account::default()
+            },
+        );
+        self.accounts.insert(
+            token_ata,
+            Account {
+                program_owner: programs::token().id(),
+                data: Data::from(&TokenHolding::Fungible {
+                    definition_id: self.ids[1],
+                    balance: 0,
+                }),
+                ..Account::default()
+            },
+        );
+        (participant, collateral_ata)
+    }
+
+    fn buy_exact_input(
+        &mut self,
+        key: u8,
+        collateral_balance: u128,
+        amount_in: u128,
+        min_amount_out: u128,
+    ) -> Result<(), lee::error::LeeError> {
+        let (participant, collateral_ata) = self.prepare_buyer(key, collateral_balance);
+        self.execute(
+            self.lbp.id(),
+            vec![
+                self.ids[9],
+                self.ids[13],
+                participant,
+                collateral_ata,
+                self.ids[11],
+                self.ids[10],
+                ata(participant, self.ids[1]),
+                self.ids[12],
+            ],
+            &[key],
+            lbp_core::Instruction::BuyExactInput {
+                amount_in,
+                min_amount_out,
+            },
+        )
+    }
+
+    fn buy_exact_output(
+        &mut self,
+        key: u8,
+        collateral_balance: u128,
+        amount_out: u128,
+        max_amount_in: u128,
+    ) -> Result<(), lee::error::LeeError> {
+        let (participant, collateral_ata) = self.prepare_buyer(key, collateral_balance);
+        self.execute(
+            self.lbp.id(),
+            vec![
+                self.ids[9],
+                self.ids[13],
+                participant,
+                collateral_ata,
+                self.ids[11],
+                self.ids[10],
+                ata(participant, self.ids[1]),
+                self.ids[12],
+            ],
+            &[key],
+            lbp_core::Instruction::BuyExactOutput {
+                amount_out,
+                max_amount_in,
+            },
+        )
+    }
+
+    fn collect_fees(&mut self) -> Result<(), lee::error::LeeError> {
+        let treasury = AccountId::new([43; 32]);
+        let treasury_ata = ata(treasury, self.ids[7]);
+        self.accounts.insert(
+            treasury_ata,
+            Account {
+                program_owner: programs::token().id(),
+                data: Data::from(&TokenHolding::Fungible {
+                    definition_id: self.ids[7],
+                    balance: 0,
+                }),
+                ..Account::default()
+            },
+        );
+        self.execute(
+            self.lbp.id(),
+            vec![self.ids[9], self.ids[13], self.ids[11], treasury_ata],
+            &[],
+            lbp_core::Instruction::CollectFees,
         )
     }
 
@@ -423,7 +537,10 @@ fn signed_creation_mints_the_exact_split_and_claims_creator_authority() {
     assert_eq!(metadata.uri, sale.inputs.uri);
     let launch = sale.launch();
     assert_eq!(launch.creation_stage, FixedPriceCreationStage::Minted);
-    assert_eq!((launch.start_timestamp, launch.end_timestamp), (100, 200));
+    assert_eq!(
+        (launch.start_timestamp, launch.end_timestamp),
+        (100, Some(200))
+    );
     assert_eq!(launch.total_supply, 1_000);
     assert_eq!(launch.sale_inventory, 800);
     assert_eq!(launch.creator_allocation, 200);
@@ -491,7 +608,7 @@ fn signed_prepare_claims_empty_vaults_and_keeps_inventory_in_factory_custody() {
             token_units: 2
         }
     );
-    assert_eq!((pool.start_timestamp, pool.end_timestamp), (100, 200));
+    assert_eq!((pool.start_timestamp, pool.end_timestamp), (100, Some(200)));
     assert_eq!(
         pool.creator_allocation_release,
         CreatorAllocationRelease::AfterEnd
@@ -545,11 +662,11 @@ fn signed_final_setup_pays_immediate_allocation_before_scheduled_start() {
     assert_eq!(sale.timestamp, 100);
     assert_eq!(
         (sale.pool().start_timestamp, sale.pool().end_timestamp),
-        (175, 200)
+        (175, Some(200))
     );
     assert_eq!(
         (sale.launch().start_timestamp, sale.launch().end_timestamp),
-        (175, 200)
+        (175, Some(200))
     );
     assert!(sale.pool().funded);
     assert!(sale.launch().creator_allocation_released);
@@ -558,6 +675,109 @@ fn signed_final_setup_pays_immediate_allocation_before_scheduled_start() {
     assert_eq!(sale.balance(10), 800);
     assert_eq!(sale.balance(11), 0);
     assert_eq!(sale.balance(8), 0);
+}
+
+#[test]
+fn signed_setup_completes_without_an_end_time() {
+    let mut sale = Sale::new();
+    sale.inputs.end_timestamp = None;
+    sale.create().unwrap();
+    sale.set_time(1_000);
+    for stage in [
+        FixedPriceCreationStage::Minted,
+        FixedPriceCreationStage::Allocated,
+        FixedPriceCreationStage::PoolPrepared,
+    ] {
+        sale.continue_creation(stage).unwrap();
+    }
+
+    assert!(sale.pool().funded);
+    assert_eq!(sale.launch().end_timestamp, None);
+    assert_eq!(sale.pool().end_timestamp, None);
+    assert_eq!(sale.balance(10), 800);
+    sale.buy_exact_input(22, 100, 10, 6).unwrap();
+    assert_eq!(sale.pool().remaining_inventory, 794);
+    assert_eq!(sale.pool().end_timestamp, None);
+    assert_eq!(sale.balance(11), 10);
+}
+
+#[test]
+fn signed_public_buys_and_permissionless_fee_collection_move_real_tokens() {
+    let mut sale = Sale::new();
+    sale.create().unwrap();
+    for stage in [
+        FixedPriceCreationStage::Minted,
+        FixedPriceCreationStage::Allocated,
+        FixedPriceCreationStage::PoolPrepared,
+    ] {
+        sale.continue_creation(stage).unwrap();
+    }
+
+    sale.buy_exact_input(22, 100, 10, 6).unwrap();
+    sale.buy_exact_output(23, 100, 2, 3).unwrap();
+    assert_eq!(sale.pool().remaining_inventory, 792);
+    assert_eq!(sale.pool().recorded_collateral, 11);
+    assert_eq!(sale.pool().accrued_fees, 2);
+    assert_eq!(sale.balance(11), 13);
+    assert_eq!(sale.balance(10), 792);
+    assert_eq!(sale.balance(8), 0);
+
+    sale.collect_fees().unwrap();
+    assert_eq!(sale.pool().recorded_collateral, 11);
+    assert_eq!(sale.pool().accrued_fees, 0);
+    assert_eq!(sale.balance(11), 11);
+    let treasury_ata = ata(AccountId::new([43; 32]), sale.ids[7]);
+    assert!(matches!(
+        TokenHolding::try_from(&sale.accounts[&treasury_ata].data).unwrap(),
+        TokenHolding::Fungible { balance: 2, .. }
+    ));
+}
+
+#[test]
+fn signed_sellout_stops_later_buys_and_keeps_fees_collectible() {
+    let mut sale = Sale::new();
+    sale.create().unwrap();
+    for stage in [
+        FixedPriceCreationStage::Minted,
+        FixedPriceCreationStage::Allocated,
+        FixedPriceCreationStage::PoolPrepared,
+    ] {
+        sale.continue_creation(stage).unwrap();
+    }
+
+    sale.buy_exact_input(24, 1_200, 1_200, 800).unwrap();
+    assert_eq!(sale.pool().remaining_inventory, 0);
+    assert_eq!(sale.pool().recorded_collateral, 1_188);
+    assert_eq!(sale.pool().accrued_fees, 12);
+    let pool_before_failed_buy = sale.pool();
+    assert_program_error(
+        sale.buy_exact_input(25, 3, 3, 2).unwrap_err(),
+        "Sale inventory is exhausted",
+    );
+    assert_eq!(sale.pool(), pool_before_failed_buy);
+    sale.collect_fees().unwrap();
+    assert_eq!(sale.pool().recorded_collateral, 1_188);
+    assert_eq!(sale.pool().accrued_fees, 0);
+}
+
+#[test]
+fn signed_buys_stop_at_the_configured_end_time() {
+    let mut sale = Sale::new();
+    sale.create().unwrap();
+    for stage in [
+        FixedPriceCreationStage::Minted,
+        FixedPriceCreationStage::Allocated,
+        FixedPriceCreationStage::PoolPrepared,
+    ] {
+        sale.continue_creation(stage).unwrap();
+    }
+    sale.set_time(200);
+    let pool_before_failed_buy = sale.pool();
+    assert_program_error(
+        sale.buy_exact_input(26, 100, 10, 6).unwrap_err(),
+        "Sale has ended",
+    );
+    assert_eq!(sale.pool(), pool_before_failed_buy);
 }
 
 #[test]
@@ -580,11 +800,11 @@ fn signed_late_setup_keeps_the_original_start_and_end() {
             .unwrap();
         assert_eq!(
             (sale.launch().start_timestamp, sale.launch().end_timestamp),
-            (expected_start, 200)
+            (expected_start, Some(200))
         );
         assert_eq!(
             (sale.pool().start_timestamp, sale.pool().end_timestamp),
-            (expected_start, 200)
+            (expected_start, Some(200))
         );
         assert!(sale.pool().funded);
         assert_eq!(sale.balance(10), 800);
@@ -960,7 +1180,7 @@ fn signed_continuations_reject_expiry_at_end_and_after_end() {
             assert_eq!(sale.launch().creation_stage, stage);
             assert_eq!(
                 (sale.launch().start_timestamp, sale.launch().end_timestamp),
-                (100, 200)
+                (100, Some(200))
             );
         }
         sale.set_time(199);
@@ -969,7 +1189,7 @@ fn signed_continuations_reject_expiry_at_end_and_after_end() {
     assert!(sale.pool().funded);
     assert_eq!(
         (sale.pool().start_timestamp, sale.pool().end_timestamp),
-        (100, 200)
+        (100, Some(200))
     );
 }
 

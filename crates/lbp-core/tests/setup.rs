@@ -144,12 +144,57 @@ impl Setup {
                     token_units: 2,
                 },
                 start_timestamp: 100,
-                end_timestamp: 200,
+                end_timestamp: Some(200),
                 creator_allocation_release: CreatorAllocationRelease::AfterSetup,
             },
             accounts,
         }
     }
+}
+
+fn active_sale() -> Setup {
+    let mut setup = Setup::prepared();
+    let (posts, _) =
+        process_instruction(setup.accounts.clone(), Instruction::ActivateFixedPrice, LBP);
+    setup.accounts[0].account = posts[0].account().clone();
+    setup.accounts[0].account.program_owner = LBP;
+    let token_definition = setup.accounts[2].account_id;
+    holding(&mut setup.accounts[4], token_definition, 0);
+    holding(
+        &mut setup.accounts[5],
+        token_definition,
+        setup.inputs.sale_inventory,
+    );
+    setup
+}
+
+fn buyer_accounts(
+    setup: &Setup,
+    participant_id: AccountId,
+    collateral_balance: u128,
+) -> Vec<AccountWithMetadata> {
+    let mut participant = account(participant_id);
+    participant.is_authorized = true;
+    let collateral_definition = setup.accounts[3].account_id;
+    let token_definition = setup.accounts[2].account_id;
+    let mut participant_collateral = account(ata(participant_id, collateral_definition));
+    holding(
+        &mut participant_collateral,
+        collateral_definition,
+        collateral_balance,
+    );
+    let mut participant_token = account(ata(participant_id, token_definition));
+    holding(&mut participant_token, token_definition, 0);
+    vec![
+        setup.accounts[0].clone(),
+        setup.accounts[8].clone(),
+        participant,
+        participant_collateral,
+        setup.accounts[6].clone(),
+        setup.accounts[5].clone(),
+        participant_token,
+        setup.accounts[7].clone(),
+    ]
 }
 
 #[test]
@@ -415,7 +460,10 @@ fn setup_keeps_the_original_schedule_and_stops_at_the_saved_end() {
                 };
                 let (posts, _) = process_instruction(setup.accounts, instruction, LBP);
                 let state = PoolAccount::try_from(&posts[0].account().data).unwrap();
-                assert_eq!((state.start_timestamp, state.end_timestamp), (100, 200));
+                assert_eq!(
+                    (state.start_timestamp, state.end_timestamp),
+                    (100, Some(200))
+                );
                 assert_eq!(state.funded, prepared);
             }
         }
@@ -439,7 +487,7 @@ fn setup_rejects_a_substituted_clock() {
 fn preparation_requires_end_after_start() {
     for end in [99, 100] {
         let mut setup = Setup::new();
-        setup.inputs.end_timestamp = end;
+        setup.inputs.end_timestamp = Some(end);
         setup.rejects("End must be after start");
     }
 }
@@ -518,6 +566,455 @@ fn activation_funds_only_the_saved_sale_inventory_and_preserves_the_terms() {
 }
 
 #[test]
+fn exact_input_buy_uses_full_payment_and_tracks_creator_proceeds_and_fees_separately() {
+    let mut setup = Setup::prepared();
+    let (posts, _) =
+        process_instruction(setup.accounts.clone(), Instruction::ActivateFixedPrice, LBP);
+    setup.accounts[0].account = posts[0].account().clone();
+    setup.accounts[0].account.program_owner = LBP;
+    let token_definition = setup.accounts[2].account_id;
+    holding(&mut setup.accounts[4], token_definition, 0);
+    holding(
+        &mut setup.accounts[5],
+        token_definition,
+        setup.inputs.sale_inventory,
+    );
+
+    let participant_id = AccountId::new([44; 32]);
+    let mut participant = account(participant_id);
+    participant.is_authorized = true;
+    let mut participant_collateral = account(ata(participant_id, setup.accounts[3].account_id));
+    holding(
+        &mut participant_collateral,
+        setup.accounts[3].account_id,
+        100,
+    );
+    let mut participant_token = account(ata(participant_id, setup.accounts[2].account_id));
+    holding(&mut participant_token, setup.accounts[2].account_id, 0);
+
+    let pre = vec![
+        setup.accounts[0].clone(),
+        setup.accounts[8].clone(),
+        participant,
+        participant_collateral,
+        setup.accounts[6].clone(),
+        setup.accounts[5].clone(),
+        participant_token,
+        setup.accounts[7].clone(),
+    ];
+    let (posts, calls) = process_instruction(
+        pre,
+        Instruction::BuyExactInput {
+            amount_in: 10,
+            min_amount_out: 6,
+        },
+        LBP,
+    );
+
+    let state = PoolAccount::try_from(&posts[0].account().data).unwrap();
+    assert_eq!(state.recorded_collateral, 9);
+    assert_eq!(state.accrued_fees, 1);
+    assert_eq!(state.remaining_inventory, 794);
+    assert_eq!(calls.len(), 2);
+    let input_transfer: associated_token_account_core::Instruction =
+        risc0_zkvm::serde::from_slice(&calls[0].instruction_data).unwrap();
+    let output_transfer: associated_token_account_core::Instruction =
+        risc0_zkvm::serde::from_slice(&calls[1].instruction_data).unwrap();
+    assert!(matches!(
+        input_transfer,
+        associated_token_account_core::Instruction::Transfer { amount: 10, .. }
+    ));
+    assert!(matches!(
+        output_transfer,
+        associated_token_account_core::Instruction::Transfer { amount: 6, .. }
+    ));
+}
+
+#[test]
+fn exact_input_buy_allows_the_fee_to_consume_the_full_payment() {
+    let mut setup = Setup::prepared();
+    let (posts, _) =
+        process_instruction(setup.accounts.clone(), Instruction::ActivateFixedPrice, LBP);
+    setup.accounts[0].account = posts[0].account().clone();
+    setup.accounts[0].account.program_owner = LBP;
+    let namespace = setup.inputs.namespace;
+    setup.accounts[8].account.data = Data::from(&curve_core::Config::new(
+        namespace,
+        9_999,
+        AccountId::new([43; 32]),
+    ));
+    let token_definition = setup.accounts[2].account_id;
+    holding(&mut setup.accounts[4], token_definition, 0);
+    holding(&mut setup.accounts[5], token_definition, 800);
+
+    let participant_id = AccountId::new([44; 32]);
+    let mut participant = account(participant_id);
+    participant.is_authorized = true;
+    let collateral_definition = setup.accounts[3].account_id;
+    let mut participant_collateral = account(ata(participant_id, collateral_definition));
+    holding(&mut participant_collateral, collateral_definition, 100);
+    let mut participant_token = account(ata(participant_id, token_definition));
+    holding(&mut participant_token, token_definition, 0);
+    let (posts, _) = process_instruction(
+        vec![
+            setup.accounts[0].clone(),
+            setup.accounts[8].clone(),
+            participant,
+            participant_collateral,
+            setup.accounts[6].clone(),
+            setup.accounts[5].clone(),
+            participant_token,
+            setup.accounts[7].clone(),
+        ],
+        Instruction::BuyExactInput {
+            amount_in: 3,
+            min_amount_out: 2,
+        },
+        LBP,
+    );
+
+    let state = PoolAccount::try_from(&posts[0].account().data).unwrap();
+    assert_eq!(state.recorded_collateral, 0);
+    assert_eq!(state.accrued_fees, 3);
+    assert_eq!(state.remaining_inventory, 798);
+}
+
+#[test]
+fn exact_input_rejects_dust_and_checked_math_overflow() {
+    let setup = active_sale();
+    assert!(
+        std::panic::catch_unwind(|| {
+            process_instruction(
+                buyer_accounts(&setup, AccountId::new([44; 32]), 100),
+                Instruction::BuyExactInput {
+                    amount_in: 1,
+                    min_amount_out: 0,
+                },
+                LBP,
+            )
+        })
+        .is_err()
+    );
+
+    let mut setup = active_sale();
+    let mut state = PoolAccount::try_from(&setup.accounts[0].account.data).unwrap();
+    state.price = FixedPrice {
+        collateral_units: 1,
+        token_units: u128::MAX,
+    };
+    setup.accounts[0].account.data = Data::from(&state);
+    assert!(
+        std::panic::catch_unwind(|| {
+            process_instruction(
+                buyer_accounts(&setup, AccountId::new([44; 32]), 100),
+                Instruction::BuyExactInput {
+                    amount_in: 2,
+                    min_amount_out: 1,
+                },
+                LBP,
+            )
+        })
+        .is_err()
+    );
+}
+
+#[test]
+fn exact_output_buy_rounds_payment_up_and_enforces_the_full_input_limit() {
+    let mut setup = Setup::prepared();
+    let (posts, _) =
+        process_instruction(setup.accounts.clone(), Instruction::ActivateFixedPrice, LBP);
+    setup.accounts[0].account = posts[0].account().clone();
+    setup.accounts[0].account.program_owner = LBP;
+    let token_definition = setup.accounts[2].account_id;
+    holding(&mut setup.accounts[4], token_definition, 0);
+    holding(
+        &mut setup.accounts[5],
+        token_definition,
+        setup.inputs.sale_inventory,
+    );
+
+    let participant_id = AccountId::new([44; 32]);
+    let mut participant = account(participant_id);
+    participant.is_authorized = true;
+    let mut participant_collateral = account(ata(participant_id, setup.accounts[3].account_id));
+    holding(
+        &mut participant_collateral,
+        setup.accounts[3].account_id,
+        100,
+    );
+    let mut participant_token = account(ata(participant_id, token_definition));
+    holding(&mut participant_token, token_definition, 0);
+    let pre = vec![
+        setup.accounts[0].clone(),
+        setup.accounts[8].clone(),
+        participant,
+        participant_collateral,
+        setup.accounts[6].clone(),
+        setup.accounts[5].clone(),
+        participant_token,
+        setup.accounts[7].clone(),
+    ];
+    let (posts, calls) = process_instruction(
+        pre,
+        Instruction::BuyExactOutput {
+            amount_out: 7,
+            max_amount_in: 11,
+        },
+        LBP,
+    );
+
+    let state = PoolAccount::try_from(&posts[0].account().data).unwrap();
+    assert_eq!(state.recorded_collateral, 10);
+    assert_eq!(state.accrued_fees, 1);
+    assert_eq!(state.remaining_inventory, 793);
+    assert_eq!(calls.len(), 2);
+    let input_transfer: associated_token_account_core::Instruction =
+        risc0_zkvm::serde::from_slice(&calls[0].instruction_data).unwrap();
+    let output_transfer: associated_token_account_core::Instruction =
+        risc0_zkvm::serde::from_slice(&calls[1].instruction_data).unwrap();
+    assert!(matches!(
+        input_transfer,
+        associated_token_account_core::Instruction::Transfer { amount: 11, .. }
+    ));
+    assert!(matches!(
+        output_transfer,
+        associated_token_account_core::Instruction::Transfer { amount: 7, .. }
+    ));
+}
+
+#[test]
+fn fee_collection_pays_the_current_treasury_without_changing_creator_proceeds() {
+    let mut setup = Setup::prepared();
+    let mut state = PoolAccount::try_from(&setup.accounts[0].account.data).unwrap();
+    state.funded = true;
+    state.recorded_collateral = 9;
+    state.accrued_fees = 1;
+    setup.accounts[0].account.program_owner = LBP;
+    setup.accounts[0].account.data = Data::from(&state);
+    let collateral_definition = setup.accounts[3].account_id;
+    holding(&mut setup.accounts[6], collateral_definition, 10);
+
+    let treasury = AccountId::new([45; 32]);
+    setup.accounts[8].account.data = Data::from(&curve_core::Config::new(
+        setup.inputs.namespace,
+        100,
+        treasury,
+    ));
+    let mut treasury_collateral = account(ata(treasury, collateral_definition));
+    holding(&mut treasury_collateral, collateral_definition, 0);
+    let (posts, calls) = process_instruction(
+        vec![
+            setup.accounts[0].clone(),
+            setup.accounts[8].clone(),
+            setup.accounts[6].clone(),
+            treasury_collateral,
+        ],
+        Instruction::CollectFees,
+        LBP,
+    );
+
+    let state = PoolAccount::try_from(&posts[0].account().data).unwrap();
+    assert_eq!(state.recorded_collateral, 9);
+    assert_eq!(state.accrued_fees, 0);
+    assert_eq!(calls.len(), 1);
+    let transfer: associated_token_account_core::Instruction =
+        risc0_zkvm::serde::from_slice(&calls[0].instruction_data).unwrap();
+    assert!(matches!(
+        transfer,
+        associated_token_account_core::Instruction::Transfer { amount: 1, .. }
+    ));
+    let mut pool = setup.accounts[0].clone();
+    pool.account = posts[0].account().clone();
+    let (posts, calls) = process_instruction(
+        vec![
+            pool,
+            setup.accounts[8].clone(),
+            setup.accounts[6].clone(),
+            account(ata(treasury, collateral_definition)),
+        ],
+        Instruction::CollectFees,
+        LBP,
+    );
+    assert_eq!(calls.len(), 0);
+    assert_eq!(
+        PoolAccount::try_from(&posts[0].account().data)
+            .unwrap()
+            .accrued_fees,
+        0
+    );
+}
+
+#[test]
+fn sellout_stops_later_buys_and_keeps_proceeds_collectible() {
+    let setup = active_sale();
+    let participant = AccountId::new([44; 32]);
+    let (posts, calls) = process_instruction(
+        buyer_accounts(&setup, participant, 1_200),
+        Instruction::BuyExactInput {
+            amount_in: 1_200,
+            min_amount_out: 800,
+        },
+        LBP,
+    );
+    let state = PoolAccount::try_from(&posts[0].account().data).unwrap();
+    assert_eq!(state.remaining_inventory, 0);
+    assert_eq!(state.recorded_collateral, 1_188);
+    assert_eq!(state.accrued_fees, 12);
+    assert_eq!(calls.len(), 2);
+
+    let mut sold_out = setup.accounts[0].clone();
+    sold_out.account = posts[0].account().clone();
+    let mut pre = buyer_accounts(&setup, participant, 1_200);
+    pre[0] = sold_out;
+    let error = std::panic::catch_unwind(|| {
+        process_instruction(
+            pre,
+            Instruction::BuyExactInput {
+                amount_in: 3,
+                min_amount_out: 2,
+            },
+            LBP,
+        )
+    })
+    .unwrap_err();
+    let message = error
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .or_else(|| error.downcast_ref::<&str>().copied())
+        .unwrap_or("Unknown panic");
+    assert!(message.contains("Sale inventory is exhausted"));
+}
+
+#[test]
+fn buys_stop_at_the_configured_end_time() {
+    let mut setup = active_sale();
+    setup.accounts[7].account.data = clock_core::ClockAccountData {
+        block_id: 2,
+        timestamp: 200,
+    }
+    .to_bytes()
+    .try_into()
+    .unwrap();
+    let error = std::panic::catch_unwind(|| {
+        process_instruction(
+            buyer_accounts(&setup, AccountId::new([44; 32]), 100),
+            Instruction::BuyExactInput {
+                amount_in: 10,
+                min_amount_out: 6,
+            },
+            LBP,
+        )
+    })
+    .unwrap_err();
+    let message = error
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .or_else(|| error.downcast_ref::<&str>().copied())
+        .unwrap_or("Unknown panic");
+    assert!(message.contains("Sale has ended"));
+}
+
+#[test]
+fn setup_and_activation_have_no_deadline_when_end_time_is_absent() {
+    let mut setup = Setup::new();
+    setup.inputs.end_timestamp = None;
+    setup.accounts[7].account.data = clock_core::ClockAccountData {
+        block_id: 2,
+        timestamp: 1_000,
+    }
+    .to_bytes()
+    .try_into()
+    .unwrap();
+    let (posts, _) = process_instruction(
+        setup.accounts.clone(),
+        Instruction::PrepareFixedPrice {
+            inputs: setup.inputs.clone(),
+        },
+        LBP,
+    );
+    setup.accounts[0].account = posts[0].account().clone();
+    setup.accounts[0].account.program_owner = LBP;
+    let token_definition = setup.accounts[2].account_id;
+    let collateral_definition = setup.accounts[3].account_id;
+    holding(&mut setup.accounts[5], token_definition, 0);
+    holding(&mut setup.accounts[6], collateral_definition, 0);
+    let (posts, _) = process_instruction(setup.accounts, Instruction::ActivateFixedPrice, LBP);
+
+    let state = PoolAccount::try_from(&posts[0].account().data).unwrap();
+    assert!(state.funded);
+    assert_eq!(state.end_timestamp, None);
+}
+
+#[test]
+fn buys_accept_an_open_sale_after_the_configured_end_boundary() {
+    let mut setup = Setup::new();
+    setup.inputs.end_timestamp = None;
+    setup.accounts[7].account.data = clock_core::ClockAccountData {
+        block_id: 2,
+        timestamp: 1_000,
+    }
+    .to_bytes()
+    .try_into()
+    .unwrap();
+    let (posts, _) = process_instruction(
+        setup.accounts.clone(),
+        Instruction::PrepareFixedPrice {
+            inputs: setup.inputs.clone(),
+        },
+        LBP,
+    );
+    setup.accounts[0].account = posts[0].account().clone();
+    setup.accounts[0].account.program_owner = LBP;
+    let token_definition = setup.accounts[2].account_id;
+    holding(&mut setup.accounts[5], token_definition, 0);
+    let collateral_definition = setup.accounts[3].account_id;
+    holding(&mut setup.accounts[6], collateral_definition, 0);
+    let (posts, _) =
+        process_instruction(setup.accounts.clone(), Instruction::ActivateFixedPrice, LBP);
+    setup.accounts[0].account = posts[0].account().clone();
+    setup.accounts[0].account.program_owner = LBP;
+    holding(&mut setup.accounts[5], token_definition, 800);
+
+    let (posts, calls) = process_instruction(
+        buyer_accounts(&setup, AccountId::new([44; 32]), 100),
+        Instruction::BuyExactInput {
+            amount_in: 10,
+            min_amount_out: 6,
+        },
+        LBP,
+    );
+
+    assert_eq!(calls.len(), 2);
+    let state = PoolAccount::try_from(&posts[0].account().data).unwrap();
+    assert_eq!(state.end_timestamp, None);
+    assert_eq!(state.remaining_inventory, 794);
+}
+
+#[test]
+fn buys_reject_noncanonical_token_accounts() {
+    for instruction in [
+        Instruction::BuyExactInput {
+            amount_in: 10,
+            min_amount_out: 6,
+        },
+        Instruction::BuyExactOutput {
+            amount_out: 6,
+            max_amount_in: 10,
+        },
+    ] {
+        for index in 3..7 {
+            let setup = active_sale();
+            let mut pre = buyer_accounts(&setup, AccountId::new([44; 32]), 100);
+            pre[index].account_id = AccountId::new([99; 32]);
+            assert!(
+                std::panic::catch_unwind(|| { process_instruction(pre, instruction.clone(), LBP) })
+                    .is_err()
+            );
+        }
+    }
+}
+
+#[test]
 fn preparation_saves_a_pending_fixed_price_pool_and_prepares_empty_vaults() {
     for (creator_allocation, release) in [
         (200, CreatorAllocationRelease::AfterSetup),
@@ -557,7 +1054,10 @@ fn preparation_saves_a_pending_fixed_price_pool_and_prepares_empty_vaults() {
                 token_units: 2
             }
         );
-        assert_eq!((state.start_timestamp, state.end_timestamp), (100, 200));
+        assert_eq!(
+            (state.start_timestamp, state.end_timestamp),
+            (100, Some(200))
+        );
         assert_eq!(state.creator_allocation_release, release);
         assert_eq!(posts.len(), 9);
         assert_eq!(calls.len(), 2);

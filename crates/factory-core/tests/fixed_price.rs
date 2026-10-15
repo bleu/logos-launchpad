@@ -187,7 +187,7 @@ impl Creation {
                     token_units: 2,
                 },
                 start: SaleStart::Now,
-                end_timestamp: 200,
+                end_timestamp: Some(200),
                 allocation_release: CreatorAllocationRelease::AfterEnd,
                 namespace_program_id: NAMESPACE_PROGRAM,
                 lbp_program_id: LBP,
@@ -308,6 +308,29 @@ fn initial_creation_rejects_a_scheduled_start_in_the_past() {
 }
 
 #[test]
+fn creation_accepts_an_absent_end_time() {
+    let mut creation = Creation::new();
+    creation.inputs.end_timestamp = None;
+    creation.accounts[12].account.data = clock_core::ClockAccountData {
+        block_id: 2,
+        timestamp: 1_000,
+    }
+    .to_bytes()
+    .try_into()
+    .unwrap();
+    let (posts, _) = process_instruction(
+        creation.accounts,
+        Instruction::CreateFixedPriceLbp {
+            inputs: creation.inputs,
+        },
+        FACTORY,
+    );
+
+    let state = FixedPriceLaunchState::try_from(&posts[0].account().data).unwrap();
+    assert_eq!(state.end_timestamp, None);
+}
+
+#[test]
 fn creation_requires_end_strictly_after_the_resolved_start() {
     for (start, end) in [
         (SaleStart::Now, 100),
@@ -317,7 +340,7 @@ fn creation_requires_end_strictly_after_the_resolved_start() {
     ] {
         let mut creation = Creation::new();
         creation.inputs.start = start;
-        creation.inputs.end_timestamp = end;
+        creation.inputs.end_timestamp = Some(end);
         assert!(
             std::panic::catch_unwind(|| process_instruction(
                 creation.accounts,
@@ -626,6 +649,41 @@ fn allocation_stage_requires_intact_mint_and_empty_destinations() {
 }
 
 #[test]
+fn continuation_has_no_setup_deadline_when_end_time_is_absent() {
+    let mut creation = Creation::allocated();
+    let mut state = FixedPriceLaunchState::try_from(&creation.accounts[0].account.data).unwrap();
+    state.end_timestamp = None;
+    creation.accounts[0].account.data = Data::from(&state);
+    creation.accounts[12].account.data = clock_core::ClockAccountData {
+        block_id: 2,
+        timestamp: 1_000,
+    }
+    .to_bytes()
+    .try_into()
+    .unwrap();
+
+    let (posts, calls) = process_instruction(
+        creation.accounts,
+        Instruction::ContinueFixedPriceCreation {
+            expected_stage: factory_core::FixedPriceCreationStage::Allocated,
+        },
+        FACTORY,
+    );
+    let state = FixedPriceLaunchState::try_from(&posts[0].account().data).unwrap();
+    assert_eq!(state.end_timestamp, None);
+    assert_eq!(
+        state.creation_stage,
+        factory_core::FixedPriceCreationStage::PoolPrepared
+    );
+    let instruction: lbp_core::Instruction =
+        risc0_zkvm::serde::from_slice(&calls[0].instruction_data).unwrap();
+    let lbp_core::Instruction::PrepareFixedPrice { inputs } = instruction else {
+        panic!("expected pool preparation")
+    };
+    assert_eq!(inputs.end_timestamp, None);
+}
+
+#[test]
 fn late_pool_preparation_uses_the_saved_price_and_schedule() {
     let mut creation = Creation::allocated();
     creation.accounts[12].account.data = clock_core::ClockAccountData {
@@ -654,7 +712,10 @@ fn late_pool_preparation_uses_the_saved_price_and_schedule() {
     let lbp_core::Instruction::PrepareFixedPrice { inputs } = instruction else {
         panic!("expected pool preparation")
     };
-    assert_eq!((inputs.start_timestamp, inputs.end_timestamp), (100, 200));
+    assert_eq!(
+        (inputs.start_timestamp, inputs.end_timestamp),
+        (100, Some(200))
+    );
     assert_eq!(
         inputs.price,
         FixedPrice {
@@ -984,7 +1045,10 @@ fn creator_can_create_a_namespace_bound_fixed_price_sale() {
             token_units: 2
         }
     );
-    assert_eq!((state.start_timestamp, state.end_timestamp), (100, 200));
+    assert_eq!(
+        (state.start_timestamp, state.end_timestamp),
+        (100, Some(200))
+    );
     assert_eq!(state.allocation_release, CreatorAllocationRelease::AfterEnd);
     state.assert_creator(&creator);
 }

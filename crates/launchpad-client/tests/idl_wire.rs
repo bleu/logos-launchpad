@@ -388,18 +388,22 @@ fn fixed_price_continuation_wire_matches_all_stage_ordinals_in_the_pinned_cli() 
 #[test]
 fn fixed_price_creation_wire_matches_the_pinned_cli() {
     use factory_core::{CreatorAllocationRelease, FixedPrice, FixedPriceInputs, SaleStart};
-    for (start, start_arg, release, release_arg) in [
+    for (start, start_arg, release, release_arg, end_timestamp, end_arg) in [
         (
             SaleStart::Now,
             "none",
             CreatorAllocationRelease::AfterEnd,
             "1",
+            None,
+            "none",
         ),
         (
             SaleStart::At { timestamp: 150 },
             "150",
             CreatorAllocationRelease::AfterSetup,
             "0",
+            Some(200),
+            "200",
         ),
     ] {
         let inputs = FixedPriceInputs {
@@ -414,7 +418,7 @@ fn fixed_price_creation_wire_matches_the_pinned_cli() {
                 token_units: 2,
             },
             start,
-            end_timestamp: 200,
+            end_timestamp,
             allocation_release: release,
             namespace_program_id: program_id(10),
             lbp_program_id: program_id(20),
@@ -432,7 +436,7 @@ fn fixed_price_creation_wire_matches_the_pinned_cli() {
                 ("--collateral-units", "3".into()),
                 ("--token-units", "2".into()),
                 ("--start", start_arg.into()),
-                ("--end-timestamp", "200".into()),
+                ("--end-timestamp", end_arg.into()),
                 ("--allocation-release", release_arg.into()),
                 ("--namespace-program-id", program_arg(program_id(10))),
                 ("--lbp-program-id", program_arg(program_id(20))),
@@ -496,6 +500,99 @@ fn fixed_price_creation_wire_matches_the_pinned_cli() {
 }
 
 #[test]
+fn fixed_price_public_instruction_wire_matches_the_pinned_cli() {
+    for (cli_name, arguments, expected, order) in [
+        (
+            "buy-exact-input",
+            vec![
+                ("--amount-in", "10".into()),
+                ("--min-amount-out", "6".into()),
+            ],
+            lbp_core::Instruction::BuyExactInput {
+                amount_in: 10,
+                min_amount_out: 6,
+            },
+            vec!["amount_in", "min_amount_out"],
+        ),
+        (
+            "buy-exact-output",
+            vec![
+                ("--amount-out", "6".into()),
+                ("--max-amount-in", "10".into()),
+            ],
+            lbp_core::Instruction::BuyExactOutput {
+                amount_out: 6,
+                max_amount_in: 10,
+            },
+            vec!["amount_out", "max_amount_in"],
+        ),
+    ] {
+        let wire = run_case(
+            "lbp",
+            cli_name,
+            arguments,
+            expected,
+            account_inputs(
+                &[
+                    "pool",
+                    "config",
+                    "participant",
+                    "participant_collateral_ata",
+                    "pool_collateral_ata",
+                    "pool_token_ata",
+                    "participant_token_ata",
+                    "clock",
+                ],
+                60,
+            ),
+            &order,
+        );
+        assert_account_flags(
+            wire,
+            &[
+                ("pool", &["writable"]),
+                ("config", &[]),
+                ("participant", &["signer"]),
+                ("participant_collateral_ata", &["writable"]),
+                ("pool_collateral_ata", &["writable"]),
+                ("pool_token_ata", &["writable"]),
+                ("participant_token_ata", &["writable"]),
+                ("clock", &[]),
+            ],
+        );
+    }
+}
+
+#[test]
+fn fixed_price_fee_collection_wire_matches_the_pinned_cli() {
+    let mut accounts = account_inputs(&["pool", "config", "pool_collateral_ata"], 60);
+    accounts.push(AccountInput {
+        name: "treasury_collateral_atas",
+        id: None,
+    });
+    let (dry_run, idl_instruction) = run_case(
+        "lbp",
+        "collect-fees",
+        vec![],
+        lbp_core::Instruction::CollectFees,
+        accounts,
+        &[],
+    );
+    for (index, writable) in [true, false, true, true].into_iter().enumerate() {
+        assert_eq!(idl_instruction["accounts"][index]["writable"], writable);
+    }
+    assert_eq!(dry_run["accounts"][0]["flags"][0], "writable");
+    assert!(
+        dry_run["accounts"][1]["flags"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(dry_run["accounts"][2]["flags"][0], "writable");
+    assert_eq!(dry_run["accounts"][3]["flags"][0], "rest");
+}
+
+#[test]
 fn fixed_price_pool_setup_wire_matches_the_pinned_cli() {
     let inputs = lbp_core::FixedPricePoolInputs {
         namespace: account(40),
@@ -509,7 +606,7 @@ fn fixed_price_pool_setup_wire_matches_the_pinned_cli() {
             token_units: 2,
         },
         start_timestamp: 100,
-        end_timestamp: 200,
+        end_timestamp: None,
         creator_allocation_release: factory_core::CreatorAllocationRelease::AfterSetup,
     };
     let wire = run_case(
@@ -525,7 +622,7 @@ fn fixed_price_pool_setup_wire_matches_the_pinned_cli() {
             ("--collateral-units", "3".into()),
             ("--token-units", "2".into()),
             ("--start-timestamp", "100".into()),
-            ("--end-timestamp", "200".into()),
+            ("--end-timestamp", "none".into()),
             ("--creator-allocation-release", "0".into()),
         ],
         lbp_core::Instruction::PrepareFixedPrice { inputs },

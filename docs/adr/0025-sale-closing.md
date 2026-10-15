@@ -12,7 +12,7 @@ A curve sale closes when all `D` is purchased or its optional expiry is reached,
 
 After expiry, settlement burns unsold `D` once; it cannot become creator allocation. `R` and the separate creator allocation retain their [post-close payout rules](0020-settlement-and-graduation.md). Retries must not burn or pay twice.
 
-Fixed-price and weighted sales close at their scheduled end. For a weighted sale, this is also the weight-interpolation endpoint. Closure permits post-close operations; settlement is separate. Fixed-price and weighted-sale close and settlement handlers remain future work. See [bonding-curve settlement](0020-settlement-and-graduation.md) and [fixed-price and weighted-sale fees and withdrawals](0016-lbp-live-fees.md).
+Fixed-price sales close at their configured end, if present, or when all sale inventory sells, whichever occurs first. If no end is configured, sellout closes the sale. Weighted sales close at their scheduled end. For a weighted sale, this is also the weight-interpolation endpoint. Closure permits post-close operations; settlement is separate. Fixed-price close and settlement handlers remain future work. See [bonding-curve settlement](0020-settlement-and-graduation.md) and [fixed-price and weighted-sale fees and withdrawals](0016-lbp-live-fees.md).
 
 ## Sources
 

@@ -35,7 +35,7 @@ pub struct FixedPricePoolInputs {
     pub creator_allocation: u128,
     pub price: FixedPrice,
     pub start_timestamp: u64,
-    pub end_timestamp: u64,
+    pub end_timestamp: Option<u64>,
     pub creator_allocation_release: CreatorAllocationRelease,
 }
 
@@ -46,8 +46,22 @@ pub struct FixedPricePoolInputs {
     reason = "the public instruction keeps typed pool inputs"
 )]
 pub enum Instruction {
-    PrepareFixedPrice { inputs: FixedPricePoolInputs },
+    PrepareFixedPrice {
+        inputs: FixedPricePoolInputs,
+    },
     ActivateFixedPrice,
+    /// Accounts: pool, config, participant, participant collateral ATA, pool collateral ATA, pool token ATA, participant token ATA, clock.
+    BuyExactInput {
+        amount_in: u128,
+        min_amount_out: u128,
+    },
+    /// Accounts: pool, config, participant, participant collateral ATA, pool collateral ATA, pool token ATA, participant token ATA, clock.
+    BuyExactOutput {
+        amount_out: u128,
+        max_amount_in: u128,
+    },
+    /// Accounts: pool, config, pool collateral ATA, then the distinct current treasury collateral ATA.
+    CollectFees,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -67,12 +81,14 @@ pub struct PoolAccount {
     pub token_definition_id: AccountId,
     pub collateral_definition_id: AccountId,
     pub sale_inventory: u128,
+    pub remaining_inventory: u128,
     pub creator_allocation: u128,
     pub price: FixedPrice,
     pub start_timestamp: u64,
-    pub end_timestamp: u64,
+    pub end_timestamp: Option<u64>,
     pub creator_allocation_release: CreatorAllocationRelease,
     pub recorded_collateral: u128,
+    pub accrued_fees: u128,
 }
 
 impl TryFrom<&Data> for PoolAccount {
@@ -131,6 +147,15 @@ pub fn process_instruction(
     match instruction {
         Instruction::PrepareFixedPrice { inputs } => prepare(pre, inputs, lbp_program_id),
         Instruction::ActivateFixedPrice => activate(pre, lbp_program_id),
+        Instruction::BuyExactInput {
+            amount_in,
+            min_amount_out,
+        } => buy_exact_input(pre, amount_in, min_amount_out, lbp_program_id),
+        Instruction::BuyExactOutput {
+            amount_out,
+            max_amount_in,
+        } => buy_exact_output(pre, amount_out, max_amount_in, lbp_program_id),
+        Instruction::CollectFees => collect_fees(pre, lbp_program_id),
     }
 }
 
@@ -152,6 +177,34 @@ fn holding_balance(holding: &AccountWithMetadata, definition: AccountId) -> u128
         "Token holding has the wrong definition"
     );
     balance
+}
+
+fn mul_div_floor(value: u128, multiplier: u128, divisor: u128) -> u128 {
+    assert!(divisor > 0, "Arithmetic divisor must be positive");
+    let quotient = value / divisor;
+    let remainder = value % divisor;
+    let whole = quotient
+        .checked_mul(multiplier)
+        .expect("Fixed-price multiplication overflow");
+    let fraction = remainder
+        .checked_mul(multiplier)
+        .expect("Fixed-price multiplication overflow")
+        / divisor;
+    whole
+        .checked_add(fraction)
+        .expect("Fixed-price addition overflow")
+}
+
+fn mul_div_ceil(value: u128, multiplier: u128, divisor: u128) -> u128 {
+    let floor = mul_div_floor(value, multiplier, divisor);
+    let fractional_numerator = (value % divisor)
+        .checked_mul(multiplier)
+        .expect("Fixed-price multiplication overflow");
+    if fractional_numerator % divisor == 0 {
+        floor
+    } else {
+        floor.checked_add(1).expect("Fixed-price addition overflow")
+    }
 }
 
 fn validate_custody_addresses(
@@ -262,7 +315,9 @@ fn activate(
         ),
         "Pool account ID does not match PDA"
     );
-    assert!(now < state.end_timestamp, "Sale has ended");
+    if let Some(end_timestamp) = state.end_timestamp {
+        assert!(now < end_timestamp, "Sale has ended");
+    }
     curve_core::validated_config(&config, state.namespace, state.namespace_program_id);
     validate_factory(&factory_owner, state.factory_program_id, state.factory_seed);
     assert_eq!(
@@ -316,6 +371,464 @@ fn activate(
     (posts, vec![call])
 }
 
+fn buy_exact_input(
+    pre: Vec<AccountWithMetadata>,
+    amount_in: u128,
+    min_amount_out: u128,
+    lbp_program_id: ProgramId,
+) -> (Vec<AccountPostState>, Vec<ChainedCall>) {
+    let [
+        pool,
+        config,
+        participant,
+        participant_collateral,
+        pool_collateral,
+        pool_token,
+        participant_token,
+        clock,
+    ]: [_; 8] = pre
+        .clone()
+        .try_into()
+        .expect("BuyExactInput requires eight accounts");
+    assert!(
+        participant.is_authorized,
+        "Participant authorization is missing"
+    );
+    let mut state = PoolAccount::try_from(&pool.account.data).expect("Invalid fixed-price pool");
+    assert_eq!(
+        pool.account.program_owner, lbp_program_id,
+        "Pool owner is invalid"
+    );
+    assert_eq!(
+        pool.account_id,
+        compute_pool_pda(
+            state.namespace,
+            lbp_program_id,
+            state.token_definition_id,
+            state.collateral_definition_id,
+            state.factory_owner,
+        ),
+        "Pool account ID does not match PDA"
+    );
+    assert!(state.funded, "Pool funding is pending");
+    assert!(state.remaining_inventory > 0, "Sale inventory is exhausted");
+    let config_state =
+        curve_core::validated_config(&config, state.namespace, state.namespace_program_id);
+    assert!(
+        !config_state.emergency.is_frozen,
+        "Namespace swaps are frozen"
+    );
+    assert!(
+        config_state.protocol_fee_bps < 10_000,
+        "Invalid protocol fee rate"
+    );
+    let now = trusted_time(&clock);
+    assert!(now >= state.start_timestamp, "Sale has not started");
+    if let Some(end_timestamp) = state.end_timestamp {
+        assert!(now < end_timestamp, "Sale has ended");
+    }
+    assert!(amount_in > 0, "Input amount must be positive");
+    assert!(
+        state.price.collateral_units > 0 && state.price.token_units > 0,
+        "Price units must be positive"
+    );
+    let amount_out = mul_div_floor(
+        amount_in,
+        state.price.token_units,
+        state.price.collateral_units,
+    );
+    assert!(amount_out > 0, "Exact-input output is zero");
+    assert!(amount_out >= min_amount_out, "Minimum output was not met");
+    assert!(
+        amount_out <= state.remaining_inventory,
+        "Buy exceeds remaining sale inventory"
+    );
+    associated_token_account_core::verify_ata_and_get_seed(
+        &participant_collateral,
+        &participant,
+        state.collateral_definition_id,
+        curve_core::ASSOCIATED_TOKEN_ACCOUNT_PROGRAM_ID,
+    );
+    associated_token_account_core::verify_ata_and_get_seed(
+        &participant_token,
+        &participant,
+        state.token_definition_id,
+        curve_core::ASSOCIATED_TOKEN_ACCOUNT_PROGRAM_ID,
+    );
+    associated_token_account_core::verify_ata_and_get_seed(
+        &pool_collateral,
+        &pool,
+        state.collateral_definition_id,
+        curve_core::ASSOCIATED_TOKEN_ACCOUNT_PROGRAM_ID,
+    );
+    associated_token_account_core::verify_ata_and_get_seed(
+        &pool_token,
+        &pool,
+        state.token_definition_id,
+        curve_core::ASSOCIATED_TOKEN_ACCOUNT_PROGRAM_ID,
+    );
+    assert!(
+        holding_balance(&participant_collateral, state.collateral_definition_id) >= amount_in,
+        "Participant collateral balance is insufficient"
+    );
+    assert!(
+        holding_balance(&pool_token, state.token_definition_id) >= amount_out,
+        "Pool token balance is insufficient"
+    );
+    let collateral_balance = holding_balance(&pool_collateral, state.collateral_definition_id);
+    let current_liabilities = state
+        .recorded_collateral
+        .checked_add(state.accrued_fees)
+        .expect("Pool collateral liabilities overflow");
+    assert!(
+        collateral_balance >= current_liabilities,
+        "Pool collateral is underbacked"
+    );
+    let fee = mul_div_ceil(amount_in, u128::from(config_state.protocol_fee_bps), 10_000);
+    assert!(fee <= amount_in, "Protocol fee exceeds buyer input");
+    let creator_proceeds = amount_in - fee;
+    state.recorded_collateral = state
+        .recorded_collateral
+        .checked_add(creator_proceeds)
+        .expect("Recorded collateral overflow");
+    state.accrued_fees = state
+        .accrued_fees
+        .checked_add(fee)
+        .expect("Accrued fees overflow");
+    state.remaining_inventory = state
+        .remaining_inventory
+        .checked_sub(amount_out)
+        .expect("Sale inventory underflow");
+    let next_liabilities = state
+        .recorded_collateral
+        .checked_add(state.accrued_fees)
+        .expect("Pool collateral liabilities overflow");
+    assert!(
+        collateral_balance
+            .checked_add(amount_in)
+            .is_some_and(|balance| balance >= next_liabilities),
+        "Pool collateral is underbacked after buy"
+    );
+    let mut posts: Vec<_> = pre
+        .into_iter()
+        .map(|account| AccountPostState::new(account.account))
+        .collect();
+    posts[0].account_mut().data = Data::from(&state);
+    let mut pool_signer = pool;
+    pool_signer.account = posts[0].account().clone();
+    pool_signer.is_authorized = true;
+    let calls = vec![
+        ChainedCall::new(
+            curve_core::ASSOCIATED_TOKEN_ACCOUNT_PROGRAM_ID,
+            vec![participant, participant_collateral, pool_collateral],
+            &AtaInstruction::Transfer {
+                ata_program_id: curve_core::ASSOCIATED_TOKEN_ACCOUNT_PROGRAM_ID,
+                amount: amount_in,
+            },
+        ),
+        ChainedCall::new(
+            curve_core::ASSOCIATED_TOKEN_ACCOUNT_PROGRAM_ID,
+            vec![pool_signer, pool_token, participant_token],
+            &AtaInstruction::Transfer {
+                ata_program_id: curve_core::ASSOCIATED_TOKEN_ACCOUNT_PROGRAM_ID,
+                amount: amount_out,
+            },
+        )
+        .with_pda_seeds(vec![compute_pool_pda_seed(
+            state.namespace,
+            state.token_definition_id,
+            state.collateral_definition_id,
+            state.factory_owner,
+        )]),
+    ];
+    (posts, calls)
+}
+
+fn buy_exact_output(
+    pre: Vec<AccountWithMetadata>,
+    amount_out: u128,
+    max_amount_in: u128,
+    lbp_program_id: ProgramId,
+) -> (Vec<AccountPostState>, Vec<ChainedCall>) {
+    let [
+        pool,
+        config,
+        participant,
+        participant_collateral,
+        pool_collateral,
+        pool_token,
+        participant_token,
+        clock,
+    ]: [_; 8] = pre
+        .clone()
+        .try_into()
+        .expect("BuyExactOutput requires eight accounts");
+    assert!(
+        participant.is_authorized,
+        "Participant authorization is missing"
+    );
+    let mut state = PoolAccount::try_from(&pool.account.data).expect("Invalid fixed-price pool");
+    assert_eq!(
+        pool.account.program_owner, lbp_program_id,
+        "Pool owner is invalid"
+    );
+    assert_eq!(
+        pool.account_id,
+        compute_pool_pda(
+            state.namespace,
+            lbp_program_id,
+            state.token_definition_id,
+            state.collateral_definition_id,
+            state.factory_owner,
+        ),
+        "Pool account ID does not match PDA"
+    );
+    assert!(state.funded, "Pool funding is pending");
+    assert!(state.remaining_inventory > 0, "Sale inventory is exhausted");
+    let config_state =
+        curve_core::validated_config(&config, state.namespace, state.namespace_program_id);
+    assert!(
+        !config_state.emergency.is_frozen,
+        "Namespace swaps are frozen"
+    );
+    assert!(
+        config_state.protocol_fee_bps < 10_000,
+        "Invalid protocol fee rate"
+    );
+    let now = trusted_time(&clock);
+    assert!(now >= state.start_timestamp, "Sale has not started");
+    if let Some(end_timestamp) = state.end_timestamp {
+        assert!(now < end_timestamp, "Sale has ended");
+    }
+    assert!(amount_out > 0, "Output amount must be positive");
+    assert!(
+        state.price.collateral_units > 0 && state.price.token_units > 0,
+        "Price units must be positive"
+    );
+    assert!(
+        amount_out <= state.remaining_inventory,
+        "Buy exceeds remaining sale inventory"
+    );
+    let amount_in = mul_div_ceil(
+        amount_out,
+        state.price.collateral_units,
+        state.price.token_units,
+    );
+    assert!(amount_in <= max_amount_in, "Maximum input was exceeded");
+    associated_token_account_core::verify_ata_and_get_seed(
+        &participant_collateral,
+        &participant,
+        state.collateral_definition_id,
+        curve_core::ASSOCIATED_TOKEN_ACCOUNT_PROGRAM_ID,
+    );
+    associated_token_account_core::verify_ata_and_get_seed(
+        &participant_token,
+        &participant,
+        state.token_definition_id,
+        curve_core::ASSOCIATED_TOKEN_ACCOUNT_PROGRAM_ID,
+    );
+    associated_token_account_core::verify_ata_and_get_seed(
+        &pool_collateral,
+        &pool,
+        state.collateral_definition_id,
+        curve_core::ASSOCIATED_TOKEN_ACCOUNT_PROGRAM_ID,
+    );
+    associated_token_account_core::verify_ata_and_get_seed(
+        &pool_token,
+        &pool,
+        state.token_definition_id,
+        curve_core::ASSOCIATED_TOKEN_ACCOUNT_PROGRAM_ID,
+    );
+    assert!(
+        holding_balance(&participant_collateral, state.collateral_definition_id) >= amount_in,
+        "Participant collateral balance is insufficient"
+    );
+    assert!(
+        holding_balance(&pool_token, state.token_definition_id) >= amount_out,
+        "Pool token balance is insufficient"
+    );
+    let collateral_balance = holding_balance(&pool_collateral, state.collateral_definition_id);
+    let current_liabilities = state
+        .recorded_collateral
+        .checked_add(state.accrued_fees)
+        .expect("Pool collateral liabilities overflow");
+    assert!(
+        collateral_balance >= current_liabilities,
+        "Pool collateral is underbacked"
+    );
+    let fee = mul_div_ceil(amount_in, u128::from(config_state.protocol_fee_bps), 10_000);
+    assert!(fee <= amount_in, "Protocol fee exceeds buyer input");
+    let creator_proceeds = amount_in - fee;
+    state.recorded_collateral = state
+        .recorded_collateral
+        .checked_add(creator_proceeds)
+        .expect("Recorded collateral overflow");
+    state.accrued_fees = state
+        .accrued_fees
+        .checked_add(fee)
+        .expect("Accrued fees overflow");
+    state.remaining_inventory = state
+        .remaining_inventory
+        .checked_sub(amount_out)
+        .expect("Sale inventory underflow");
+    let next_liabilities = state
+        .recorded_collateral
+        .checked_add(state.accrued_fees)
+        .expect("Pool collateral liabilities overflow");
+    assert!(
+        collateral_balance
+            .checked_add(amount_in)
+            .is_some_and(|balance| balance >= next_liabilities),
+        "Pool collateral is underbacked after buy"
+    );
+    let mut posts: Vec<_> = pre
+        .into_iter()
+        .map(|account| AccountPostState::new(account.account))
+        .collect();
+    posts[0].account_mut().data = Data::from(&state);
+    let mut pool_signer = pool;
+    pool_signer.account = posts[0].account().clone();
+    pool_signer.is_authorized = true;
+    let calls = vec![
+        ChainedCall::new(
+            curve_core::ASSOCIATED_TOKEN_ACCOUNT_PROGRAM_ID,
+            vec![participant, participant_collateral, pool_collateral],
+            &AtaInstruction::Transfer {
+                ata_program_id: curve_core::ASSOCIATED_TOKEN_ACCOUNT_PROGRAM_ID,
+                amount: amount_in,
+            },
+        ),
+        ChainedCall::new(
+            curve_core::ASSOCIATED_TOKEN_ACCOUNT_PROGRAM_ID,
+            vec![pool_signer, pool_token, participant_token],
+            &AtaInstruction::Transfer {
+                ata_program_id: curve_core::ASSOCIATED_TOKEN_ACCOUNT_PROGRAM_ID,
+                amount: amount_out,
+            },
+        )
+        .with_pda_seeds(vec![compute_pool_pda_seed(
+            state.namespace,
+            state.token_definition_id,
+            state.collateral_definition_id,
+            state.factory_owner,
+        )]),
+    ];
+    (posts, calls)
+}
+
+fn collect_fees(
+    pre: Vec<AccountWithMetadata>,
+    lbp_program_id: ProgramId,
+) -> (Vec<AccountPostState>, Vec<ChainedCall>) {
+    assert!(
+        pre.len() == 3 || pre.len() == 4,
+        "CollectFees requires three or four accounts"
+    );
+    let pool = pre[0].clone();
+    let config = pre[1].clone();
+    let pool_collateral = pre[2].clone();
+    let mut state = PoolAccount::try_from(&pool.account.data).expect("Invalid fixed-price pool");
+    assert_eq!(
+        pool.account.program_owner, lbp_program_id,
+        "Pool owner is invalid"
+    );
+    assert_eq!(
+        pool.account_id,
+        compute_pool_pda(
+            state.namespace,
+            lbp_program_id,
+            state.token_definition_id,
+            state.collateral_definition_id,
+            state.factory_owner,
+        ),
+        "Pool account ID does not match PDA"
+    );
+    assert!(state.funded, "Pool funding is pending");
+    let config_state =
+        curve_core::validated_config(&config, state.namespace, state.namespace_program_id);
+    let treasury = AccountWithMetadata {
+        account: Account::default(),
+        account_id: config_state.treasury,
+        is_authorized: false,
+    };
+    associated_token_account_core::verify_ata_and_get_seed(
+        &pool_collateral,
+        &pool,
+        state.collateral_definition_id,
+        curve_core::ASSOCIATED_TOKEN_ACCOUNT_PROGRAM_ID,
+    );
+    let treasury_ata_id = AccountId::for_public_pda(
+        &curve_core::ASSOCIATED_TOKEN_ACCOUNT_PROGRAM_ID,
+        &associated_token_account_core::compute_ata_seed(
+            config_state.treasury,
+            state.collateral_definition_id,
+        ),
+    );
+    let treasury_is_pool_vault = treasury_ata_id == pool_collateral.account_id;
+    assert_eq!(
+        pre.len(),
+        if treasury_is_pool_vault { 3 } else { 4 },
+        "Treasury collateral ATA account count is invalid"
+    );
+    let treasury_collateral = pre.get(3).cloned();
+    if let Some(treasury_collateral) = &treasury_collateral {
+        associated_token_account_core::verify_ata_and_get_seed(
+            treasury_collateral,
+            &treasury,
+            state.collateral_definition_id,
+            curve_core::ASSOCIATED_TOKEN_ACCOUNT_PROGRAM_ID,
+        );
+        assert_ne!(
+            treasury_collateral.account_id, pool_collateral.account_id,
+            "Treasury ATA duplicates the pool collateral ATA"
+        );
+    }
+    let collateral_balance = holding_balance(&pool_collateral, state.collateral_definition_id);
+    let liabilities = state
+        .recorded_collateral
+        .checked_add(state.accrued_fees)
+        .expect("Pool collateral liabilities overflow");
+    assert!(
+        collateral_balance >= liabilities,
+        "Collateral vault cannot cover creator proceeds and fees"
+    );
+    let amount = state.accrued_fees;
+    state.accrued_fees = 0;
+    let mut posts: Vec<_> = pre
+        .into_iter()
+        .map(|account| AccountPostState::new(account.account))
+        .collect();
+    posts[0].account_mut().data = Data::from(&state);
+    let calls = if amount == 0 || treasury_is_pool_vault {
+        Vec::new()
+    } else {
+        let mut pool_signer = pool;
+        pool_signer.account = posts[0].account().clone();
+        pool_signer.is_authorized = true;
+        vec![
+            ChainedCall::new(
+                curve_core::ASSOCIATED_TOKEN_ACCOUNT_PROGRAM_ID,
+                vec![
+                    pool_signer,
+                    pool_collateral,
+                    treasury_collateral.expect("Distinct treasury ATA is required"),
+                ],
+                &AtaInstruction::Transfer {
+                    ata_program_id: curve_core::ASSOCIATED_TOKEN_ACCOUNT_PROGRAM_ID,
+                    amount,
+                },
+            )
+            .with_pda_seeds(vec![compute_pool_pda_seed(
+                state.namespace,
+                state.token_definition_id,
+                state.collateral_definition_id,
+                state.factory_owner,
+            )]),
+        ]
+    };
+    (posts, calls)
+}
+
 fn prepare(
     pre: Vec<AccountWithMetadata>,
     inputs: FixedPricePoolInputs,
@@ -351,11 +864,13 @@ fn prepare(
         inputs.price.collateral_units > 0 && inputs.price.token_units > 0,
         "Price units must be positive"
     );
-    assert!(
-        inputs.end_timestamp > inputs.start_timestamp,
-        "End must be after start"
-    );
-    assert!(now < inputs.end_timestamp, "Sale has ended");
+    if let Some(end_timestamp) = inputs.end_timestamp {
+        assert!(
+            end_timestamp > inputs.start_timestamp,
+            "End must be after start"
+        );
+        assert!(now < end_timestamp, "Sale has ended");
+    }
     curve_core::validated_config(&config, inputs.namespace, inputs.namespace_program_id);
     assert_ne!(
         token.account_id, collateral.account_id,
@@ -407,12 +922,14 @@ fn prepare(
         token_definition_id: token.account_id,
         collateral_definition_id: collateral.account_id,
         sale_inventory: inputs.sale_inventory,
+        remaining_inventory: inputs.sale_inventory,
         creator_allocation: inputs.creator_allocation,
         price: inputs.price,
         start_timestamp: inputs.start_timestamp,
         end_timestamp: inputs.end_timestamp,
         creator_allocation_release: inputs.creator_allocation_release,
         recorded_collateral: 0,
+        accrued_fees: 0,
     };
     let mut pool_post = pool.account;
     pool_post.data = Data::from(&state);

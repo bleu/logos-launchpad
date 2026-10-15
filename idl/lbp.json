@@ -104,7 +104,9 @@
         },
         {
           "name": "end_timestamp",
-          "type": "u64"
+          "type": {
+            "option": "u64"
+          }
         },
         {
           "name": "creator_allocation_release",
@@ -168,6 +170,163 @@
           "writable": false,
           "signer": false,
           "init": false
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "buy_exact_input",
+      "accounts": [
+        {
+          "name": "pool",
+          "writable": true,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "config",
+          "writable": false,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "participant",
+          "writable": false,
+          "signer": true,
+          "init": false
+        },
+        {
+          "name": "participant_collateral_ata",
+          "writable": true,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "pool_collateral_ata",
+          "writable": true,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "pool_token_ata",
+          "writable": true,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "participant_token_ata",
+          "writable": true,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "clock",
+          "writable": false,
+          "signer": false,
+          "init": false
+        }
+      ],
+      "args": [
+        {
+          "name": "amount_in",
+          "type": "u128"
+        },
+        {
+          "name": "min_amount_out",
+          "type": "u128"
+        }
+      ]
+    },
+    {
+      "name": "buy_exact_output",
+      "accounts": [
+        {
+          "name": "pool",
+          "writable": true,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "config",
+          "writable": false,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "participant",
+          "writable": false,
+          "signer": true,
+          "init": false
+        },
+        {
+          "name": "participant_collateral_ata",
+          "writable": true,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "pool_collateral_ata",
+          "writable": true,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "pool_token_ata",
+          "writable": true,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "participant_token_ata",
+          "writable": true,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "clock",
+          "writable": false,
+          "signer": false,
+          "init": false
+        }
+      ],
+      "args": [
+        {
+          "name": "amount_out",
+          "type": "u128"
+        },
+        {
+          "name": "max_amount_in",
+          "type": "u128"
+        }
+      ]
+    },
+    {
+      "name": "collect_fees",
+      "accounts": [
+        {
+          "name": "pool",
+          "writable": true,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "config",
+          "writable": false,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "pool_collateral_ata",
+          "writable": true,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "treasury_collateral_atas",
+          "writable": true,
+          "signer": false,
+          "init": false,
+          "rest": true
         }
       ],
       "args": []

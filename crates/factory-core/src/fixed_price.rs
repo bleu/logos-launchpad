@@ -25,7 +25,7 @@ pub struct FixedPriceInputs {
     pub creator_allocation: u128,
     pub price: FixedPrice,
     pub start: SaleStart,
-    pub end_timestamp: u64,
+    pub end_timestamp: Option<u64>,
     pub allocation_release: CreatorAllocationRelease,
     pub namespace_program_id: ProgramId,
     pub lbp_program_id: ProgramId,
@@ -61,7 +61,7 @@ pub struct FixedPriceLaunchState {
     pub total_supply: u128,
     pub price: FixedPrice,
     pub start_timestamp: u64,
-    pub end_timestamp: u64,
+    pub end_timestamp: Option<u64>,
     pub allocation_release: CreatorAllocationRelease,
     pub creator_allocation_released: bool,
 }
@@ -81,7 +81,7 @@ impl TryFrom<&Data> for FixedPriceLaunchState {
 
     fn try_from(data: &Data) -> Result<Self, Self::Error> {
         let state = Self::try_from_slice(data.as_ref())?;
-        if state.format != *b"LZFXLAUN" || state.version != 1 {
+        if state.format != *b"LZFXLAUN" || state.version != 2 {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 "Unsupported fixed-price launch state",
@@ -237,13 +237,15 @@ pub(crate) fn create(
             timestamp
         }
     };
-    assert!(
-        inputs.end_timestamp > start_timestamp,
-        "Sale end must be after start"
-    );
+    if let Some(end_timestamp) = inputs.end_timestamp {
+        assert!(
+            end_timestamp > start_timestamp,
+            "Sale end must be after start"
+        );
+    }
     let state = FixedPriceLaunchState {
         format: *b"LZFXLAUN",
-        version: 1,
+        version: 2,
         creator_authority: AdminConfig::default(),
         mode: lbp_core::PoolMode::FixedPrice,
         creation_stage: FixedPriceCreationStage::Minted,
@@ -458,10 +460,12 @@ pub(crate) fn continue_creation(
     }
     curve_core::validated_config(&pre[13], state.namespace, state.namespace_program_id);
     assert_eq!(state.creation_stage, expected_stage, "Stale creation stage");
-    assert!(
-        super::trusted_time(&pre[12]) < state.end_timestamp,
-        "Sale setup has expired"
-    );
+    if let Some(end_timestamp) = state.end_timestamp {
+        assert!(
+            super::trusted_time(&pre[12]) < end_timestamp,
+            "Sale setup has expired"
+        );
+    }
     let stage = state.creation_stage;
     if stage == FixedPriceCreationStage::Minted {
         assert_eq!(

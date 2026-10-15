@@ -156,12 +156,14 @@ fn main() {
         token_definition_id: definition.account_id,
         collateral_definition_id: pre[7].account_id,
         sale_inventory: pool_inputs.sale_inventory,
+        remaining_inventory: pool_inputs.sale_inventory,
         creator_allocation: pool_inputs.creator_allocation,
         price: pool_inputs.price,
         start_timestamp: pool_inputs.start_timestamp,
         end_timestamp: pool_inputs.end_timestamp,
         creator_allocation_release: pool_inputs.creator_allocation_release,
         recorded_collateral: 0,
+        accrued_fees: 0,
     };
     let mut activation_accounts = pool_accounts;
     activation_accounts[0].account.program_owner = inputs.lbp_program_id;

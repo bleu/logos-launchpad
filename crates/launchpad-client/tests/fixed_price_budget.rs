@@ -116,7 +116,7 @@ impl Fixture {
                 token_units: 2,
             },
             start: SaleStart::Now,
-            end_timestamp: 42,
+            end_timestamp: Some(42),
             allocation_release: release,
             namespace_program_id: curve.id(),
             lbp_program_id: lbp.id(),
@@ -252,7 +252,7 @@ fn assert_complete(fixture: &Fixture, accounts: &HashMap<AccountId, Account>) {
     assert!(state.funded);
     assert_eq!(state.sale_inventory, 800);
     assert_eq!(state.start_timestamp, 1);
-    assert_eq!(state.end_timestamp, 42);
+    assert_eq!(state.end_timestamp, Some(42));
     assert_eq!(balance(10), 800);
     assert_eq!(balance(11), 0);
     assert_eq!(balance(8), 0);

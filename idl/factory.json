@@ -631,7 +631,9 @@
         },
         {
           "name": "end_timestamp",
-          "type": "u64"
+          "type": {
+            "option": "u64"
+          }
         },
         {
           "name": "allocation_release",
