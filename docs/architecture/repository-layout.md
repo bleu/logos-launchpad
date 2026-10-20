@@ -15,6 +15,7 @@ The table defines architectural responsibilities. Ownership here means responsib
 | `crates/private-flow-core/` | Existing private helper and its on-chain validation | The complete SDK privacy or provider integration contract |
 | `crates/lbp-core/` | Fixed-price sale pool state, token vault setup and allocation escrow; future fixed-price sale pricing, trading, lifecycle and fee rules remain separate | Curve semantics hidden behind a generic pool interface |
 | `packages/weighted-math/` | Standalone math kernel, harness, fixtures, proof material, fuzz target and parity workspace | Custody, authorities or product flow |
+| `packages/lez-compat/` | Temporary actor token, ATA and role-authority handlers; thin guests; maintained build and wire tools | Sale pricing or lifecycle, a replacement wallet, fee mechanism or execution engine |
 | `methods/guest/` | Thin dispatch entry points and guest-specific build profiles | A second copy of handler logic |
 | `crates/launchpad-client/` | Quotes, authoritative reads, transaction construction and the PoC single-transaction private-buy flow | QML state, direct indexer HTTP calls or duplicated pricing rules |
 | `cli/` | Argument parsing, command output and SDK calls | Independent protocol logic |

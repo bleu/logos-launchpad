@@ -49,6 +49,7 @@ Read [CONTEXT.md](../../CONTEXT.md) for terms and [repository layout](../archite
 | [0031](0031-shared-launch-factory.md) | Share matching launch setup without sharing mechanism rules | Shared fixed-price sale creation and funding implementation; locked local verification passed using development receipts; real proofs and deployment readiness pending |
 | [0032](0032-fixed-price-lbp-setup.md) | Fixed-price sale creation and funding | Four-stage implementation; locked local verification passed using development receipts; real proofs and deployment readiness pending; collateral activation rule superseded by [0033](0033-fixed-price-lbp-recorded-collateral.md) |
 | [0033](0033-fixed-price-lbp-recorded-collateral.md) | Recorded fixed-price sale collateral excludes unsolicited vault transfers | Accepted; implemented for fixed-price sale creation and funding; trading and settlement remain future work |
+| [0034](0034-lez-v04-migration.md) | Fixed development target, temporary local compatibility support and maintained tooling | Actor development base implemented with host tests, locked guests and a small node-free token check; application migration and broader execution pending |
 
 IDs 0023 and 0024 are intentionally unused.
 
