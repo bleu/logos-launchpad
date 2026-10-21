@@ -131,3 +131,10 @@ jobs:
         run: bash verify/check-builds.sh
       - name: Check generated program interfaces
         run: bash verify/check-idl.sh
+      - name: Free build output before saving dependency cache
+        if: always()
+        run: |
+          rm -rf target methods/target methods/guest/target \
+            packages/weighted-math/target packages/weighted-math/fuzz/target \
+            packages/weighted-math/zkvm/target packages/weighted-math/zkvm/methods/target \
+            packages/weighted-math/zkvm/methods/guest/target
