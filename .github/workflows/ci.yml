@@ -28,6 +28,7 @@ jobs:
         run: rustup toolchain install 1.98.1 --profile minimal --component rustfmt --component clippy
       - name: Check actor pins and host behavior
         run: |
+          bash verify/tests/dev.sh
           bash verify/tests/actor-pins.sh --static
           cargo +1.98.1 fmt --manifest-path packages/lez-compat/Cargo.toml --all -- --check
           cargo +1.98.1 test --manifest-path packages/lez-compat/Cargo.toml --workspace --locked
@@ -130,3 +131,10 @@ jobs:
         run: bash verify/check-builds.sh
       - name: Check generated program interfaces
         run: bash verify/check-idl.sh
+      - name: Free build output before saving dependency cache
+        if: always()
+        run: |
+          rm -rf target methods/target methods/guest/target \
+            packages/weighted-math/target packages/weighted-math/fuzz/target \
+            packages/weighted-math/zkvm/target packages/weighted-math/zkvm/methods/target \
+            packages/weighted-math/zkvm/methods/guest/target

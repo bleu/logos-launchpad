@@ -50,7 +50,7 @@ This is the planned product view. The QML apps and shared core are future work. 
 - [Private participation and recovery](docs/architecture/private-participation.md)
 - [Creation and private-route sequences](docs/architecture/sequence-diagrams/README.md)
 - [Repository baseline and planned layout](docs/architecture/repository-layout.md)
-- [Workspace commands](docs/architecture/workspace-guide.md)
+- [Daily development and verification commands](docs/architecture/workspace-guide.md#daily-development)
 - [Domain terms](CONTEXT.md)
 - [Plain-English glossary](docs/glossary.md)
 - [Architecture decisions](docs/adr/README.md)
