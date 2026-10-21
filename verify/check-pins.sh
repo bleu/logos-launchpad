@@ -8,6 +8,11 @@
 # Written for bash 3.2, which is what macOS ships.
 set -euo pipefail
 
+if [ "${1:-}" = --actor ]; then
+  shift
+  exec bash "$(dirname "${BASH_SOURCE[0]}")/check-actor-pins.sh" "$@"
+fi
+
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root"
 

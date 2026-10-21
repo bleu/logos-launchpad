@@ -18,6 +18,22 @@ defaults:
     shell: bash
 
 jobs:
+  actor-foundation:
+    name: Actor foundation host checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Install actor host Rust
+        run: rustup toolchain install 1.98.1 --profile minimal --component rustfmt --component clippy
+      - name: Check actor pins and host behavior
+        run: |
+          bash verify/tests/actor-pins.sh --static
+          cargo +1.98.1 fmt --manifest-path packages/lez-compat/Cargo.toml --all -- --check
+          cargo +1.98.1 test --manifest-path packages/lez-compat/Cargo.toml --workspace --locked
+          cargo +1.98.1 clippy --manifest-path packages/lez-compat/Cargo.toml --workspace --all-targets --locked -- -D warnings
+          bash verify/tests/actor-tools.sh
+
   checks:
     name: Formatting and pins
     runs-on: ubuntu-24.04

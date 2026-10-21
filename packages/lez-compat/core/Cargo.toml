@@ -1,0 +1,11 @@
+[package]
+name = "lez-compat-core"
+version = "0.1.0"
+edition.workspace = true
+rust-version = "1.94"
+license.workspace = true
+
+[dependencies]
+borsh.workspace = true
+lee_core.workspace = true
+risc0-zkvm.workspace = true

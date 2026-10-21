@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if [ "${1:-}" = --actor ]; then
+  shift
+  exec bash "$(dirname "${BASH_SOURCE[0]}")/check-actor-builds.sh" "$@"
+fi
+
 fail() {
   printf 'check-builds: %s\n' "$1" >&2
   exit 1

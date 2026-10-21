@@ -4,6 +4,8 @@ This repository contains the imported curve PoC and weighted-math library. They 
 
 ## Build contexts
 
+The [actor development base](../../packages/lez-compat/README.md) has separate host, guest and optional execution workspaces. Run `bash verify/check-builds.sh --actor --preflight` to check its Rust 1.98.1 and RISC0 tool set. Run `bash verify/check-builds.sh --actor` for locked foundation checks, or add `--execution` for the node-free token fixture. `check-pins.sh`, `generate-idl.sh` and `check-idl.sh` also accept `--actor`. These commands need no scaffold or SPEL CLI. The remaining commands below select the unported application baseline; they do not establish actor compatibility.
+
 Curve host and guest builds require `CURVE_EMERGENCY_AUTHORITY`, a nonzero 64-character hex account ID. For local tests, run this from the repository root before the commands below:
 
 ```sh
