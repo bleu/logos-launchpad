@@ -21,6 +21,8 @@ Host execution uses the selected LEZ revision's checked-in `artifacts/lee/privac
 
 ## Commands
 
+For routine host work, use `bash verify/dev.sh actor check` or `bash verify/dev.sh actor test`. These use compact output per worktree and optional shared compiler caching. See [daily development](../../docs/architecture/workspace-guide.md#daily-development). The commands below remain the foundation verification lane.
+
 Run from the repository root:
 
 ```sh

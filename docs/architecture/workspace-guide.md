@@ -2,6 +2,33 @@
 
 This repository contains the imported curve PoC and weighted-math library. They are a starting point for production work, not a claim that the [accepted design](../adr/README.md) is implemented. See [repository layout](repository-layout.md) for each package's role.
 
+## Daily development
+
+Use the compact host command while working in parallel branches or Git worktrees:
+
+```sh
+bash verify/dev.sh actor check
+bash verify/dev.sh actor test
+bash verify/dev.sh app test -p curve-math
+bash verify/dev.sh math test -p weighted-math-core
+bash verify/dev.sh actor clippy --all-targets -- -D warnings
+```
+
+`app` selects the root application workspace. `actor` selects the actor foundation host workspace. `math` selects the weighted-math host workspace. The command uses each workspace's pinned host Rust and locked dependencies. For `app`, it uses the local emergency-authority fixture when `CURVE_EMERGENCY_AUTHORITY` is unset. The command accepts focused Cargo arguments such as `-p`, `--test` and test filters. Guest workspaces, release profiles and target/profile overrides use the verification commands below.
+
+Development output stays in `.local/launchpad/dev/<workspace>/target` inside each worktree. It is ignored by Git. The command keeps line information for backtraces and disables incremental compilation for host development and tests. It sets these options only for its child Cargo process. It does not change release or guest profiles. See [ADR 0035](../adr/0035-compact-host-development.md) for the tradeoffs.
+
+Install [sccache](https://github.com/mozilla/sccache#installation) on `PATH` to share compiled dependencies between worktrees. On macOS, `brew install sccache` is one option. The development command was checked with sccache 0.18.0. It uses one local server and a disk cache capped at 5 GiB under `${XDG_CACHE_HOME:-$HOME/.cache}/logos-launchpad/`. `LAUNCHPAD_DEV_CACHE_DIR` can select another absolute directory. Use the same directory in every worktree. This command does not build guest artifacts. Compiled output still occupies space in each worktree; cache reuse does not remove that cost.
+
+`LAUNCHPAD_DEV_CACHE=auto` is the default: use sccache when available, or report that shared caching is off. Set it to `required` to fail when sccache is absent, or `off` to disable shared caching. View cache use or clean one worktree's development output with:
+
+```sh
+bash verify/dev.sh cache-stats
+bash verify/dev.sh actor clean
+```
+
+`clean` removes only that worktree's selected development target. It retains verification builds and the shared cache. Run full guest and release verification in CI or a dedicated verification worktree. Do not export development wrappers globally: the verification commands reject wrapper and target-directory overrides. The separate launchpad core and QML package workflows still use their [package guide](../../packages/launchpad/README.md).
+
 ## Build contexts
 
 The [actor development base](../../packages/lez-compat/README.md) has separate host, guest and optional execution workspaces. Run `bash verify/check-builds.sh --actor --preflight` to check its Rust 1.98.1 and RISC0 tool set. Run `bash verify/check-builds.sh --actor` for locked foundation checks, or add `--execution` for the node-free token fixture. `check-pins.sh`, `generate-idl.sh` and `check-idl.sh` also accept `--actor`. These commands need no scaffold or SPEL CLI. The remaining commands below select the unported application baseline; they do not establish actor compatibility.
