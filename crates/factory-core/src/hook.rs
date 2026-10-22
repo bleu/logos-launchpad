@@ -1,308 +1,200 @@
 use super::*;
-
-pub(super) fn validate_interface(
-    pre: &[AccountWithMetadata],
-    remaining: &[AccountWithMetadata],
-    program: ProgramId,
-) {
-    for slot in [0, 2, 3, 4, 9, 10] {
-        assert!(
-            !pre[slot].is_authorized,
-            "Hook callback prefix must be unauthorized"
-        );
-    }
-    let state = FactoryState::try_from(&pre[0].account.data).expect("valid factory");
-    let mut protected: Vec<_> = pre.iter().map(|account| account.account_id).collect();
-    protected.extend([
-        state.creator_escrow_id,
-        compute_escrow_pda(state.namespace, program, state.launch_salt),
-        compute_definition_pda(state.namespace, program, state.launch_salt),
-        compute_mint_pda(state.namespace, program, state.launch_salt),
-        compute_metadata_pda(state.namespace, program, state.launch_salt),
-    ]);
-    for account in remaining {
-        assert!(
-            !account.is_authorized,
-            "Hook remaining accounts must be unauthorized"
-        );
-        assert_ne!(
-            account.account.program_owner, program,
-            "Hook cannot expose factory-owned accounts"
-        );
-        assert!(
-            !protected.contains(&account.account_id),
-            "Hook remaining account aliases protected or duplicate account"
-        );
-        protected.push(account.account_id);
+#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct GraduationRequest {
+    pub factory_program_id: AccountId,
+    pub namespace: AccountId,
+    pub launch_salt: [u8; 32],
+    pub token_definition_id: AccountId,
+    pub collateral_definition_id: AccountId,
+    pub dex_seed_reserve: u128,
+    pub collateral_amount: u128,
+    pub configuration: Vec<u8>,
+}
+#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub enum AdapterMessage {
+    Initialize {
+        factory_program_id: AccountId,
+        namespace: AccountId,
+        launch_salt: [u8; 32],
+        ready: bool,
+    },
+    ReadState,
+    Graduate {
+        request: GraduationRequest,
+    },
+}
+#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct AdapterState {
+    pub factory: Actor,
+    pub ready: bool,
+    pub receipt: Option<GraduationRequest>,
+    pending: Option<(GraduationRequest, u8)>,
+}
+#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct GraduationResult {
+    pub factory: AccountId,
+}
+impl AdapterState {
+    pub fn decode(bytes: &[u8]) -> Result<Self, Error> {
+        borsh::from_slice(bytes).map_err(|_| Error::InvalidState)
     }
 }
-
-pub(super) fn validate_settlement(pre: &[AccountWithMetadata], program: ProgramId) {
-    let state = FactoryState::try_from(&pre[0].account.data).expect("valid factory");
-    let pool = PoolAccount::try_from(&pre[1].account.data).expect("valid pool");
-    assert_eq!(
-        pre[1].account_id,
-        compute_pool_pda(
-            state.namespace,
-            state.curve_program_id,
-            state.token_definition_id,
-            state.collateral_definition_id,
-            pre[0].account_id
-        ),
-        "Wrong canonical settlement pool"
-    );
-    assert_eq!(pool.owner, pre[0].account_id, "Wrong settlement pool owner");
-    assert_eq!(
-        pool.owner_program,
-        Some((
-            program,
-            *compute_factory_seed(state.namespace, state.launch_salt).as_bytes()
-        )),
-        "Wrong settlement pool authority"
-    );
-    assert_eq!(
-        pool.token0_definition_id, state.token_definition_id,
-        "Wrong pool launch definition"
-    );
-    assert_eq!(
-        pool.token1_definition_id, state.collateral_definition_id,
-        "Wrong pool collateral definition"
-    );
-    let config = curve_core::validated_config(&pre[12], state.namespace, state.curve_program_id);
-    let treasury = AccountWithMetadata {
-        account_id: config.treasury,
-        account: Account::default(),
-        is_authorized: false,
-    };
-    for (slot, owner, token) in [
-        (7, &pre[1], state.token_definition_id),
-        (8, &pre[1], state.collateral_definition_id),
-        (13, &treasury, state.collateral_definition_id),
-    ] {
-        associated_token_account_core::verify_ata_and_get_seed(
-            &pre[slot],
-            owner,
-            token,
-            ASSOCIATED_TOKEN_ACCOUNT_PROGRAM_ID,
-        );
-    }
-    for slot in [3, 4] {
-        assert_eq!(
-            pre[slot].account.program_owner,
-            curve_core::TOKEN_PROGRAM_ID,
-            "Invalid settlement definition program"
-        );
-        assert!(
-            matches!(
-                token_core::TokenDefinition::try_from(&pre[slot].account.data)
-                    .expect("valid settlement definition"),
-                token_core::TokenDefinition::Fungible { .. }
-            ),
-            "Settlement definitions must be fungible"
-        );
-    }
-    for (slot, token) in [
-        (5, state.token_definition_id),
-        (6, state.collateral_definition_id),
-        (7, state.token_definition_id),
-        (8, state.collateral_definition_id),
-        (9, state.token_definition_id),
-        (10, state.collateral_definition_id),
-        (13, state.collateral_definition_id),
-    ] {
-        if pre[slot].account != Account::default() {
-            balance(&pre[slot], token);
-        }
-    }
-    match state.settlement_stage {
-        SettlementStage::Ready => {
-            assert!(
-                balance(&pre[7], state.token_definition_id) >= pool.pool.real_reserve0,
-                "Pool token custody is underfunded"
-            );
-            let collateral_liability = pool
-                .pool
-                .real_reserve1
-                .checked_add(pool.pool.fees_accrued)
-                .expect("Pool collateral liabilities overflow");
-            assert!(
-                balance(&pre[8], state.collateral_definition_id) >= collateral_liability,
-                "Pool collateral custody is underfunded"
-            );
-            let treasury_credit = if pre[13].account_id == pre[8].account_id {
-                0
-            } else {
-                pool.pool.fees_accrued
-            };
-            check_credits(
-                pre,
-                &[
-                    (5, state.token_definition_id, pool.pool.real_reserve0),
-                    (6, state.collateral_definition_id, pool.pool.real_reserve1),
-                    (13, state.collateral_definition_id, treasury_credit),
-                ],
-            );
-        }
-        SettlementStage::Withdrawn { unsold, .. } if unsold != 0 => {
-            assert!(
-                balance(&pre[5], state.token_definition_id) >= unsold,
-                "Unsold allocation custody is underfunded"
-            );
-            let token_core::TokenDefinition::Fungible { total_supply, .. } =
-                token_core::TokenDefinition::try_from(&pre[3].account.data)
-                    .expect("valid definition")
-            else {
-                unreachable!()
-            };
-            assert!(total_supply >= unsold, "Unsold burn exceeds total supply");
-        }
-        SettlementStage::Burned { .. } | SettlementStage::HookReady { .. }
-            if state.dex_seed_reserve != 0 =>
-        {
-            assert!(
-                balance(&pre[5], state.token_definition_id) >= state.dex_seed_reserve,
-                "Factory token custody is underfunded"
-            );
-            check_credits(
-                pre,
-                &[(9, state.token_definition_id, state.dex_seed_reserve)],
-            );
-        }
-        SettlementStage::Burned { collateral_due }
-        | SettlementStage::HookReady { collateral_due }
-        | SettlementStage::TokenPaid { collateral_due } => {
-            assert!(
-                balance(&pre[6], state.collateral_definition_id) >= collateral_due,
-                "Factory collateral custody is underfunded"
-            );
-            check_credits(pre, &[(10, state.collateral_definition_id, collateral_due)]);
-        }
-        _ => {}
-    }
-}
-
-fn check_credits(pre: &[AccountWithMetadata], credits: &[(usize, AccountId, u128)]) {
-    let mut totals: Vec<(AccountId, u128)> = Vec::new();
-    for &(slot, token, amount) in credits {
-        let id = pre[slot].account_id;
-        if let Some((_, value)) = totals.iter_mut().find(|(account, _)| *account == id) {
-            *value = value
-                .checked_add(amount)
-                .expect("Settlement custody credit overflow");
+pub fn handle_adapter(input: &ReceiveInput) -> Result<Response, Error> {
+    if let Ok(mut state) = AdapterState::decode(&input.pre_state)
+        && let Some((request, step)) = state.pending.take()
+    {
+        let owner = input.receiver.account_id;
+        let definition = if step == 0 || step == 2 {
+            request.token_definition_id
         } else {
-            let value = if pre[slot].account == Account::default() {
-                0
+            request.collateral_definition_id
+        };
+        let expected = Actor::new(
+            if step < 2 {
+                definition
             } else {
-                balance(&pre[slot], token)
-            };
-            totals.push((
-                id,
-                value
-                    .checked_add(amount)
-                    .expect("Settlement custody credit overflow"),
-            ));
+                token::holding_address(TOKEN_PROGRAM_ACCOUNT_ID, owner, definition)
+            },
+            TOKEN_PROGRAM_ACCOUNT_ID,
+        );
+        let value = token::read_reply(input, expected)?;
+        match value {
+            TokenState::Definition {
+                kind: TokenKind::Fungible,
+                ..
+            } if step < 2 => {}
+            TokenState::Holding {
+                owner: stored,
+                definition: stored_definition,
+                kind: TokenKind::Fungible,
+                balance,
+            } if step >= 2
+                && stored == owner
+                && stored_definition == definition
+                && balance
+                    >= if step == 2 {
+                        request.dex_seed_reserve
+                    } else {
+                        request.collateral_amount
+                    } => {}
+            _ => return Err(Error::InvalidCustody),
         }
-    }
-}
-
-fn balance(account: &AccountWithMetadata, definition: AccountId) -> u128 {
-    assert_eq!(
-        account.account.program_owner,
-        curve_core::TOKEN_PROGRAM_ID,
-        "Invalid settlement token program"
-    );
-    match TokenHolding::try_from(&account.account.data).expect("valid settlement token holding") {
-        TokenHolding::Fungible {
-            definition_id,
-            balance,
-        } => {
-            assert_eq!(
-                definition_id, definition,
-                "Wrong settlement holding definition"
+        if step == 3 {
+            state.receipt = Some(request);
+            return Ok(
+                Response::set_state(borsh::to_vec(&state).unwrap()).send_sync(
+                    state.factory,
+                    &GraduationResult {
+                        factory: state.factory.account_id,
+                    },
+                ),
             );
-            balance
         }
-        _ => panic!("Settlement tokens must be fungible"),
+        let next = step + 1;
+        let definition = if next == 2 {
+            request.token_definition_id
+        } else {
+            request.collateral_definition_id
+        };
+        let address = if next < 2 {
+            definition
+        } else {
+            token::holding_address(TOKEN_PROGRAM_ACCOUNT_ID, owner, definition)
+        };
+        state.pending = Some((request, next));
+        return Ok(
+            Response::set_state(borsh::to_vec(&state).unwrap()).send_sync(
+                Actor::new(address, TOKEN_PROGRAM_ACCOUNT_ID),
+                &token::Message::ReadState,
+            ),
+        );
     }
-}
-
-fn credited(
-    account: &AccountWithMetadata,
-    definition: AccountId,
-    amount: u128,
-) -> AccountWithMetadata {
-    let value = balance(account, definition)
-        .checked_add(amount)
-        .expect("Adapter custody balance overflow");
-    let mut snapshot = account.clone();
-    snapshot.account.data = Data::from(&TokenHolding::Fungible {
-        definition_id: definition,
-        balance: value,
-    });
-    snapshot
-}
-
-pub(super) fn final_calls(
-    pre: &[AccountWithMetadata],
-    snapshot: AccountWithMetadata,
-    state: &FactoryState,
-    factory_program_id: ProgramId,
-    collateral_due: u128,
-) -> Vec<ChainedCall> {
-    let settings = state.graduation_hook.as_ref().expect("configured hook");
-    assert!(
-        balance(&pre[5], state.token_definition_id) >= state.dex_seed_reserve,
-        "Factory token custody is underfunded"
-    );
-    assert!(
-        balance(&pre[6], state.collateral_definition_id) >= collateral_due,
-        "Factory collateral custody is underfunded"
-    );
-    let token = credited(&pre[9], state.token_definition_id, state.dex_seed_reserve);
-    let collateral = credited(&pre[10], state.collateral_definition_id, collateral_due);
-    let owner = AccountWithMetadata {
-        is_authorized: true,
-        ..snapshot.clone()
-    };
-    let mut calls = Vec::new();
-    for (source, recipient, definition, amount) in [
-        (&pre[5], &pre[9], &pre[3], state.dex_seed_reserve),
-        (&pre[6], &pre[10], &pre[4], collateral_due),
-    ] {
-        if amount != 0 {
-            let mut transfer = payout_calls(
-                owner.clone(),
-                pre[2].clone(),
-                source.clone(),
-                recipient.clone(),
-                definition.clone(),
-                amount,
-                vec![compute_factory_seed(state.namespace, state.launch_salt)],
-            );
-            transfer.remove(0);
-            calls.extend(transfer);
-        }
-    }
-    calls.push(ChainedCall::new(
-        settings.program_id,
-        vec![
-            snapshot,
-            pre[2].clone(),
-            pre[3].clone(),
-            pre[4].clone(),
-            token,
-            collateral,
-        ],
-        &GraduationRequest {
+    let message: AdapterMessage =
+        borsh::from_slice(&input.message).map_err(|_| Error::InvalidMessage)?;
+    match message {
+        AdapterMessage::Initialize {
             factory_program_id,
-            namespace: state.namespace,
-            launch_salt: state.launch_salt,
-            token_definition_id: state.token_definition_id,
-            collateral_definition_id: state.collateral_definition_id,
-            dex_seed_reserve: state.dex_seed_reserve,
-            collateral_amount: collateral_due,
-            configuration: settings.configuration.clone(),
-        },
-    ));
-    calls
+            namespace,
+            launch_salt,
+            ready,
+        } => {
+            let factory = Actor::new(
+                compute_factory_pda(namespace, factory_program_id, launch_salt),
+                factory_program_id,
+            );
+            if input.receiver.account_id
+                != compute_graduation_pda(input.receiver.program_account_id, factory.account_id)
+            {
+                return Err(Error::WrongAccount);
+            }
+            if !input.pre_state.is_empty() {
+                let previous = AdapterState::decode(&input.pre_state)?;
+                if previous.factory != factory
+                    || previous.receipt.is_some()
+                    || previous.pending.is_some()
+                {
+                    return Err(Error::AlreadyInitialized);
+                }
+            }
+            Ok(Response::set_state(
+                borsh::to_vec(&AdapterState {
+                    factory,
+                    ready,
+                    receipt: None,
+                    pending: None,
+                })
+                .unwrap(),
+            ))
+        }
+        AdapterMessage::Graduate { request } => {
+            let mut state = AdapterState::decode(&input.pre_state)?;
+            if input.from != Some(state.factory) {
+                return Err(Error::Unauthorized);
+            }
+            if input.receiver.account_id
+                != compute_graduation_pda(
+                    input.receiver.program_account_id,
+                    state.factory.account_id,
+                )
+                || state.factory
+                    != Actor::new(
+                        compute_factory_pda(
+                            request.namespace,
+                            request.factory_program_id,
+                            request.launch_salt,
+                        ),
+                        request.factory_program_id,
+                    )
+                || request.token_definition_id
+                    != compute_definition_pda(
+                        request.namespace,
+                        request.factory_program_id,
+                        request.launch_salt,
+                    )
+                || request.token_definition_id == request.collateral_definition_id
+            {
+                return Err(Error::WrongAccount);
+            }
+            if !state.ready {
+                return Err(Error::AdapterNotReady);
+            }
+            if state.receipt.is_some() {
+                return Err(Error::AlreadySettled);
+            }
+            state.pending = Some((request.clone(), 0));
+            Ok(
+                Response::set_state(borsh::to_vec(&state).unwrap()).send_sync(
+                    Actor::new(request.token_definition_id, TOKEN_PROGRAM_ACCOUNT_ID),
+                    &token::Message::ReadState,
+                ),
+            )
+        }
+        AdapterMessage::ReadState => {
+            AdapterState::decode(&input.pre_state)?;
+            Ok(Response::keep_state().send_sync(
+                input.from.ok_or(Error::Unauthorized)?,
+                &StateReply::from(input),
+            ))
+        }
+    }
 }

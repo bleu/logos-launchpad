@@ -6,19 +6,19 @@ source verify/actor-tools.env
 fail() { printf 'check-pins: %s\n' "$1" >&2; exit 1; }
 case "${1:-}" in ''|--tools) [ "$#" -le 1 ] || fail 'usage: check-actor-pins.sh [--tools]' ;; *) fail 'usage: check-actor-pins.sh [--tools]' ;; esac
 base=packages/lez-compat
-for manifest in "$base/Cargo.toml" "$base/methods/guest/Cargo.toml" "$base/execution/Cargo.toml"; do
+for manifest in Cargo.toml methods/Cargo.toml methods/guest/Cargo.toml "$base/Cargo.toml" "$base/methods/guest/Cargo.toml" "$base/execution/Cargo.toml"; do
   lines="$(grep 'git = "https://github.com/logos-blockchain/logos-execution-zone.git"' "$manifest")" || fail "missing actor LEZ dependency: $manifest"
   if printf '%s\n' "$lines" | grep -vF "rev = \"$ACTOR_LEZ_REV\"" >/dev/null; then
     fail "actor LEZ revision differs in $manifest"
   fi
 done
-for lock in "$base/Cargo.lock" "$base/methods/guest/Cargo.lock" "$base/execution/Cargo.lock"; do
+for lock in Cargo.lock methods/Cargo.lock methods/guest/Cargo.lock "$base/Cargo.lock" "$base/methods/guest/Cargo.lock" "$base/execution/Cargo.lock"; do
   lines="$(grep '^source = "git+https://github.com/logos-blockchain/logos-execution-zone.git' "$lock")" || fail "missing actor LEZ lock source: $lock"
   if printf '%s\n' "$lines" | grep -vF "?rev=$ACTOR_LEZ_REV#$ACTOR_LEZ_REV\"" >/dev/null; then
     fail "actor LEZ lock revision differs in $lock"
   fi
 done
-for lock in "$base/Cargo.lock" "$base/methods/Cargo.lock" "$base/methods/guest/Cargo.lock" "$base/execution/Cargo.lock"; do
+for lock in Cargo.lock methods/Cargo.lock methods/guest/Cargo.lock "$base/Cargo.lock" "$base/methods/Cargo.lock" "$base/methods/guest/Cargo.lock" "$base/execution/Cargo.lock"; do
   awk -v expected="$ACTOR_RISC0_VERSION" '
     /^name = / {name=$3}
     /^version = / && (name == "\"risc0-zkvm\"" || name == "\"risc0-build\"") {
@@ -34,7 +34,9 @@ for lock in "$base/Cargo.lock" "$base/methods/Cargo.lock" "$base/methods/guest/C
     END {if (!found) exit 1}
   ' "$lock" || fail "zkOS version differs in $lock"
 done
-grep -Fx "channel = \"$ACTOR_RUST_VERSION\"" "$base/rust-toolchain.toml" >/dev/null || fail 'actor host Rust pin differs'
+for toolchain in rust-toolchain.toml "$base/rust-toolchain.toml"; do
+  grep -Fx "channel = \"$ACTOR_RUST_VERSION\"" "$toolchain" >/dev/null || fail "actor host Rust pin differs in $toolchain"
+done
 if [ "${1:-}" = --tools ]; then
   actual="$(rustc +"$ACTOR_RUST_VERSION" --version | cut -d ' ' -f 2)"
   [ "$actual" = "$ACTOR_RUST_VERSION" ] || fail "expected actor Rust $ACTOR_RUST_VERSION, found $actual"

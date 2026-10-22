@@ -1,6 +1,6 @@
 # LEZ actor development base
 
-This temporary development base targets LEZ actor revision `578ce58a71b79c49d48e97e51c520bf71f0252d9`. It supplies token, ATA and role-authority handlers, thin guests and repository tools. It has no sale rules. The existing launchpad still uses its original dependencies until the application migration. These are migration stages, not two supported platform implementations. Nothing is deployed to testnet or production.
+This temporary development base targets LEZ actor revision `578ce58a71b79c49d48e97e51c520bf71f0252d9`. It supplies token, ATA and role-authority handlers, thin guests and repository tools. It has no sale rules. The root application is migrated to the same revision. There is no second supported platform implementation. Nothing is deployed to testnet or production.
 
 ## Build requirements
 
@@ -33,7 +33,7 @@ bash verify/check-idl.sh --actor
 bash verify/check-builds.sh --actor
 ```
 
-The final command runs the host, guest, IDL, wire and shell checks and checks that the four lockfiles stay unchanged. Add `--execution` to include the optional node-free execution test. Its separate command is:
+The final command now selects repository-wide checks, including the root application and weighted math. The `--actor` flag is retained as an alias for the same platform. See the [workspace guide](../../docs/architecture/workspace-guide.md) for the current scope, passed local checks and remaining gaps. Add `--execution` to include the optional token and seeded curve fixtures. The token fixture's separate command is:
 
 ```sh
 RISC0_BUILD_LOCKED=1 cargo +1.98.1 test --manifest-path packages/lez-compat/execution/Cargo.toml --locked
@@ -41,7 +41,7 @@ RISC0_BUILD_LOCKED=1 cargo +1.98.1 test --manifest-path packages/lez-compat/exec
 
 The executor needs permission to start a local process and use local IPC. A filesystem sandbox can reject it with `Operation not permitted`. This is not a passing execution result. No network service or real-proof mode is needed. The fixture uses upstream fee-exempt test transactions; it does not establish wallet submission or network-fee behavior.
 
-The `--actor` commands select this foundation. Commands without that flag still select the unported application baseline. The CI actor job runs host tests, formatting, clippy, static pin checks and wire/tool checks. Guest builds and execution remain local checks in this stage.
+Commands with or without `--actor` select the same actor platform. The CI workflow is configured for repository checks; Linux CI has not run. Foundation evidence below stays separate from the application results in the [workspace guide](../../docs/architecture/workspace-guide.md#execution-and-evidence-limits).
 
 ## Interfaces and addresses
 
@@ -49,7 +49,7 @@ The [actor interface](https://github.com/logos-blockchain/logos-execution-zone/b
 
 A program account address identifies a deployment. An image ID identifies its binary. Pass the program account address to PDA derivation and callbacks. The execution fixture alone uses `AccountId::from_builtin_program` to register a disposable test program. The generated `COMPAT_TOKEN_ID` and `COMPAT_AUTHORITY_ID` constants are image IDs, not deployment addresses. Guest binaries and IDs can depend on the build path; this foundation does not establish release identity across paths or operating systems.
 
-`token::holding_address(program, owner, definition)` and `holding_seed` define canonical associated holdings. Each holding stores its definition, owner, token kind and balance. A definition stores its name, kind, supply and optional metadata. Metadata is part of the definition actor state; there is no separate metadata actor in this temporary interface. Fungible amounts use checked `u128` arithmetic. Legacy role NFTs have one master unit; printing and general NFT products are outside this package.
+`token::holding_address(program, owner, definition)` and `holding_seed` define canonical associated holdings. Each holding stores its definition, owner, token kind and balance. These holdings are public only; private purchase and authority execution is explicitly unsupported in the application helpers. A definition stores its name, kind, supply and optional metadata. Metadata is part of the definition actor state; there is no separate metadata actor in this temporary interface. Fungible amounts use checked `u128` arithmetic. Legacy role NFTs have one master unit; printing and general NFT products are outside this package.
 
 Call `Create`, `Mint` or `Initialize` at the definition actor. `Create` and `Mint` require definition authorization. Call `Transfer`, `Burn` or `AssertNft` at the owner's actor for this token program. That actor requires the runtime's signer or PDA authorization, then calls the canonical holding. Credits and burns use synchronous messages. Another program can request `ReadState`; `read_reply` checks the expected token actor before decoding the upstream `StateReply`. `verify_nft_holder` checks a reply's token program, canonical holding, definition and owner. Keep legacy curve creator and pool-owner NFT checks until their separate role migration.
 

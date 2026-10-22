@@ -1,197 +1,143 @@
-//! Direction and config adapter for pool swaps.
-
-use lee_core::{
-    account::{AccountId, AccountWithMetadata},
-    program::{AccountPostState, ProgramId},
+//! Curve pricing stays in the pure pool crate.
+use crate::{
+    Error, Message, PoolAccount, TOKEN_PROGRAM_ACCOUNT_ID,
+    dispatch::{Pending, Query},
+    pool_create::{assert_clock, transfer},
 };
-use pool::{ExactInputSwap, ExactOutputSwap, FeeSide, TokenSide};
+use lee_core::{
+    account::Actor,
+    program::{ReceiveInput, Response, SyncMessage},
+};
+use pool::{ExactInputSwap, ExactOutputSwap, TokenSide};
 
-use crate::{Config, PoolAccount, compute_config_pda, compute_pool_pda};
-
-/// Values the token-account adapter must settle atomically.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SwapSettlement {
-    pub token_in: AccountId,
-    pub token_out: AccountId,
-    pub amount_in: u128,
-    pub effective_amount_in: u128,
-    pub raw_amount_out: u128,
-    pub amount_out: u128,
-    pub protocol_fee: u128,
-    pub protocol_fee_side: FeeSide,
-    pub treasury: AccountId,
+pub fn begin(input: &ReceiveInput, message: Message) -> Result<Response, Error> {
+    let state = PoolAccount::decode(&input.pre_state)?;
+    state.validate_address(input.receiver)?;
+    let sender = input.from.ok_or(Error::Unauthorized)?;
+    if sender.program_account_id != input.receiver.program_account_id {
+        return Err(Error::Unauthorized);
+    }
+    Pending::new(
+        state,
+        message,
+        sender.account_id,
+        vec![Query::Namespace, Query::Vault0, Query::Vault1],
+    )
+    .advance(input.receiver)
 }
-
-#[must_use]
-pub fn swap_exact_input(
-    pool: AccountWithMetadata,
-    config: AccountWithMetadata,
-    clock: Option<AccountWithMetadata>,
-    amount_in: u128,
-    min_amount_out: u128,
-    token_in: AccountId,
-    curve_program_id: ProgramId,
-) -> (Vec<AccountPostState>, SwapSettlement) {
-    let mut pool_account = validated_pool_identity(&pool, curve_program_id);
-    let config_data = validated_config(&config, pool_account.namespace, curve_program_id);
-    assert!(
-        !config_data.emergency.is_frozen,
-        "Namespace swaps are frozen"
-    );
-    assert!(pool_account.funded, "Pool funding is pending");
-    let (side, token_out) = direction(&pool_account, token_in);
-    let now = trusted_time(&pool_account, clock);
-    let outcome = pool_account
+pub(crate) fn backed(pending: &Pending) -> Result<(), Error> {
+    let collateral = pending
+        .state
         .pool
-        .swap_exact_input(ExactInputSwap {
+        .real_reserve1
+        .checked_add(pending.state.pool.fees_accrued)
+        .ok_or(Error::Arithmetic)?;
+    if pending.balances[0] < pending.state.pool.real_reserve0 || pending.balances[1] < collateral {
+        return Err(Error::Underfunded);
+    }
+    Ok(())
+}
+pub(crate) fn payout(
+    response: Response,
+    state: &PoolAccount,
+    receiver: Actor,
+    definition: lee_core::account::AccountId,
+    recipient: lee_core::account::AccountId,
+    amount: u128,
+) -> Response {
+    if amount == 0 || recipient == receiver.account_id {
+        return response;
+    }
+    response.send(
+        SyncMessage::new(
+            Actor::new(receiver.account_id, TOKEN_PROGRAM_ACCOUNT_ID),
+            &lez_compat_core::token::Message::Transfer {
+                definition,
+                recipient,
+                amount,
+            },
+        )
+        .with_pda_seeds([crate::compute_pool_pda_seed(
+            state.namespace,
+            state.token0_definition_id,
+            state.token1_definition_id,
+            state.owner,
+        )]),
+    )
+}
+pub(crate) fn finish(mut pending: Pending, receiver: Actor) -> Result<Response, Error> {
+    let config = pending.config.as_ref().ok_or(Error::InvalidState)?;
+    if config.emergency.is_frozen {
+        return Err(Error::Frozen);
+    }
+    if !pending.state.funded {
+        return Err(Error::PendingFunding);
+    }
+    let (token_in, now) = match pending.message {
+        Message::SwapExactInput { token_in, now, .. }
+        | Message::SwapExactOutput { token_in, now, .. } => (token_in, now),
+        _ => return Err(Error::InvalidMessage),
+    };
+    let (side, token_out) = if token_in == pending.state.token0_definition_id {
+        (TokenSide::Token0, pending.state.token1_definition_id)
+    } else if token_in == pending.state.token1_definition_id {
+        (TokenSide::Token1, pending.state.token0_definition_id)
+    } else {
+        return Err(Error::InvalidToken);
+    };
+    if pending
+        .state
+        .allowed_input_token
+        .is_some_and(|allowed| allowed != side)
+    {
+        return Err(Error::Restricted);
+    }
+    backed(&pending)?;
+    let outcome = match pending.message {
+        Message::SwapExactInput {
+            amount_in,
+            min_amount_out,
+            ..
+        } => pending.state.pool.swap_exact_input(ExactInputSwap {
             token_in: side,
             amount_in,
             min_amount_out,
             pool_fee_bps: 0,
-            protocol_fee_bps: config_data.protocol_fee_bps,
+            protocol_fee_bps: config.protocol_fee_bps,
             now,
-        })
-        .unwrap_or_else(|error| panic!("exact-input swap rejected: {error}"));
-
-    let mut post = pool.account;
-    post.data = (&pool_account).into();
-    (
-        vec![AccountPostState::new(post)],
-        SwapSettlement {
-            token_in,
-            token_out,
-            amount_in: outcome.amount_in,
-            effective_amount_in: outcome.effective_amount_in,
-            raw_amount_out: outcome.raw_amount_out,
-            amount_out: outcome.amount_out,
-            protocol_fee: outcome.protocol_fee,
-            protocol_fee_side: outcome.protocol_fee_side,
-            treasury: config_data.treasury,
-        },
-    )
-}
-
-#[must_use]
-pub fn swap_exact_output(
-    pool: AccountWithMetadata,
-    config: AccountWithMetadata,
-    clock: Option<AccountWithMetadata>,
-    amount_out: u128,
-    max_amount_in: u128,
-    token_in: AccountId,
-    curve_program_id: ProgramId,
-) -> (Vec<AccountPostState>, SwapSettlement) {
-    let mut pool_account = validated_pool_identity(&pool, curve_program_id);
-    let config_data = validated_config(&config, pool_account.namespace, curve_program_id);
-    assert!(
-        !config_data.emergency.is_frozen,
-        "Namespace swaps are frozen"
-    );
-    assert!(pool_account.funded, "Pool funding is pending");
-    let (side, token_out) = direction(&pool_account, token_in);
-    let now = trusted_time(&pool_account, clock);
-    let outcome = pool_account
-        .pool
-        .swap_exact_output(ExactOutputSwap {
+        }),
+        Message::SwapExactOutput {
+            amount_out,
+            max_amount_in,
+            ..
+        } => pending.state.pool.swap_exact_output(ExactOutputSwap {
             token_in: side,
             amount_out,
             max_amount_in,
             pool_fee_bps: 0,
-            protocol_fee_bps: config_data.protocol_fee_bps,
+            protocol_fee_bps: config.protocol_fee_bps,
             now,
-        })
-        .unwrap_or_else(|error| panic!("exact-output swap rejected: {error}"));
-
-    let mut post = pool.account;
-    post.data = (&pool_account).into();
-    (
-        vec![AccountPostState::new(post)],
-        SwapSettlement {
-            token_in,
-            token_out,
-            amount_in: outcome.amount_in,
-            effective_amount_in: outcome.effective_amount_in,
-            raw_amount_out: outcome.raw_amount_out,
-            amount_out: outcome.amount_out,
-            protocol_fee: outcome.protocol_fee,
-            protocol_fee_side: outcome.protocol_fee_side,
-            treasury: config_data.treasury,
-        },
-    )
-}
-
-pub fn validated_config(
-    config: &AccountWithMetadata,
-    namespace: AccountId,
-    curve_program_id: ProgramId,
-) -> Config {
-    assert_eq!(
-        config.account_id,
-        compute_config_pda(namespace, curve_program_id),
-        "Config account ID does not match PDA"
-    );
-    assert_eq!(
-        config.account.program_owner, curve_program_id,
-        "Config owner does not match program"
-    );
-    Config::try_from(&config.account.data).expect("Config account holds invalid data")
-}
-
-pub(crate) fn validated_pool(
-    pool: &AccountWithMetadata,
-    curve_program_id: ProgramId,
-) -> PoolAccount {
-    let pool_account = validated_pool_identity(pool, curve_program_id);
-    assert!(pool_account.funded, "Pool funding is pending");
-    pool_account
-}
-
-fn validated_pool_identity(pool: &AccountWithMetadata, curve_program_id: ProgramId) -> PoolAccount {
-    assert_eq!(
-        pool.account.program_owner, curve_program_id,
-        "Pool owner does not match program"
-    );
-    let pool_account =
-        PoolAccount::try_from(&pool.account.data).expect("Pool account holds invalid data");
-    assert_eq!(
-        pool.account_id,
-        compute_pool_pda(
-            pool_account.namespace,
-            curve_program_id,
-            pool_account.token0_definition_id,
-            pool_account.token1_definition_id,
-            pool_account.owner,
-        ),
-        "Pool account ID does not match PDA"
-    );
-    pool_account
-}
-
-fn direction(pool: &PoolAccount, token_in: AccountId) -> (TokenSide, AccountId) {
-    let (side, token_out) = if token_in == pool.token0_definition_id {
-        (TokenSide::Token0, pool.token1_definition_id)
-    } else if token_in == pool.token1_definition_id {
-        (TokenSide::Token1, pool.token0_definition_id)
-    } else {
-        panic!("token_in is not a token definition for the pool")
-    };
-    assert!(
-        pool.allowed_input_token
-            .is_none_or(|allowed| allowed == side),
-        "Input token is restricted"
-    );
-    (side, token_out)
-}
-
-fn trusted_time(pool: &PoolAccount, clock: Option<AccountWithMetadata>) -> u64 {
-    if pool.pool.close_timestamp.is_none() {
-        return 0;
+        }),
+        _ => return Err(Error::InvalidMessage),
     }
-    let clock = clock.expect("Trusted LEZ clock is required for a pool with expiry");
-    assert_eq!(
-        clock.account_id,
-        clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID,
-        "Clock account is not the trusted LEZ clock"
+    .map_err(|_| Error::InvalidPool)?;
+    let mut response = Response::set_state(borsh::to_vec(&pending.state).unwrap());
+    if let Some(end) = pending.state.pool.close_timestamp {
+        response = assert_clock(response, now, Some(end))?;
+    }
+    response = transfer(
+        response,
+        pending.authority,
+        token_in,
+        receiver.account_id,
+        outcome.amount_in,
     );
-    clock_core::ClockAccountData::from_bytes(clock.account.data.as_ref()).timestamp
+    Ok(payout(
+        response,
+        &pending.state,
+        receiver,
+        token_out,
+        pending.authority,
+        outcome.amount_out,
+    ))
 }

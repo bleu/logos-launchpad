@@ -4,7 +4,7 @@ Status: Product and recovery requirements accepted; platform, wallet and proof v
 
 Date: 2026-10-01.
 
-This is the shared private-flow specification for curve buys, curve sells, fixed-price sale buys and weighted sale buys. It defines required behavior, not implemented production behavior. The imported curve-buy PoC does not complete the required flow. See [ADR 0018](../adr/0018-private-participation.md), [allowlist policy](../adr/0021-modes-and-open-limits.md) and the [platform research](../research/private-route-transaction-patterns.md).
+This is the shared private-flow specification for curve buys, curve sells, fixed-price sale buys and weighted sale buys. It defines required behavior, not implemented production behavior. The selected actor revision's temporary token support has no private holdings. Existing private purchase and authority helpers return explicit unsupported errors. See [ADR 0018](../adr/0018-private-participation.md), [migration limits](../adr/0034-lez-v04-migration.md) and [allowlist policy](../adr/0021-modes-and-open-limits.md).
 
 ## Transaction contract
 
@@ -159,4 +159,4 @@ For transaction failures, inspect the selected platform's pool state, public bal
 - Reconciliation and restart tests covering lost responses, missing hashes, authoritative terminal outcomes and no duplicate trades.
 - Agreement with the accepted custody, fee, clock, event and SDK interface decisions before final design acceptance.
 
-The [platform research](../research/private-route-transaction-patterns.md) records the current 14-run curve-buy graph, the pinned private proving limit of 10 runs, the static native gas-source ownership mismatch, and the absence of input/gas returns. Those are current implementation gaps. A smaller graph remains a candidate, not an approved or tested implementation. See [verification boundaries](../adr/0022-verification-boundaries.md).
+The [platform research](../research/private-route-transaction-patterns.md) records the old curve-buy graph, call limit and missing returns before the actor migration. Those observations do not define the selected revision's runtime limits or establish a supported private route. Private execution remains unsupported until compatible holdings and the complete transaction contract are implemented and verified. See [verification boundaries](../adr/0022-verification-boundaries.md).

@@ -1,7 +1,6 @@
 use std::str::FromStr;
 
 use lee::AccountId;
-use lee_core::program::ProgramId;
 
 use crate::{ClientError, Result};
 
@@ -104,8 +103,8 @@ impl FromStr for PrivateAccountId {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FactorySale {
     pub namespace: AccountId,
-    pub factory_program_id: ProgramId,
-    pub curve_program_id: ProgramId,
+    pub factory_program_id: AccountId,
+    pub curve_program_id: AccountId,
     pub launch_salt: [u8; 32],
     pub collateral_definition: AccountId,
 }

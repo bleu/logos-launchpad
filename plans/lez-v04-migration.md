@@ -1,6 +1,6 @@
 # LEZ v0.4 migration plan
 
-Status: The [actor development base](../packages/lez-compat/README.md) is implemented and locally checked. Application migration has not started. No sale-flow compatibility is claimed. See [ADR 0034](../docs/adr/0034-lez-v04-migration.md) for the selected approach and the development base guide for exact pins, commands and evidence limits.
+Status: The actor development base and application are migrated to the selected revision. Listed local checks passed; full sale-flow compatibility and production readiness are not established. See [ADR 0034](../docs/adr/0034-lez-v04-migration.md) for the approach and the [workspace guide](../docs/architecture/workspace-guide.md#execution-and-evidence-limits) for results and remaining gaps.
 
 ## Agreed scope
 
@@ -16,7 +16,7 @@ Repository-owned development tooling can remain maintained after the migration. 
 
 Use the LEZ actor interface directly with narrow repository helpers instead of rebuilding the full SPEL framework and code-generation system. Clearly mark temporary compatibility components, explain what upstream support replaces each one, and link its removal task. Keep maintained development tooling distinct from temporary runtime support.
 
-Completion of the full private route remains separate work. Adapt existing private helpers where supported and retain explicit gaps and failure evidence. Do not claim successful private purchases from interface compatibility alone.
+Completion of the full private route remains separate work. The temporary token implementation has no private holdings. Existing private purchase and authority helpers return explicit unsupported errors; they are not successful private routes.
 
 Completion checks cover locked builds, existing tests adapted to the selected interfaces, local execution of supported public flows, client/program encoding checks, and build/load checks for the existing app packages. Use disposable local state. Real-proof readiness remains a separate visible requirement. Testnet deployment is not required.
 
@@ -26,7 +26,9 @@ Preserve the existing curve creator and pool-owner authority behavior where the 
 
 ## Current baseline and sources
 
-The application retains its existing v0.2 pins. The actor development base has its own fixed revision and lockfiles. See the [workspace guide](../docs/architecture/workspace-guide.md) for current checks and known gaps, [repository layout](../docs/architecture/repository-layout.md) for component boundaries, and [ADR index](../docs/adr/README.md) for accepted designs and unfinished work. This plan does not replace the broader product delivery plan.
+The application and development base now target the same fixed actor revision. Root handlers accept `ReceiveInput` and return `Result<Response, Error>`. There is no supported old-platform lane. See the [workspace guide](../docs/architecture/workspace-guide.md) for current commands and known gaps, [repository layout](../docs/architecture/repository-layout.md) for component boundaries, and [ADR index](../docs/adr/README.md) for accepted designs and unfinished work. This plan does not replace the broader product delivery plan.
+
+The three `.lgx` archives passed the Nix build recorded in the [package README](../packages/launchpad/README.md). Installation, loading and the `Test backend` action are blocked by missing Basecamp and `lgpm`; no `Backend OK` result is recorded. Local locked builds and tests, strict Clippy, formatting, pin/shell and IDL/wire checks passed. The execution gate passed with unchanged lockfiles; Linux CI has not run. Broader sale execution remains deferred. Seeded curve tests executed public buys, stale-cap rejection and clock-gated deadline checks, with unchanged state and nonce on rejection. The clock test uses the real upstream assertion guest with seeded clock data. It does not cover sequencer `Tick`, setup, factory clocks, settlement, graduation or fees. Costly execution checks can be deferred with a named evidence gap. Neither host checks nor token-fixture rollback establish sale rollback.
 
 The dated [upstream source check](../docs/research/logos-v02-v04-migration-check.md) links the actor interface, program identities and wallet/module changes. It is source evidence, not a compatible dependency set. The exact revisions and supported platform interfaces must be checked before implementation.
 
@@ -60,12 +62,13 @@ The six stages below describe the work sequence within those two issues. Record 
 - Use synchronous Calls for required token movement and related accounting. Keep standalone fee collection atomic and terminal collection part of atomic settlement. Do not introduce automatic Cast-based collection in this migration.
 - Distinguish deployed program account addresses from image IDs. Update PDA derivation, canonical vault checks, client address helpers and disposable fixtures together.
 - Update source interfaces, generated artifacts, SDK builders and affected CLI calls with each supported operation. Use platform wallet submission and network-fee handling.
+- Use typed graduation callbacks with no arbitrary remaining-account forwarding or factory PDA seed grant to the adapter. Runtime transaction signer permissions still apply; do not recreate the old generic unauthorized extra-account guard. See [ADR 0020](../docs/adr/0020-settlement-and-graduation.md).
 - Start with namespace setup, sale creation, funding and one exact-output public buy. Then cover remaining implemented trades, administration, freeze, collection, close and settlement.
 - Check the Alice/Bob example: both approve 1,000 launch tokens with a 200 collateral limit; Alice executes first; Bob uses current reserves and either pays within the limit or fails without partial application changes. Host checks alone do not establish transaction rollback.
 
 ### 4. Port fixed-price setup and existing private helpers
 
-- Port the four implemented fixed-price setup stages using the shared factory and fixed-price actor boundaries. Preserve exact mint/supply, creator authority, allocation escrow, funding and recorded-collateral checks.
+- Port the four implemented fixed-price setup stages using the shared factory and fixed-price actor boundaries. Preserve exact mint/supply, creator authority, allocation escrow, funding and recorded-collateral checks. Apply the amended immediate-start and trusted-clock rules in [ADR 0032](../docs/adr/0032-fixed-price-lbp-setup.md).
 - Keep fixed-price trading, close and settlement and all weighted-sale execution outside this migration. Preserve independent weighted math and its existing numerical checks.
 - Adapt existing private helpers and callers only where the target platform supports their current scope. Replace obsolete limit-specific failure assertions with accurate target-revision checks; do not preserve a known failure as a product requirement.
 - Keep complete private returns, safe gas funding, wallet recovery and successful whole-route evidence as separate feature work. Never treat a compilation pass or helper envelope test as a successful private purchase.

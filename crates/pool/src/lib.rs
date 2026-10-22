@@ -1,9 +1,7 @@
 //! The bounded-pool state machine behind the neutral AMM interface.
 //!
 //! Knows about ordered real and virtual reserves, fees, slippage, expiry, and lifecycle.
-//! Knows nothing about `AccountWithMetadata`, PDAs, or
-//! `ChainedCall`, which is what lets the solvency property test run against a state
-//! machine instead of hand-built account fixtures.
+//! Actor messages and token custody stay outside this state machine.
 //!
 //! Launch-specific allocation and vocabulary belong to the factory adapter.
 //! Errors remain operation-specific to preserve the guest-facing API. Their hand-written

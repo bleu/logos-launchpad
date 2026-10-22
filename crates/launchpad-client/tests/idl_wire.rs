@@ -1,1335 +1,222 @@
-use std::{
-    path::{Path, PathBuf},
-    process::Command,
-};
+use lee_core::account::AccountId;
+use serde_json::{Value, json};
 
-use curve_core::Instruction as CurveInstruction;
-use factory_core::Instruction as FactoryInstruction;
-use launchpad_client::{
-    CreateSaleRequest, FactorySale, build_create_sale_invocation,
-    build_initialize_namespace_invocation, build_transfer_admin_invocation,
-    build_update_fee_invocation, build_update_treasury_invocation,
-};
-use lee::{AccountId, program::Program};
-use private_flow_core::PrivateBuyInstruction;
-use serde::Serialize;
-use serde_json::Value;
-
-const CLI_PROGRAM_ID: &str = "0000000000000000000000000000000000000000000000000000000000000000";
-
-#[derive(Clone, Copy)]
-struct AccountInput {
-    name: &'static str,
-    id: Option<AccountId>,
+fn schema() -> Value {
+    serde_json::from_str(include_str!("../../../idl/launchpad.json")).unwrap()
 }
 
-fn account(id: u8) -> AccountId {
-    AccountId::new([id; 32])
-}
-
-fn account_hex(id: u8) -> String {
-    hex::encode([id; 32])
-}
-
-fn account_id_hex(account: AccountId) -> String {
-    hex::encode(account.value())
-}
-
-fn program_id(first_word: u32) -> [u32; 8] {
-    std::array::from_fn(|offset| first_word + u32::try_from(offset).unwrap())
-}
-
-fn program_arg(program_id: [u32; 8]) -> String {
-    program_id
-        .iter()
-        .map(u32::to_string)
-        .collect::<Vec<_>>()
-        .join(",")
-}
-
-fn words_hex(words: Vec<u32>) -> String {
-    hex::encode(
-        words
-            .into_iter()
-            .flat_map(u32::to_le_bytes)
-            .collect::<Vec<_>>(),
-    )
-}
-
-fn root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(2)
-        .unwrap()
-        .to_owned()
-}
-
-fn account_inputs(names: &[&'static str], first_id: u8) -> Vec<AccountInput> {
-    names
-        .iter()
-        .enumerate()
-        .map(|(offset, name)| AccountInput {
-            name,
-            id: Some(account(first_id + u8::try_from(offset).unwrap())),
-        })
-        .collect()
-}
-
-fn named_account_inputs(names: &[&'static str], ids: Vec<AccountId>) -> Vec<AccountInput> {
-    assert_eq!(names.len(), ids.len());
-    names
-        .iter()
-        .zip(ids)
-        .map(|(&name, id)| AccountInput { name, id: Some(id) })
-        .collect()
-}
-
-fn create_pool_arguments(
-    curve_program_id: [u32; 8],
-    close_timestamp: &str,
-    close_on_depletion: &str,
-    owner_program_id: &str,
-    owner_program_seed: &str,
-) -> Vec<(&'static str, String)> {
-    vec![
-        ("--allowed-input-token", "none".into()),
-        ("--defer-funding", "false".into()),
-        ("--namespace", account_hex(44)),
-        ("--token0-amount", "1000".into()),
-        ("--token1-amount", "2000".into()),
-        ("--virtual-reserve0", "3000".into()),
-        ("--virtual-reserve1", "4000".into()),
-        ("--close-timestamp", close_timestamp.into()),
-        ("--close-on-depletion", close_on_depletion.into()),
-        ("--owner", account_hex(45)),
-        ("--owner-program-id", owner_program_id.into()),
-        ("--owner-program-seed", owner_program_seed.into()),
-        ("--curve-program-id", program_arg(curve_program_id)),
-    ]
-}
-
-fn create_factory_pool_arguments(
-    curve_program_id: [u32; 8],
-    end_timestamp: &str,
-) -> Vec<(&'static str, String)> {
-    vec![
-        ("--trade-mode", "1".into()),
-        ("--graduation-hook-program-id", program_arg(program_id(60))),
-        ("--graduation-hook-configuration", "7,11".into()),
-        ("--namespace", account_hex(75)),
-        ("--launch-salt", hex::encode([76; 32])),
-        ("--name", "Launch".into()),
-        ("--uri", "https://example.invalid/launch".into()),
-        ("--sale-reserve", "1000".into()),
-        ("--dex-seed-reserve", "200".into()),
-        ("--creator-allocation", "300".into()),
-        ("--virtual-token-reserve", "4000".into()),
-        ("--virtual-collateral-reserve", "5000".into()),
-        ("--end-timestamp", end_timestamp.into()),
-        ("--curve-program-id", program_arg(curve_program_id)),
-    ]
-}
-
-fn create_sale_request(end_timestamp: Option<u64>) -> CreateSaleRequest {
-    CreateSaleRequest {
-        trade_mode: launchpad_client::TradeMode::BuyAndSell,
-        graduation_hook: Some(launchpad_client::GraduationHook {
-            program_id: program_id(60),
-            configuration: vec![7, 11],
-        }),
-        name: "Launch".into(),
-        uri: "https://example.invalid/launch".into(),
-        sale_reserve: 1000,
-        dex_seed_reserve: 200,
-        creator_allocation: 300,
-        virtual_token_reserve: 4000,
-        virtual_collateral_reserve: 5000,
-        end_timestamp,
-    }
-}
-
-fn dry_run_command(
-    program: &str,
-    instruction: &str,
-    arguments: Vec<(&str, String)>,
-    accounts: &[AccountInput],
-) -> Command {
-    let root = root();
-    let idl_path = root.join("idl").join(format!("{program}.json"));
-    let mut command = Command::new("lgs");
-    command.current_dir(&root).args([
-        "spel",
-        "--",
-        "--idl",
-        idl_path.to_str().unwrap(),
-        "--program",
-        CLI_PROGRAM_ID,
-        "--dry-run=json",
-        "--",
-        instruction,
-    ]);
-    for (name, value) in arguments {
-        command.arg(name).arg(value);
-    }
-    for account in accounts {
-        if let Some(id) = account.id {
-            command
-                .arg(format!("--{}", account.name.replace('_', "-")))
-                .arg(account_id_hex(id));
-        }
-    }
-
-    command
-}
-
-fn run_case<I: Serialize>(
-    program: &str,
-    instruction: &str,
-    arguments: Vec<(&str, String)>,
-    expected_instruction: I,
-    accounts: Vec<AccountInput>,
-    expected_argument_order: &[&str],
-) -> (Value, Value) {
-    let idl_path = root().join("idl").join(format!("{program}.json"));
-    let output = dry_run_command(program, instruction, arguments, &accounts)
-        .output()
-        .expect("run pinned lgs SPEL CLI");
-    assert!(
-        output.status.success(),
-        "{} {instruction} failed: {}",
-        program,
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let dry_run: Value = serde_json::from_slice(&output.stdout).expect("parse lgs dry-run JSON");
-    assert_eq!(dry_run["instruction"], instruction.replace('-', "_"));
-    assert_eq!(
-        dry_run["instruction_data"],
-        words_hex(Program::serialize_instruction(expected_instruction).unwrap())
-    );
-
-    let actual_accounts = dry_run["accounts"].as_array().unwrap();
-    assert_eq!(actual_accounts.len(), accounts.len());
-    for (actual, expected) in actual_accounts.iter().zip(&accounts) {
-        assert_eq!(actual["name"], expected.name);
-        match expected.id {
-            Some(id) => assert_eq!(actual["id"], format!("0x{}", account_id_hex(id))),
-            None => {
-                assert!(actual["id"].is_null());
-                assert!(
-                    actual["flags"]
-                        .as_array()
-                        .unwrap()
-                        .contains(&Value::String("rest".into()))
-                );
-            }
-        }
-    }
-
-    let idl: Value = serde_json::from_slice(&std::fs::read(idl_path).unwrap()).unwrap();
-    let idl_instruction = idl["instructions"]
+fn variant(module: &str, message: &str, name: &str) -> Value {
+    schema()["modules"][module][message]["variants"]
         .as_array()
         .unwrap()
         .iter()
-        .find(|candidate| candidate["name"] == instruction.replace('-', "_"))
-        .unwrap();
-    assert_eq!(
-        idl_instruction["args"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|argument| argument["name"].as_str().unwrap())
-            .collect::<Vec<_>>(),
-        expected_argument_order
-    );
-    assert_eq!(
-        idl_instruction["accounts"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|account| account["name"].as_str().unwrap())
-            .collect::<Vec<_>>(),
-        accounts
-            .iter()
-            .map(|account| account.name)
-            .collect::<Vec<_>>()
-    );
-    if program != "private_buy" {
-        assert!(
-            idl_instruction["accounts"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .all(|account| account.get("pda").is_none())
-        );
-    }
-    (dry_run, idl_instruction.clone())
-}
-
-fn assert_account_flags((dry_run, idl_instruction): (Value, Value), expected: &[(&str, &[&str])]) {
-    let cli_accounts = dry_run["accounts"].as_array().unwrap();
-    let idl_accounts = idl_instruction["accounts"].as_array().unwrap();
-    assert_eq!(cli_accounts.len(), expected.len());
-    assert_eq!(idl_accounts.len(), expected.len());
-    for ((cli, idl), (name, flags)) in cli_accounts.iter().zip(idl_accounts).zip(expected) {
-        assert_eq!(cli["name"], *name);
-        assert_eq!(idl["name"], *name);
-        let actual_flags = cli["flags"].as_array().unwrap();
-        // The pinned CLI reports init only in the IDL, not in dry-run flags.
-        assert_eq!(
-            actual_flags.len(),
-            flags.iter().filter(|&&flag| flag != "init").count(),
-            "{name} flags",
-        );
-        for flag in ["writable", "signer", "init"] {
-            let enabled = flags.contains(&flag);
-            assert_eq!(idl[flag], enabled, "{name} IDL {flag}");
-            assert_eq!(
-                actual_flags.contains(&Value::String(flag.into())),
-                enabled && flag != "init",
-                "{name} CLI {flag}",
-            );
-        }
-    }
+        .find(|entry| entry["name"] == name)
+        .unwrap()
+        .clone()
 }
 
 #[test]
-fn fixed_price_continuation_wire_matches_all_stage_ordinals_in_the_pinned_cli() {
-    use factory_core::FixedPriceCreationStage;
-    for (stage, argument, bytes, private_bytes) in [
-        (
-            FixedPriceCreationStage::Minted,
-            "0",
-            "0600000000000000",
-            "070000000600000000000000",
-        ),
-        (
-            FixedPriceCreationStage::Allocated,
-            "1",
-            "0600000001000000",
-            "070000000600000001000000",
-        ),
-        (
-            FixedPriceCreationStage::PoolPrepared,
-            "2",
-            "0600000002000000",
-            "070000000600000002000000",
-        ),
-        (
-            FixedPriceCreationStage::Complete,
-            "3",
-            "0600000003000000",
-            "070000000600000003000000",
-        ),
-    ] {
-        let instruction = FactoryInstruction::ContinueFixedPriceCreation {
-            expected_stage: stage,
-        };
-        assert_eq!(
-            words_hex(Program::serialize_instruction(&instruction).unwrap()),
-            bytes
-        );
-        assert_eq!(
-            words_hex(
-                Program::serialize_instruction(FactoryInstruction::Private {
-                    instruction: Box::new(instruction.clone()),
-                })
-                .unwrap()
-            ),
-            private_bytes,
-        );
-        let wire = run_case(
-            "factory",
-            "continue-fixed-price-creation",
-            vec![("--expected-stage", argument.into())],
-            instruction,
-            account_inputs(
-                &[
-                    "factory",
-                    "token_definition",
-                    "mint",
-                    "metadata",
-                    "creator_escrow",
-                    "creator",
-                    "creator_token_ata",
-                    "collateral_definition",
-                    "factory_token_ata",
-                    "pool",
-                    "pool_token_ata",
-                    "pool_collateral_ata",
-                    "clock",
-                    "config",
-                ],
-                50,
-            ),
-            &["expected_stage"],
-        );
-        assert_account_flags(
-            wire,
-            &[
-                ("factory", &["writable"]),
-                ("token_definition", &[]),
-                ("mint", &["writable"]),
-                ("metadata", &[]),
-                ("creator_escrow", &["writable"]),
-                ("creator", &["signer"]),
-                ("creator_token_ata", &["writable"]),
-                ("collateral_definition", &[]),
-                ("factory_token_ata", &["writable"]),
-                ("pool", &["writable"]),
-                ("pool_token_ata", &["writable"]),
-                ("pool_collateral_ata", &["writable"]),
-                ("clock", &[]),
-                ("config", &[]),
-            ],
-        );
-    }
-}
-
-#[test]
-fn fixed_price_creation_wire_matches_the_pinned_cli() {
-    use factory_core::{CreatorAllocationRelease, FixedPrice, FixedPriceInputs, SaleStart};
-    for (start, start_arg, release, release_arg) in [
-        (
-            SaleStart::Now,
-            "none",
-            CreatorAllocationRelease::AfterEnd,
-            "1",
-        ),
-        (
-            SaleStart::At { timestamp: 150 },
-            "150",
-            CreatorAllocationRelease::AfterSetup,
-            "0",
-        ),
-    ] {
-        let inputs = FixedPriceInputs {
-            namespace: account(40),
-            launch_salt: [41; 32],
-            name: "Launch".into(),
-            uri: "https://example.test/launch.json".into(),
-            sale_inventory: 800,
-            creator_allocation: 200,
-            price: FixedPrice {
-                collateral_units: 3,
-                token_units: 2,
-            },
-            start,
-            end_timestamp: 200,
-            allocation_release: release,
-            namespace_program_id: program_id(10),
-            lbp_program_id: program_id(20),
-        };
-        let wire = run_case(
-            "factory",
-            "create-fixed-price-lbp",
-            vec![
-                ("--namespace", account_hex(40)),
-                ("--launch-salt", hex::encode([41; 32])),
-                ("--name", "Launch".into()),
-                ("--uri", "https://example.test/launch.json".into()),
-                ("--sale-inventory", "800".into()),
-                ("--creator-allocation", "200".into()),
-                ("--collateral-units", "3".into()),
-                ("--token-units", "2".into()),
-                ("--start", start_arg.into()),
-                ("--end-timestamp", "200".into()),
-                ("--allocation-release", release_arg.into()),
-                ("--namespace-program-id", program_arg(program_id(10))),
-                ("--lbp-program-id", program_arg(program_id(20))),
-            ],
-            FactoryInstruction::CreateFixedPriceLbp { inputs },
-            account_inputs(
-                &[
-                    "factory",
-                    "token_definition",
-                    "mint",
-                    "metadata",
-                    "creator_escrow",
-                    "creator",
-                    "creator_token_ata",
-                    "collateral_definition",
-                    "factory_token_ata",
-                    "pool",
-                    "pool_token_ata",
-                    "pool_collateral_ata",
-                    "clock",
-                    "config",
-                ],
-                50,
-            ),
-            &[
-                "namespace",
-                "launch_salt",
-                "name",
-                "uri",
-                "sale_inventory",
-                "creator_allocation",
-                "collateral_units",
-                "token_units",
-                "start",
-                "end_timestamp",
-                "allocation_release",
-                "namespace_program_id",
-                "lbp_program_id",
-            ],
-        );
-        assert_account_flags(
-            wire,
-            &[
-                ("factory", &["writable", "init"]),
-                ("token_definition", &["writable", "init"]),
-                ("mint", &["writable", "init"]),
-                ("metadata", &["writable", "init"]),
-                ("creator_escrow", &["writable", "init"]),
-                ("creator", &["signer"]),
-                ("creator_token_ata", &["writable", "init"]),
-                ("collateral_definition", &[]),
-                ("factory_token_ata", &["writable", "init"]),
-                ("pool", &["writable", "init"]),
-                ("pool_token_ata", &["writable", "init"]),
-                ("pool_collateral_ata", &["writable", "init"]),
-                ("clock", &[]),
-                ("config", &[]),
-            ],
-        );
-    }
-}
-
-#[test]
-fn fixed_price_pool_setup_wire_matches_the_pinned_cli() {
-    let inputs = lbp_core::FixedPricePoolInputs {
-        namespace: account(40),
-        namespace_program_id: program_id(10),
-        factory_program_id: program_id(20),
-        factory_seed: [42; 32],
-        sale_inventory: 800,
-        creator_allocation: 200,
-        price: factory_core::FixedPrice {
-            collateral_units: 3,
-            token_units: 2,
-        },
-        start_timestamp: 100,
-        end_timestamp: 200,
-        creator_allocation_release: factory_core::CreatorAllocationRelease::AfterSetup,
+fn participant_purchase_envelope_keeps_deployment_pool_and_explicit_limits_on_wire() {
+    let message = curve_core::Message::Execute {
+        pool: AccountId::new([3; 32]),
+        instruction: Box::new(curve_core::Message::SwapExactOutput {
+            amount_out: 25,
+            max_amount_in: 100,
+            token_in: AccountId::new([4; 32]),
+            now: 9,
+        }),
     };
-    let wire = run_case(
-        "lbp",
-        "prepare-fixed-price",
-        vec![
-            ("--namespace", account_hex(40)),
-            ("--namespace-program-id", program_arg(program_id(10))),
-            ("--factory-program-id", program_arg(program_id(20))),
-            ("--factory-seed", hex::encode([42; 32])),
-            ("--sale-inventory", "800".into()),
-            ("--creator-allocation", "200".into()),
-            ("--collateral-units", "3".into()),
-            ("--token-units", "2".into()),
-            ("--start-timestamp", "100".into()),
-            ("--end-timestamp", "200".into()),
-            ("--creator-allocation-release", "0".into()),
-        ],
-        lbp_core::Instruction::PrepareFixedPrice { inputs },
-        account_inputs(
-            &[
-                "pool",
-                "factory_owner",
-                "token_definition",
-                "collateral_definition",
-                "factory_token_ata",
-                "pool_token_ata",
-                "pool_collateral_ata",
-                "clock",
-                "config",
-            ],
-            50,
-        ),
-        &[
-            "namespace",
-            "namespace_program_id",
-            "factory_program_id",
-            "factory_seed",
-            "sale_inventory",
-            "creator_allocation",
-            "collateral_units",
-            "token_units",
-            "start_timestamp",
-            "end_timestamp",
-            "creator_allocation_release",
-        ],
+    let expected = hex::decode(concat!(
+        "07",
+        "0303030303030303030303030303030303030303030303030303030303030303",
+        "04",
+        "19000000000000000000000000000000",
+        "64000000000000000000000000000000",
+        "0404040404040404040404040404040404040404040404040404040404040404",
+        "0900000000000000"
+    ))
+    .unwrap();
+    assert_eq!(borsh::to_vec(&message).unwrap(), expected);
+    assert_eq!(
+        borsh::from_slice::<curve_core::Message>(&expected).unwrap(),
+        message
     );
-    assert_account_flags(
-        wire,
-        &[
-            ("pool", &["writable", "init"]),
-            ("factory_owner", &["signer"]),
-            ("token_definition", &[]),
-            ("collateral_definition", &[]),
-            ("factory_token_ata", &[]),
-            ("pool_token_ata", &["writable", "init"]),
-            ("pool_collateral_ata", &["writable", "init"]),
-            ("clock", &[]),
-            ("config", &[]),
-        ],
-    );
-    let wire = run_case(
-        "lbp",
-        "activate-fixed-price",
-        vec![],
-        lbp_core::Instruction::ActivateFixedPrice,
-        account_inputs(
-            &[
-                "pool",
-                "factory_owner",
-                "token_definition",
-                "collateral_definition",
-                "factory_token_ata",
-                "pool_token_ata",
-                "pool_collateral_ata",
-                "clock",
-                "config",
-            ],
-            50,
-        ),
-        &[],
-    );
-    assert_account_flags(
-        wire,
-        &[
-            ("pool", &["writable"]),
-            ("factory_owner", &["signer"]),
-            ("token_definition", &[]),
-            ("collateral_definition", &[]),
-            ("factory_token_ata", &["writable"]),
-            ("pool_token_ata", &["writable"]),
-            ("pool_collateral_ata", &[]),
-            ("clock", &[]),
-            ("config", &[]),
-        ],
+    assert_eq!(variant("curve", "Message", "Execute")["tag"], 7);
+    assert_eq!(variant("curve", "Message", "SwapExactOutput")["tag"], 4);
+    assert_eq!(
+        variant("curve", "Message", "SwapExactOutput")["fields"],
+        json!([
+            {"name":"amount_out","type":"u128"}, {"name":"max_amount_in","type":"u128"},
+            {"name":"token_in","type":"AccountId"}, {"name":"now","type":"u64"}
+        ])
     );
 }
 
 #[test]
-fn curve_namespace_initialization_wire_matches_the_pinned_cli() {
-    let curve_program_id = program_id(10);
-    let invocation =
-        build_initialize_namespace_invocation(account(40), curve_program_id, 100, account(42));
-    assert_eq!(invocation.signer_accounts, vec![account(40)]);
-    run_case(
-        "curve",
-        "initialize-namespace",
-        vec![
-            ("--namespace", account_hex(40)),
-            ("--protocol-fee-bps", "100".into()),
-            ("--treasury", account_hex(42)),
-        ],
-        invocation.instruction,
-        named_account_inputs(&["config", "creator"], invocation.account_ids),
-        &["namespace", "protocol_fee_bps", "treasury"],
-    );
-}
-
-#[test]
-fn curve_fee_update_wire_matches_the_pinned_cli() {
-    let invocation = build_update_fee_invocation(account(40), program_id(10), account(41), 9999);
-    assert_eq!(invocation.signer_accounts, vec![account(41)]);
-    run_case(
-        "curve",
-        "update-fee",
-        vec![
-            ("--namespace", account_hex(40)),
-            ("--protocol-fee-bps", "9999".into()),
-        ],
-        invocation.instruction,
-        named_account_inputs(&["config", "authority"], invocation.account_ids),
-        &["namespace", "protocol_fee_bps"],
-    );
-}
-
-#[test]
-fn curve_treasury_update_wire_matches_the_pinned_cli() {
-    let invocation =
-        build_update_treasury_invocation(account(40), program_id(10), account(41), account(42));
-    assert_eq!(invocation.signer_accounts, vec![account(41)]);
-    run_case(
-        "curve",
-        "update-treasury",
-        vec![
-            ("--namespace", account_hex(40)),
-            ("--treasury", account_hex(42)),
-        ],
-        invocation.instruction,
-        named_account_inputs(&["config", "authority"], invocation.account_ids),
-        &["namespace", "treasury"],
-    );
-}
-
-#[test]
-fn curve_cosigned_admin_transfer_wire_matches_the_pinned_cli() {
-    let invocation = build_transfer_admin_invocation(
-        account(40),
-        program_id(10),
-        account(41),
-        account(42),
-        curve_core::AdminCandidate::Signer,
-    );
-    assert_eq!(invocation.signer_accounts, vec![account(41), account(42)]);
-    run_case(
-        "curve",
-        "transfer-admin",
-        vec![
-            ("--namespace", account_hex(40)),
-            ("--new-admin", account_hex(42)),
-            ("--candidate", "none".into()),
-        ],
-        invocation.instruction,
-        named_account_inputs(
-            &["config", "authority", "successor"],
-            invocation.account_ids,
-        ),
-        &["namespace", "new_admin", "candidate"],
-    );
-}
-
-#[test]
-fn curve_pda_admin_transfer_wire_does_not_request_a_successor_key_signature() {
-    let owner_program = program_id(80);
-    let seed = std::array::from_fn(|offset| 90 + u8::try_from(offset).unwrap());
-    let successor =
-        AccountId::for_public_pda(&owner_program, &lee_core::program::PdaSeed::new(seed));
-    let invocation = build_transfer_admin_invocation(
-        account(40),
-        program_id(10),
-        account(41),
-        successor,
-        curve_core::AdminCandidate::Pda {
-            program_id: owner_program,
-            seed,
-        },
-    );
-    assert_eq!(invocation.signer_accounts, vec![account(41)]);
-    let candidate = owner_program
-        .into_iter()
-        .chain(seed.map(u32::from))
-        .map(|word| word.to_string())
-        .collect::<Vec<_>>()
-        .join(",");
-    run_case(
-        "curve",
-        "transfer-admin",
-        vec![
-            ("--namespace", account_hex(40)),
-            ("--new-admin", account_id_hex(successor)),
-            ("--candidate", candidate),
-        ],
-        invocation.instruction,
-        named_account_inputs(
-            &["config", "authority", "successor"],
-            invocation.account_ids,
-        ),
-        &["namespace", "new_admin", "candidate"],
-    );
-}
-
-#[test]
-fn curve_public_instruction_wire_matches_the_pinned_cli() {
-    let curve_program_id = program_id(10);
-    run_case(
-        "curve",
-        "renounce-admin",
-        vec![("--namespace", account_hex(43))],
-        CurveInstruction::RenounceAdmin {
-            namespace: account(43),
-        },
-        account_inputs(&["config", "authority"], 3),
-        &["namespace"],
-    );
-    let create_pool_accounts = named_account_inputs(
-        &[
-            "pool",
-            "owner_authority",
-            "token0_definition",
-            "token1_definition",
-            "owner_token0_ata",
-            "owner_token1_ata",
-            "pool_token0_ata",
-            "pool_token1_ata",
-            "clock",
-            "config",
-        ],
-        vec![
-            curve_core::compute_pool_pda(
-                account(44),
-                curve_program_id,
-                account(47),
-                account(48),
-                account(45),
-            ),
-            account(45),
-            account(47),
-            account(48),
-            account(49),
-            account(50),
-            account(51),
-            account(52),
-            clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID,
-            curve_core::compute_config_pda(account(44), curve_program_id),
-        ],
-    );
-    let create_pool_argument_order = [
-        "allowed_input_token",
-        "defer_funding",
-        "namespace",
-        "token0_amount",
-        "token1_amount",
-        "virtual_reserve0",
-        "virtual_reserve1",
-        "close_timestamp",
-        "close_on_depletion",
-        "owner",
-        "owner_program_id",
-        "owner_program_seed",
-        "curve_program_id",
-    ];
-    run_case(
-        "curve",
-        "create-pool",
-        create_pool_arguments(
-            curve_program_id,
-            "5000",
-            "1",
-            &program_arg(program_id(20)),
-            &hex::encode([46; 32]),
-        ),
-        CurveInstruction::CreatePool {
-            allowed_input_token: None,
-            defer_funding: false,
-            namespace: account(44),
-            token0_amount: 1000,
-            token1_amount: 2000,
-            virtual_reserve0: 3000,
-            virtual_reserve1: 4000,
-            close_timestamp: Some(5000),
-            close_on_depletion: Some(1),
-            owner: account(45),
-            owner_program_id: Some(program_id(20)),
-            owner_program_seed: Some([46; 32]),
-            curve_program_id,
-        },
-        create_pool_accounts.clone(),
-        &create_pool_argument_order,
-    );
-    run_case(
-        "curve",
-        "create-pool",
-        create_pool_arguments(curve_program_id, "none", "none", "none", "none"),
-        CurveInstruction::CreatePool {
-            allowed_input_token: None,
-            defer_funding: false,
-            namespace: account(44),
-            token0_amount: 1000,
-            token1_amount: 2000,
-            virtual_reserve0: 3000,
-            virtual_reserve1: 4000,
-            close_timestamp: None,
-            close_on_depletion: None,
-            owner: account(45),
-            owner_program_id: None,
-            owner_program_seed: None,
-            curve_program_id,
-        },
-        create_pool_accounts,
-        &create_pool_argument_order,
-    );
-    run_case(
-        "curve",
-        "swap-exact-input",
-        vec![
-            ("--amount-in", "100".into()),
-            ("--min-amount-out", "90".into()),
-            ("--token-in", account_hex(47)),
-        ],
-        CurveInstruction::SwapExactInput {
-            amount_in: 100,
-            min_amount_out: 90,
-            token_in: account(47),
-        },
-        account_inputs(
-            &[
-                "pool",
-                "config",
-                "participant",
-                "participant_token_in_ata",
-                "pool_token_in_ata",
-                "pool_token_out_ata",
-                "participant_token_out_ata",
-                "clock",
-            ],
-            15,
-        ),
-        &["amount_in", "min_amount_out", "token_in"],
-    );
-    run_case(
-        "curve",
-        "swap-exact-output",
-        vec![
-            ("--amount-out", "100".into()),
-            ("--max-amount-in", "110".into()),
-            ("--token-in", account_hex(48)),
-        ],
-        CurveInstruction::SwapExactOutput {
-            amount_out: 100,
-            max_amount_in: 110,
-            token_in: account(48),
-        },
-        account_inputs(
-            &[
-                "pool",
-                "config",
-                "participant",
-                "participant_token_in_ata",
-                "pool_token_in_ata",
-                "pool_token_out_ata",
-                "participant_token_out_ata",
-                "clock",
-            ],
-            23,
-        ),
-        &["amount_out", "max_amount_in", "token_in"],
-    );
-    run_case(
-        "curve",
-        "close-pool",
-        vec![],
-        CurveInstruction::ClosePool,
-        account_inputs(&["pool", "owner", "clock"], 31),
-        &[],
-    );
-    run_case(
-        "curve",
-        "activate-pool",
-        vec![],
-        CurveInstruction::ActivatePool,
-        account_inputs(
-            &[
-                "pool",
-                "owner_authority",
-                "token0_definition",
-                "token1_definition",
-                "owner_token0_ata",
-                "owner_token1_ata",
-                "pool_token0_ata",
-                "pool_token1_ata",
-                "clock",
-                "config",
-            ],
-            34,
-        ),
-        &[],
-    );
-    let withdraw_accounts = account_inputs(
-        &[
-            "pool",
-            "owner",
-            "owner_token0_ata",
-            "owner_token1_ata",
-            "pool_token0_ata",
-            "pool_token1_ata",
-            "clock",
-            "config",
-        ],
-        44,
-    );
-    let mut without_treasury = withdraw_accounts.clone();
-    without_treasury.push(AccountInput {
-        name: "treasury_collateral_atas",
-        id: None,
-    });
-    run_case(
-        "curve",
-        "withdraw-reserves",
-        vec![],
-        CurveInstruction::WithdrawReserves,
-        without_treasury,
-        &[],
-    );
-    let mut with_treasury = withdraw_accounts;
-    with_treasury.push(AccountInput {
-        name: "treasury_collateral_atas",
-        id: Some(account(52)),
-    });
-    run_case(
-        "curve",
-        "withdraw-reserves",
-        vec![],
-        CurveInstruction::WithdrawReserves,
-        with_treasury,
-        &[],
-    );
-    let collection_accounts = account_inputs(&["pool", "config", "pool_collateral_ata"], 53);
-    let mut without_treasury = collection_accounts.clone();
-    without_treasury.push(AccountInput {
-        name: "treasury_collateral_atas",
-        id: None,
-    });
-    run_case(
-        "curve",
-        "collect-fees",
-        vec![],
-        CurveInstruction::CollectFees,
-        without_treasury,
-        &[],
-    );
-    let mut with_treasury = collection_accounts;
-    with_treasury.push(AccountInput {
-        name: "treasury_collateral_atas",
-        id: Some(account(56)),
-    });
-    run_case(
-        "curve",
-        "collect-fees",
-        vec![],
-        CurveInstruction::CollectFees,
-        with_treasury,
-        &[],
-    );
-}
-
-#[test]
-fn curve_freeze_instruction_wire_matches_the_pinned_cli() {
-    for frozen in [false, true] {
-        run_case(
-            "curve",
-            "set-frozen",
-            vec![
-                ("--namespace", account_hex(57)),
-                ("--frozen", frozen.to_string()),
-            ],
-            CurveInstruction::SetFrozen {
-                namespace: account(57),
-                frozen,
-            },
-            account_inputs(&["config", "authority"], 58),
-            &["namespace", "frozen"],
-        );
-    }
-    let idl: Value =
-        serde_json::from_slice(&std::fs::read(root().join("idl/curve.json")).unwrap()).unwrap();
-    let accounts = idl["instructions"][9]["accounts"].as_array().unwrap();
-    assert_eq!(accounts[0]["signer"], false);
-    assert_eq!(accounts[1]["signer"], true);
-}
-
-#[test]
-fn curve_emergency_transfer_wire_matches_the_pinned_cli() {
-    run_case(
-        "curve",
-        "transfer-emergency-authority",
-        vec![
-            ("--namespace", account_hex(57)),
-            ("--new-authority", account_hex(60)),
-        ],
-        CurveInstruction::TransferEmergencyAuthority {
-            namespace: account(57),
-            new_authority: account(60),
-        },
-        account_inputs(&["config", "authority"], 58),
-        &["namespace", "new_authority"],
-    );
-    let idl: Value =
-        serde_json::from_slice(&std::fs::read(root().join("idl/curve.json")).unwrap()).unwrap();
-    let accounts = idl["instructions"][10]["accounts"].as_array().unwrap();
-    assert_eq!(accounts[0]["signer"], false);
-    assert_eq!(accounts[1]["signer"], true);
-}
-
-#[test]
-fn factory_public_instruction_wire_matches_the_pinned_cli() {
-    let curve_program_id = program_id(30);
-    let sale = FactorySale {
-        namespace: account(75),
-        factory_program_id: program_id(29),
-        curve_program_id,
-        launch_salt: [76; 32],
-        collateral_definition: account(77),
+fn factory_resume_keeps_creator_stage_and_clock_lower_bound_on_wire() {
+    let message = factory_core::Message::ContinueFixedPriceCreation {
+        expected_stage: factory_core::FixedPriceCreationStage::PoolPrepared,
+        creator: AccountId::new([5; 32]),
+        now: 0,
     };
-    let creator = account(78);
-    let create_account_names = [
-        "factory",
-        "token_definition",
-        "mint",
-        "metadata",
-        "creator_escrow",
-        "creator",
-        "creator_token_ata",
-        "collateral_definition",
-        "factory_token_ata",
-        "factory_collateral_ata",
-        "pool",
-        "pool_token_ata",
-        "pool_collateral_ata",
-        "clock",
-        "config",
-    ];
-    let create_argument_order = [
-        "trade_mode",
-        "graduation_hook_program_id",
-        "graduation_hook_configuration",
-        "namespace",
-        "launch_salt",
-        "name",
-        "uri",
-        "sale_reserve",
-        "dex_seed_reserve",
-        "creator_allocation",
-        "virtual_token_reserve",
-        "virtual_collateral_reserve",
-        "end_timestamp",
-        "curve_program_id",
-    ];
-    let present_create =
-        build_create_sale_invocation(sale, creator, create_sale_request(Some(6000)))
-            .expect("build factory create invocation");
-    run_case(
-        "factory",
-        "create-factory-pool",
-        create_factory_pool_arguments(curve_program_id, "6000"),
-        present_create.instruction,
-        named_account_inputs(&create_account_names, present_create.account_ids),
-        &create_argument_order,
+    let expected = hex::decode(concat!(
+        "0602",
+        "0505050505050505050505050505050505050505050505050505050505050505",
+        "0000000000000000"
+    ))
+    .unwrap();
+    assert_eq!(borsh::to_vec(&message).unwrap(), expected);
+    assert_eq!(
+        borsh::from_slice::<factory_core::Message>(&expected).unwrap(),
+        message
     );
-    let absent_create = build_create_sale_invocation(sale, creator, create_sale_request(None))
-        .expect("build factory create invocation");
-    run_case(
-        "factory",
-        "create-factory-pool",
-        create_factory_pool_arguments(curve_program_id, "none"),
-        absent_create.instruction,
-        named_account_inputs(&create_account_names, absent_create.account_ids),
-        &create_argument_order,
+    assert_eq!(
+        variant("factory", "Message", "ContinueFixedPriceCreation"),
+        json!({
+            "tag":6,"name":"ContinueFixedPriceCreation","fields":[
+                {"name":"expected_stage","type":"FixedPriceCreationStage"},
+                {"name":"creator","type":"AccountId"},{"name":"now","type":"u64"}
+            ]
+        })
     );
-    let create_accounts = named_account_inputs(
-        &create_account_names,
-        build_create_sale_invocation(sale, creator, create_sale_request(Some(6000)))
-            .expect("build factory create invocation")
-            .account_ids,
-    );
-    run_case(
-        "factory",
-        "continue-creation",
-        vec![],
-        FactoryInstruction::ContinueCreation,
-        create_accounts,
-        &[],
-    );
-    run_case(
-        "factory",
-        "claim-creator-allocation",
-        vec![],
-        FactoryInstruction::ClaimCreatorAllocation,
-        account_inputs(
-            &[
-                "factory",
-                "pool",
-                "creator_escrow",
-                "creator",
-                "token_definition",
-                "creator_token_ata",
-                "clock",
-            ],
-            77,
-        ),
-        &[],
-    );
-    let withdraw_accounts = account_inputs(
-        &[
-            "factory",
-            "pool",
-            "creator",
-            "token_definition",
-            "collateral_definition",
-            "factory_token_ata",
-            "factory_collateral_ata",
-            "pool_token_ata",
-            "pool_collateral_ata",
-            "creator_token_ata",
-            "creator_collateral_ata",
-            "clock",
-            "config",
-        ],
-        84,
-    );
-    let mut without_treasury = withdraw_accounts.clone();
-    without_treasury.push(AccountInput {
-        name: "treasury_collateral_atas",
-        id: None,
-    });
-    run_case(
-        "factory",
-        "withdraw-factory-proceeds",
-        vec![],
-        FactoryInstruction::WithdrawFactoryProceeds,
-        without_treasury,
-        &[],
-    );
-    let mut with_treasury = withdraw_accounts;
-    with_treasury.push(AccountInput {
-        name: "treasury_collateral_atas",
-        id: Some(account(97)),
-    });
-    run_case(
-        "factory",
-        "withdraw-factory-proceeds",
-        vec![],
-        FactoryInstruction::WithdrawFactoryProceeds,
-        with_treasury,
-        &[],
+    assert_eq!(
+        variant("fixed_price", "FixedPriceCreationStage", "PoolPrepared")["tag"],
+        2
     );
 }
 
 #[test]
-fn pinned_cli_reports_its_empty_hook_configuration_limit() {
-    let accounts = account_inputs(
-        &[
-            "factory",
-            "token_definition",
-            "mint",
-            "metadata",
-            "creator_escrow",
-            "creator",
-            "creator_token_ata",
-            "collateral_definition",
-            "factory_token_ata",
-            "factory_collateral_ata",
-            "pool",
-            "pool_token_ata",
-            "pool_collateral_ata",
-            "clock",
-            "config",
-        ],
-        1,
+fn start_now_preserves_zero_and_scheduled_start_has_a_separate_tag() {
+    let now = factory_core::SaleStart::Now { timestamp: 0 };
+    let scheduled = factory_core::SaleStart::At { timestamp: 9 };
+    let now_bytes = hex::decode("000000000000000000").unwrap();
+    let scheduled_bytes = hex::decode("010900000000000000").unwrap();
+    assert_eq!(borsh::to_vec(&now).unwrap(), now_bytes);
+    assert_eq!(
+        borsh::from_slice::<factory_core::SaleStart>(&now_bytes).unwrap(),
+        now
     );
-    for configuration in ["", "[]"] {
-        let mut arguments = create_factory_pool_arguments(program_id(30), "none");
-        for (name, value) in &mut arguments {
-            match *name {
-                "--graduation-hook-program-id" => *value = "none".into(),
-                "--graduation-hook-configuration" => *value = configuration.into(),
-                _ => {}
-            }
-        }
-        let output = dry_run_command("factory", "create-factory-pool", arguments, &accounts)
-            .output()
-            .expect("run pinned lgs SPEL CLI");
-        assert!(!output.status.success());
-        let error = String::from_utf8_lossy(&output.stderr);
-        assert!(error.contains("type mismatch: expected Vec"), "{error}");
-        assert!(error.contains("got Raw"), "{error}");
-    }
+    assert_eq!(borsh::to_vec(&scheduled).unwrap(), scheduled_bytes);
+    assert_eq!(
+        borsh::from_slice::<factory_core::SaleStart>(&scheduled_bytes).unwrap(),
+        scheduled
+    );
+    assert_eq!(
+        variant("fixed_price", "SaleStart", "Now"),
+        json!({"tag":0,"name":"Now","fields":[{"name":"timestamp","type":"u64"}]})
+    );
+    assert_eq!(variant("fixed_price", "SaleStart", "At")["tag"], 1);
 }
 
 #[test]
-fn graduation_instruction_wire_matches_the_pinned_cli() {
-    let mut accounts = account_inputs(
-        &[
-            "factory",
-            "pool",
-            "adapter_custody",
-            "token_definition",
-            "collateral_definition",
-            "factory_token_ata",
-            "factory_collateral_ata",
-            "pool_token_ata",
-            "pool_collateral_ata",
-            "adapter_token_ata",
-            "adapter_collateral_ata",
-            "clock",
-            "config",
-        ],
-        100,
-    );
-    accounts.push(AccountInput {
-        name: "treasury_and_adapter_accounts",
-        id: Some(account(113)),
-    });
-    run_case(
-        "factory",
-        "execute-graduation-hook",
-        vec![("--remaining-accounts", "0".into())],
-        FactoryInstruction::ExecuteGraduationHook {
-            remaining_accounts: 0,
+fn graduation_callback_has_a_typed_request_without_an_account_extension() {
+    let message = factory_core::AdapterMessage::Graduate {
+        request: factory_core::GraduationRequest {
+            factory_program_id: AccountId::new([1; 32]),
+            namespace: AccountId::new([2; 32]),
+            launch_salt: [3; 32],
+            token_definition_id: AccountId::new([4; 32]),
+            collateral_definition_id: AccountId::new([5; 32]),
+            dex_seed_reserve: 6,
+            collateral_amount: 7,
+            configuration: vec![8, 9],
         },
-        accounts,
-        &["remaining_accounts"],
+    };
+    let expected = hex::decode(concat!(
+        "02",
+        "0101010101010101010101010101010101010101010101010101010101010101",
+        "0202020202020202020202020202020202020202020202020202020202020202",
+        "0303030303030303030303030303030303030303030303030303030303030303",
+        "0404040404040404040404040404040404040404040404040404040404040404",
+        "0505050505050505050505050505050505050505050505050505050505050505",
+        "06000000000000000000000000000000",
+        "07000000000000000000000000000000",
+        "020000000809"
+    ))
+    .unwrap();
+    assert_eq!(borsh::to_vec(&message).unwrap(), expected);
+    assert_eq!(
+        borsh::from_slice::<factory_core::AdapterMessage>(&expected).unwrap(),
+        message
     );
-    let idl: Value =
-        serde_json::from_slice(&std::fs::read(root().join("idl/factory.json")).unwrap()).unwrap();
-    assert!(
-        idl["instructions"][4]["accounts"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .all(|account| account["signer"] == false)
+    assert_eq!(
+        variant("hook", "AdapterMessage", "Graduate"),
+        json!({"tag":2,"name":"Graduate","fields":[{"name":"request","type":"GraduationRequest"}]})
+    );
+    assert_eq!(
+        schema()["modules"]["hook"]["GraduationRequest"]["fields"],
+        json!([
+            {"name":"factory_program_id","type":"AccountId"},{"name":"namespace","type":"AccountId"},
+            {"name":"launch_salt","type":"[u8;32]"},{"name":"token_definition_id","type":"AccountId"},
+            {"name":"collateral_definition_id","type":"AccountId"},{"name":"dex_seed_reserve","type":"u128"},
+            {"name":"collateral_amount","type":"u128"},{"name":"configuration","type":"Vec<u8>"}
+        ])
     );
 }
 
 #[test]
-fn private_buy_execute_wire_matches_the_pinned_cli() {
-    let curve_program_id = program_id(40);
-    let token_program_id = program_id(50);
-    let ata_program_id = program_id(60);
-    let native_transfer_program_id = program_id(70);
-    run_case(
-        "private_buy",
-        "execute",
-        vec![
-            ("--curve-program-id", program_arg(curve_program_id)),
-            ("--token-program-id", program_arg(token_program_id)),
-            ("--ata-program-id", program_arg(ata_program_id)),
-            (
-                "--native-transfer-program-id",
-                program_arg(native_transfer_program_id),
-            ),
-            ("--amount-out", "100".into()),
-            ("--max-collateral-in", "125".into()),
-            ("--gas-reserve", "5".into()),
-            ("--collateral-definition-id", account_hex(110)),
-        ],
-        PrivateBuyInstruction::Execute {
-            curve_program_id,
-            token_program_id,
-            ata_program_id,
-            native_transfer_program_id,
-            amount_out: 100,
-            max_collateral_in: 125,
-            gas_reserve: 5,
-            collateral_definition_id: account(110),
-        },
-        account_inputs(
-            &[
-                "private_source",
-                "transient",
-                "collateral_definition",
-                "launch_definition",
-                "transient_collateral_ata",
-                "transient_token_ata",
-                "pool",
-                "config",
-                "pool_collateral_ata",
-                "pool_token_ata",
-                "clock",
-                "private_destination",
-            ],
-            111,
-        ),
-        &[
-            "curve_program_id",
-            "token_program_id",
-            "ata_program_id",
-            "native_transfer_program_id",
-            "amount_out",
-            "max_collateral_in",
-            "gas_reserve",
-            "collateral_definition_id",
-        ],
+fn fixed_price_lbp_price_and_activation_have_independent_wire_bytes() {
+    let price = lbp_core::FixedPrice {
+        collateral_units: 25,
+        token_units: 3,
+    };
+    let expected =
+        hex::decode("1900000000000000000000000000000003000000000000000000000000000000").unwrap();
+    assert_eq!(borsh::to_vec(&price).unwrap(), expected);
+    assert_eq!(
+        borsh::from_slice::<lbp_core::FixedPrice>(&expected).unwrap(),
+        price
+    );
+    assert_eq!(
+        borsh::to_vec(&lbp_core::Message::ActivateFixedPrice).unwrap(),
+        [1]
+    );
+    assert_eq!(
+        borsh::from_slice::<lbp_core::Message>(&[1]).unwrap(),
+        lbp_core::Message::ActivateFixedPrice
+    );
+    assert_eq!(
+        schema()["modules"]["lbp"]["FixedPrice"]["fields"],
+        json!([
+            {"name":"collateral_units","type":"u128"},{"name":"token_units","type":"u128"}
+        ])
+    );
+    assert_eq!(
+        variant("lbp", "Message", "ActivateFixedPrice"),
+        json!({"tag":1,"name":"ActivateFixedPrice","fields":[]})
+    );
+}
+
+#[test]
+fn namespace_initialization_has_independent_borsh_bytes_and_schema() {
+    let message = curve_core::Message::InitializeNamespace {
+        namespace: AccountId::new([1; 32]),
+        protocol_fee_bps: 75,
+        treasury: AccountId::new([2; 32]),
+    };
+    let expected = hex::decode(concat!(
+        "10",
+        "0101010101010101010101010101010101010101010101010101010101010101",
+        "4b000000",
+        "0202020202020202020202020202020202020202020202020202020202020202"
+    ))
+    .unwrap();
+    assert_eq!(borsh::to_vec(&message).unwrap(), expected);
+    assert_eq!(
+        borsh::from_slice::<curve_core::Message>(&expected).unwrap(),
+        message
+    );
+    assert_eq!(schema()["encoding"], "borsh");
+    assert_eq!(schema()["version"], 1);
+    assert_eq!(schema()["upstream_types"]["AccountId"], "[u8;32]");
+    assert_eq!(
+        variant("curve", "Message", "InitializeNamespace"),
+        json!({
+            "tag": 16, "name": "InitializeNamespace", "fields": [
+                {"name": "namespace", "type": "AccountId"},
+                {"name": "protocol_fee_bps", "type": "u32"},
+                {"name": "treasury", "type": "AccountId"}
+            ]
+        })
     );
 }

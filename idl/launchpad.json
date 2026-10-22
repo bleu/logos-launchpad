@@ -1,0 +1,1388 @@
+{
+  "encoding": "borsh",
+  "modules": {
+    "curve": {
+      "AdminCandidate": {
+        "variants": [
+          {
+            "fields": [],
+            "name": "Signer",
+            "tag": 0
+          },
+          {
+            "fields": [
+              {
+                "name": "program_id",
+                "type": "AccountId"
+              },
+              {
+                "name": "seed",
+                "type": "[u8;32]"
+              }
+            ],
+            "name": "Pda",
+            "tag": 1
+          }
+        ]
+      },
+      "Config": {
+        "fields": [
+          {
+            "name": "format",
+            "type": "[u8;8]"
+          },
+          {
+            "name": "version",
+            "type": "u16"
+          },
+          {
+            "name": "namespace",
+            "type": "AccountId"
+          },
+          {
+            "name": "protocol_fee_bps",
+            "type": "u16"
+          },
+          {
+            "name": "treasury",
+            "type": "AccountId"
+          },
+          {
+            "name": "emergency",
+            "type": "FreezeConfig"
+          }
+        ]
+      },
+      "FreezeConfig": {
+        "fields": [
+          {
+            "name": "holder",
+            "type": "AccountId"
+          },
+          {
+            "name": "is_frozen",
+            "type": "bool"
+          }
+        ]
+      },
+      "Message": {
+        "variants": [
+          {
+            "fields": [],
+            "name": "ReadState",
+            "tag": 0
+          },
+          {
+            "fields": [
+              {
+                "name": "now",
+                "type": "u64"
+              }
+            ],
+            "name": "WithdrawReserves",
+            "tag": 1
+          },
+          {
+            "fields": [
+              {
+                "name": "now",
+                "type": "u64"
+              }
+            ],
+            "name": "ClosePool",
+            "tag": 2
+          },
+          {
+            "fields": [],
+            "name": "CollectFees",
+            "tag": 3
+          },
+          {
+            "fields": [
+              {
+                "name": "amount_out",
+                "type": "u128"
+              },
+              {
+                "name": "max_amount_in",
+                "type": "u128"
+              },
+              {
+                "name": "token_in",
+                "type": "AccountId"
+              },
+              {
+                "name": "now",
+                "type": "u64"
+              }
+            ],
+            "name": "SwapExactOutput",
+            "tag": 4
+          },
+          {
+            "fields": [
+              {
+                "name": "amount_in",
+                "type": "u128"
+              },
+              {
+                "name": "min_amount_out",
+                "type": "u128"
+              },
+              {
+                "name": "token_in",
+                "type": "AccountId"
+              },
+              {
+                "name": "now",
+                "type": "u64"
+              }
+            ],
+            "name": "SwapExactInput",
+            "tag": 5
+          },
+          {
+            "fields": [
+              {
+                "name": "now",
+                "type": "u64"
+              }
+            ],
+            "name": "ActivatePool",
+            "tag": 6
+          },
+          {
+            "fields": [
+              {
+                "name": "pool",
+                "type": "AccountId"
+              },
+              {
+                "name": "instruction",
+                "type": "Box<Message>"
+              }
+            ],
+            "name": "Execute",
+            "tag": 7
+          },
+          {
+            "fields": [
+              {
+                "name": "namespace",
+                "type": "AccountId"
+              },
+              {
+                "name": "token0_definition_id",
+                "type": "AccountId"
+              },
+              {
+                "name": "token1_definition_id",
+                "type": "AccountId"
+              },
+              {
+                "name": "allowed_input_token",
+                "type": "Option<u8>"
+              },
+              {
+                "name": "defer_funding",
+                "type": "bool"
+              },
+              {
+                "name": "token0_amount",
+                "type": "u128"
+              },
+              {
+                "name": "token1_amount",
+                "type": "u128"
+              },
+              {
+                "name": "virtual_reserve0",
+                "type": "u128"
+              },
+              {
+                "name": "virtual_reserve1",
+                "type": "u128"
+              },
+              {
+                "name": "close_timestamp",
+                "type": "Option<u64>"
+              },
+              {
+                "name": "close_on_depletion",
+                "type": "Option<u8>"
+              },
+              {
+                "name": "owner",
+                "type": "AccountId"
+              },
+              {
+                "name": "owner_program_id",
+                "type": "Option<AccountId>"
+              },
+              {
+                "name": "owner_program_seed",
+                "type": "Option<[u8;32]>"
+              },
+              {
+                "name": "curve_program_id",
+                "type": "AccountId"
+              },
+              {
+                "name": "now",
+                "type": "u64"
+              }
+            ],
+            "name": "CreatePool",
+            "tag": 8
+          },
+          {
+            "fields": [
+              {
+                "name": "namespace",
+                "type": "AccountId"
+              },
+              {
+                "name": "new_authority",
+                "type": "AccountId"
+              }
+            ],
+            "name": "TransferEmergencyAuthority",
+            "tag": 9
+          },
+          {
+            "fields": [
+              {
+                "name": "namespace",
+                "type": "AccountId"
+              },
+              {
+                "name": "frozen",
+                "type": "bool"
+              }
+            ],
+            "name": "SetFrozen",
+            "tag": 10
+          },
+          {
+            "fields": [
+              {
+                "name": "namespace",
+                "type": "AccountId"
+              }
+            ],
+            "name": "RenounceAdmin",
+            "tag": 11
+          },
+          {
+            "fields": [
+              {
+                "name": "namespace",
+                "type": "AccountId"
+              }
+            ],
+            "name": "ReadNamespace",
+            "tag": 12
+          },
+          {
+            "fields": [
+              {
+                "name": "namespace",
+                "type": "AccountId"
+              },
+              {
+                "name": "new_admin",
+                "type": "AccountId"
+              },
+              {
+                "name": "candidate",
+                "type": "AdminCandidate"
+              }
+            ],
+            "name": "TransferAdmin",
+            "tag": 13
+          },
+          {
+            "fields": [
+              {
+                "name": "namespace",
+                "type": "AccountId"
+              },
+              {
+                "name": "treasury",
+                "type": "AccountId"
+              }
+            ],
+            "name": "UpdateTreasury",
+            "tag": 14
+          },
+          {
+            "fields": [
+              {
+                "name": "namespace",
+                "type": "AccountId"
+              },
+              {
+                "name": "protocol_fee_bps",
+                "type": "u32"
+              }
+            ],
+            "name": "UpdateFee",
+            "tag": 15
+          },
+          {
+            "fields": [
+              {
+                "name": "namespace",
+                "type": "AccountId"
+              },
+              {
+                "name": "protocol_fee_bps",
+                "type": "u32"
+              },
+              {
+                "name": "treasury",
+                "type": "AccountId"
+              }
+            ],
+            "name": "InitializeNamespace",
+            "tag": 16
+          }
+        ]
+      },
+      "PoolAccount": {
+        "fields": [
+          {
+            "name": "allowed_input_token",
+            "type": "Option<pool::TokenSide>"
+          },
+          {
+            "name": "funded",
+            "type": "bool"
+          },
+          {
+            "name": "namespace",
+            "type": "AccountId"
+          },
+          {
+            "name": "token0_definition_id",
+            "type": "AccountId"
+          },
+          {
+            "name": "token1_definition_id",
+            "type": "AccountId"
+          },
+          {
+            "name": "owner",
+            "type": "AccountId"
+          },
+          {
+            "name": "owner_program",
+            "type": "Option<(AccountId,[u8;32])>"
+          },
+          {
+            "name": "pool",
+            "type": "pool::Pool"
+          }
+        ]
+      }
+    },
+    "factory": {
+      "CreationStage": {
+        "variants": [
+          {
+            "fields": [],
+            "name": "Minted",
+            "tag": 0
+          },
+          {
+            "fields": [],
+            "name": "Allocated",
+            "tag": 1
+          },
+          {
+            "fields": [],
+            "name": "PoolPrepared",
+            "tag": 2
+          },
+          {
+            "fields": [],
+            "name": "Active",
+            "tag": 3
+          }
+        ]
+      },
+      "FactoryState": {
+        "fields": [
+          {
+            "name": "trade_mode",
+            "type": "TradeMode"
+          },
+          {
+            "name": "graduation_hook",
+            "type": "Option<GraduationHook>"
+          },
+          {
+            "name": "creation_stage",
+            "type": "CreationStage"
+          },
+          {
+            "name": "settlement_stage",
+            "type": "SettlementStage"
+          },
+          {
+            "name": "end_timestamp",
+            "type": "Option<u64>"
+          },
+          {
+            "name": "namespace",
+            "type": "AccountId"
+          },
+          {
+            "name": "launch_salt",
+            "type": "[u8;32]"
+          },
+          {
+            "name": "token_definition_id",
+            "type": "AccountId"
+          },
+          {
+            "name": "collateral_definition_id",
+            "type": "AccountId"
+          },
+          {
+            "name": "sale_reserve",
+            "type": "u128"
+          },
+          {
+            "name": "dex_seed_reserve",
+            "type": "u128"
+          },
+          {
+            "name": "creator_allocation",
+            "type": "u128"
+          },
+          {
+            "name": "total_supply",
+            "type": "u128"
+          },
+          {
+            "name": "virtual_token_reserve",
+            "type": "u128"
+          },
+          {
+            "name": "virtual_collateral_reserve",
+            "type": "u128"
+          },
+          {
+            "name": "curve_program_id",
+            "type": "AccountId"
+          },
+          {
+            "name": "creator_commitment",
+            "type": "[u8;32]"
+          },
+          {
+            "name": "creator_nft_definition",
+            "type": "AccountId"
+          },
+          {
+            "name": "name",
+            "type": "String"
+          },
+          {
+            "name": "uri",
+            "type": "String"
+          },
+          {
+            "name": "creator_escrow_id",
+            "type": "AccountId"
+          },
+          {
+            "name": "pool_id",
+            "type": "AccountId"
+          },
+          {
+            "name": "creator_allocation_claimed",
+            "type": "bool"
+          },
+          {
+            "name": "pending",
+            "type": "Option<Pending>"
+          }
+        ]
+      },
+      "GraduationHook": {
+        "fields": [
+          {
+            "name": "program_id",
+            "type": "AccountId"
+          },
+          {
+            "name": "configuration",
+            "type": "Vec<u8>"
+          }
+        ]
+      },
+      "Message": {
+        "variants": [
+          {
+            "fields": [
+              {
+                "name": "trade_mode",
+                "type": "u8"
+              },
+              {
+                "name": "graduation_hook_program_id",
+                "type": "Option<AccountId>"
+              },
+              {
+                "name": "graduation_hook_configuration",
+                "type": "Vec<u8>"
+              },
+              {
+                "name": "namespace",
+                "type": "AccountId"
+              },
+              {
+                "name": "launch_salt",
+                "type": "[u8;32]"
+              },
+              {
+                "name": "name",
+                "type": "String"
+              },
+              {
+                "name": "uri",
+                "type": "String"
+              },
+              {
+                "name": "sale_reserve",
+                "type": "u128"
+              },
+              {
+                "name": "dex_seed_reserve",
+                "type": "u128"
+              },
+              {
+                "name": "creator_allocation",
+                "type": "u128"
+              },
+              {
+                "name": "virtual_token_reserve",
+                "type": "u128"
+              },
+              {
+                "name": "virtual_collateral_reserve",
+                "type": "u128"
+              },
+              {
+                "name": "end_timestamp",
+                "type": "Option<u64>"
+              },
+              {
+                "name": "curve_program_id",
+                "type": "AccountId"
+              },
+              {
+                "name": "collateral_definition_id",
+                "type": "AccountId"
+              },
+              {
+                "name": "creator",
+                "type": "AccountId"
+              },
+              {
+                "name": "creator_nft_definition",
+                "type": "AccountId"
+              },
+              {
+                "name": "now",
+                "type": "u64"
+              }
+            ],
+            "name": "CreateFactoryPool",
+            "tag": 0
+          },
+          {
+            "fields": [
+              {
+                "name": "creator",
+                "type": "AccountId"
+              },
+              {
+                "name": "now",
+                "type": "u64"
+              }
+            ],
+            "name": "ContinueCreation",
+            "tag": 1
+          },
+          {
+            "fields": [
+              {
+                "name": "creator",
+                "type": "AccountId"
+              },
+              {
+                "name": "now",
+                "type": "u64"
+              }
+            ],
+            "name": "ClaimCreatorAllocation",
+            "tag": 2
+          },
+          {
+            "fields": [
+              {
+                "name": "creator",
+                "type": "AccountId"
+              },
+              {
+                "name": "now",
+                "type": "u64"
+              }
+            ],
+            "name": "WithdrawFactoryProceeds",
+            "tag": 3
+          },
+          {
+            "fields": [
+              {
+                "name": "now",
+                "type": "u64"
+              }
+            ],
+            "name": "ExecuteGraduationHook",
+            "tag": 4
+          },
+          {
+            "fields": [
+              {
+                "name": "inputs",
+                "type": "FixedPriceInputs"
+              }
+            ],
+            "name": "CreateFixedPriceLbp",
+            "tag": 5
+          },
+          {
+            "fields": [
+              {
+                "name": "expected_stage",
+                "type": "FixedPriceCreationStage"
+              },
+              {
+                "name": "creator",
+                "type": "AccountId"
+              },
+              {
+                "name": "now",
+                "type": "u64"
+              }
+            ],
+            "name": "ContinueFixedPriceCreation",
+            "tag": 6
+          },
+          {
+            "fields": [],
+            "name": "ReadState",
+            "tag": 7
+          }
+        ]
+      },
+      "SettlementStage": {
+        "variants": [
+          {
+            "fields": [],
+            "name": "Unstarted",
+            "tag": 0
+          },
+          {
+            "fields": [],
+            "name": "Ready",
+            "tag": 1
+          },
+          {
+            "fields": [
+              {
+                "name": "unsold",
+                "type": "u128"
+              },
+              {
+                "name": "collateral_due",
+                "type": "u128"
+              }
+            ],
+            "name": "Withdrawn",
+            "tag": 2
+          },
+          {
+            "fields": [
+              {
+                "name": "collateral_due",
+                "type": "u128"
+              }
+            ],
+            "name": "Burned",
+            "tag": 3
+          },
+          {
+            "fields": [
+              {
+                "name": "collateral_due",
+                "type": "u128"
+              }
+            ],
+            "name": "TokenPaid",
+            "tag": 4
+          },
+          {
+            "fields": [],
+            "name": "Complete",
+            "tag": 5
+          },
+          {
+            "fields": [
+              {
+                "name": "collateral_due",
+                "type": "u128"
+              }
+            ],
+            "name": "HookReady",
+            "tag": 6
+          },
+          {
+            "fields": [],
+            "name": "Graduated",
+            "tag": 7
+          },
+          {
+            "fields": [],
+            "name": "NoPayout",
+            "tag": 8
+          }
+        ]
+      },
+      "TradeMode": {
+        "variants": [
+          {
+            "fields": [],
+            "name": "BuyOnly",
+            "tag": 0
+          },
+          {
+            "fields": [],
+            "name": "BuyAndSell",
+            "tag": 1
+          }
+        ]
+      }
+    },
+    "fixed_price": {
+      "FixedPriceCreationStage": {
+        "variants": [
+          {
+            "fields": [],
+            "name": "Minted",
+            "tag": 0
+          },
+          {
+            "fields": [],
+            "name": "Allocated",
+            "tag": 1
+          },
+          {
+            "fields": [],
+            "name": "PoolPrepared",
+            "tag": 2
+          },
+          {
+            "fields": [],
+            "name": "Complete",
+            "tag": 3
+          }
+        ]
+      },
+      "FixedPriceInputs": {
+        "fields": [
+          {
+            "name": "namespace",
+            "type": "AccountId"
+          },
+          {
+            "name": "launch_salt",
+            "type": "[u8;32]"
+          },
+          {
+            "name": "name",
+            "type": "String"
+          },
+          {
+            "name": "uri",
+            "type": "String"
+          },
+          {
+            "name": "sale_inventory",
+            "type": "u128"
+          },
+          {
+            "name": "creator_allocation",
+            "type": "u128"
+          },
+          {
+            "name": "price",
+            "type": "FixedPrice"
+          },
+          {
+            "name": "start",
+            "type": "SaleStart"
+          },
+          {
+            "name": "end_timestamp",
+            "type": "u64"
+          },
+          {
+            "name": "allocation_release",
+            "type": "CreatorAllocationRelease"
+          },
+          {
+            "name": "namespace_program_id",
+            "type": "AccountId"
+          },
+          {
+            "name": "lbp_program_id",
+            "type": "AccountId"
+          },
+          {
+            "name": "collateral_definition_id",
+            "type": "AccountId"
+          },
+          {
+            "name": "creator",
+            "type": "AccountId"
+          },
+          {
+            "name": "now",
+            "type": "u64"
+          }
+        ]
+      },
+      "FixedPriceLaunchState": {
+        "fields": [
+          {
+            "name": "format",
+            "type": "[u8;8]"
+          },
+          {
+            "name": "version",
+            "type": "u16"
+          },
+          {
+            "name": "creator_role_id",
+            "type": "AccountId"
+          },
+          {
+            "name": "mode",
+            "type": "lbp_core::PoolMode"
+          },
+          {
+            "name": "creation_stage",
+            "type": "FixedPriceCreationStage"
+          },
+          {
+            "name": "namespace",
+            "type": "AccountId"
+          },
+          {
+            "name": "launch_salt",
+            "type": "[u8;32]"
+          },
+          {
+            "name": "token_definition_id",
+            "type": "AccountId"
+          },
+          {
+            "name": "collateral_definition_id",
+            "type": "AccountId"
+          },
+          {
+            "name": "creator_escrow_id",
+            "type": "AccountId"
+          },
+          {
+            "name": "pool_id",
+            "type": "AccountId"
+          },
+          {
+            "name": "namespace_program_id",
+            "type": "AccountId"
+          },
+          {
+            "name": "lbp_program_id",
+            "type": "AccountId"
+          },
+          {
+            "name": "sale_inventory",
+            "type": "u128"
+          },
+          {
+            "name": "creator_allocation",
+            "type": "u128"
+          },
+          {
+            "name": "total_supply",
+            "type": "u128"
+          },
+          {
+            "name": "price",
+            "type": "FixedPrice"
+          },
+          {
+            "name": "start_timestamp",
+            "type": "u64"
+          },
+          {
+            "name": "end_timestamp",
+            "type": "u64"
+          },
+          {
+            "name": "allocation_release",
+            "type": "CreatorAllocationRelease"
+          },
+          {
+            "name": "creator_allocation_released",
+            "type": "bool"
+          },
+          {
+            "name": "name",
+            "type": "String"
+          },
+          {
+            "name": "uri",
+            "type": "String"
+          },
+          {
+            "name": "pending",
+            "type": "Option<Pending>"
+          }
+        ]
+      },
+      "SaleStart": {
+        "variants": [
+          {
+            "fields": [
+              {
+                "name": "timestamp",
+                "type": "u64"
+              }
+            ],
+            "name": "Now",
+            "tag": 0
+          },
+          {
+            "fields": [
+              {
+                "name": "timestamp",
+                "type": "u64"
+              }
+            ],
+            "name": "At",
+            "tag": 1
+          }
+        ]
+      }
+    },
+    "hook": {
+      "AdapterMessage": {
+        "variants": [
+          {
+            "fields": [
+              {
+                "name": "factory_program_id",
+                "type": "AccountId"
+              },
+              {
+                "name": "namespace",
+                "type": "AccountId"
+              },
+              {
+                "name": "launch_salt",
+                "type": "[u8;32]"
+              },
+              {
+                "name": "ready",
+                "type": "bool"
+              }
+            ],
+            "name": "Initialize",
+            "tag": 0
+          },
+          {
+            "fields": [],
+            "name": "ReadState",
+            "tag": 1
+          },
+          {
+            "fields": [
+              {
+                "name": "request",
+                "type": "GraduationRequest"
+              }
+            ],
+            "name": "Graduate",
+            "tag": 2
+          }
+        ]
+      },
+      "AdapterState": {
+        "fields": [
+          {
+            "name": "factory",
+            "type": "Actor"
+          },
+          {
+            "name": "ready",
+            "type": "bool"
+          },
+          {
+            "name": "receipt",
+            "type": "Option<GraduationRequest>"
+          },
+          {
+            "name": "pending",
+            "type": "Option<(GraduationRequest,u8)>"
+          }
+        ]
+      },
+      "GraduationRequest": {
+        "fields": [
+          {
+            "name": "factory_program_id",
+            "type": "AccountId"
+          },
+          {
+            "name": "namespace",
+            "type": "AccountId"
+          },
+          {
+            "name": "launch_salt",
+            "type": "[u8;32]"
+          },
+          {
+            "name": "token_definition_id",
+            "type": "AccountId"
+          },
+          {
+            "name": "collateral_definition_id",
+            "type": "AccountId"
+          },
+          {
+            "name": "dex_seed_reserve",
+            "type": "u128"
+          },
+          {
+            "name": "collateral_amount",
+            "type": "u128"
+          },
+          {
+            "name": "configuration",
+            "type": "Vec<u8>"
+          }
+        ]
+      },
+      "GraduationResult": {
+        "fields": [
+          {
+            "name": "factory",
+            "type": "AccountId"
+          }
+        ]
+      }
+    },
+    "lbp": {
+      "CreatorAllocationRelease": {
+        "variants": [
+          {
+            "fields": [],
+            "name": "AfterSetup",
+            "tag": 0
+          },
+          {
+            "fields": [],
+            "name": "AfterEnd",
+            "tag": 1
+          }
+        ]
+      },
+      "FixedPrice": {
+        "fields": [
+          {
+            "name": "collateral_units",
+            "type": "u128"
+          },
+          {
+            "name": "token_units",
+            "type": "u128"
+          }
+        ]
+      },
+      "FixedPricePoolInputs": {
+        "fields": [
+          {
+            "name": "namespace",
+            "type": "AccountId"
+          },
+          {
+            "name": "namespace_program_id",
+            "type": "AccountId"
+          },
+          {
+            "name": "factory_program_id",
+            "type": "AccountId"
+          },
+          {
+            "name": "factory_seed",
+            "type": "[u8;32]"
+          },
+          {
+            "name": "token_definition_id",
+            "type": "AccountId"
+          },
+          {
+            "name": "collateral_definition_id",
+            "type": "AccountId"
+          },
+          {
+            "name": "sale_inventory",
+            "type": "u128"
+          },
+          {
+            "name": "creator_allocation",
+            "type": "u128"
+          },
+          {
+            "name": "price",
+            "type": "FixedPrice"
+          },
+          {
+            "name": "start_timestamp",
+            "type": "u64"
+          },
+          {
+            "name": "end_timestamp",
+            "type": "u64"
+          },
+          {
+            "name": "creator_allocation_release",
+            "type": "CreatorAllocationRelease"
+          }
+        ]
+      },
+      "Message": {
+        "variants": [
+          {
+            "fields": [
+              {
+                "name": "inputs",
+                "type": "FixedPricePoolInputs"
+              }
+            ],
+            "name": "PrepareFixedPrice",
+            "tag": 0
+          },
+          {
+            "fields": [],
+            "name": "ActivateFixedPrice",
+            "tag": 1
+          },
+          {
+            "fields": [],
+            "name": "ReadState",
+            "tag": 2
+          }
+        ]
+      },
+      "PoolAccount": {
+        "fields": [
+          {
+            "name": "mode",
+            "type": "PoolMode"
+          },
+          {
+            "name": "funded",
+            "type": "bool"
+          },
+          {
+            "name": "namespace",
+            "type": "AccountId"
+          },
+          {
+            "name": "namespace_program_id",
+            "type": "AccountId"
+          },
+          {
+            "name": "factory_owner",
+            "type": "AccountId"
+          },
+          {
+            "name": "factory_program_id",
+            "type": "AccountId"
+          },
+          {
+            "name": "factory_seed",
+            "type": "[u8;32]"
+          },
+          {
+            "name": "token_definition_id",
+            "type": "AccountId"
+          },
+          {
+            "name": "collateral_definition_id",
+            "type": "AccountId"
+          },
+          {
+            "name": "sale_inventory",
+            "type": "u128"
+          },
+          {
+            "name": "creator_allocation",
+            "type": "u128"
+          },
+          {
+            "name": "price",
+            "type": "FixedPrice"
+          },
+          {
+            "name": "start_timestamp",
+            "type": "u64"
+          },
+          {
+            "name": "end_timestamp",
+            "type": "u64"
+          },
+          {
+            "name": "creator_allocation_release",
+            "type": "CreatorAllocationRelease"
+          },
+          {
+            "name": "recorded_collateral",
+            "type": "u128"
+          },
+          {
+            "name": "pending",
+            "type": "Option<Pending>"
+          }
+        ]
+      },
+      "PoolMode": {
+        "variants": [
+          {
+            "fields": [],
+            "name": "FixedPrice",
+            "tag": 0
+          }
+        ]
+      }
+    },
+    "pool": {
+      "Pool": {
+        "fields": [
+          {
+            "name": "virtual_reserve0",
+            "type": "u128"
+          },
+          {
+            "name": "virtual_reserve1",
+            "type": "u128"
+          },
+          {
+            "name": "k",
+            "type": "u128"
+          },
+          {
+            "name": "real_reserve0",
+            "type": "u128"
+          },
+          {
+            "name": "real_reserve1",
+            "type": "u128"
+          },
+          {
+            "name": "fees_accrued",
+            "type": "u128"
+          },
+          {
+            "name": "fees_collected",
+            "type": "u128"
+          },
+          {
+            "name": "close_timestamp",
+            "type": "Option<u64>"
+          },
+          {
+            "name": "close_on_depletion",
+            "type": "Option<TokenSide>"
+          },
+          {
+            "name": "lifecycle",
+            "type": "PoolLifecycle"
+          }
+        ]
+      },
+      "PoolLifecycle": {
+        "variants": [
+          {
+            "fields": [],
+            "name": "Open",
+            "tag": 0
+          },
+          {
+            "fields": [],
+            "name": "Closed",
+            "tag": 1
+          },
+          {
+            "fields": [],
+            "name": "Withdrawn",
+            "tag": 2
+          }
+        ]
+      },
+      "TokenSide": {
+        "variants": [
+          {
+            "fields": [],
+            "name": "Token0",
+            "tag": 0
+          },
+          {
+            "fields": [],
+            "name": "Token1",
+            "tag": 1
+          }
+        ]
+      }
+    }
+  },
+  "upstream_types": {
+    "AccountId": "[u8;32]",
+    "Actor": [
+      {
+        "name": "account_id",
+        "type": "AccountId"
+      },
+      {
+        "name": "program_account_id",
+        "type": "AccountId"
+      }
+    ],
+    "PdaSeed": "[u8;32]",
+    "StateReply": [
+      {
+        "name": "state",
+        "type": "Vec<u8>"
+      }
+    ]
+  },
+  "version": 1
+}

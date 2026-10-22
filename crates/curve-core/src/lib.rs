@@ -1,23 +1,198 @@
-//! The curve program: instruction enum, Borsh state, PDA derivation, and the handlers.
-//!
-//! Modelled on `lez/programs/amm/core/src/lib.rs` plus `lez/programs/amm/src/`, with one
-//! deliberate difference. Upstream puts the handlers in the guest binary crate; here they
-//! live in the host workspace and `methods/guest/src/bin/curve.rs` is a dispatch shim, so
-//! the AMM-style tests run under `cargo test --workspace`.
-//!
-//! The handlers stay shallow. They deserialize accounts, call `pool`, and translate the
-//! returned outcome into account post-states plus typed token-settlement values. The guest/token
-//! adapter turns those settlements into chained calls.
-
-#![cfg_attr(not(test), warn(unused_crate_dependencies))]
+//! Bounded curve actor and namespace administration.
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
-    account::{AccountId, Data},
-    program::{PdaSeed, ProgramId},
+    account::{AccountId, Actor},
+    program::{PdaSeed, ReceiveInput, Response, SyncMessage},
 };
-use pool::Pool;
-use serde::{Deserialize, Serialize};
+
+include!(concat!(env!("OUT_DIR"), "/emergency_authority.rs"));
+
+pub const MAX_FEE_BPS: u16 = 10_000;
+pub const TOKEN_PROGRAM_ACCOUNT_ID: AccountId = AccountId::new([
+    227, 49, 42, 31, 136, 159, 220, 198, 195, 186, 3, 242, 23, 1, 47, 213, 204, 150, 77, 104, 203,
+    183, 207, 146, 116, 205, 6, 145, 114, 161, 89, 113,
+]);
+pub const AUTHORITY_PROGRAM_ACCOUNT_ID: AccountId = AccountId::new([
+    94, 144, 155, 106, 14, 146, 62, 120, 135, 16, 55, 144, 76, 89, 251, 81, 15, 154, 235, 51, 72,
+    22, 124, 218, 6, 52, 198, 24, 253, 158, 192, 243,
+]);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Error {
+    InvalidMessage,
+    InvalidState,
+    Unauthorized,
+    WrongAccount,
+    AlreadyInitialized,
+    InvalidFee,
+    InvalidTreasury,
+    InvalidPool,
+    InvalidToken,
+    Underfunded,
+    PendingFunding,
+    Frozen,
+    Arithmetic,
+    Restricted,
+    Closed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub enum Message {
+    ReadState,
+    WithdrawReserves {
+        now: u64,
+    },
+    ClosePool {
+        now: u64,
+    },
+    CollectFees,
+    SwapExactOutput {
+        amount_out: u128,
+        max_amount_in: u128,
+        token_in: AccountId,
+        now: u64,
+    },
+    SwapExactInput {
+        amount_in: u128,
+        min_amount_out: u128,
+        token_in: AccountId,
+        now: u64,
+    },
+    ActivatePool {
+        now: u64,
+    },
+    Execute {
+        pool: AccountId,
+        instruction: Box<Message>,
+    },
+    CreatePool {
+        namespace: AccountId,
+        token0_definition_id: AccountId,
+        token1_definition_id: AccountId,
+        allowed_input_token: Option<u8>,
+        defer_funding: bool,
+        token0_amount: u128,
+        token1_amount: u128,
+        virtual_reserve0: u128,
+        virtual_reserve1: u128,
+        close_timestamp: Option<u64>,
+        close_on_depletion: Option<u8>,
+        owner: AccountId,
+        owner_program_id: Option<AccountId>,
+        owner_program_seed: Option<[u8; 32]>,
+        curve_program_id: AccountId,
+        now: u64,
+    },
+    TransferEmergencyAuthority {
+        namespace: AccountId,
+        new_authority: AccountId,
+    },
+    SetFrozen {
+        namespace: AccountId,
+        frozen: bool,
+    },
+    RenounceAdmin {
+        namespace: AccountId,
+    },
+    ReadNamespace {
+        namespace: AccountId,
+    },
+    TransferAdmin {
+        namespace: AccountId,
+        new_admin: AccountId,
+        candidate: AdminCandidate,
+    },
+    UpdateTreasury {
+        namespace: AccountId,
+        treasury: AccountId,
+    },
+    UpdateFee {
+        namespace: AccountId,
+        protocol_fee_bps: u32,
+    },
+    InitializeNamespace {
+        namespace: AccountId,
+        protocol_fee_bps: u32,
+        treasury: AccountId,
+    },
+}
+pub type Instruction = Message;
+#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub enum AdminCandidate {
+    Signer,
+    Pda {
+        program_id: AccountId,
+        seed: [u8; 32],
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct FreezeConfig {
+    holder: AccountId,
+    pub is_frozen: bool,
+}
+impl FreezeConfig {
+    pub fn authority(&self) -> AccountId {
+        self.holder
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct Config {
+    format: [u8; 8],
+    version: u16,
+    pub namespace: AccountId,
+    pub protocol_fee_bps: u16,
+    pub treasury: AccountId,
+    pub emergency: FreezeConfig,
+}
+impl Config {
+    pub fn decode(bytes: &[u8]) -> Result<Self, Error> {
+        let state: Self = borsh::from_slice(bytes).map_err(|_| Error::InvalidState)?;
+        if state.format != *b"LZNSCONF" || state.version != 3 {
+            return Err(Error::InvalidState);
+        }
+        Ok(state)
+    }
+    pub fn format_version(&self) -> u16 {
+        self.version
+    }
+}
+
+/// Convert public Unix seconds to native clock milliseconds.
+pub fn timestamp_millis(seconds: u64) -> Result<u64, Error> {
+    seconds.checked_mul(1000).ok_or(Error::Arithmetic)
+}
+
+/// Assert a public lower bound and an optional strict deadline, both in seconds.
+pub fn clock_assertion(at_least: u64, before: Option<u64>) -> Result<clock_core::Message, Error> {
+    let at_least = timestamp_millis(at_least)?;
+    let at_most = match before {
+        Some(end) => timestamp_millis(end)?
+            .checked_sub(1)
+            .ok_or(Error::Arithmetic)?,
+        None => u64::MAX,
+    };
+    if at_least > at_most {
+        return Err(Error::Closed);
+    }
+    Ok(clock_core::Message::AssertTimestamp { at_least, at_most })
+}
+
+pub fn compute_config_pda_seed(namespace: AccountId) -> PdaSeed {
+    PdaSeed::new(*namespace.value())
+}
+pub fn compute_config_pda(namespace: AccountId, program: AccountId) -> AccountId {
+    AccountId::for_public_pda(&program, &compute_config_pda_seed(namespace))
+}
+pub fn compute_admin_role_seed(namespace: AccountId) -> PdaSeed {
+    let domain = AccountId::from_builtin_program_name(b"launchpad/namespace-admin/v1");
+    PdaSeed::new(*AccountId::for_public_pda(&domain, &compute_config_pda_seed(namespace)).value())
+}
+pub fn compute_admin_role(namespace: AccountId, program: AccountId) -> AccountId {
+    AccountId::for_public_pda(&program, &compute_admin_role_seed(namespace))
+}
 
 mod authority;
 mod dispatch;
@@ -27,228 +202,162 @@ mod pool_lifecycle;
 mod pool_swap;
 mod update_config;
 
-include!(concat!(env!("OUT_DIR"), "/emergency_authority.rs"));
+pub fn handle(input: &ReceiveInput) -> Result<Response, Error> {
+    if let Some(result) = update_config::resume(input) {
+        return result;
+    }
+    if let Some(result) = dispatch::resume(input) {
+        return result;
+    }
+    let message: Message = borsh::from_slice(&input.message).map_err(|_| Error::InvalidMessage)?;
+    let program = input.receiver.program_account_id;
+    match message {
+        Message::ReadState => {
+            let state = PoolAccount::decode(&input.pre_state)?;
+            state.validate_address(input.receiver)?;
+            Ok(Response::keep_state().send_sync(
+                input.from.ok_or(Error::Unauthorized)?,
+                &lee_core::program::StateReply::from(input),
+            ))
+        }
+        Message::Execute { pool, instruction } => {
+            if !input.is_authorized
+                || !matches!(
+                    *instruction,
+                    Message::CreatePool { .. }
+                        | Message::ActivatePool { .. }
+                        | Message::WithdrawReserves { .. }
+                        | Message::ClosePool { .. }
+                        | Message::SwapExactInput { .. }
+                        | Message::SwapExactOutput { .. }
+                )
+            {
+                return Err(Error::Unauthorized);
+            }
+            Ok(Response::keep_state().send_sync(Actor::new(pool, program), &*instruction))
+        }
+        Message::WithdrawReserves { .. } | Message::ClosePool { .. } | Message::CollectFees => {
+            pool_lifecycle::begin(input, message)
+        }
+        Message::SwapExactInput { .. } | Message::SwapExactOutput { .. } => {
+            pool_swap::begin(input, message)
+        }
+        Message::ActivatePool { .. } => pool_create::activate(input, message),
+        Message::CreatePool { .. } => pool_create::begin(input, message),
+        Message::TransferEmergencyAuthority { .. } | Message::SetFrozen { .. } => {
+            emergency::handle(input, message)
+        }
+        Message::ReadNamespace { namespace } => {
+            if input.receiver.account_id != compute_config_pda(namespace, program) {
+                return Err(Error::WrongAccount);
+            }
+            let config = Config::decode(&input.pre_state)?;
+            if config.namespace != namespace {
+                return Err(Error::WrongAccount);
+            }
+            Ok(Response::keep_state().send_sync(
+                input.from.ok_or(Error::Unauthorized)?,
+                &lee_core::program::StateReply::from(input),
+            ))
+        }
+        Message::RenounceAdmin { .. }
+        | Message::TransferAdmin { .. }
+        | Message::UpdateFee { .. }
+        | Message::UpdateTreasury { .. } => update_config::begin(input, message),
+        Message::InitializeNamespace {
+            namespace,
+            protocol_fee_bps,
+            treasury,
+        } => {
+            if namespace == AccountId::default() {
+                return Err(Error::Unauthorized);
+            }
+            if protocol_fee_bps >= u32::from(MAX_FEE_BPS) {
+                return Err(Error::InvalidFee);
+            }
+            if treasury == AccountId::default() {
+                return Err(Error::InvalidTreasury);
+            }
+            let config = Actor::new(compute_config_pda(namespace, program), program);
+            if input.receiver.account_id == namespace {
+                if !input.is_authorized {
+                    return Err(Error::Unauthorized);
+                }
+                return Ok(Response::keep_state().send_sync(config, &message));
+            }
+            if input.receiver != config {
+                return Err(Error::WrongAccount);
+            }
+            if input.from != Some(Actor::new(namespace, program)) {
+                return Err(Error::Unauthorized);
+            }
+            if !input.pre_state.is_empty() {
+                return Err(Error::AlreadyInitialized);
+            }
+            let state = Config {
+                format: *b"LZNSCONF",
+                version: 3,
+                namespace,
+                protocol_fee_bps: protocol_fee_bps as u16,
+                treasury,
+                emergency: FreezeConfig {
+                    holder: INITIAL_EMERGENCY_AUTHORITY,
+                    is_frozen: false,
+                },
+            };
+            Ok(Response::set_state(borsh::to_vec(&state).unwrap()).send(
+                SyncMessage::new(
+                    Actor::new(
+                        compute_admin_role(namespace, program),
+                        AUTHORITY_PROGRAM_ACCOUNT_ID,
+                    ),
+                    &lez_compat_core::authority::Message::Bootstrap {
+                        authority: namespace,
+                    },
+                )
+                .with_pda_seeds([compute_admin_role_seed(namespace)]),
+            ))
+        }
+    }
+}
 
-pub use authority::{TOKEN_PROGRAM_ID, identity};
-pub use dispatch::{process_instruction, use_public_authorizations};
-pub use emergency::{AuthorityError, FreezeConfig};
-pub use pool_create::after_ata_creation;
-pub use pool_swap::validated_config;
+pub fn compute_pool_pda_seed(
+    namespace: AccountId,
+    token0: AccountId,
+    token1: AccountId,
+    owner: AccountId,
+) -> PdaSeed {
+    use risc0_zkvm::sha::{Impl, Sha256 as _};
+    let mut bytes = [0; 128];
+    bytes[..32].copy_from_slice(token0.value());
+    bytes[32..64].copy_from_slice(token1.value());
+    bytes[64..96].copy_from_slice(owner.value());
+    bytes[96..].copy_from_slice(namespace.value());
+    PdaSeed::new(Impl::hash_bytes(&bytes).as_bytes().try_into().unwrap())
+}
+pub fn compute_pool_pda(
+    namespace: AccountId,
+    program: AccountId,
+    token0: AccountId,
+    token1: AccountId,
+    owner: AccountId,
+) -> AccountId {
+    AccountId::for_public_pda(
+        &program,
+        &compute_pool_pda_seed(namespace, token0, token1, owner),
+    )
+}
+
+impl core::fmt::Display for Error {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{self:?}")
+    }
+}
+impl std::error::Error for Error {}
 
 #[cfg(test)]
 mod tests;
 
-/// Curve program instruction. Token accounts are supplied by the guest/token adapter.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum Instruction {
-    /// Permanently disables namespace administration; swaps retain the last settings.
-    RenounceAdmin { namespace: AccountId },
-    /// Creates a bounded pool over an ordered token pair.
-    ///
-    /// Required accounts:
-    /// - Pool PDA (uninitialized)
-    /// - Owner authority (authorized)
-    /// - Token 0 definition
-    /// - Token 1 definition
-    /// - Owner's token 0 ATA
-    /// - Owner's token 1 ATA
-    /// - Pool PDA's token 0 ATA (uninitialized)
-    /// - Pool PDA's token 1 ATA (uninitialized)
-    CreatePool {
-        allowed_input_token: Option<u8>,
-        defer_funding: bool,
-        namespace: AccountId,
-        token0_amount: u128,
-        token1_amount: u128,
-        virtual_reserve0: u128,
-        virtual_reserve1: u128,
-        close_timestamp: Option<u64>,
-        close_on_depletion: Option<u8>,
-        owner: AccountId,
-        owner_program_id: Option<ProgramId>,
-        owner_program_seed: Option<[u8; 32]>,
-        /// Included in the wire instruction following the LEZ program convention;
-        /// dispatch verifies it against the executing program id.
-        curve_program_id: ProgramId,
-    },
-    /// Swaps an exact input amount; `token_in` selects the direction.
-    ///
-    /// Required accounts, in order:
-    /// - Pool PDA
-    /// - Config PDA
-    /// - Participant (authorized)
-    /// - Participant input ATA
-    /// - Pool input ATA
-    /// - Pool output ATA
-    /// - Participant output ATA
-    /// - Trusted LEZ clock
-    SwapExactInput {
-        amount_in: u128,
-        min_amount_out: u128,
-        token_in: AccountId,
-    },
-    /// Receives an exact output amount while capping fee-inclusive input.
-    SwapExactOutput {
-        amount_out: u128,
-        max_amount_in: u128,
-        token_in: AccountId,
-    },
-    /// Owner-only logical closure.
-    ClosePool,
-    /// Funds a prepared pool; same ten accounts as CreatePool.
-    ActivatePool,
-    /// Owner-only full withdrawal after manual closure or expiry, collecting fees atomically.
-    /// Accounts: pool, owner, owner ATA0/ATA1, pool ATA0/ATA1, clock, config, treasury ATA1.
-    /// Omit the last account when it aliases owner ATA1 (LEZ requires unique IDs).
-    WithdrawReserves,
-    /// Permissionless collection: pool, namespace config, pool token1 ATA, treasury token1 ATA.
-    CollectFees,
-    /// Emergency-only swap gate. Accounts: config, current emergency authority.
-    SetFrozen { namespace: AccountId, frozen: bool },
-    /// Immediate emergency transfer. Accounts: config, current emergency authority.
-    TransferEmergencyAuthority {
-        namespace: AccountId,
-        new_authority: AccountId,
-    },
-    /// Creates namespace settings and assigns the signing namespace account as admin.
-    InitializeNamespace {
-        namespace: AccountId,
-        protocol_fee_bps: u32,
-        treasury: AccountId,
-    },
-    /// Changes only the live namespace fee rate.
-    UpdateFee {
-        namespace: AccountId,
-        protocol_fee_bps: u32,
-    },
-    /// Changes only the live namespace treasury.
-    UpdateTreasury {
-        namespace: AccountId,
-        treasury: AccountId,
-    },
-    /// Transfers administration using the package's successor evidence.
-    TransferAdmin {
-        namespace: AccountId,
-        new_admin: AccountId,
-        candidate: AdminCandidate,
-    },
-    /// Select the pinned privacy circuit's transaction-wide PDA authorization rules.
-    Private { instruction: Box<Instruction> },
-}
-
-/// Acceptance evidence for a namespace administrator.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum AdminCandidate {
-    Signer,
-    Pda {
-        program_id: ProgramId,
-        seed: [u8; 32],
-    },
-}
-
-/// The protocol fee denominator. A fee at this rate consumes its buy-side input,
-/// so the swap state machine rejects it as untradeable.
-pub const MAX_FEE_BPS: u16 = 10_000;
-
-/// The ATA program shipped by the pinned LEZ revision. Program IDs are risc0
-/// image IDs, so this binds custody calls to that exact guest implementation.
-pub const ASSOCIATED_TOKEN_ACCOUNT_PROGRAM_ID: ProgramId = [
-    0xc81c_8495,
-    0xd787_2cbd,
-    0xc7c5_1b11,
-    0x852a_aaf3,
-    0xf790_5ed3,
-    0xa382_7e21,
-    0xac05_aa97,
-    0xf800_15d5,
-];
-
-/// The live settings and emergency state of one namespace.
-#[derive(Clone, BorshSerialize, BorshDeserialize)]
-pub struct Config {
-    format: [u8; 8],
-    version: u16,
-    administration: admin_authority::AdminConfig,
-    pub protocol_fee_bps: u16,
-    pub treasury: AccountId,
-    pub emergency: FreezeConfig,
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            format: *b"LZNSCONF",
-            version: 2,
-            administration: Default::default(),
-            protocol_fee_bps: 0,
-            treasury: AccountId::default(),
-            emergency: FreezeConfig::initialize(INITIAL_EMERGENCY_AUTHORITY)
-                .expect("Deployment emergency authority must not be the default key"),
-        }
-    }
-}
-
-impl Config {
-    pub(crate) const ADMIN_OFFSET: usize = 10;
-
-    /// Constructs state; namespace creation also validates the signing account.
-    pub fn new(admin: AccountId, protocol_fee_bps: u16, treasury: AccountId) -> Self {
-        Self {
-            administration: admin_authority::AdminConfig::initialize(
-                spel_framework::prelude::AccountId::new(admin.to_bytes()),
-            )
-            .expect("Non-default initial administrator"),
-            protocol_fee_bps,
-            treasury,
-            ..Self::default()
-        }
-    }
-
-    /// Checks administrator authorization using execution-validated account metadata.
-    /// Panics if the account is unsigned, is not the administrator, or administration was renounced.
-    pub fn assert_admin(&self, account: &lee_core::account::AccountWithMetadata) {
-        self.administration
-            .assert_admin(&update_config::adapt(account))
-            .expect("Namespace administrator authorization failed");
-    }
-}
-
-impl TryFrom<&Data> for Config {
-    type Error = std::io::Error;
-
-    fn try_from(data: &Data) -> Result<Self, Self::Error> {
-        let config = Self::try_from_slice(data.as_ref())?;
-        if config.format != *b"LZNSCONF" || config.version != 2 {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "Unsupported namespace config",
-            ));
-        }
-        Ok(config)
-    }
-}
-
-impl From<&Config> for Data {
-    fn from(config: &Config) -> Self {
-        let mut data = Vec::with_capacity(std::mem::size_of_val(config));
-
-        BorshSerialize::serialize(config, &mut data).expect("Serialization to Vec should not fail");
-
-        Self::try_from(data).expect("Config encoded data should fit into Data")
-    }
-}
-
-#[must_use]
-pub fn compute_config_pda(namespace: AccountId, curve_program_id: ProgramId) -> AccountId {
-    AccountId::for_public_pda(&curve_program_id, &compute_config_pda_seed(namespace))
-}
-
-#[must_use]
-pub fn compute_config_pda_seed(namespace: AccountId) -> PdaSeed {
-    PdaSeed::new(namespace.to_bytes())
-}
-
-/// The pool PDA's contents: ordered token roles, owner, and bounded-AMM state.
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PoolAccount {
     pub allowed_input_token: Option<pool::TokenSide>,
@@ -257,61 +366,25 @@ pub struct PoolAccount {
     pub token0_definition_id: AccountId,
     pub token1_definition_id: AccountId,
     pub owner: AccountId,
-    pub owner_program: Option<(ProgramId, [u8; 32])>,
-    pub pool: Pool,
+    pub owner_program: Option<(AccountId, [u8; 32])>,
+    pub pool: pool::Pool,
 }
-
-impl TryFrom<&Data> for PoolAccount {
-    type Error = std::io::Error;
-
-    fn try_from(data: &Data) -> Result<Self, Self::Error> {
-        Self::try_from_slice(data.as_ref())
+impl PoolAccount {
+    pub fn decode(bytes: &[u8]) -> Result<Self, Error> {
+        borsh::from_slice(bytes).map_err(|_| Error::InvalidState)
     }
-}
-
-impl From<&PoolAccount> for Data {
-    fn from(pool_account: &PoolAccount) -> Self {
-        let mut bytes = Vec::with_capacity(std::mem::size_of_val(pool_account));
-        BorshSerialize::serialize(pool_account, &mut bytes)
-            .expect("serialisation to a Vec cannot fail");
-        Self::try_from(bytes).expect("a pool account is far below the account data size limit")
+    pub fn validate_address(&self, actor: Actor) -> Result<(), Error> {
+        if actor.account_id
+            != compute_pool_pda(
+                self.namespace,
+                actor.program_account_id,
+                self.token0_definition_id,
+                self.token1_definition_id,
+                self.owner,
+            )
+        {
+            return Err(Error::WrongAccount);
+        }
+        Ok(())
     }
-}
-
-/// One pool per namespace, ordered pair and owner. The pair hashes in fixed order.
-#[must_use]
-pub fn compute_pool_pda(
-    namespace: AccountId,
-    curve_program_id: ProgramId,
-    token0_definition_id: AccountId,
-    token1_definition_id: AccountId,
-    owner: AccountId,
-) -> AccountId {
-    AccountId::for_public_pda(
-        &curve_program_id,
-        &compute_pool_pda_seed(namespace, token0_definition_id, token1_definition_id, owner),
-    )
-}
-
-#[must_use]
-pub fn compute_pool_pda_seed(
-    namespace: AccountId,
-    token0_definition_id: AccountId,
-    token1_definition_id: AccountId,
-    owner: AccountId,
-) -> PdaSeed {
-    use risc0_zkvm::sha::{Impl, Sha256 as _};
-
-    let mut bytes = [0; 128];
-    bytes[0..32].copy_from_slice(&token0_definition_id.to_bytes());
-    bytes[32..64].copy_from_slice(&token1_definition_id.to_bytes());
-    bytes[64..96].copy_from_slice(&owner.to_bytes());
-    bytes[96..].copy_from_slice(&namespace.to_bytes());
-
-    PdaSeed::new(
-        Impl::hash_bytes(&bytes)
-            .as_bytes()
-            .try_into()
-            .expect("Hash output must be exactly 32 bytes long"),
-    )
 }
