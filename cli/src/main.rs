@@ -156,6 +156,8 @@ enum Command {
 struct CreateAuthorityArgs {
     #[arg(long)]
     token_program_path: PathBuf,
+    #[arg(long, value_parser = parse_public_account_id)]
+    fee_payer: lee::AccountId,
     #[arg(long)]
     name: String,
     #[arg(long)]
@@ -668,12 +670,13 @@ async fn run(json: bool, cli: Cli) -> Result<()> {
                 .store_config_changes()
                 .await
                 .map_err(|error| eyre::eyre!(error.into_boxed_dyn_error()))?;
-            let invocation = launchpad_client::build_create_authority_invocation(
+            let mut invocation = launchpad_client::build_create_authority_invocation(
                 definition,
                 holder,
                 args.name.clone(),
                 args.uri.clone(),
             );
+            invocation.fee_payer = Some(args.fee_payer);
             let hash = submit_public_invocation(
                 &wallet,
                 &load_deployment(
@@ -1413,6 +1416,45 @@ mod tests {
     use clap::{CommandFactory, Parser};
 
     #[test]
+    fn create_authority_requires_a_public_fee_payer() {
+        let command = [
+            "launchpad",
+            "create-authority",
+            "--token-program-path",
+            "token.bin",
+            "--name",
+            "Creator",
+            "--uri",
+            "https://example.invalid/creator",
+        ];
+        let error = Cli::try_parse_from(command).unwrap_err();
+        assert_eq!(
+            error.kind(),
+            clap::error::ErrorKind::MissingRequiredArgument
+        );
+        assert!(error.to_string().contains("--fee-payer"));
+        for payer in [
+            "11111111111111111111111111111111",
+            "Public/11111111111111111111111111111111",
+        ] {
+            let cli =
+                Cli::try_parse_from(command.into_iter().chain(["--fee-payer", payer])).unwrap();
+            let Command::CreateAuthority(args) = cli.command else {
+                panic!("expected create-authority");
+            };
+            assert_eq!(args.fee_payer, parse_public_account_id(payer).unwrap());
+        }
+        assert!(
+            Cli::try_parse_from(
+                command
+                    .into_iter()
+                    .chain(["--fee-payer", "Private/11111111111111111111111111111111",])
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
     fn private_nft_transfer_is_rejected_before_wallet_access() {
         let cli = Cli::try_parse_from([
             "launchpad",
@@ -1538,6 +1580,8 @@ mod tests {
                 "create-authority",
                 "--token-program-path",
                 "token.bin",
+                "--fee-payer",
+                "11111111111111111111111111111111",
                 "--name",
                 "Admin",
                 "--uri",
