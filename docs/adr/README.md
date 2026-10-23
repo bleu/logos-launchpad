@@ -13,7 +13,7 @@ Read [CONTEXT.md](../../CONTEXT.md) for terms and [repository layout](../archite
 | [0003](0003-source-reuse-and-licenses.md) | Direct source reuse and licenses | Accepted |
 | [0004](0004-upstream-patterns.md) | Adopt AMM patterns without a fork | Accepted |
 | [0005](0005-mechanism-boundaries.md) | Separate mechanism rules and pools; share matching launch setup | Accepted; partially superseded for shared setup by [0031](0031-shared-launch-factory.md) |
-| [0006](0006-namespaces-and-authority.md) | Separate roles using AccountId authority | Accepted; curve namespace has local guest evidence; creator/pool-owner migration pending; fixed-price sale creation and funding gap partially superseded by [0032](0032-fixed-price-lbp-setup.md) |
+| [0006](0006-namespaces-and-authority.md) | Separate roles using AccountId authority | Accepted; actor namespace host checks passed; runtime administration and creator/pool-owner migration pending; fixed-price sale creation and funding gap partially superseded by [0032](0032-fixed-price-lbp-setup.md) |
 | [0007](0007-typed-sale-inputs.md) | Typed immutable sale inputs | Accepted internally; To be reviewed by Logos team |
 | [0008](0008-curve-allocation-and-close.md) | Curve allocations | Accepted internally; To be reviewed by Logos team |
 | [0009](0009-curve-arithmetic.md) | Checked curve pricing and reserve solvency | Accepted baseline |
@@ -43,7 +43,7 @@ Read [CONTEXT.md](../../CONTEXT.md) for terms and [repository layout](../archite
 | [0025](0025-sale-closing.md) | Mechanism-specific sale closing | Accepted internally; fixed-price and weighted-sale close and settlement handlers remain future work; expiry-validation departure: To be reviewed by Logos team |
 | [0026](0026-lbp-clock-and-poke.md) | Fixed-total clock weights and timestamp-keyed buy/poke checkpoints | Accepted; historical clock evidence; live freshness and weighted-sale integration unverified |
 | [0027](0027-events-and-history.md) | Platform events and existing history tooling | Accepted internally; failed-event retention: To be reviewed by Logos team; actor event emission and ingestion unverified |
-| [0028](0028-token-custody-and-freeze.md) | Token custody and namespace emergency controls | Accepted; bonding-curve controls have local guest evidence; fixed-price and weighted-sale checks and broader platform checks pending |
+| [0028](0028-token-custody-and-freeze.md) | Token custody and namespace emergency controls | Accepted; actor bonding-curve controls have host checks; broader runtime, fixed-price and weighted-sale checks pending |
 | [0029](0029-wallet-integration.md) | Integrate the LEZ Wallet Provider SDK | Accepted; awaits LP-0021 development |
 | [0030](0030-lbp-pricing-collateral.md) | Fee-neutral weighted-sale pricing collateral and separate custody records | Accepted internally; weighted-sale execution and custody/numerical verification pending; fee departures: To be reviewed by Logos team |
 | [0031](0031-shared-launch-factory.md) | Share matching launch setup without sharing mechanism rules | Shared fixed-price sale creation and funding implementation; locked local verification passed using development receipts; real proofs and deployment readiness pending |
