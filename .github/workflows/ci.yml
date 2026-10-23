@@ -59,9 +59,6 @@ jobs:
           bash verify/check-pins.sh
           bash verify/tests/actor-pins.sh --static
           bash verify/tests/application-pins.sh
-          bash verify/tests/application-idl.sh
-          bash verify/tests/application-idl-drift.sh
-          bash verify/tests/actor-tools.sh
           bash verify/tests/check-builds.sh
           bash verify/tests/check-builds.sh missing-artifacts
 
@@ -123,6 +120,11 @@ jobs:
           source verify/actor-tools.env
           cargo +"$ACTOR_RUST_VERSION" clippy --workspace --all-targets --locked -- -D warnings
           cargo +"$ACTOR_RUST_VERSION" clippy --manifest-path packages/lez-compat/Cargo.toml --workspace --all-targets --locked -- -D warnings
+      - name: Check actor interface and wire commands
+        run: |
+          bash verify/tests/application-idl.sh
+          bash verify/tests/application-idl-drift.sh
+          bash verify/tests/actor-tools.sh
       - name: Run actor repository locked builds and tests
         run: bash verify/check-builds.sh
       - name: Check generated actor program interfaces
