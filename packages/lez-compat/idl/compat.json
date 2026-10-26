@@ -1,0 +1,533 @@
+{
+  "encoding": "borsh",
+  "modules": {
+    "authority": {
+      "Authorized": {
+        "fields": [
+          {
+            "name": "role",
+            "type": "AccountId"
+          },
+          {
+            "name": "authority",
+            "type": "AccountId"
+          }
+        ]
+      },
+      "Message": {
+        "variants": [
+          {
+            "fields": [
+              {
+                "name": "authority",
+                "type": "AccountId"
+              }
+            ],
+            "name": "Bootstrap",
+            "tag": 0
+          },
+          {
+            "fields": [
+              {
+                "name": "role",
+                "type": "AccountId"
+              },
+              {
+                "name": "epoch",
+                "type": "u64"
+              }
+            ],
+            "name": "Consent",
+            "tag": 1
+          },
+          {
+            "fields": [
+              {
+                "name": "epoch",
+                "type": "u64"
+              }
+            ],
+            "name": "Install",
+            "tag": 2
+          },
+          {
+            "fields": [
+              {
+                "name": "role",
+                "type": "AccountId"
+              },
+              {
+                "name": "callback",
+                "type": "Actor"
+              }
+            ],
+            "name": "Check",
+            "tag": 3
+          },
+          {
+            "fields": [
+              {
+                "name": "authority",
+                "type": "AccountId"
+              },
+              {
+                "name": "callback",
+                "type": "Actor"
+              }
+            ],
+            "name": "Assert",
+            "tag": 4
+          },
+          {
+            "fields": [
+              {
+                "name": "role",
+                "type": "AccountId"
+              },
+              {
+                "name": "successor",
+                "type": "AccountId"
+              }
+            ],
+            "name": "Transfer",
+            "tag": 5
+          },
+          {
+            "fields": [
+              {
+                "name": "authority",
+                "type": "AccountId"
+              },
+              {
+                "name": "successor",
+                "type": "AccountId"
+              }
+            ],
+            "name": "Propose",
+            "tag": 6
+          },
+          {
+            "fields": [
+              {
+                "name": "role",
+                "type": "AccountId"
+              }
+            ],
+            "name": "Renounce",
+            "tag": 7
+          },
+          {
+            "fields": [
+              {
+                "name": "authority",
+                "type": "AccountId"
+              }
+            ],
+            "name": "Revoke",
+            "tag": 8
+          },
+          {
+            "fields": [
+              {
+                "name": "role",
+                "type": "AccountId"
+              },
+              {
+                "name": "program",
+                "type": "AccountId"
+              },
+              {
+                "name": "seed",
+                "type": "PdaSeed"
+              }
+            ],
+            "name": "TransferPda",
+            "tag": 9
+          },
+          {
+            "fields": [
+              {
+                "name": "authority",
+                "type": "AccountId"
+              },
+              {
+                "name": "program",
+                "type": "AccountId"
+              },
+              {
+                "name": "seed",
+                "type": "PdaSeed"
+              }
+            ],
+            "name": "ProposePda",
+            "tag": 10
+          },
+          {
+            "fields": [
+              {
+                "name": "role",
+                "type": "AccountId"
+              },
+              {
+                "name": "epoch",
+                "type": "u64"
+              },
+              {
+                "name": "program",
+                "type": "AccountId"
+              },
+              {
+                "name": "seed",
+                "type": "PdaSeed"
+              }
+            ],
+            "name": "AcceptPda",
+            "tag": 11
+          }
+        ]
+      },
+      "PdaRequest": {
+        "fields": [
+          {
+            "name": "role",
+            "type": "Actor"
+          },
+          {
+            "name": "epoch",
+            "type": "u64"
+          },
+          {
+            "name": "seed",
+            "type": "PdaSeed"
+          }
+        ]
+      }
+    },
+    "token": {
+      "Message": {
+        "variants": [
+          {
+            "fields": [
+              {
+                "name": "name",
+                "type": "String"
+              },
+              {
+                "name": "kind",
+                "type": "TokenKind"
+              },
+              {
+                "name": "supply",
+                "type": "u128"
+              },
+              {
+                "name": "recipient",
+                "type": "AccountId"
+              },
+              {
+                "name": "metadata",
+                "type": "Option<Metadata>"
+              }
+            ],
+            "name": "Create",
+            "tag": 0
+          },
+          {
+            "fields": [
+              {
+                "name": "definition",
+                "type": "AccountId"
+              },
+              {
+                "name": "owner",
+                "type": "AccountId"
+              },
+              {
+                "name": "kind",
+                "type": "TokenKind"
+              },
+              {
+                "name": "amount",
+                "type": "u128"
+              }
+            ],
+            "name": "Credit",
+            "tag": 1
+          },
+          {
+            "fields": [
+              {
+                "name": "definition",
+                "type": "AccountId"
+              },
+              {
+                "name": "recipient",
+                "type": "AccountId"
+              },
+              {
+                "name": "amount",
+                "type": "u128"
+              }
+            ],
+            "name": "Transfer",
+            "tag": 2
+          },
+          {
+            "fields": [
+              {
+                "name": "definition",
+                "type": "AccountId"
+              },
+              {
+                "name": "owner",
+                "type": "AccountId"
+              },
+              {
+                "name": "recipient",
+                "type": "AccountId"
+              },
+              {
+                "name": "amount",
+                "type": "u128"
+              }
+            ],
+            "name": "Debit",
+            "tag": 3
+          },
+          {
+            "fields": [
+              {
+                "name": "recipient",
+                "type": "AccountId"
+              },
+              {
+                "name": "amount",
+                "type": "u128"
+              }
+            ],
+            "name": "Mint",
+            "tag": 4
+          },
+          {
+            "fields": [
+              {
+                "name": "definition",
+                "type": "AccountId"
+              },
+              {
+                "name": "amount",
+                "type": "u128"
+              }
+            ],
+            "name": "Burn",
+            "tag": 5
+          },
+          {
+            "fields": [
+              {
+                "name": "definition",
+                "type": "AccountId"
+              },
+              {
+                "name": "owner",
+                "type": "AccountId"
+              },
+              {
+                "name": "amount",
+                "type": "u128"
+              }
+            ],
+            "name": "BurnHolding",
+            "tag": 6
+          },
+          {
+            "fields": [
+              {
+                "name": "owner",
+                "type": "AccountId"
+              },
+              {
+                "name": "amount",
+                "type": "u128"
+              }
+            ],
+            "name": "BurnSupply",
+            "tag": 7
+          },
+          {
+            "fields": [
+              {
+                "name": "owner",
+                "type": "AccountId"
+              }
+            ],
+            "name": "Initialize",
+            "tag": 8
+          },
+          {
+            "fields": [
+              {
+                "name": "definition",
+                "type": "AccountId"
+              },
+              {
+                "name": "callback",
+                "type": "Actor"
+              }
+            ],
+            "name": "AssertNft",
+            "tag": 9
+          },
+          {
+            "fields": [
+              {
+                "name": "definition",
+                "type": "AccountId"
+              },
+              {
+                "name": "owner",
+                "type": "AccountId"
+              },
+              {
+                "name": "callback",
+                "type": "Actor"
+              }
+            ],
+            "name": "CheckNft",
+            "tag": 10
+          },
+          {
+            "fields": [],
+            "name": "ReadState",
+            "tag": 11
+          }
+        ]
+      },
+      "Metadata": {
+        "fields": [
+          {
+            "name": "standard",
+            "type": "MetadataStandard"
+          },
+          {
+            "name": "uri",
+            "type": "String"
+          },
+          {
+            "name": "creators",
+            "type": "String"
+          }
+        ]
+      },
+      "MetadataStandard": {
+        "variants": [
+          {
+            "fields": [],
+            "name": "Simple",
+            "tag": 0
+          },
+          {
+            "fields": [],
+            "name": "Expanded",
+            "tag": 1
+          }
+        ]
+      },
+      "NftHolder": {
+        "fields": [
+          {
+            "name": "definition",
+            "type": "AccountId"
+          },
+          {
+            "name": "owner",
+            "type": "AccountId"
+          }
+        ]
+      },
+      "TokenKind": {
+        "variants": [
+          {
+            "fields": [],
+            "name": "Fungible",
+            "tag": 0
+          },
+          {
+            "fields": [],
+            "name": "NftMaster",
+            "tag": 1
+          }
+        ]
+      },
+      "TokenState": {
+        "variants": [
+          {
+            "fields": [
+              {
+                "name": "name",
+                "type": "String"
+              },
+              {
+                "name": "kind",
+                "type": "TokenKind"
+              },
+              {
+                "name": "supply",
+                "type": "u128"
+              },
+              {
+                "name": "metadata",
+                "type": "Option<Metadata>"
+              }
+            ],
+            "name": "Definition",
+            "tag": 0
+          },
+          {
+            "fields": [
+              {
+                "name": "definition",
+                "type": "AccountId"
+              },
+              {
+                "name": "owner",
+                "type": "AccountId"
+              },
+              {
+                "name": "kind",
+                "type": "TokenKind"
+              },
+              {
+                "name": "balance",
+                "type": "u128"
+              }
+            ],
+            "name": "Holding",
+            "tag": 1
+          }
+        ]
+      }
+    }
+  },
+  "upstream_types": {
+    "AccountId": "[u8;32]",
+    "Actor": [
+      {
+        "name": "account_id",
+        "type": "AccountId"
+      },
+      {
+        "name": "program_account_id",
+        "type": "AccountId"
+      }
+    ],
+    "PdaSeed": "[u8;32]",
+    "StateReply": [
+      {
+        "name": "state",
+        "type": "Vec<u8>"
+      }
+    ]
+  },
+  "version": 1
+}

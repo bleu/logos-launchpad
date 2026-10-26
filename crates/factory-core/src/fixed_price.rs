@@ -1,21 +1,13 @@
-use admin_authority::{AdminCandidate, AdminConfig};
-use borsh::{BorshDeserialize, BorshSerialize};
-use lee_core::{
-    account::{Account, AccountId, AccountWithMetadata, Data},
-    program::{AccountPostState, ChainedCall, Claim, ProgramId},
-};
-use serde::{Deserialize, Serialize};
-use spel_framework::prelude as spel;
-
+use super::*;
 pub use lbp_core::{CreatorAllocationRelease, FixedPrice};
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, BorshSerialize, BorshDeserialize, Serialize, Deserialize,
+)]
 pub enum SaleStart {
-    Now,
+    Now { timestamp: u64 },
     At { timestamp: u64 },
 }
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize, Serialize, Deserialize)]
 pub struct FixedPriceInputs {
     pub namespace: AccountId,
     pub launch_salt: [u8; 32],
@@ -27,10 +19,12 @@ pub struct FixedPriceInputs {
     pub start: SaleStart,
     pub end_timestamp: Option<u64>,
     pub allocation_release: CreatorAllocationRelease,
-    pub namespace_program_id: ProgramId,
-    pub lbp_program_id: ProgramId,
+    pub namespace_program_id: AccountId,
+    pub lbp_program_id: AccountId,
+    pub collateral_definition_id: AccountId,
+    pub creator: AccountId,
+    pub now: u64,
 }
-
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, BorshSerialize, BorshDeserialize, Serialize, Deserialize,
 )]
@@ -40,12 +34,11 @@ pub enum FixedPriceCreationStage {
     PoolPrepared,
     Complete,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct FixedPriceLaunchState {
     format: [u8; 8],
     version: u16,
-    creator_authority: AdminConfig,
+    pub creator_role_id: AccountId,
     pub mode: lbp_core::PoolMode,
     pub creation_stage: FixedPriceCreationStage,
     pub namespace: AccountId,
@@ -54,8 +47,8 @@ pub struct FixedPriceLaunchState {
     pub collateral_definition_id: AccountId,
     pub creator_escrow_id: AccountId,
     pub pool_id: AccountId,
-    pub namespace_program_id: ProgramId,
-    pub lbp_program_id: ProgramId,
+    pub namespace_program_id: AccountId,
+    pub lbp_program_id: AccountId,
     pub sale_inventory: u128,
     pub creator_allocation: u128,
     pub total_supply: u128,
@@ -64,197 +57,60 @@ pub struct FixedPriceLaunchState {
     pub end_timestamp: Option<u64>,
     pub allocation_release: CreatorAllocationRelease,
     pub creator_allocation_released: bool,
+    pub name: String,
+    pub uri: String,
+    pub(super) pending: Option<Pending>,
 }
-
-impl FixedPriceLaunchState {
-    const CREATOR_OFFSET: usize = 10;
-
-    pub fn assert_creator(&self, creator: &AccountWithMetadata) {
-        self.creator_authority
-            .assert_admin(&adapt(creator))
-            .expect("Sale creator authorization failed");
-    }
-}
-
-impl TryFrom<&Data> for FixedPriceLaunchState {
-    type Error = std::io::Error;
-
-    fn try_from(data: &Data) -> Result<Self, Self::Error> {
-        let state = Self::try_from_slice(data.as_ref())?;
-        if state.format != *b"LZFXLAUN" || state.version != 2 {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "Unsupported fixed-price launch state",
-            ));
-        }
-        Ok(state)
-    }
-}
-
-impl From<&FixedPriceLaunchState> for Data {
-    fn from(state: &FixedPriceLaunchState) -> Self {
-        borsh::to_vec(state)
-            .expect("Fixed-price launch serializes")
-            .try_into()
-            .expect("Fixed-price launch fits account data")
-    }
-}
-
-// The authority library uses a different LEZ crate identity.
-fn adapt(source: &AccountWithMetadata) -> spel::AccountWithMetadata {
-    spel::AccountWithMetadata {
-        account_id: spel::AccountId::new(source.account_id.to_bytes()),
-        is_authorized: source.is_authorized,
-        account: spel::Account {
-            program_owner: source.account.program_owner,
-            balance: source.account.balance,
-            data: source
-                .account
-                .data
-                .to_vec()
-                .try_into()
-                .expect("Authority account fits"),
-            nonce: source.account.nonce.0.into(),
-        },
-    }
-}
-
-pub(crate) fn create(
-    pre: Vec<AccountWithMetadata>,
-    inputs: FixedPriceInputs,
-    program: ProgramId,
-) -> (Vec<AccountPostState>, Vec<ChainedCall>) {
-    let [
-        factory,
-        definition,
-        mint,
-        metadata,
-        escrow,
-        creator,
-        _creator_ata,
-        collateral,
-        _factory_ata,
-        pool,
-        _pool_token,
-        _pool_collateral,
-        clock,
-        _config,
-    ]: [_; 14] = pre
-        .clone()
-        .try_into()
-        .expect("CreateFixedPriceLbp requires fourteen accounts");
-    assert_ne!(
-        inputs.namespace,
-        AccountId::default(),
-        "Namespace must not be empty"
-    );
-    assert_eq!(
-        factory.account_id,
-        super::compute_factory_pda(inputs.namespace, program, inputs.launch_salt),
-        "Factory account ID does not match PDA"
-    );
-    assert_eq!(
-        definition.account_id,
-        super::compute_definition_pda(inputs.namespace, program, inputs.launch_salt),
-        "Wrong launch definition PDA"
-    );
-    assert_eq!(
-        mint.account_id,
-        super::compute_mint_pda(inputs.namespace, program, inputs.launch_salt),
-        "Wrong mint PDA"
-    );
-    assert_eq!(
-        metadata.account_id,
-        super::compute_metadata_pda(inputs.namespace, program, inputs.launch_salt),
-        "Wrong metadata PDA"
-    );
-    assert_eq!(
-        escrow.account_id,
-        super::compute_escrow_pda(inputs.namespace, program, inputs.launch_salt),
-        "Wrong creator escrow PDA"
-    );
-    assert_eq!(
-        pool.account_id,
-        curve_core::compute_pool_pda(
+pub(super) fn create(input: &ReceiveInput, inputs: FixedPriceInputs) -> Result<Response, Error> {
+    if input.receiver.account_id
+        != compute_factory_pda(
             inputs.namespace,
-            inputs.lbp_program_id,
-            definition.account_id,
-            collateral.account_id,
-            factory.account_id
-        ),
-        "Wrong fixed-price pool PDA"
-    );
-    for (index, owner, token) in [
-        (6, &creator, definition.account_id),
-        (8, &factory, definition.account_id),
-        (10, &pool, definition.account_id),
-        (11, &pool, collateral.account_id),
-    ] {
-        associated_token_account_core::verify_ata_and_get_seed(
-            &pre[index],
-            owner,
-            token,
-            curve_core::ASSOCIATED_TOKEN_ACCOUNT_PROGRAM_ID,
-        );
+            input.receiver.program_account_id,
+            inputs.launch_salt,
+        )
+    {
+        return Err(Error::WrongAccount);
     }
-    assert_eq!(
-        collateral.account.program_owner,
-        curve_core::TOKEN_PROGRAM_ID,
-        "Collateral definition owner does not match token program"
-    );
-    assert!(
-        matches!(
-            token_core::TokenDefinition::try_from(&collateral.account.data)
-                .expect("Invalid collateral definition"),
-            token_core::TokenDefinition::Fungible { .. }
-        ),
-        "Collateral must be fungible"
-    );
-    curve_core::validated_config(&pre[13], inputs.namespace, inputs.namespace_program_id);
-    for index in [1, 2, 3, 4, 8, 9, 10, 11] {
-        assert_eq!(
-            pre[index].account,
-            Account::default(),
-            "Setup account already exists"
-        );
+    if !input.pre_state.is_empty() {
+        return Err(Error::AlreadyInitialized);
     }
-    assert_eq!(factory.account, Account::default(), "Launch already exists");
-    assert!(!inputs.name.is_empty(), "Token name must not be empty");
-    assert!(
-        !inputs.uri.is_empty(),
-        "Token metadata URI must not be empty"
-    );
-    assert!(inputs.sale_inventory > 0, "Sale inventory must be positive");
-    assert!(
-        inputs.price.collateral_units > 0 && inputs.price.token_units > 0,
-        "Fixed price ratio must be positive"
-    );
-    let now = super::trusted_time(&clock);
+    let program = input.receiver.program_account_id;
+    let token_definition_id = compute_definition_pda(inputs.namespace, program, inputs.launch_salt);
     let start_timestamp = match inputs.start {
-        SaleStart::Now => now,
-        SaleStart::At { timestamp } => {
-            assert!(timestamp >= now, "Scheduled start is in the past");
-            timestamp
-        }
+        SaleStart::Now { timestamp } | SaleStart::At { timestamp } => timestamp,
     };
-    if let Some(end_timestamp) = inputs.end_timestamp {
-        assert!(
-            end_timestamp > start_timestamp,
-            "Sale end must be after start"
-        );
+    if inputs.namespace == AccountId::default()
+        || inputs.creator == AccountId::default()
+        || inputs.sale_inventory == 0
+        || inputs.name.is_empty()
+        || inputs.uri.is_empty()
+        || inputs.price.collateral_units == 0
+        || inputs.price.token_units == 0
+        || inputs
+            .end_timestamp
+            .is_some_and(|end| end <= start_timestamp)
+        || inputs.collateral_definition_id == token_definition_id
+    {
+        return Err(Error::InvalidTerms);
     }
     let state = FixedPriceLaunchState {
         format: *b"LZFXLAUN",
         version: 2,
-        creator_authority: AdminConfig::default(),
+        creator_role_id: compute_creator_role_pda(inputs.namespace, program, inputs.launch_salt),
         mode: lbp_core::PoolMode::FixedPrice,
         creation_stage: FixedPriceCreationStage::Minted,
         namespace: inputs.namespace,
         launch_salt: inputs.launch_salt,
-        token_definition_id: definition.account_id,
-        collateral_definition_id: collateral.account_id,
-        creator_escrow_id: escrow.account_id,
-        pool_id: pool.account_id,
+        token_definition_id,
+        collateral_definition_id: inputs.collateral_definition_id,
+        creator_escrow_id: compute_escrow_pda(inputs.namespace, program, inputs.launch_salt),
+        pool_id: lbp_core::compute_pool_pda(
+            inputs.namespace,
+            inputs.lbp_program_id,
+            token_definition_id,
+            inputs.collateral_definition_id,
+            input.receiver.account_id,
+        ),
         namespace_program_id: inputs.namespace_program_id,
         lbp_program_id: inputs.lbp_program_id,
         sale_inventory: inputs.sale_inventory,
@@ -262,408 +118,423 @@ pub(crate) fn create(
         total_supply: inputs
             .sale_inventory
             .checked_add(inputs.creator_allocation)
-            .expect("Launch supply overflow"),
+            .ok_or(Error::Overflow)?,
         price: inputs.price,
         start_timestamp,
         end_timestamp: inputs.end_timestamp,
         allocation_release: inputs.allocation_release,
         creator_allocation_released: false,
+        name: inputs.name.clone(),
+        uri: inputs.uri.clone(),
+        pending: Some(Pending {
+            command: Message::CreateFixedPriceLbp {
+                inputs: inputs.clone(),
+            },
+            proof: false,
+            reads: vec![
+                Read::new(
+                    Actor::new(
+                        curve_core::compute_config_pda(
+                            inputs.namespace,
+                            inputs.namespace_program_id,
+                        ),
+                        inputs.namespace_program_id,
+                    ),
+                    &curve_core::Message::ReadNamespace {
+                        namespace: inputs.namespace,
+                    },
+                ),
+                Read::new(
+                    Actor::new(inputs.collateral_definition_id, TOKEN_PROGRAM_ACCOUNT_ID),
+                    &token::Message::ReadState,
+                ),
+            ],
+            values: vec![],
+        }),
     };
-    let mut embedded = adapt(&factory);
-    embedded.account.data = Data::from(&state).to_vec().try_into().expect("Launch fits");
-    AdminConfig::bootstrap_at(
-        &mut embedded,
-        FixedPriceLaunchState::CREATOR_OFFSET,
-        AdminCandidate::Signer,
-        &adapt(&creator),
-    )
-    .expect("Sale creator authorization failed");
-    let mut post = factory.account.clone();
-    post.data = embedded
-        .account
-        .data
-        .to_vec()
-        .try_into()
-        .expect("Launch fits");
-    let mut posts: Vec<_> = pre
-        .into_iter()
-        .map(|a| AccountPostState::new(a.account))
-        .collect();
-    posts[0] = AccountPostState::new_claimed_if_default(
-        post,
-        Claim::Pda(super::compute_factory_seed(
-            inputs.namespace,
-            inputs.launch_salt,
-        )),
-    );
-    let call = ChainedCall::new(
-        curve_core::TOKEN_PROGRAM_ID,
-        vec![
-            AccountWithMetadata {
-                is_authorized: true,
-                ..definition
-            },
-            AccountWithMetadata {
-                is_authorized: true,
-                ..mint
-            },
-            AccountWithMetadata {
-                is_authorized: true,
-                ..metadata
-            },
-        ],
-        &token_core::Instruction::NewDefinitionWithMetadata {
-            new_definition: token_core::NewTokenDefinition::Fungible {
-                name: inputs.name,
-                total_supply: state.total_supply,
-            },
-            metadata: Box::new(token_core::NewTokenMetadata {
-                standard: token_core::MetadataStandard::Simple,
-                uri: inputs.uri,
-                creators: String::new(),
-            }),
-        },
-    )
-    .with_pda_seeds(vec![
-        super::compute_definition_seed(inputs.namespace, inputs.launch_salt),
-        super::compute_mint_seed(inputs.namespace, inputs.launch_salt),
-        super::compute_metadata_seed(inputs.namespace, inputs.launch_salt),
-    ]);
-    (posts, vec![call])
+    Ok(state.next())
 }
-
-fn holding_balance(account: &AccountWithMetadata, definition: AccountId) -> u128 {
-    assert_eq!(
-        account.account.program_owner,
-        curve_core::TOKEN_PROGRAM_ID,
-        "Wrong token holding owner"
-    );
-    match token_core::TokenHolding::try_from(&account.account.data).expect("Invalid token holding")
-    {
-        token_core::TokenHolding::Fungible {
-            definition_id,
-            balance,
-        } => {
-            assert_eq!(definition_id, definition, "Wrong token holding definition");
-            balance
-        }
-        _ => panic!("Token holding must be fungible"),
-    }
-}
-
-pub(crate) fn continue_creation(
-    pre: Vec<AccountWithMetadata>,
+pub(super) fn begin(
+    input: &ReceiveInput,
     expected_stage: FixedPriceCreationStage,
-    program: ProgramId,
-) -> (Vec<AccountPostState>, Vec<ChainedCall>) {
-    let [
-        factory,
-        definition,
-        mint,
-        _metadata,
-        escrow,
-        creator,
-        _creator_ata,
-        _collateral,
-        factory_token,
-        _pool,
-        _pool_token,
-        _pool_collateral,
-        _clock,
-        _config,
-    ]: [_; 14] = pre
-        .clone()
-        .try_into()
-        .expect("ContinueFixedPriceCreation requires fourteen accounts");
-    let mut state =
-        FixedPriceLaunchState::try_from(&factory.account.data).expect("Invalid launch state");
-    state.assert_creator(&creator);
-    assert_eq!(
-        factory.account.program_owner, program,
-        "Wrong factory program owner"
-    );
-    assert_eq!(
-        factory.account_id,
-        super::compute_factory_pda(state.namespace, program, state.launch_salt),
-        "Wrong factory PDA"
-    );
-    assert_eq!(
-        definition.account_id, state.token_definition_id,
-        "Wrong launch definition"
-    );
-    assert_eq!(
-        definition.account.program_owner,
-        curve_core::TOKEN_PROGRAM_ID,
-        "Wrong launch definition owner"
-    );
-    match token_core::TokenDefinition::try_from(&definition.account.data)
-        .expect("Invalid launch definition")
+    creator: AccountId,
+    now: u64,
+) -> Result<Response, Error> {
+    let mut state = FixedPriceLaunchState::decode(&input.pre_state)?;
+    if input.receiver.account_id
+        != compute_factory_pda(
+            state.namespace,
+            input.receiver.program_account_id,
+            state.launch_salt,
+        )
     {
-        token_core::TokenDefinition::Fungible {
-            total_supply,
-            metadata_id,
-            ..
-        } => {
-            assert_eq!(total_supply, state.total_supply, "Launch supply changed");
-            assert_eq!(
-                metadata_id,
-                Some(pre[3].account_id),
-                "Launch metadata changed"
-            );
-        }
-        _ => panic!("Launch definition must be fungible"),
+        return Err(Error::WrongAccount);
     }
-    assert_eq!(
-        mint.account_id,
-        super::compute_mint_pda(state.namespace, program, state.launch_salt),
-        "Wrong mint PDA"
-    );
-    assert_eq!(
-        pre[3].account_id,
-        super::compute_metadata_pda(state.namespace, program, state.launch_salt),
-        "Wrong metadata PDA"
-    );
-    assert_eq!(
-        escrow.account_id, state.creator_escrow_id,
-        "Wrong creator escrow"
-    );
-    assert_eq!(
-        pre[7].account_id, state.collateral_definition_id,
-        "Wrong collateral definition"
-    );
-    assert_eq!(
-        pre[7].account.program_owner,
-        curve_core::TOKEN_PROGRAM_ID,
-        "Wrong collateral definition owner"
-    );
-    assert!(
-        matches!(
-            token_core::TokenDefinition::try_from(&pre[7].account.data)
-                .expect("Invalid collateral definition"),
-            token_core::TokenDefinition::Fungible { .. }
-        ),
-        "Collateral must be fungible"
-    );
-    assert_eq!(pre[9].account_id, state.pool_id, "Wrong fixed-price pool");
-    for (index, owner, token) in [
-        (6, &creator, state.token_definition_id),
-        (8, &factory, state.token_definition_id),
-        (10, &pre[9], state.token_definition_id),
-        (11, &pre[9], state.collateral_definition_id),
-    ] {
-        associated_token_account_core::verify_ata_and_get_seed(
-            &pre[index],
-            owner,
-            token,
-            curve_core::ASSOCIATED_TOKEN_ACCOUNT_PROGRAM_ID,
-        );
-    }
-    curve_core::validated_config(&pre[13], state.namespace, state.namespace_program_id);
-    assert_eq!(state.creation_stage, expected_stage, "Stale creation stage");
-    if let Some(end_timestamp) = state.end_timestamp {
-        assert!(
-            super::trusted_time(&pre[12]) < end_timestamp,
-            "Sale setup has expired"
-        );
-    }
-    let stage = state.creation_stage;
-    if stage == FixedPriceCreationStage::Minted {
-        assert_eq!(
-            holding_balance(&mint, state.token_definition_id),
-            state.total_supply,
-            "Mint does not hold the complete launch supply"
-        );
-        assert_eq!(
-            escrow.account,
-            Account::default(),
-            "Creator escrow already exists"
-        );
-        if factory_token.account != Account::default() {
-            assert_eq!(
-                holding_balance(&factory_token, state.token_definition_id),
-                0,
-                "Factory inventory custody must be empty"
-            );
-        }
-    } else {
-        assert_eq!(
-            holding_balance(&mint, state.token_definition_id),
-            0,
-            "Mint must be empty after allocation"
-        );
-        assert_eq!(
-            holding_balance(&factory_token, state.token_definition_id),
-            state.sale_inventory,
-            "Sale inventory changed"
-        );
-        if state.creator_allocation != 0 {
-            assert_eq!(
-                holding_balance(&escrow, state.token_definition_id),
-                state.creator_allocation,
-                "Creator allocation changed"
-            );
-        }
-    }
-    state.creation_stage = match stage {
-        FixedPriceCreationStage::Minted => FixedPriceCreationStage::Allocated,
-        FixedPriceCreationStage::Allocated => FixedPriceCreationStage::PoolPrepared,
-        FixedPriceCreationStage::PoolPrepared => FixedPriceCreationStage::Complete,
-        _ => panic!("Unsupported creation stage"),
-    };
-    if stage == FixedPriceCreationStage::PoolPrepared
-        && state.allocation_release == CreatorAllocationRelease::AfterSetup
+    if state.creation_stage != expected_stage || expected_stage == FixedPriceCreationStage::Complete
     {
-        state.creator_allocation_released = true;
+        return Err(Error::StaleStage);
     }
-    let mut post = factory.account.clone();
-    post.data = Data::from(&state);
-    let snapshot = AccountWithMetadata {
-        account: post.clone(),
-        ..factory
-    };
-    let calls = if stage == FixedPriceCreationStage::Minted {
-        let mut calls = vec![ChainedCall::new(
-            curve_core::ASSOCIATED_TOKEN_ACCOUNT_PROGRAM_ID,
-            vec![snapshot, definition.clone(), factory_token.clone()],
-            &associated_token_account_core::Instruction::Create {
-                ata_program_id: curve_core::ASSOCIATED_TOKEN_ACCOUNT_PROGRAM_ID,
-            },
-        )];
-        let mut sender = AccountWithMetadata {
-            is_authorized: true,
-            ..mint
-        };
-        calls.push(
-            ChainedCall::new(
-                curve_core::TOKEN_PROGRAM_ID,
-                vec![
-                    sender.clone(),
-                    curve_core::after_ata_creation(&factory_token, &definition),
-                ],
-                &token_core::Instruction::Transfer {
-                    amount_to_transfer: state.sale_inventory,
-                },
-            )
-            .with_pda_seeds(vec![super::compute_mint_seed(
-                state.namespace,
-                state.launch_salt,
-            )]),
-        );
-        if state.creator_allocation != 0 {
-            let mut holding = token_core::TokenHolding::try_from(&sender.account.data)
-                .expect("Invalid mint holding");
-            let token_core::TokenHolding::Fungible { balance, .. } = &mut holding else {
-                panic!("Mint must be fungible")
+    let mint = compute_mint_pda(
+        state.namespace,
+        input.receiver.program_account_id,
+        state.launch_salt,
+    );
+    state.pending = Some(Pending {
+        command: Message::ContinueFixedPriceCreation {
+            expected_stage,
+            creator,
+            now,
+        },
+        proof: true,
+        reads: vec![
+            Read::new(
+                Actor::new(state.token_definition_id, TOKEN_PROGRAM_ACCOUNT_ID),
+                &token::Message::ReadState,
+            ),
+            holding_read(mint, state.token_definition_id),
+            holding_read(input.receiver.account_id, state.token_definition_id),
+            holding_read(state.creator_escrow_id, state.token_definition_id),
+        ],
+        values: vec![],
+    });
+    if expected_stage == FixedPriceCreationStage::PoolPrepared {
+        let pending = state.pending.as_mut().unwrap();
+        pending.reads.extend([
+            Read::new(
+                Actor::new(state.pool_id, state.lbp_program_id),
+                &lbp_core::Message::ReadState,
+            ),
+            holding_read(state.pool_id, state.token_definition_id),
+            holding_read(state.pool_id, state.collateral_definition_id),
+        ]);
+    }
+    Ok(state.response().send_sync(
+        Actor::new(creator, AUTHORITY_PROGRAM_ACCOUNT_ID),
+        &authority::Message::Check {
+            role: state.creator_role_id,
+            callback: input.receiver,
+        },
+    ))
+}
+pub(super) fn resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
+    let mut state = FixedPriceLaunchState::decode(&input.pre_state).ok()?;
+    let mut pending = state.pending.take()?;
+    Some((|| {
+        if pending.proof {
+            let Message::ContinueFixedPriceCreation { creator, .. } = pending.command else {
+                return Err(Error::InvalidState);
             };
-            *balance = balance
-                .checked_sub(state.sale_inventory)
-                .expect("Missing sale inventory");
-            sender.account.data = Data::from(&holding);
-            calls.push(
-                ChainedCall::new(
-                    curve_core::TOKEN_PROGRAM_ID,
-                    vec![
-                        sender,
-                        AccountWithMetadata {
-                            is_authorized: true,
-                            ..escrow
-                        },
-                    ],
-                    &token_core::Instruction::Transfer {
-                        amount_to_transfer: state.creator_allocation,
+            authority::verify(
+                input,
+                Actor::new(state.creator_role_id, AUTHORITY_PROGRAM_ACCOUNT_ID),
+                creator,
+            )?;
+            pending.proof = false;
+            state.pending = Some(pending);
+            return Ok(state
+                .response()
+                .send_sync(
+                    Actor::new(state.token_definition_id, TOKEN_PROGRAM_ACCOUNT_ID),
+                    &token::Message::Initialize {
+                        owner: input.receiver.account_id,
                     },
                 )
-                .with_pda_seeds(vec![
-                    super::compute_mint_seed(state.namespace, state.launch_salt),
-                    super::compute_escrow_seed(state.namespace, state.launch_salt),
-                ]),
-            );
-        }
-        calls
-    } else {
-        let inputs = lbp_core::FixedPricePoolInputs {
-            namespace: state.namespace,
-            namespace_program_id: state.namespace_program_id,
-            factory_program_id: program,
-            factory_seed: *super::compute_factory_seed(state.namespace, state.launch_salt)
-                .as_bytes(),
-            sale_inventory: state.sale_inventory,
-            creator_allocation: state.creator_allocation,
-            price: state.price,
-            start_timestamp: state.start_timestamp,
-            end_timestamp: state.end_timestamp,
-            creator_allocation_release: state.allocation_release,
-        };
-        let mut calls = vec![
-            ChainedCall::new(
-                state.lbp_program_id,
-                vec![
-                    pre[9].clone(),
-                    AccountWithMetadata {
-                        is_authorized: true,
-                        ..snapshot
+                .send_sync(
+                    Actor::new(state.token_definition_id, TOKEN_PROGRAM_ACCOUNT_ID),
+                    &token::Message::Initialize {
+                        owner: state.creator_escrow_id,
                     },
-                    definition,
-                    pre[7].clone(),
-                    factory_token,
-                    pre[10].clone(),
-                    pre[11].clone(),
-                    pre[12].clone(),
-                    pre[13].clone(),
-                ],
-                &if stage == FixedPriceCreationStage::Allocated {
-                    lbp_core::Instruction::PrepareFixedPrice { inputs }
-                } else {
-                    lbp_core::Instruction::ActivateFixedPrice
-                },
-            )
-            .with_pda_seeds(vec![super::compute_factory_seed(
-                state.namespace,
-                state.launch_salt,
-            )]),
-        ];
-        if stage == FixedPriceCreationStage::Allocated
-            && state.allocation_release == CreatorAllocationRelease::AfterSetup
-            && state.creator_allocation != 0
+                )
+                .send(state.next().sync_messages.remove(0)));
+        }
+        let expected = pending
+            .reads
+            .get(pending.values.len())
+            .ok_or(Error::InvalidState)?;
+        if input.from != Some(expected.actor) {
+            return Err(Error::Unauthorized);
+        }
+        let reply: StateReply =
+            borsh::from_slice(&input.message).map_err(|_| Error::InvalidMessage)?;
+        pending.values.push(reply.state.to_vec());
+        if pending.values.len() < pending.reads.len() {
+            state.pending = Some(pending);
+            return Ok(state.next());
+        }
+        if let Message::ContinueFixedPriceCreation {
+            expected_stage,
+            creator,
+            ..
+        } = pending.command
         {
-            calls.push(ChainedCall::new(
-                curve_core::ASSOCIATED_TOKEN_ACCOUNT_PROGRAM_ID,
-                vec![creator, pre[1].clone(), pre[6].clone()],
-                &associated_token_account_core::Instruction::Create {
-                    ata_program_id: curve_core::ASSOCIATED_TOKEN_ACCOUNT_PROGRAM_ID,
-                },
+            if TokenState::decode(&pending.values[0])?
+                != (TokenState::Definition {
+                    name: state.name.clone(),
+                    kind: TokenKind::Fungible,
+                    supply: state.total_supply,
+                    metadata: Some(token::Metadata {
+                        standard: token::MetadataStandard::Simple,
+                        uri: state.uri.clone(),
+                        creators: String::new(),
+                    }),
+                })
+            {
+                return Err(Error::InvalidDefinition);
+            }
+            let mint = compute_mint_pda(
+                state.namespace,
+                input.receiver.program_account_id,
+                state.launch_salt,
+            );
+            if expected_stage == FixedPriceCreationStage::PoolPrepared {
+                if balance(&pending.values[1], mint, state.token_definition_id)? != 0
+                    || balance(
+                        &pending.values[2],
+                        input.receiver.account_id,
+                        state.token_definition_id,
+                    )? != state.sale_inventory
+                    || balance(
+                        &pending.values[3],
+                        state.creator_escrow_id,
+                        state.token_definition_id,
+                    )? != state.creator_allocation
+                {
+                    return Err(Error::InvalidCustody);
+                }
+                let pool = lbp_core::PoolAccount::decode(&pending.values[4])
+                    .map_err(|_| Error::InvalidState)?;
+                if pool.funded
+                    || pool.recorded_collateral != 0
+                    || pool.namespace != state.namespace
+                    || pool.namespace_program_id != state.namespace_program_id
+                    || pool.factory_owner != input.receiver.account_id
+                    || pool.factory_program_id != input.receiver.program_account_id
+                    || pool.factory_seed
+                        != *compute_factory_seed(state.namespace, state.launch_salt).as_bytes()
+                    || pool.token_definition_id != state.token_definition_id
+                    || pool.collateral_definition_id != state.collateral_definition_id
+                    || pool.sale_inventory != state.sale_inventory
+                    || pool.creator_allocation != state.creator_allocation
+                    || pool.price != state.price
+                    || pool.start_timestamp != state.start_timestamp
+                    || pool.end_timestamp != state.end_timestamp
+                    || pool.creator_allocation_release != state.allocation_release
+                {
+                    return Err(Error::InvalidState);
+                }
+                if balance(&pending.values[5], state.pool_id, state.token_definition_id)? != 0 {
+                    return Err(Error::InvalidCustody);
+                }
+                balance(
+                    &pending.values[6],
+                    state.pool_id,
+                    state.collateral_definition_id,
+                )?;
+                state.pending = None;
+                state.creation_stage = FixedPriceCreationStage::Complete;
+                state.creator_allocation_released =
+                    state.allocation_release == CreatorAllocationRelease::AfterSetup;
+                let response = transfer(
+                    state.response(),
+                    input.receiver.account_id,
+                    compute_factory_seed(state.namespace, state.launch_salt),
+                    state.token_definition_id,
+                    state.pool_id,
+                    state.sale_inventory,
+                )
+                .send_sync(
+                    Actor::new(state.pool_id, state.lbp_program_id),
+                    &lbp_core::Message::ActivateFixedPrice,
+                );
+                let response = state.with_setup_deadline(response)?;
+                return Ok(if state.creator_allocation_released {
+                    transfer(
+                        response,
+                        state.creator_escrow_id,
+                        compute_escrow_seed(state.namespace, state.launch_salt),
+                        state.token_definition_id,
+                        creator,
+                        state.creator_allocation,
+                    )
+                } else {
+                    response
+                });
+            }
+            if expected_stage == FixedPriceCreationStage::Allocated {
+                if balance(&pending.values[1], mint, state.token_definition_id)? != 0
+                    || balance(
+                        &pending.values[2],
+                        input.receiver.account_id,
+                        state.token_definition_id,
+                    )? != state.sale_inventory
+                    || balance(
+                        &pending.values[3],
+                        state.creator_escrow_id,
+                        state.token_definition_id,
+                    )? != state.creator_allocation
+                {
+                    return Err(Error::InvalidCustody);
+                }
+                state.pending = None;
+                state.creation_stage = FixedPriceCreationStage::PoolPrepared;
+                let inputs = lbp_core::FixedPricePoolInputs {
+                    namespace: state.namespace,
+                    namespace_program_id: state.namespace_program_id,
+                    factory_program_id: input.receiver.program_account_id,
+                    factory_seed: *compute_factory_seed(state.namespace, state.launch_salt)
+                        .as_bytes(),
+                    token_definition_id: state.token_definition_id,
+                    collateral_definition_id: state.collateral_definition_id,
+                    sale_inventory: state.sale_inventory,
+                    creator_allocation: state.creator_allocation,
+                    price: state.price,
+                    start_timestamp: state.start_timestamp,
+                    end_timestamp: state.end_timestamp,
+                    creator_allocation_release: state.allocation_release,
+                };
+                return state.with_setup_deadline(state.response().send_sync(
+                    Actor::new(state.pool_id, state.lbp_program_id),
+                    &lbp_core::Message::PrepareFixedPrice { inputs },
+                ));
+            }
+            if expected_stage != FixedPriceCreationStage::Minted {
+                return Err(Error::StaleStage);
+            }
+            if balance(&pending.values[1], mint, state.token_definition_id)? != state.total_supply
+                || balance(
+                    &pending.values[2],
+                    input.receiver.account_id,
+                    state.token_definition_id,
+                )? != 0
+                || balance(
+                    &pending.values[3],
+                    state.creator_escrow_id,
+                    state.token_definition_id,
+                )? != 0
+            {
+                return Err(Error::InvalidCustody);
+            }
+            state.pending = None;
+            state.creation_stage = FixedPriceCreationStage::Allocated;
+            let response = transfer(
+                state.response(),
+                mint,
+                compute_mint_seed(state.namespace, state.launch_salt),
+                state.token_definition_id,
+                input.receiver.account_id,
+                state.sale_inventory,
+            );
+            return state.with_setup_deadline(transfer(
+                response,
+                mint,
+                compute_mint_seed(state.namespace, state.launch_salt),
+                state.token_definition_id,
+                state.creator_escrow_id,
+                state.creator_allocation,
             ));
         }
-        if stage == FixedPriceCreationStage::PoolPrepared
-            && state.allocation_release == CreatorAllocationRelease::AfterSetup
-            && state.creator_allocation != 0
-        {
-            calls.push(
-                ChainedCall::new(
-                    curve_core::TOKEN_PROGRAM_ID,
-                    vec![
-                        AccountWithMetadata {
-                            is_authorized: true,
-                            ..escrow
-                        },
-                        pre[6].clone(),
-                    ],
-                    &token_core::Instruction::Transfer {
-                        amount_to_transfer: state.creator_allocation,
+        let Message::CreateFixedPriceLbp { inputs } = pending.command.clone() else {
+            return Err(Error::InvalidMessage);
+        };
+        let config =
+            curve_core::Config::decode(&pending.values[0]).map_err(|_| Error::InvalidState)?;
+        if config.namespace != state.namespace {
+            return Err(Error::WrongAccount);
+        }
+        if !matches!(
+            TokenState::decode(&pending.values[1])?,
+            TokenState::Definition {
+                kind: TokenKind::Fungible,
+                ..
+            }
+        ) {
+            return Err(Error::InvalidDefinition);
+        }
+        state.pending = None;
+        let response = state
+            .response()
+            .send(
+                SyncMessage::new(
+                    Actor::new(state.creator_role_id, AUTHORITY_PROGRAM_ACCOUNT_ID),
+                    &authority::Message::Bootstrap {
+                        authority: inputs.creator,
                     },
                 )
-                .with_pda_seeds(vec![super::compute_escrow_seed(
+                .with_pda_seeds([compute_creator_role_seed(
                     state.namespace,
                     state.launch_salt,
                 )]),
+            )
+            .send(
+                SyncMessage::new(
+                    Actor::new(state.token_definition_id, TOKEN_PROGRAM_ACCOUNT_ID),
+                    &token::Message::Create {
+                        name: state.name.clone(),
+                        kind: TokenKind::Fungible,
+                        supply: state.total_supply,
+                        recipient: compute_mint_pda(
+                            state.namespace,
+                            input.receiver.program_account_id,
+                            state.launch_salt,
+                        ),
+                        metadata: Some(token::Metadata {
+                            standard: token::MetadataStandard::Simple,
+                            uri: state.uri.clone(),
+                            creators: String::new(),
+                        }),
+                    },
+                )
+                .with_pda_seeds([compute_definition_seed(state.namespace, state.launch_salt)]),
             );
+        let (at_least, at_most) = match inputs.start {
+            SaleStart::Now { timestamp } => (
+                curve_core::timestamp_millis(timestamp).map_err(|_| Error::InvalidTerms)?,
+                u64::MAX,
+            ),
+            SaleStart::At { timestamp } => (
+                0,
+                curve_core::timestamp_millis(timestamp).map_err(|_| Error::InvalidTerms)?,
+            ),
+        };
+        state.with_setup_deadline(response.send_sync(
+            Actor::new(
+                clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID,
+                clock_core::clock_account_id(),
+            ),
+            &clock_core::Message::AssertTimestamp { at_least, at_most },
+        ))
+    })())
+}
+impl FixedPriceLaunchState {
+    fn with_setup_deadline(&self, response: Response) -> Result<Response, Error> {
+        let Some(end_timestamp) = self.end_timestamp else {
+            return Ok(response);
+        };
+        Ok(response.send_sync(
+            Actor::new(
+                clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID,
+                clock_core::clock_account_id(),
+            ),
+            &curve_core::clock_assertion(0, Some(end_timestamp))
+                .map_err(|_| Error::InvalidTerms)?,
+        ))
+    }
+    fn response(&self) -> Response {
+        Response::set_state(borsh::to_vec(self).unwrap())
+    }
+    fn next(&self) -> Response {
+        let pending = self.pending.as_ref().unwrap();
+        let read = &pending.reads[pending.values.len()];
+        let mut message = SyncMessage::new(read.actor, &());
+        message.message = read.message.clone();
+        self.response().send(message)
+    }
+
+    pub fn decode(bytes: &[u8]) -> Result<Self, Error> {
+        let state: Self = borsh::from_slice(bytes).map_err(|_| Error::InvalidState)?;
+        if state.format != *b"LZFXLAUN" || state.version != 2 {
+            return Err(Error::InvalidState);
         }
-        calls
-    };
-    let mut posts: Vec<_> = pre
-        .into_iter()
-        .map(|a| AccountPostState::new(a.account))
-        .collect();
-    posts[0] = AccountPostState::new(post);
-    (posts, calls)
+        Ok(state)
+    }
 }

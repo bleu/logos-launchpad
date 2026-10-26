@@ -1,115 +1,119 @@
-//! Owner-authorized lifecycle transitions for a bounded pool.
-
+//! Owner lifecycle and permissionless protocol-fee collection.
+use crate::{
+    Error, Message, PoolAccount,
+    dispatch::{Pending, Query},
+    pool_swap::payout,
+};
 use lee_core::{
-    account::AccountWithMetadata,
-    program::{AccountPostState, ProgramId},
+    account::Actor,
+    program::{ReceiveInput, Response},
 };
 
-use crate::{PoolAccount, compute_pool_pda};
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct WithdrawnReserves {
-    pub token0_amount: u128,
-    pub token1_amount: u128,
-}
-
-#[must_use]
-pub fn close_pool(
-    pool: AccountWithMetadata,
-    owner: AccountWithMetadata,
-    clock: AccountWithMetadata,
-    curve_program_id: ProgramId,
-) -> Vec<AccountPostState> {
-    assert!(owner.is_authorized, "Owner authorization is missing");
-    let mut pool_account =
-        PoolAccount::try_from(&pool.account.data).expect("Pool account holds invalid data");
-    assert!(pool_account.funded, "Pool funding is pending");
-    assert_eq!(
-        crate::authority::pool_owner(&owner, pool_account.owner_program),
-        pool_account.owner,
-        "Authority is not the pool owner"
-    );
-    assert_eq!(
-        pool.account_id,
-        compute_pool_pda(
-            pool_account.namespace,
-            curve_program_id,
-            pool_account.token0_definition_id,
-            pool_account.token1_definition_id,
-            pool_account.owner,
-        ),
-        "Pool account ID does not match PDA"
-    );
-
-    let now = trusted_time(clock.clone());
-    pool_account
-        .pool
-        .close_pool(now)
-        .expect("Pool is already closed");
-    let mut post = pool.account;
-    post.data = (&pool_account).into();
-    vec![
-        AccountPostState::new(post),
-        AccountPostState::new(owner.account),
-        AccountPostState::new(clock.account),
-    ]
-}
-
-fn trusted_time(clock: AccountWithMetadata) -> u64 {
-    assert_eq!(
-        clock.account_id,
-        clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID,
-        "Clock account is not the trusted LEZ clock"
-    );
-    clock_core::ClockAccountData::from_bytes(clock.account.data.as_ref()).timestamp
-}
-
-/// Retires the pool and returns the exact amounts the token adapter must transfer.
-/// Expiry is read only from the canonical one-block LEZ clock account.
-#[must_use]
-pub fn withdraw_reserves(
-    pool: AccountWithMetadata,
-    owner: AccountWithMetadata,
-    clock: AccountWithMetadata,
-    curve_program_id: ProgramId,
-) -> (Vec<AccountPostState>, WithdrawnReserves) {
-    assert!(owner.is_authorized, "Owner authorization is missing");
-    let mut pool_account =
-        PoolAccount::try_from(&pool.account.data).expect("Pool account holds invalid data");
-    assert!(pool_account.funded, "Pool funding is pending");
-    assert_eq!(
-        crate::authority::pool_owner(&owner, pool_account.owner_program),
-        pool_account.owner,
-        "Authority is not the pool owner"
-    );
-    assert_eq!(
-        pool.account_id,
-        compute_pool_pda(
-            pool_account.namespace,
-            curve_program_id,
-            pool_account.token0_definition_id,
-            pool_account.token1_definition_id,
-            pool_account.owner,
-        ),
-        "Pool account ID does not match PDA"
-    );
-
-    let now = trusted_time(clock.clone());
-    let (token0_amount, token1_amount) = pool_account
-        .pool
-        .withdraw_reserves(now)
-        .expect("Pool must be closed or expired and not already retired");
-    let mut post = pool.account;
-    post.data = (&pool_account).into();
-    (
-        vec![
-            AccountPostState::new(post),
-            AccountPostState::new(owner.account),
-            AccountPostState::new(clock.account),
-        ],
-        WithdrawnReserves {
-            token0_amount,
-            token1_amount,
-        },
+pub fn begin(input: &ReceiveInput, message: Message) -> Result<Response, Error> {
+    let state = PoolAccount::decode(&input.pre_state)?;
+    state.validate_address(input.receiver)?;
+    if !state.funded {
+        return Err(Error::PendingFunding);
+    }
+    if matches!(message, Message::WithdrawReserves { .. }) {
+        let (authority, mut queries) = crate::authority::owner(input, &state)?;
+        queries.extend([Query::Namespace, Query::Vault0, Query::Vault1]);
+        return Pending::new(state, message, authority, queries).advance(input.receiver);
+    }
+    if matches!(message, Message::ClosePool { .. }) {
+        let (authority, queries) = crate::authority::owner(input, &state)?;
+        return Pending::new(state, message, authority, queries).advance(input.receiver);
+    }
+    Pending::new(
+        state,
+        message,
+        input.receiver.account_id,
+        vec![Query::Namespace, Query::Vault1],
     )
+    .advance(input.receiver)
+}
+pub(crate) fn finish(mut pending: Pending, receiver: Actor) -> Result<Response, Error> {
+    if let Message::ClosePool { now } = pending.message {
+        pending
+            .state
+            .pool
+            .close_pool(now)
+            .map_err(|_| Error::Closed)?;
+        return crate::pool_create::assert_clock(
+            Response::set_state(borsh::to_vec(&pending.state).unwrap()),
+            now,
+            pending.state.pool.close_timestamp,
+        );
+    }
+    let config = pending.config.as_ref().ok_or(Error::InvalidState)?;
+    if pending.balances[1]
+        < pending
+            .state
+            .pool
+            .real_reserve1
+            .checked_add(pending.state.pool.fees_accrued)
+            .ok_or(Error::Arithmetic)?
+    {
+        return Err(Error::Underfunded);
+    }
+    if let Message::WithdrawReserves { now } = pending.message {
+        crate::pool_swap::backed(&pending)?;
+        let now = if pending.state.pool.lifecycle == pool::PoolLifecycle::Open {
+            now.max(pending.state.pool.close_timestamp.ok_or(Error::Closed)?)
+        } else {
+            now
+        };
+        let (reserve0, reserve1) = pending
+            .state
+            .pool
+            .withdraw_reserves(now)
+            .map_err(|_| Error::Closed)?;
+        let fees = pending
+            .state
+            .pool
+            .collect_fees()
+            .map_err(|_| Error::Arithmetic)?;
+        let response = crate::pool_create::assert_clock(
+            Response::set_state(borsh::to_vec(&pending.state).unwrap()),
+            now,
+            None,
+        )?;
+        let response = payout(
+            response,
+            &pending.state,
+            receiver,
+            pending.state.token1_definition_id,
+            config.treasury,
+            fees,
+        );
+        let response = payout(
+            response,
+            &pending.state,
+            receiver,
+            pending.state.token0_definition_id,
+            pending.authority,
+            reserve0,
+        );
+        return Ok(payout(
+            response,
+            &pending.state,
+            receiver,
+            pending.state.token1_definition_id,
+            pending.authority,
+            reserve1,
+        ));
+    }
+    let fees = pending
+        .state
+        .pool
+        .collect_fees()
+        .map_err(|_| Error::Arithmetic)?;
+    Ok(payout(
+        Response::set_state(borsh::to_vec(&pending.state).unwrap()),
+        &pending.state,
+        receiver,
+        pending.state.token1_definition_id,
+        config.treasury,
+        fees,
+    ))
 }

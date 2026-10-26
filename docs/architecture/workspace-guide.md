@@ -1,76 +1,76 @@
 # Workspace guide
 
-This repository contains the imported curve PoC and weighted-math library. They are a starting point for production work, not a claim that the [accepted design](../adr/README.md) is implemented. See [repository layout](repository-layout.md) for each package's role.
+The application is [migrated to the selected LEZ actor revision](../../plans/lez-v04-migration.md). Local checks below passed with the stated evidence gaps. There is no second supported legacy platform. See [repository layout](repository-layout.md) for package roles and [ADR 0034](../adr/0034-lez-v04-migration.md) for the decision.
 
 ## Build contexts
 
-Curve host and guest builds require `CURVE_EMERGENCY_AUTHORITY`, a nonzero 64-character hex account ID. For local tests, run this from the repository root before the commands below:
+Use LEZ `578ce58a71b79c49d48e97e51c520bf71f0252d9`, host Rust 1.98.1, guest Rust 1.94.1, RISC0 3.0.5 and zkOS wrapper 2.2.2. The [development base guide](../../packages/lez-compat/README.md) gives installation requirements. Check local tools with `bash verify/check-builds.sh --preflight`. Scaffold and SPEL CLI are not required.
+
+Curve host and guest builds require `CURVE_EMERGENCY_AUTHORITY`, a nonzero 64-character hex account ID. For local tests, run this from the repository root:
 
 ```sh
 export CURVE_EMERGENCY_AUTHORITY="$(< crates/curve-core/tests/fixtures/emergency-authority.hex)"
 ```
 
-For deployment builds, supply the deployment's account instead. The built guest contains that selection; transaction callers cannot replace it. See [ADR 0028](../adr/0028-token-custody-and-freeze.md).
+The built guest contains that selection; transaction callers cannot replace it. See [ADR 0028](../adr/0028-token-custody-and-freeze.md).
 
 | Workspace | Contents | Command from the repository root |
 | --- | --- | --- |
-| Root `Cargo.toml` | Curve math, pool, handlers, client and CLI | `cargo test --workspace --locked` |
-| `packages/weighted-math/Cargo.toml` | Weighted kernel, harness and numerical fixtures | `cargo test --manifest-path packages/weighted-math/Cargo.toml --workspace --locked` |
-| Launchpad core workspaces | Separate logic and native adapter workspaces under `packages/launchpad/core/` | See the [package README](../../packages/launchpad/README.md) for setup and package commands |
-| `methods/guest/` | Curve, factory and private-flow guest entry points | `RISC0_BUILD_LOCKED=1 cargo build --manifest-path methods/Cargo.toml --release --locked` |
-| `packages/weighted-math/zkvm/` | Weighted-math host/guest parity | `RISC0_BUILD_LOCKED=1 cargo run --manifest-path packages/weighted-math/zkvm/Cargo.toml --release --locked` |
-| `packages/weighted-math/fuzz/` | Weighted trade invariant fuzz target | `cd packages/weighted-math/fuzz && cargo +nightly fuzz run trade_invariant` |
+| Root `Cargo.toml` | Curve math, pool, handlers, client and CLI | `cargo +1.98.1 test --workspace --locked` |
+| `packages/lez-compat/` | Temporary token, ATA and role-authority support | See the [development base guide](../../packages/lez-compat/README.md) |
+| `packages/weighted-math/` | Independent kernel, harness and numerical fixtures | `cargo +1.98.1 test --manifest-path packages/weighted-math/Cargo.toml --workspace --locked` |
+| Launchpad core workspaces | Separate logic and native adapter workspaces | See the [package README](../../packages/launchpad/README.md) |
+| `methods/guest/` | Application actor guest entry points | `RISC0_BUILD_LOCKED=1 cargo +1.98.1 build --manifest-path methods/Cargo.toml --release --locked` |
+| `packages/weighted-math/zkvm/` | Weighted-math host/guest parity | `RISC0_BUILD_LOCKED=1 cargo +1.98.1 run --manifest-path packages/weighted-math/zkvm/Cargo.toml --release --locked` |
+| `packages/weighted-math/fuzz/` | Weighted trade invariant fuzz target | Run `cargo +nightly fuzz run trade_invariant` from that workspace |
 
-Root workspace commands do not include the nested math, launchpad, guest or fuzz workspaces. Keep their lockfiles separate. Fixed-price sale setup uses the root launch factory; no separate fixed-price sale workspace is selected. A future weighted sale can depend on `packages/weighted-math/crates/weighted-math-core/` by Cargo path.
+Root Cargo commands do not include nested workspaces. Keep their lockfiles separate. `RISC0_BUILD_LOCKED=1` locks nested guest builds; outer Cargo `--locked` alone does not. Fuzzing needs nightly Rust and `cargo-fuzz`.
 
-The root and weighted-math host workspaces declare edition 2024 and a minimum Rust version of 1.94. The root and math zkVM `rust-toolchain.toml` files select Rust 1.94.0. Guest builds and parity also require the tool versions in [`verify/build-tools.env`](../../verify/build-tools.env). Check setup with `bash verify/check-builds.sh --preflight`. Fuzzing needs nightly Rust and `cargo-fuzz`.
+## Repository checks
 
-## Host checks
-
-Run these curve and weighted-math checks from the repository root:
+Run from the repository root:
 
 ```sh
-cargo test --workspace --locked
-cargo fmt --all -- --check
-cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
-cargo test --manifest-path packages/weighted-math/Cargo.toml --workspace --locked
-cargo fmt --manifest-path packages/weighted-math/Cargo.toml --all -- --check
-cargo clippy --manifest-path packages/weighted-math/Cargo.toml --workspace --all-targets --all-features --locked -- -D warnings
 bash verify/check-pins.sh
+bash verify/check-builds.sh
 bash verify/check-idl.sh
 ```
 
-`check-pins.sh` checks the LEZ revision in the root and guest manifests against `scaffold.toml`. `check-idl.sh` requires `lgs`, checks generated on-chain IDLs against `idl-src/`, and runs the non-default `idl-tests` lane. Normal host tests do not require `lgs` or wallet state.
+The build script selects locked host/client/CLI tests, application and compatibility guest builds, weighted-math checks, math guest parity and release-overflow checks. It checks that lockfiles stay unchanged. The local results and their limits are recorded below. The old `--actor` flag is an alias for the same platform, not a separate foundation-only lane.
+
+`check-pins.sh` checks application and compatibility dependencies against the selected actor revision. `generate-idl.sh` generates the actor schemas from Rust declarations. `check-idl.sh` checks drift and Borsh wire fixtures. The application schema is [`idl/launchpad.json`](../../idl/launchpad.json); the compatibility schema is separate. The application schema includes serialized private types. Schema `imports` lists parent modules to search when a type is not defined in the current module. The old SPEL instruction schemas are not supported. Regenerate after changing message types; do not edit generated output by hand.
+
+Root handlers accept `ReceiveInput` and return `Result<Response, Error>`. Guests turn handler errors into transaction failure. Program account addresses identify deployments; image IDs identify binaries. Use program account addresses for PDA derivation and callbacks. Rebuild clients and guests together after wire changes. See the [actor interface guide](../../packages/lez-compat/README.md#interfaces-and-addresses).
+
+Application, SDK and CLI timestamps use Unix seconds. The native LEZ clock uses Unix milliseconds; programs convert checked bounds at that interface. Deadline checks use trusted time intervals rather than exact client-time equality. See [sale closing](../adr/0025-sale-closing.md).
 
 ## CI
 
-[Root CI](../../.github/workflows/ci.yml) runs on pull requests, pushes to `main` and manual runs. It checks formatting across the root, curve guest and weighted-math workspaces, including fuzz source, and checks the fuzz lockfile without building it. It checks dependency pins, then runs `verify/check-builds.sh` and `verify/check-idl.sh` for locked builds, tests, guest execution, math parity and generated program interfaces. The Ubuntu 24.04 setup uses `rust-toolchain.toml` and `verify/build-tools.env`; the workflow contains the tool installation commands.
+[Root CI](../../.github/workflows/ci.yml) is configured for actor formatting, pin and shell checks, locked repository builds and tests, and generated-interface checks. Manual runs can select node-free actor fixtures. This configuration does not establish a passing run. Package installation, app smoke actions, live service integration, fuzz campaigns and real proofs remain separate checks.
 
-The root weighted-math smoke test calls the local kernel's public trade functions. Run it with `cargo test -p launchpad-client --test weighted_math --locked`. It checks consumption from the root workspace, not a weighted-sale program.
+## Execution and evidence limits
 
-CI excludes the separate launchpad core workspaces, mini-app builds and installation, fuzz campaigns, live standalone-sequencer/E2E tests, concurrency and private-flow fault testing, and real-proof generation. Clippy remains a local check. Guest development receipts and standalone math parity do not establish production readiness.
+Add `--execution` to `check-builds.sh` to select the optional node-free token, seeded curve and seeded fixed-price fixtures. They need compatible guest binaries and an executor that can start local processes and use local IPC. A sandbox rejection is not a passing result. The token fixture's successful transfer and rollback checks cover disposable token actors only; they do not prove sale rollback.
 
-## Guest integration tests
+The two [seeded curve tests](../../methods/tests/actor_sale.rs) passed through real curve and compatibility-token guests on `V03State`. Public buys passed, and stale-cap rejection preserved full state and buyer nonce. A delayed pre-expiry trade passed with the upstream `AssertTimestamp` guest and seeded native clock data; expiry rejection also preserved state and nonce. See the tests for exact amounts and timestamps.
 
-Client tests that execute guest programs use the non-default `guest-tests` feature. Build the guest artifacts with `RISC0_BUILD_LOCKED=1 cargo build --manifest-path methods/Cargo.toml --release --locked`. The nested guest lock needs `RISC0_BUILD_LOCKED=1`; outer Cargo `--locked` alone does not lock it. The `r0vm` executable must be on `PATH`, or `RISC0_SERVER_PATH` must point to it. Then run:
+The four seeded fixed-price tests passed through real fixed-price, namespace and compatibility-token guests. They cover exact-input and exact-output buys, live fees, current-treasury collection, surplus, no-end sellout, clock bounds, slippage and freeze. A failed output transfer preserved full state and buyer nonce, including the earlier input transfer. Fee collection passed after expiry while frozen and without a signer; a zero-fee retry left state unchanged.
+
+These checks do not exercise sequencer `Tick`, setup, factory clocks, settlement, graduation, curve fee collection, wallet submission or real proofs. To run them directly:
 
 ```sh
-RISC0_DEV_MODE=1 cargo test -p launchpad-client --release --features guest-tests --test namespace_admin --test private_authority --test settlement --locked
+RISC0_BUILD_LOCKED=1 cargo +1.98.1 test --manifest-path methods/Cargo.toml --release --locked --features actor-execution-tests --test actor_sale
 ```
 
-This lane checks namespace administration, private-authority, private-buy and settlement execution. Missing artifacts are failures when the lane is selected. Host-only tests do not execute it. All-feature clippy compiles these test targets without running their guests.
+The local `bash verify/check-builds.sh --execution` gate passed with unchanged lockfiles. It covered release host tests, application and compatibility guests, weighted-math parity, release-overflow checks, token execution and all six seeded sale tests. Debug workspace tests, strict root and compatibility Clippy, formatting across maintained workspaces, IDL and wire checks, and pin and shell regressions also passed. Linux CI has not run.
 
-## Known limits
+Setup, factory-clock, settlement, graduation, curve-fee and PDA-administration runtime checks remain deferred, as do sequencer `Tick`, wallet/service integration and real proofs. Old namespace, private-helper and settlement guest evidence predates this actor migration and cannot establish compatibility on the selected revision. Private purchase and authority helpers return explicit unsupported errors because the compatibility token implementation has no private holdings.
 
-A passing host suite does not prove guest execution. The math margin test runs with the host suite; the [math README](../../packages/weighted-math/README.md) describes fixtures, bounds and separate verification tools.
+The three launchpad package archives passed the Nix build. Installation, loading and `Test backend` are blocked by missing Basecamp and `lgpm`; no `Backend OK` result is recorded. See the [package README](../../packages/launchpad/README.md) for the command and local requirements.
 
-Public curve-factory variants remain in source-IDL tags 0 through 4. Fixed-price variants use tags 5 and later. SDK-only private wrappers follow all public variants, so their move deliberately changes private encoding. Rebuild clients and guest IDs for the implemented encoding. The IDL uses the pinned serializer's supported primitive wire values: fees use `u32`, depletion uses `Option<u8>`, and owner-program ID and seed use paired optional fields. Generated CLI calls require explicit PDA addresses; the SDK computes them with its existing helpers. The trailing treasury account is a remaining-account vector and may be omitted when it aliases an earlier account. `check-idl.sh` verifies generated artifacts and compares CLI dry-run bytes and account metadata with `Program::serialize_instruction`. An omitted trailing Treasury account appears as null rest metadata in a dry run and is absent from the CLI transaction account vector. This repository does not support the old pre-launch encoding.
+Host tests do not prove guest execution or cross-program rollback. Guest development receipts and standalone math parity do not establish production readiness. Real proofs, service integration, wallet workflows and live E2E verification remain separate evidence gaps. Use disposable state for execution checks. Nothing is deployed to testnet or production, and no state migration is provided.
 
-The imported private-buy route exceeds the pinned LEZ chained-call limit when executed as a complete graph. Its guest test checks the router's instruction envelope and records this full-route rejection; it does not prove a successful private purchase. The router also deshields the full collateral cap and only requests re-shielding of purchased tokens. Its call graph leaves unspent collateral in the transient public ATA, and the SDK has no automatic remainder recovery. These route limits require separate work; the IDL correction does not remove them.
-
-Live E2E verification remains future work. Use disposable wallet and localnet state for those checks.
-
-Run `bash verify/check-builds.sh` locally for the same locked build/test lane. For stable guest IDs, use a committed checkout at `/tmp/logos-launchpad-release/source` and run `bash verify/check-builds.sh --release`. Keep its guest binaries and image IDs. Builds from other paths can change the factory ID; cross-OS identity is unverified. CI does not verify stable release image IDs.
+For stable release image IDs, the build script requires `/tmp/logos-launchpad-release/source` with `--release`. Build paths can change guest binaries and IDs; cross-OS identity remains unverified. See [verification boundaries](../adr/0022-verification-boundaries.md).
 
 ## Licenses
 

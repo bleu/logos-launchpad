@@ -1,734 +1,877 @@
-use curve_core::{
-    Config, INITIAL_EMERGENCY_AUTHORITY, Instruction, compute_config_pda, process_instruction,
-};
+use curve_core::{Config, INITIAL_EMERGENCY_AUTHORITY, Message, compute_config_pda, handle};
 use lee_core::{
-    account::{Account, AccountId, AccountWithMetadata},
-    program::ProgramId,
+    account::{AccountId, Actor, ActorState},
+    program::ReceiveInput,
 };
 
-const PROGRAM: ProgramId = [42; 8];
+const PROGRAM: AccountId = AccountId::new([42; 32]);
+const NAMESPACE: AccountId = AccountId::new([1; 32]);
+const TREASURY: AccountId = AccountId::new([6; 32]);
 
-fn id(n: u8) -> AccountId {
-    AccountId::new([n; 32])
-}
-
-fn signer(account_id: AccountId) -> AccountWithMetadata {
-    AccountWithMetadata::new(Account::default(), true, account_id)
-}
-
-fn initialize(namespace: AccountId) -> AccountWithMetadata {
-    let (posts, _) = process_instruction(
-        vec![
-            AccountWithMetadata::new(
-                Account::default(),
-                false,
-                compute_config_pda(namespace, PROGRAM),
-            ),
-            signer(namespace),
-        ],
-        Instruction::InitializeNamespace {
-            namespace,
-            protocol_fee_bps: 500,
-            treasury: id(6),
-        },
-        PROGRAM,
-    );
-    let mut account = posts[0].account().clone();
-    account.program_owner = PROGRAM;
-    AccountWithMetadata::new(account, false, compute_config_pda(namespace, PROGRAM))
+fn input(
+    receiver: AccountId,
+    state: ActorState,
+    authorized: bool,
+    message: Message,
+) -> ReceiveInput {
+    ReceiveInput {
+        receiver: Actor::new(receiver, PROGRAM),
+        from: None,
+        is_authorized: authorized,
+        pre_state: state,
+        message: borsh::to_vec(&message).unwrap(),
+    }
 }
 
 #[test]
 fn namespace_signer_creates_its_config_without_an_authority_nft() {
-    let namespace = id(1);
-    let creator = signer(namespace);
-    let (posts, calls) = process_instruction(
-        vec![
-            AccountWithMetadata::new(
-                Account::default(),
-                false,
-                compute_config_pda(namespace, PROGRAM),
-            ),
-            creator.clone(),
-        ],
-        Instruction::InitializeNamespace {
-            namespace,
+    let request = input(
+        NAMESPACE,
+        ActorState::empty(),
+        true,
+        Message::InitializeNamespace {
+            namespace: NAMESPACE,
             protocol_fee_bps: 500,
-            treasury: id(6),
+            treasury: TREASURY,
         },
-        PROGRAM,
     );
-    let state = Config::try_from(&posts[0].account().data).unwrap();
-    state.assert_admin(&signer(namespace));
+    let forwarded = handle(&request).unwrap().sync_messages.remove(0);
+    assert_eq!(
+        forwarded.to,
+        Actor::new(compute_config_pda(NAMESPACE, PROGRAM), PROGRAM)
+    );
+    let response = handle(&ReceiveInput {
+        receiver: forwarded.to,
+        from: Some(request.receiver),
+        is_authorized: false,
+        pre_state: ActorState::empty(),
+        message: forwarded.message,
+    })
+    .unwrap();
+    let state = Config::decode(&response.post_state.unwrap()).unwrap();
     assert_eq!(state.protocol_fee_bps, 500);
-    assert_eq!(state.treasury, id(6));
+    assert_eq!(state.treasury, TREASURY);
     assert_eq!(state.emergency.authority(), INITIAL_EMERGENCY_AUTHORITY);
     assert!(!state.emergency.is_frozen);
-    assert_eq!(posts[1].account(), &creator.account);
-    assert!(calls.is_empty());
-}
-
-fn control(
-    config: AccountWithMetadata,
-    caller: AccountWithMetadata,
-    instruction: Instruction,
-) -> AccountWithMetadata {
-    let (posts, calls) =
-        process_instruction(vec![config.clone(), caller.clone()], instruction, PROGRAM);
-    assert!(calls.is_empty());
-    assert_eq!(posts[1].account(), &caller.account);
-    AccountWithMetadata::new(posts[0].account().clone(), false, config.account_id)
+    assert_eq!(
+        response.sync_messages.len(),
+        1,
+        "administrator bootstrap is synchronous"
+    );
 }
 
 #[test]
-fn administrator_changes_only_the_fee_while_frozen() {
-    let namespace = id(1);
-    let config = control(
-        initialize(namespace),
-        signer(INITIAL_EMERGENCY_AUTHORITY),
-        Instruction::SetFrozen {
-            namespace,
-            frozen: true,
+fn administrator_changes_only_the_fee_after_an_authenticated_role_reply() {
+    let init = input(
+        NAMESPACE,
+        ActorState::empty(),
+        true,
+        Message::InitializeNamespace {
+            namespace: NAMESPACE,
+            protocol_fee_bps: 500,
+            treasury: TREASURY,
         },
     );
-    let config = control(
-        config,
-        signer(namespace),
-        Instruction::UpdateFee {
-            namespace,
+    let forward = handle(&init).unwrap().sync_messages.remove(0);
+    let config_actor = forward.to;
+    let created = handle(&ReceiveInput {
+        receiver: config_actor,
+        from: Some(init.receiver),
+        is_authorized: false,
+        pre_state: ActorState::empty(),
+        message: forward.message,
+    })
+    .unwrap();
+    let before = created.post_state.unwrap();
+    let request = input(
+        NAMESPACE,
+        ActorState::empty(),
+        true,
+        Message::UpdateFee {
+            namespace: NAMESPACE,
             protocol_fee_bps: 123,
         },
     );
-    let state = Config::try_from(&config.account.data).unwrap();
+    let forwarded = handle(&request).unwrap().sync_messages.remove(0);
+    let pending = handle(&ReceiveInput {
+        receiver: config_actor,
+        from: Some(request.receiver),
+        is_authorized: false,
+        pre_state: before,
+        message: forwarded.message,
+    })
+    .unwrap();
+    let proof = lez_compat_core::authority::Authorized {
+        role: curve_core::compute_admin_role(NAMESPACE, PROGRAM),
+        authority: NAMESPACE,
+    };
+    let mut reply = ReceiveInput {
+        receiver: config_actor,
+        from: Some(Actor::new(
+            proof.role,
+            curve_core::AUTHORITY_PROGRAM_ACCOUNT_ID,
+        )),
+        is_authorized: false,
+        pre_state: pending.post_state.unwrap(),
+        message: borsh::to_vec(&proof).unwrap(),
+    };
+    let updated = handle(&reply).unwrap();
+    let state = Config::decode(&updated.post_state.unwrap()).unwrap();
     assert_eq!(state.protocol_fee_bps, 123);
-    assert_eq!(state.treasury, id(6));
-    state.assert_admin(&signer(namespace));
-    assert_eq!(state.emergency.authority(), INITIAL_EMERGENCY_AUTHORITY);
-    assert!(state.emergency.is_frozen);
+    assert_eq!(state.treasury, TREASURY);
+    reply.from = Some(Actor::new(proof.role, PROGRAM));
+    assert!(handle(&reply).is_err());
 }
 
 #[test]
-fn administrator_changes_only_the_treasury_while_frozen() {
-    let namespace = id(1);
-    let config = control(
-        initialize(namespace),
-        signer(INITIAL_EMERGENCY_AUTHORITY),
-        Instruction::SetFrozen {
-            namespace,
-            frozen: true,
+fn administrator_changes_only_the_treasury_after_an_authenticated_role_reply() {
+    let init = input(
+        NAMESPACE,
+        ActorState::empty(),
+        true,
+        Message::InitializeNamespace {
+            namespace: NAMESPACE,
+            protocol_fee_bps: 500,
+            treasury: TREASURY,
         },
     );
-    let config = control(
-        config,
-        signer(namespace),
-        Instruction::UpdateTreasury {
-            namespace,
-            treasury: id(7),
+    let forward = handle(&init).unwrap().sync_messages.remove(0);
+    let config_actor = forward.to;
+    let created = handle(&ReceiveInput {
+        receiver: config_actor,
+        from: Some(init.receiver),
+        is_authorized: false,
+        pre_state: ActorState::empty(),
+        message: forward.message,
+    })
+    .unwrap();
+    let before = created.post_state.unwrap();
+    let request = input(
+        NAMESPACE,
+        ActorState::empty(),
+        true,
+        Message::UpdateTreasury {
+            namespace: NAMESPACE,
+            treasury: AccountId::new([7; 32]),
         },
     );
-    let state = Config::try_from(&config.account.data).unwrap();
-    assert_eq!(state.treasury, id(7));
+    let forwarded = handle(&request).unwrap().sync_messages.remove(0);
+    let pending = handle(&ReceiveInput {
+        receiver: config_actor,
+        from: Some(request.receiver),
+        is_authorized: false,
+        pre_state: before,
+        message: forwarded.message,
+    })
+    .unwrap();
+    let proof = lez_compat_core::authority::Authorized {
+        role: curve_core::compute_admin_role(NAMESPACE, PROGRAM),
+        authority: NAMESPACE,
+    };
+    let mut reply = ReceiveInput {
+        receiver: config_actor,
+        from: Some(Actor::new(
+            proof.role,
+            curve_core::AUTHORITY_PROGRAM_ACCOUNT_ID,
+        )),
+        is_authorized: false,
+        pre_state: pending.post_state.unwrap(),
+        message: borsh::to_vec(&proof).unwrap(),
+    };
+    let updated = handle(&reply).unwrap();
+    let state = Config::decode(&updated.post_state.unwrap()).unwrap();
     assert_eq!(state.protocol_fee_bps, 500);
-    state.assert_admin(&signer(namespace));
-    assert_eq!(state.emergency.authority(), INITIAL_EMERGENCY_AUTHORITY);
-    assert!(state.emergency.is_frozen);
+    assert_eq!(state.treasury, AccountId::new([7; 32]));
+    reply.from = Some(Actor::new(proof.role, PROGRAM));
+    assert!(handle(&reply).is_err());
+}
+
+fn authority_call(
+    call: lee_core::program::SyncMessage,
+    from: Actor,
+    state: ActorState,
+    authorized: bool,
+) -> Result<lee_core::program::Response, lez_compat_core::Error> {
+    lez_compat_core::authority::handle(&ReceiveInput {
+        receiver: call.to,
+        from: Some(from),
+        is_authorized: authorized,
+        pre_state: state,
+        message: call.message,
+    })
 }
 
 #[test]
-fn cosigned_transfer_moves_admin_power_without_changing_settings() {
-    let namespace = id(1);
-    let config = control(
-        initialize(namespace),
-        signer(INITIAL_EMERGENCY_AUTHORITY),
-        Instruction::SetFrozen {
-            namespace,
-            frozen: true,
+fn pda_successor_requires_owner_approval_and_can_then_administer_the_namespace() {
+    use curve_core::{
+        AUTHORITY_PROGRAM_ACCOUNT_ID as AUTHORITY, AdminCandidate, compute_admin_role,
+    };
+    use lee_core::program::PdaSeed;
+    let owner_program = AccountId::new([81; 32]);
+    let seed = PdaSeed::new([82; 32]);
+    let successor = AccountId::for_public_pda(&owner_program, &seed);
+    let config_actor = Actor::new(compute_config_pda(NAMESPACE, PROGRAM), PROGRAM);
+    let role_actor = Actor::new(compute_admin_role(NAMESPACE, PROGRAM), AUTHORITY);
+    let init = input(
+        NAMESPACE,
+        ActorState::empty(),
+        true,
+        Message::InitializeNamespace {
+            namespace: NAMESPACE,
+            protocol_fee_bps: 500,
+            treasury: TREASURY,
         },
     );
-    let (posts, calls) = process_instruction(
-        vec![config.clone(), signer(namespace), signer(id(2))],
-        Instruction::TransferAdmin {
-            namespace,
-            new_admin: id(2),
-            candidate: curve_core::AdminCandidate::Signer,
-        },
-        PROGRAM,
-    );
-    assert!(calls.is_empty());
-    let config = AccountWithMetadata::new(posts[0].account().clone(), false, config.account_id);
-    let state = Config::try_from(&config.account.data).unwrap();
-    state.assert_admin(&signer(id(2)));
-    assert_eq!(state.protocol_fee_bps, 500);
-    assert_eq!(state.treasury, id(6));
-    assert_eq!(state.emergency.authority(), INITIAL_EMERGENCY_AUTHORITY);
-    assert!(state.emergency.is_frozen);
+    let forward = handle(&init).unwrap().sync_messages.remove(0);
+    let created = handle(&ReceiveInput {
+        receiver: config_actor,
+        from: Some(init.receiver),
+        is_authorized: false,
+        pre_state: ActorState::empty(),
+        message: forward.message,
+    })
+    .unwrap();
+    let config = created.post_state.unwrap();
+    let boot = created.sync_messages.into_iter().next().unwrap();
     assert!(
-        std::panic::catch_unwind(|| {
-            process_instruction(
-                vec![config.clone(), signer(namespace)],
-                Instruction::UpdateFee {
-                    namespace,
-                    protocol_fee_bps: 99,
-                },
-                PROGRAM,
-            )
-        })
+        boot.pda_seeds
+            .contains(&curve_core::compute_admin_role_seed(NAMESPACE))
+    );
+    let proposed = authority_call(boot, config_actor, ActorState::empty(), true).unwrap();
+    let consent = authority_call(
+        proposed.sync_messages.into_iter().next().unwrap(),
+        role_actor,
+        ActorState::empty(),
+        true,
+    )
+    .unwrap();
+    let installed = authority_call(
+        consent.sync_messages.into_iter().next().unwrap(),
+        Actor::new(NAMESPACE, AUTHORITY),
+        proposed.post_state.unwrap(),
+        false,
+    )
+    .unwrap();
+    let role_state = installed.post_state.unwrap();
+    let response = admin_change(
+        config.clone(),
+        Message::TransferAdmin {
+            namespace: NAMESPACE,
+            new_admin: successor,
+            candidate: AdminCandidate::Pda {
+                program_id: owner_program,
+                seed: [82; 32],
+            },
+        },
+    );
+    let transfer = authority_call(
+        response.sync_messages.into_iter().next().unwrap(),
+        config_actor,
+        ActorState::empty(),
+        true,
+    )
+    .unwrap();
+    let proposed = authority_call(
+        transfer.sync_messages.into_iter().next().unwrap(),
+        Actor::new(NAMESPACE, AUTHORITY),
+        role_state,
+        false,
+    )
+    .unwrap();
+    let request = proposed.sync_messages.into_iter().next().unwrap();
+    assert_eq!(request.to, Actor::new(successor, owner_program));
+    let owner_input = ReceiveInput {
+        receiver: request.to,
+        from: Some(role_actor),
+        is_authorized: false,
+        pre_state: ActorState::empty(),
+        message: request.message,
+    };
+    let approval = lez_compat_core::authority::approve_pda(&owner_input, AUTHORITY)
+        .unwrap()
+        .sync_messages
+        .remove(0);
+    assert!(approval.pda_seeds.contains(&seed));
+    assert!(
+        authority_call(
+            approval.clone(),
+            owner_input.receiver,
+            ActorState::empty(),
+            false
+        )
         .is_err()
     );
-    let updated = control(
-        config,
-        signer(id(2)),
-        Instruction::UpdateFee {
-            namespace,
-            protocol_fee_bps: 99,
+    let accepted =
+        authority_call(approval, owner_input.receiver, ActorState::empty(), true).unwrap();
+    let installed = authority_call(
+        accepted.sync_messages.into_iter().next().unwrap(),
+        Actor::new(successor, AUTHORITY),
+        proposed.post_state.unwrap(),
+        false,
+    )
+    .unwrap();
+    let signed = input(
+        successor,
+        ActorState::empty(),
+        true,
+        Message::UpdateFee {
+            namespace: NAMESPACE,
+            protocol_fee_bps: 77,
+        },
+    );
+    let forward = handle(&signed).unwrap().sync_messages.remove(0);
+    let pending = handle(&ReceiveInput {
+        receiver: forward.to,
+        from: Some(signed.receiver),
+        is_authorized: false,
+        pre_state: config,
+        message: forward.message,
+    })
+    .unwrap();
+    let check = authority_call(
+        pending.sync_messages.into_iter().next().unwrap(),
+        config_actor,
+        ActorState::empty(),
+        true,
+    )
+    .unwrap();
+    let proof = authority_call(
+        check.sync_messages.into_iter().next().unwrap(),
+        Actor::new(successor, AUTHORITY),
+        installed.post_state.unwrap(),
+        false,
+    )
+    .unwrap()
+    .sync_messages
+    .remove(0);
+    let updated = handle(&ReceiveInput {
+        receiver: proof.to,
+        from: Some(role_actor),
+        is_authorized: false,
+        pre_state: pending.post_state.unwrap(),
+        message: proof.message,
+    })
+    .unwrap();
+    assert_eq!(
+        Config::decode(&updated.post_state.unwrap())
+            .unwrap()
+            .protocol_fee_bps,
+        77
+    );
+}
+
+#[test]
+fn cosigned_transfer_removes_old_admin_and_renunciation_is_terminal() {
+    use curve_core::{AUTHORITY_PROGRAM_ACCOUNT_ID as AUTHORITY, compute_admin_role};
+    use lee_core::program::SyncMessage;
+    use lez_compat_core::authority::Message as RoleMessage;
+    let role = Actor::new(compute_admin_role(NAMESPACE, PROGRAM), AUTHORITY);
+    let current = Actor::new(NAMESPACE, AUTHORITY);
+    let successor = Actor::new(AccountId::new([2; 32]), AUTHORITY);
+    let boot = authority_call(
+        SyncMessage::new(
+            role,
+            &RoleMessage::Bootstrap {
+                authority: NAMESPACE,
+            },
+        ),
+        Actor::new(compute_config_pda(NAMESPACE, PROGRAM), PROGRAM),
+        ActorState::empty(),
+        true,
+    )
+    .unwrap();
+    let consent = authority_call(
+        boot.sync_messages.into_iter().next().unwrap(),
+        role,
+        ActorState::empty(),
+        true,
+    )
+    .unwrap();
+    let installed = authority_call(
+        consent.sync_messages.into_iter().next().unwrap(),
+        current,
+        boot.post_state.unwrap(),
+        false,
+    )
+    .unwrap();
+    let before = namespace_state();
+    let transfer = admin_change(
+        before.clone(),
+        Message::TransferAdmin {
+            namespace: NAMESPACE,
+            new_admin: successor.account_id,
+            candidate: curve_core::AdminCandidate::Signer,
+        },
+    );
+    assert_eq!(transfer.post_state.unwrap(), before);
+    let transfer = authority_call(
+        transfer.sync_messages.into_iter().next().unwrap(),
+        Actor::new(compute_config_pda(NAMESPACE, PROGRAM), PROGRAM),
+        ActorState::empty(),
+        true,
+    )
+    .unwrap();
+    let proposed = authority_call(
+        transfer.sync_messages.into_iter().next().unwrap(),
+        current,
+        installed.post_state.unwrap(),
+        false,
+    )
+    .unwrap();
+    let consent = proposed.sync_messages.into_iter().next().unwrap();
+    assert!(authority_call(consent.clone(), role, ActorState::empty(), false).is_err());
+    let accepted = authority_call(consent, role, ActorState::empty(), true).unwrap();
+    let installed = authority_call(
+        accepted.sync_messages.into_iter().next().unwrap(),
+        successor,
+        proposed.post_state.unwrap(),
+        false,
+    )
+    .unwrap();
+    let check = |actor: Actor, state: ActorState| {
+        authority_call(
+            SyncMessage::new(
+                role,
+                &RoleMessage::Assert {
+                    authority: actor.account_id,
+                    callback: Actor::new(compute_config_pda(NAMESPACE, PROGRAM), PROGRAM),
+                },
+            ),
+            actor,
+            state,
+            false,
+        )
+    };
+    let role_state = installed.post_state.unwrap();
+    assert!(check(current, role_state.clone()).is_err());
+    assert!(check(successor, role_state.clone()).is_ok());
+    let revoke = authority_call(
+        SyncMessage::new(
+            successor,
+            &RoleMessage::Renounce {
+                role: role.account_id,
+            },
+        ),
+        Actor::new(successor.account_id, PROGRAM),
+        ActorState::empty(),
+        true,
+    )
+    .unwrap();
+    let revoked = authority_call(
+        revoke.sync_messages.into_iter().next().unwrap(),
+        successor,
+        role_state,
+        false,
+    )
+    .unwrap()
+    .post_state
+    .unwrap();
+    assert!(check(successor, revoked.clone()).is_err());
+    assert!(check(current, revoked.clone()).is_err());
+    assert!(
+        authority_call(
+            SyncMessage::new(
+                role,
+                &RoleMessage::Bootstrap {
+                    authority: NAMESPACE
+                }
+            ),
+            current,
+            revoked,
+            true
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn namespace_creation_requires_its_signer_valid_settings_and_empty_canonical_state() {
+    let message = Message::InitializeNamespace {
+        namespace: NAMESPACE,
+        protocol_fee_bps: 500,
+        treasury: TREASURY,
+    };
+    assert!(
+        handle(&input(
+            NAMESPACE,
+            ActorState::empty(),
+            false,
+            message.clone()
+        ))
+        .is_err()
+    );
+    let mut wrong = input(
+        AccountId::new([9; 32]),
+        ActorState::empty(),
+        true,
+        message.clone(),
+    );
+    assert!(handle(&wrong).is_err());
+    wrong.receiver.account_id = compute_config_pda(NAMESPACE, PROGRAM);
+    wrong.from = Some(Actor::new(AccountId::new([9; 32]), PROGRAM));
+    assert!(handle(&wrong).is_err());
+    wrong.from = Some(Actor::new(NAMESPACE, PROGRAM));
+    wrong.pre_state = namespace_state();
+    assert!(handle(&wrong).is_err());
+    for (namespace, fee, treasury) in [
+        (AccountId::default(), 500, TREASURY),
+        (NAMESPACE, 10000, TREASURY),
+        (NAMESPACE, u32::MAX, TREASURY),
+        (NAMESPACE, 500, AccountId::default()),
+    ] {
+        assert!(
+            handle(&input(
+                namespace,
+                ActorState::empty(),
+                true,
+                Message::InitializeNamespace {
+                    namespace,
+                    protocol_fee_bps: fee,
+                    treasury
+                }
+            ))
+            .is_err()
+        );
+    }
+    for fee in [0, 9999] {
+        assert!(
+            handle(&input(
+                NAMESPACE,
+                ActorState::empty(),
+                true,
+                Message::InitializeNamespace {
+                    namespace: NAMESPACE,
+                    protocol_fee_bps: fee,
+                    treasury: TREASURY
+                }
+            ))
+            .is_ok()
+        );
+    }
+}
+
+#[test]
+fn controls_reject_legacy_corrupt_or_unknown_version_namespace_state() {
+    let original = namespace_state();
+    let mut unknown = original.to_vec();
+    unknown[8..10].copy_from_slice(&4u16.to_le_bytes());
+    let mut corrupt = original.to_vec();
+    corrupt[0] ^= 1;
+    for state in [
+        ActorState::empty(),
+        vec![0; 64].into(),
+        unknown.into(),
+        corrupt.into(),
+        original[..original.len() - 1].to_vec().into(),
+    ] {
+        for message in [
+            Message::ReadNamespace {
+                namespace: NAMESPACE,
+            },
+            Message::UpdateFee {
+                namespace: NAMESPACE,
+                protocol_fee_bps: 1,
+            },
+            Message::SetFrozen {
+                namespace: NAMESPACE,
+                frozen: true,
+            },
+        ] {
+            let mut request = input(
+                compute_config_pda(NAMESPACE, PROGRAM),
+                state.clone(),
+                false,
+                message,
+            );
+            request.from = Some(Actor::new(NAMESPACE, PROGRAM));
+            assert!(handle(&request).is_err());
+        }
+    }
+}
+
+#[test]
+fn admin_changes_preserve_emergency_control_and_validate_fee_treasury_and_successor() {
+    let emergency = input(
+        INITIAL_EMERGENCY_AUTHORITY,
+        ActorState::empty(),
+        true,
+        Message::TransferEmergencyAuthority {
+            namespace: NAMESPACE,
+            new_authority: AccountId::new([102; 32]),
+        },
+    );
+    let forward = handle(&emergency).unwrap().sync_messages.remove(0);
+    let transferred = handle(&ReceiveInput {
+        receiver: forward.to,
+        from: Some(emergency.receiver),
+        is_authorized: false,
+        pre_state: namespace_state(),
+        message: forward.message,
+    })
+    .unwrap();
+    let mut config = Config::decode(&transferred.post_state.unwrap()).unwrap();
+    assert_eq!(config.emergency.authority(), AccountId::new([102; 32]));
+    config.emergency.is_frozen = true;
+    let frozen: ActorState = borsh::to_vec(&config).unwrap().into();
+    for fee in [0, 9999] {
+        let result = admin_change(
+            frozen.clone(),
+            Message::UpdateFee {
+                namespace: NAMESPACE,
+                protocol_fee_bps: fee,
+            },
+        );
+        let updated = Config::decode(&result.post_state.unwrap()).unwrap();
+        assert_eq!(updated.protocol_fee_bps, fee as u16);
+        assert_eq!(updated.emergency, config.emergency);
+        assert_eq!(updated.treasury, config.treasury);
+    }
+    for message in [
+        Message::UpdateFee {
+            namespace: NAMESPACE,
+            protocol_fee_bps: 10000,
+        },
+        Message::UpdateFee {
+            namespace: NAMESPACE,
+            protocol_fee_bps: u32::MAX,
+        },
+        Message::UpdateTreasury {
+            namespace: NAMESPACE,
+            treasury: AccountId::default(),
+        },
+        Message::TransferAdmin {
+            namespace: NAMESPACE,
+            new_admin: AccountId::default(),
+            candidate: curve_core::AdminCandidate::Signer,
+        },
+        Message::TransferAdmin {
+            namespace: NAMESPACE,
+            new_admin: AccountId::new([9; 32]),
+            candidate: curve_core::AdminCandidate::Pda {
+                program_id: PROGRAM,
+                seed: [9; 32],
+            },
+        },
+    ] {
+        assert!(admin_change_result(frozen.clone(), message).is_err());
+    }
+    for message in [
+        Message::UpdateTreasury {
+            namespace: NAMESPACE,
+            treasury: AccountId::new([8; 32]),
+        },
+        Message::TransferAdmin {
+            namespace: NAMESPACE,
+            new_admin: AccountId::new([9; 32]),
+            candidate: curve_core::AdminCandidate::Signer,
+        },
+        Message::RenounceAdmin {
+            namespace: NAMESPACE,
+        },
+    ] {
+        let updated =
+            Config::decode(&admin_change(frozen.clone(), message).post_state.unwrap()).unwrap();
+        assert_eq!(updated.emergency, config.emergency);
+    }
+    config.protocol_fee_bps = 10000;
+    let corrected = admin_change(
+        borsh::to_vec(&config).unwrap().into(),
+        Message::UpdateFee {
+            namespace: NAMESPACE,
+            protocol_fee_bps: 500,
         },
     );
     assert_eq!(
-        Config::try_from(&updated.account.data)
+        Config::decode(&corrected.post_state.unwrap())
             .unwrap()
             .protocol_fee_bps,
-        99
+        500
     );
 }
 
 #[test]
-fn renunciation_is_terminal_and_keeps_fees_treasury_and_emergency_control() {
-    let namespace = id(1);
-    let config = control(
-        initialize(namespace),
-        signer(INITIAL_EMERGENCY_AUTHORITY),
-        Instruction::SetFrozen {
-            namespace,
-            frozen: true,
+fn every_admin_action_requires_its_current_namespace_role_even_for_no_op_changes() {
+    let messages = [
+        Message::UpdateFee {
+            namespace: NAMESPACE,
+            protocol_fee_bps: 500,
         },
-    );
-    let config = control(
-        config,
-        signer(namespace),
-        Instruction::RenounceAdmin { namespace },
-    );
-    let state = Config::try_from(&config.account.data).unwrap();
-    assert!(std::panic::catch_unwind(|| state.assert_admin(&signer(namespace))).is_err());
-    assert_eq!(state.protocol_fee_bps, 500);
-    assert_eq!(state.treasury, id(6));
-    assert_eq!(state.emergency.authority(), INITIAL_EMERGENCY_AUTHORITY);
-    assert!(state.emergency.is_frozen);
-    for instruction in [
-        Instruction::UpdateFee {
-            namespace,
-            protocol_fee_bps: 0,
+        Message::UpdateTreasury {
+            namespace: NAMESPACE,
+            treasury: TREASURY,
         },
-        Instruction::UpdateTreasury {
-            namespace,
-            treasury: id(7),
-        },
-        Instruction::RenounceAdmin { namespace },
-        Instruction::TransferAdmin {
-            namespace,
-            new_admin: id(2),
+        Message::TransferAdmin {
+            namespace: NAMESPACE,
+            new_admin: NAMESPACE,
             candidate: curve_core::AdminCandidate::Signer,
         },
-    ] {
-        let mut accounts = vec![config.clone(), signer(namespace)];
-        if matches!(instruction, Instruction::TransferAdmin { .. }) {
-            accounts.push(signer(id(2)));
-        }
+        Message::RenounceAdmin {
+            namespace: NAMESPACE,
+        },
+    ];
+    for message in messages {
         assert!(
-            std::panic::catch_unwind(|| process_instruction(accounts, instruction, PROGRAM))
-                .is_err()
-        );
-    }
-    let unfrozen = control(
-        config,
-        signer(INITIAL_EMERGENCY_AUTHORITY),
-        Instruction::SetFrozen {
-            namespace,
-            frozen: false,
-        },
-    );
-    assert!(
-        !Config::try_from(&unfrozen.account.data)
-            .unwrap()
-            .emergency
-            .is_frozen
-    );
-}
-
-#[test]
-fn only_the_namespace_account_can_authorize_creation() {
-    let namespace = id(1);
-    let mut unsigned = signer(namespace);
-    unsigned.is_authorized = false;
-    let nft_holder = AccountWithMetadata::new(
-        Account {
-            program_owner: curve_core::TOKEN_PROGRAM_ID,
-            data: lee_core::account::Data::from(&token_core::TokenHolding::NftMaster {
-                definition_id: namespace,
-                print_balance: 1,
-            }),
-            ..Account::default()
-        },
-        true,
-        id(20),
-    );
-    for creator in [unsigned, signer(id(2)), nft_holder] {
-        let accounts = vec![
-            AccountWithMetadata::new(
-                Account::default(),
+            handle(&input(
+                NAMESPACE,
+                ActorState::empty(),
                 false,
-                compute_config_pda(namespace, PROGRAM),
+                message.clone()
+            ))
+            .is_err()
+        );
+        let signed = input(NAMESPACE, ActorState::empty(), true, message);
+        let forward = handle(&signed).unwrap().sync_messages.remove(0);
+        let pending = handle(&ReceiveInput {
+            receiver: forward.to,
+            from: Some(signed.receiver),
+            is_authorized: false,
+            pre_state: namespace_state(),
+            message: forward.message,
+        })
+        .unwrap();
+        let current = curve_core::compute_admin_role(NAMESPACE, PROGRAM);
+        for (role, authority) in [
+            (
+                curve_core::compute_admin_role(AccountId::new([2; 32]), PROGRAM),
+                NAMESPACE,
             ),
-            creator,
-        ];
-        assert!(
-            std::panic::catch_unwind(|| {
-                process_instruction(
-                    accounts,
-                    Instruction::InitializeNamespace {
-                        namespace,
-                        protocol_fee_bps: 500,
-                        treasury: id(6),
-                    },
-                    PROGRAM,
-                )
-            })
-            .is_err()
-        );
-    }
-}
-
-#[test]
-fn namespace_creation_cannot_replace_existing_or_renounced_administration() {
-    let namespace = id(1);
-    let existing = initialize(namespace);
-    let renounced = control(
-        existing.clone(),
-        signer(namespace),
-        Instruction::RenounceAdmin { namespace },
-    );
-    for config in [existing, renounced] {
-        assert!(
-            std::panic::catch_unwind(|| {
-                process_instruction(
-                    vec![config, signer(namespace)],
-                    Instruction::InitializeNamespace {
-                        namespace,
-                        protocol_fee_bps: 0,
-                        treasury: id(7),
-                    },
-                    PROGRAM,
-                )
-            })
-            .is_err()
-        );
-    }
-}
-
-#[test]
-fn every_admin_action_requires_the_stored_role_signature_even_for_no_op_updates() {
-    let namespace = id(1);
-    let config = initialize(namespace);
-    let mut unsigned = signer(namespace);
-    unsigned.is_authorized = false;
-    let nft_holder = AccountWithMetadata::new(
-        Account {
-            program_owner: curve_core::TOKEN_PROGRAM_ID,
-            data: lee_core::account::Data::from(&token_core::TokenHolding::NftMaster {
-                definition_id: namespace,
-                print_balance: 1,
-            }),
-            ..Account::default()
-        },
-        true,
-        id(20),
-    );
-    for caller in [
-        unsigned,
-        signer(id(2)),
-        nft_holder,
-        signer(INITIAL_EMERGENCY_AUTHORITY),
-    ] {
-        for instruction in [
-            Instruction::UpdateFee {
-                namespace,
-                protocol_fee_bps: 500,
-            },
-            Instruction::UpdateTreasury {
-                namespace,
-                treasury: id(6),
-            },
-            Instruction::RenounceAdmin { namespace },
-            Instruction::TransferAdmin {
-                namespace,
-                new_admin: id(3),
-                candidate: curve_core::AdminCandidate::Signer,
-            },
+            (current, AccountId::new([9; 32])),
         ] {
-            let mut accounts = vec![config.clone(), caller.clone()];
-            if matches!(instruction, Instruction::TransferAdmin { .. }) {
-                accounts.push(signer(id(3)));
-            }
             assert!(
-                std::panic::catch_unwind(|| process_instruction(accounts, instruction, PROGRAM))
-                    .is_err()
+                handle(&ReceiveInput {
+                    receiver: forward.to,
+                    from: Some(Actor::new(role, curve_core::AUTHORITY_PROGRAM_ACCOUNT_ID)),
+                    is_authorized: false,
+                    pre_state: pending.post_state.clone().unwrap(),
+                    message: borsh::to_vec(&lez_compat_core::authority::Authorized {
+                        role,
+                        authority
+                    })
+                    .unwrap()
+                })
+                .is_err()
             );
         }
     }
 }
 
-fn assert_rejected(accounts: Vec<AccountWithMetadata>, instruction: Instruction, expected: &str) {
-    let error = std::panic::catch_unwind(|| process_instruction(accounts, instruction, PROGRAM))
-        .expect_err("instruction must reject");
-    let message = error
-        .downcast_ref::<String>()
-        .map(String::as_str)
-        .or_else(|| error.downcast_ref::<&str>().copied())
-        .expect("panic message");
-    assert!(message.contains(expected), "{message}");
+fn namespace_state() -> ActorState {
+    let signer = input(
+        NAMESPACE,
+        ActorState::empty(),
+        true,
+        Message::InitializeNamespace {
+            namespace: NAMESPACE,
+            protocol_fee_bps: 500,
+            treasury: TREASURY,
+        },
+    );
+    let call = handle(&signer).unwrap().sync_messages.remove(0);
+    handle(&ReceiveInput {
+        receiver: call.to,
+        from: Some(signer.receiver),
+        is_authorized: false,
+        pre_state: ActorState::empty(),
+        message: call.message,
+    })
+    .unwrap()
+    .post_state
+    .unwrap()
+}
+fn admin_change(state: ActorState, message: Message) -> lee_core::program::Response {
+    admin_change_result(state, message).unwrap()
+}
+fn admin_change_result(
+    state: ActorState,
+    message: Message,
+) -> Result<lee_core::program::Response, curve_core::Error> {
+    let signer = input(NAMESPACE, ActorState::empty(), true, message);
+    let call = handle(&signer).unwrap().sync_messages.remove(0);
+    let pending = handle(&ReceiveInput {
+        receiver: call.to,
+        from: Some(signer.receiver),
+        is_authorized: false,
+        pre_state: state,
+        message: call.message,
+    })
+    .unwrap();
+    let role = curve_core::compute_admin_role(NAMESPACE, PROGRAM);
+    handle(&ReceiveInput {
+        receiver: call.to,
+        from: Some(Actor::new(role, curve_core::AUTHORITY_PROGRAM_ACCOUNT_ID)),
+        is_authorized: false,
+        pre_state: pending.post_state.unwrap(),
+        message: borsh::to_vec(&lez_compat_core::authority::Authorized {
+            role,
+            authority: NAMESPACE,
+        })
+        .unwrap(),
+    })
 }
 
-fn admin_instructions(namespace: AccountId) -> [Instruction; 4] {
-    [
-        Instruction::UpdateFee {
-            namespace,
-            protocol_fee_bps: 123,
-        },
-        Instruction::UpdateTreasury {
-            namespace,
-            treasury: id(7),
-        },
-        Instruction::RenounceAdmin { namespace },
-        Instruction::TransferAdmin {
-            namespace,
-            new_admin: id(3),
+#[test]
+fn admin_transfer_uses_the_successor_consent_protocol_and_preserves_config() {
+    let before = namespace_state();
+    let response = admin_change(
+        before.clone(),
+        Message::TransferAdmin {
+            namespace: NAMESPACE,
+            new_admin: AccountId::new([2; 32]),
             candidate: curve_core::AdminCandidate::Signer,
         },
-    ]
-}
-
-#[test]
-fn namespace_admin_cannot_change_another_namespace() {
-    let other = id(2);
-    let config = initialize(other);
-    for instruction in admin_instructions(other) {
-        let mut accounts = vec![config.clone(), signer(id(1))];
-        if matches!(instruction, Instruction::TransferAdmin { .. }) {
-            accounts.push(signer(id(3)));
-        }
-        assert_rejected(accounts, instruction, "NotAdmin");
-    }
-}
-
-#[test]
-fn namespace_admin_actions_reject_wrong_config_address_or_owner() {
-    let namespace = id(1);
-    let config = initialize(namespace);
-    let foreign = initialize(id(2));
-    let mut forged = config.clone();
-    forged.account_id = id(99);
-    let mut wrong_owner = config;
-    wrong_owner.account.program_owner = [43; 8];
-    for (invalid, expected) in [
-        (foreign, "Config account ID does not match PDA"),
-        (forged, "Config account ID does not match PDA"),
-        (wrong_owner, "Config owner does not match program"),
-    ] {
-        for instruction in admin_instructions(namespace) {
-            let mut accounts = vec![invalid.clone(), signer(namespace)];
-            if matches!(instruction, Instruction::TransferAdmin { .. }) {
-                accounts.push(signer(id(3)));
-            }
-            assert_rejected(accounts, instruction, expected);
-        }
-    }
-}
-
-#[test]
-fn namespace_admin_actions_reject_malformed_and_legacy_config_state() {
-    let namespace = id(1);
-    let config = initialize(namespace);
-    let mut truncated = config.account.data.to_vec();
-    truncated.pop();
-    let mut legacy = namespace.to_bytes().to_vec();
-    legacy.extend_from_slice(&500_u16.to_le_bytes());
-    legacy.extend_from_slice(&id(6).to_bytes());
-    let legacy_without_emergency = legacy.clone();
-    legacy.extend_from_slice(&INITIAL_EMERGENCY_AUTHORITY.to_bytes());
-    legacy.push(0);
-    for data in [vec![], vec![1], truncated, legacy_without_emergency, legacy] {
-        let mut invalid = config.clone();
-        invalid.account.data = data.try_into().unwrap();
-        for instruction in admin_instructions(namespace) {
-            let mut accounts = vec![invalid.clone(), signer(namespace)];
-            if matches!(instruction, Instruction::TransferAdmin { .. }) {
-                accounts.push(signer(id(3)));
-            }
-            assert_rejected(accounts, instruction, "Config account holds invalid data");
-        }
-    }
-}
-
-#[test]
-fn namespace_creation_requires_a_non_default_identity_and_empty_config_pda() {
-    let namespace = id(1);
-    let empty = AccountWithMetadata::new(
-        Account::default(),
-        false,
-        compute_config_pda(namespace, PROGRAM),
     );
-    let mut forged = empty.clone();
-    forged.account_id = id(99);
-    let mut foreign = empty.clone();
-    foreign.account_id = compute_config_pda(id(2), PROGRAM);
-    let mut wrong_owner = empty.clone();
-    wrong_owner.account.program_owner = [43; 8];
-    let mut funded = empty.clone();
-    funded.account.balance = 1;
-    let mut nonempty = empty;
-    nonempty.account.data = vec![1].try_into().unwrap();
-    for (namespace, config, expected) in [
-        (namespace, forged, "Config account ID does not match PDA"),
-        (namespace, foreign, "Config account ID does not match PDA"),
-        (namespace, wrong_owner, "Namespace config already exists"),
-        (namespace, funded, "Namespace config already exists"),
-        (namespace, nonempty, "Namespace config already exists"),
-        (
-            AccountId::default(),
-            AccountWithMetadata::new(
-                Account::default(),
-                false,
-                compute_config_pda(AccountId::default(), PROGRAM),
-            ),
-            "Namespace must not be the default key",
-        ),
-    ] {
-        assert_rejected(
-            vec![config, signer(namespace)],
-            Instruction::InitializeNamespace {
-                namespace,
-                protocol_fee_bps: 500,
-                treasury: id(6),
-            },
-            expected,
-        );
-    }
-}
-
-#[test]
-fn namespace_creation_and_treasury_update_reject_the_default_treasury() {
-    let namespace = id(1);
-    assert_rejected(
-        vec![
-            AccountWithMetadata::new(
-                Account::default(),
-                false,
-                compute_config_pda(namespace, PROGRAM),
-            ),
-            signer(namespace),
-        ],
-        Instruction::InitializeNamespace {
-            namespace,
-            protocol_fee_bps: 500,
-            treasury: AccountId::default(),
-        },
-        "Treasury must not be the default key",
-    );
-    assert_rejected(
-        vec![initialize(namespace), signer(namespace)],
-        Instruction::UpdateTreasury {
-            namespace,
-            treasury: AccountId::default(),
-        },
-        "Treasury must not be the default key",
-    );
-}
-
-#[test]
-fn admin_transfer_requires_the_matching_non_default_successor_signature() {
-    let namespace = id(1);
-    let config = initialize(namespace);
-    let mut unsigned = signer(id(3));
-    unsigned.is_authorized = false;
-    for (new_admin, successor, expected) in [
-        (id(3), None, "TransferAdmin requires exactly three accounts"),
-        (
-            id(3),
-            Some(unsigned),
-            "Namespace administration transfer failed: InvalidCandidate",
-        ),
-        (
-            AccountId::default(),
-            Some(signer(AccountId::default())),
-            "Namespace administration transfer failed: InvalidCandidate",
-        ),
-        (
-            id(3),
-            Some(signer(id(2))),
-            "Successor account ID does not match new admin",
-        ),
-    ] {
-        let mut accounts = vec![config.clone(), signer(namespace)];
-        if let Some(successor) = successor {
-            accounts.push(successor);
-        }
-        assert_rejected(
-            accounts,
-            Instruction::TransferAdmin {
-                namespace,
-                new_admin,
-                candidate: curve_core::AdminCandidate::Signer,
-            },
-            expected,
-        );
-    }
-}
-
-fn deployed_pda(program_id: ProgramId, seed: [u8; 32]) -> AccountWithMetadata {
-    AccountWithMetadata::new(
-        Account {
-            program_owner: program_id,
-            ..Account::default()
-        },
-        false,
-        AccountId::for_public_pda(&program_id, &lee_core::program::PdaSeed::new(seed)),
-    )
-}
-
-#[test]
-fn admin_transfer_accepts_a_deployed_pda_without_successor_signature() {
-    let namespace = id(1);
-    let program_id = [8; 8];
-    let seed = [9; 32];
-    let successor = deployed_pda(program_id, seed);
-    let accounts = vec![initialize(namespace), signer(namespace), successor.clone()];
-    let (posts, calls) = process_instruction(
-        accounts.clone(),
-        Instruction::TransferAdmin {
-            namespace,
-            new_admin: successor.account_id,
-            candidate: curve_core::AdminCandidate::Pda { program_id, seed },
-        },
-        PROGRAM,
-    );
-    lee_core::program::validate_execution(&accounts, &posts, PROGRAM).unwrap();
-    assert!(calls.is_empty());
-    assert_eq!(posts[1].account(), &accounts[1].account);
-    assert_eq!(posts[2].account(), &successor.account);
-    let config =
-        AccountWithMetadata::new(posts[0].account().clone(), false, accounts[0].account_id);
-    let state = Config::try_from(&config.account.data).unwrap();
-    state.assert_admin(&signer(successor.account_id));
-    assert_eq!(state.protocol_fee_bps, 500);
-    assert_eq!(state.treasury, id(6));
-    assert_eq!(state.emergency.authority(), INITIAL_EMERGENCY_AUTHORITY);
-    assert!(!state.emergency.is_frozen);
-    assert_rejected(
-        vec![config.clone(), successor.clone()],
-        Instruction::UpdateFee {
-            namespace,
-            protocol_fee_bps: 123,
-        },
-        "Namespace administrator authorization failed: MissingSignature",
-    );
-    let mut authorized = successor;
-    authorized.is_authorized = true;
-    let updated = control(
-        config,
-        authorized,
-        Instruction::UpdateFee {
-            namespace,
-            protocol_fee_bps: 123,
-        },
-    );
+    assert_eq!(response.post_state.unwrap(), before);
+    let call = &response.sync_messages[0];
     assert_eq!(
-        Config::try_from(&updated.account.data)
-            .unwrap()
-            .protocol_fee_bps,
-        123
+        call.to,
+        Actor::new(NAMESPACE, curve_core::AUTHORITY_PROGRAM_ACCOUNT_ID)
+    );
+    let message: lez_compat_core::authority::Message = borsh::from_slice(&call.message).unwrap();
+    assert_eq!(
+        message,
+        lez_compat_core::authority::Message::Transfer {
+            role: curve_core::compute_admin_role(NAMESPACE, PROGRAM),
+            successor: AccountId::new([2; 32])
+        }
     );
 }
 
 #[test]
-fn admin_transfer_rejects_pda_candidate_derivation_mismatch() {
-    let namespace = id(1);
-    let program_id = [8; 8];
-    let seed = [9; 32];
-    let successor = deployed_pda(program_id, seed);
-    let mut wrong_address = successor.clone();
-    wrong_address.account_id = id(99);
-    let mut wrong_program = successor.clone();
-    wrong_program.account.program_owner = [9; 8];
-    for (successor, program_id, seed) in [
-        (wrong_address, program_id, seed),
-        (successor, program_id, [10; 32]),
-        (wrong_program, [9; 8], seed),
-    ] {
-        assert_rejected(
-            vec![initialize(namespace), signer(namespace), successor.clone()],
-            Instruction::TransferAdmin {
-                namespace,
-                new_admin: successor.account_id,
-                candidate: curve_core::AdminCandidate::Pda { program_id, seed },
-            },
-            "Namespace administration transfer failed: CandidateMismatch",
-        );
-    }
+fn a_namespace_query_returns_only_the_requested_canonical_config() {
+    let state = namespace_state();
+    let mut query = input(
+        curve_core::compute_config_pda(NAMESPACE, PROGRAM),
+        state.clone(),
+        false,
+        Message::ReadNamespace {
+            namespace: NAMESPACE,
+        },
+    );
+    query.from = Some(Actor::new(AccountId::new([9; 32]), AccountId::new([8; 32])));
+    let reply = handle(&query).unwrap().sync_messages.remove(0);
+    let decoded: lee_core::program::StateReply = borsh::from_slice(&reply.message).unwrap();
+    assert_eq!(decoded.state, state);
+    assert_eq!(reply.to, query.from.unwrap());
+    query.receiver.account_id = AccountId::new([99; 32]);
+    assert!(handle(&query).is_err());
 }
 
 #[test]
-fn admin_transfer_rejects_unclaimed_and_wrong_owner_pda_candidates() {
-    let namespace = id(1);
-    let program_id = [8; 8];
-    let seed = [9; 32];
-    let mut wrong_owner = deployed_pda(program_id, seed);
-    wrong_owner.account.program_owner = [9; 8];
-    let mut unclaimed = deployed_pda(program_id, seed);
-    unclaimed.account = Account::default();
-    let mut funded = unclaimed.clone();
-    funded.account.balance = 1;
-    for successor in [wrong_owner, unclaimed, funded] {
-        assert_rejected(
-            vec![initialize(namespace), signer(namespace), successor.clone()],
-            Instruction::TransferAdmin {
-                namespace,
-                new_admin: successor.account_id,
-                candidate: curve_core::AdminCandidate::Pda { program_id, seed },
-            },
-            "PDA administrator belongs to another program",
-        );
-    }
-    for balance in [0, 1] {
-        let program_id = ProgramId::default();
-        let mut successor = deployed_pda(program_id, seed);
-        successor.account.balance = balance;
-        assert_rejected(
-            vec![initialize(namespace), signer(namespace), successor.clone()],
-            Instruction::TransferAdmin {
-                namespace,
-                new_admin: successor.account_id,
-                candidate: curve_core::AdminCandidate::Pda { program_id, seed },
-            },
-            "Namespace administration transfer failed: UndeployedPda",
-        );
-    }
-}
-
-#[test]
-fn namespace_controls_reject_an_unknown_config_version() {
-    let namespace = id(1);
-    let mut config = initialize(namespace);
-    let mut data = config.account.data.to_vec();
-    data[8] = 99;
-    config.account.data = data.try_into().unwrap();
-    let result = std::panic::catch_unwind(|| {
-        process_instruction(
-            vec![config, signer(INITIAL_EMERGENCY_AUTHORITY)],
-            Instruction::SetFrozen {
-                namespace,
-                frozen: true,
-            },
-            PROGRAM,
-        )
-    });
-    assert!(result.is_err(), "unsupported namespace state must reject");
+fn renunciation_leaves_namespace_settings_and_revokes_the_separate_admin_role() {
+    let before = namespace_state();
+    let response = admin_change(
+        before.clone(),
+        Message::RenounceAdmin {
+            namespace: NAMESPACE,
+        },
+    );
+    assert_eq!(response.post_state.unwrap(), before);
+    let message: lez_compat_core::authority::Message =
+        borsh::from_slice(&response.sync_messages[0].message).unwrap();
+    assert_eq!(
+        message,
+        lez_compat_core::authority::Message::Renounce {
+            role: curve_core::compute_admin_role(NAMESPACE, PROGRAM)
+        }
+    );
 }

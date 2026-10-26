@@ -10,8 +10,7 @@ borsh.workspace = true
 serde.workspace = true
 lee_core.workspace = true
 curve-core.workspace = true
-token_core.workspace = true
-associated_token_account_core.workspace = true
+lez-compat-core.workspace = true
 clock_core.workspace = true
 
 [dev-dependencies]

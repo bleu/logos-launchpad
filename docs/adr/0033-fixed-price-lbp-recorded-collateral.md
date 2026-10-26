@@ -1,6 +1,6 @@
 # ADR 0033: Separate fixed-price sale collateral accounting from vault balances
 
-Status: Accepted; implemented for fixed-price sale creation and funding. Trading and settlement remain future work.
+Status: Accepted; implemented for fixed-price setup, public buys and fee collection. Close and settlement remain future work.
 
 Date: 2026-10-14
 

@@ -2,7 +2,7 @@
 
 Date: 2026-10-01. This is source research, not proof that the route works. No builds, tests or live transactions were run for this research.
 
-The findings use LEZ revision `a58fbce2ff48c58b7bb5001b1a27e64b9596ee3a`, pinned in [Cargo.toml](../../Cargo.toml). Newer code is a comparison only. The selected product rules are in [ADR 0018](../adr/0018-private-participation.md).
+The findings use LEZ revision `a58fbce2ff48c58b7bb5001b1a27e64b9596ee3a`, pinned by the application at the time. They are historical and do not describe the selected actor revision. The [actor migration](../adr/0034-lez-v04-migration.md) replaces private helper execution with explicit unsupported errors because temporary token support has no private holdings. Code links below refer to the pre-migration implementation. The selected product rules remain in [ADR 0018](../adr/0018-private-participation.md).
 
 ## What changes when we split the transaction?
 
@@ -29,12 +29,12 @@ The private proving code allows 10 total program runs, including the first progr
 | Return purchased tokens to the private account | 2 |
 | Total | 14 |
 
-The 11th run is rejected. The limit counts all runs, not just nested calls. The [existing test](../../crates/launchpad-client/tests/private_authority.rs#L401-L410) expects this failure; it does not show a successful purchase. [Private proving code][runner], [current route](../../methods/guest/src/bin/private_buy.rs#L108-L189), [trade calls](../../crates/curve-core/src/dispatch.rs#L562-L585).
+The 11th run is rejected. The limit counts all runs, not just nested calls. The [existing test](https://github.com/bleu/logos-launchpad/blob/5b6927cbd3b5a12941f3956bcab8458446ed52db/crates/launchpad-client/tests/private_authority.rs#L401-L410) expects this failure; it does not show a successful purchase. [Private proving code][runner], [current route](https://github.com/bleu/logos-launchpad/blob/5b6927cbd3b5a12941f3956bcab8458446ed52db/methods/guest/src/bin/private_buy.rs#L108-L189), [trade calls](https://github.com/bleu/logos-launchpad/blob/5b6927cbd3b5a12941f3956bcab8458446ed52db/crates/curve-core/src/dispatch.rs#L562-L585).
 
 Code review found two more gaps:
 
-- The route uses the same private source for collateral and gas. That account belongs to the token program, but a different program tries to spend its native balance. LEZ requires the spending program to own that account. This needs a separate test; the call-limit failure occurs first. [Funding code](../../methods/guest/src/bin/private_buy.rs#L61-L114), [native transfer][native], [ownership check][owner].
-- Only purchased tokens are returned privately. Unused collateral and gas have no return calls. These are gaps in the route, not funds stranded by the failing test. [Return code](../../methods/guest/src/bin/private_buy.rs#L134-L189).
+- The route uses the same private source for collateral and gas. That account belongs to the token program, but a different program tries to spend its native balance. LEZ requires the spending program to own that account. This needs a separate test; the call-limit failure occurs first. [Funding code](https://github.com/bleu/logos-launchpad/blob/5b6927cbd3b5a12941f3956bcab8458446ed52db/methods/guest/src/bin/private_buy.rs#L61-L114), [native transfer][native], [ownership check][owner].
+- Only purchased tokens are returned privately. Unused collateral and gas have no return calls. These are gaps in the route, not funds stranded by the failing test. [Return code](https://github.com/bleu/logos-launchpad/blob/5b6927cbd3b5a12941f3956bcab8458446ed52db/methods/guest/src/bin/private_buy.rs#L134-L189).
 
 The newer inspected LEZ revision, `c31a6bca60537ec08f595cf786f1ae6275ab7f43`, allows 11 total runs. That still does not fit 14 or prove compatibility with this client. [Newer call-limit test][new-limit].
 

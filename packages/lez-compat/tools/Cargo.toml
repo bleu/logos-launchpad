@@ -1,0 +1,15 @@
+[package]
+name = "lez-compat-tools"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+borsh.workspace = true
+lee_core.workspace = true
+lez-compat-core.workspace = true
+hex = "0.4"
+serde_json = "1"
+syn = { version = "2", features = ["full"] }
+quote = "1"

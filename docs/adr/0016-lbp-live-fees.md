@@ -16,7 +16,7 @@ The RFP baseline does not allow collection before the scheduled end, and creator
 
 ## Consequences
 
-Do not report these RFP departures as externally approved commitments. Their external status is `To be reviewed by Logos team`. The program must prove vault coverage of fees and remaining obligations, including when fees are collected during a sale. Curve fee deductions cannot substitute for the creator-borne model. Fixed-price and weighted-sale fee execution remains future work. Production input, rounding and solvency evidence remain required.
+Do not report these RFP departures as externally approved commitments. Their external status is `To be reviewed by Logos team`. The program must prove vault coverage of fees and remaining obligations, including when fees are collected during a sale. Curve fee deductions cannot substitute for the creator-borne model. Fixed-price public buys and fee collection use this model; weighted-sale fee execution remains future work. Production input, rounding and solvency evidence remain required.
 
 ## Sources
 

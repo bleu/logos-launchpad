@@ -4,7 +4,7 @@ Status: Product and recovery requirements accepted; platform, wallet and proof v
 
 Date: 2026-10-01.
 
-This is the shared private-flow specification for curve buys, curve sells, fixed-price sale buys and weighted sale buys. It defines required behavior, not implemented production behavior. The imported curve-buy PoC does not complete the required flow. See [ADR 0018](../adr/0018-private-participation.md), [allowlist policy](../adr/0021-modes-and-open-limits.md) and the [platform research](../research/private-route-transaction-patterns.md).
+This is the shared private-flow specification for curve buys, curve sells, fixed-price sale buys and weighted sale buys. It defines required behavior, not implemented production behavior. The selected actor revision's temporary token support has no private holdings. Existing private purchase and authority helpers return explicit unsupported errors. See [ADR 0018](../adr/0018-private-participation.md), [migration limits](../adr/0034-lez-v04-migration.md) and [allowlist policy](../adr/0021-modes-and-open-limits.md).
 
 ## Transaction contract
 
@@ -29,7 +29,7 @@ Private and public routes use the same mechanism state, custody checks, price ru
 | Fixed-price sale buy | Collateral | Launch tokens | Creator-borne claim on collateral proceeds. Full buyer collateral enters pricing. |
 | Weighted sale buy | Collateral | Launch tokens | Creator-borne claim on collateral proceeds. Full buyer collateral enters pricing. |
 
-A curve sell is available only when the sale mode permits it. Fixed-price and weighted sale selling is not added by this specification. Fixed-price and weighted sale buys retain their separate price rules and close at their scheduled endpoints. See [sale closing](../adr/0025-sale-closing.md), [weighted sale clock](../adr/0026-lbp-clock-and-poke.md) and [fee accounting](../adr/0015-fee-accounting.md).
+A curve sell is available only when the sale mode permits it. Fixed-price and weighted sale selling is not added by this specification. Fixed-price and weighted sale buys retain their separate price rules. Fixed-price buys stop at the optional end or sellout; weighted sales close at their scheduled end. See [sale closing](../adr/0025-sale-closing.md), [weighted sale clock](../adr/0026-lbp-clock-and-poke.md) and [fee accounting](../adr/0015-fee-accounting.md).
 
 The SDK obtains a fresh quote from current chain state and retains explicit participant-selected bounds. Apply the [quote and slippage decision](../adr/0017-quotes-and-slippage.md) to each supported operation. This specification does not add an on-chain instruction or change exact-input and exact-output meanings.
 
@@ -159,4 +159,4 @@ For transaction failures, inspect the selected platform's pool state, public bal
 - Reconciliation and restart tests covering lost responses, missing hashes, authoritative terminal outcomes and no duplicate trades.
 - Agreement with the accepted custody, fee, clock, event and SDK interface decisions before final design acceptance.
 
-The [platform research](../research/private-route-transaction-patterns.md) records the current 14-run curve-buy graph, the pinned private proving limit of 10 runs, the static native gas-source ownership mismatch, and the absence of input/gas returns. Those are current implementation gaps. A smaller graph remains a candidate, not an approved or tested implementation. See [verification boundaries](../adr/0022-verification-boundaries.md).
+The [platform research](../research/private-route-transaction-patterns.md) records the old curve-buy graph, call limit and missing returns before the actor migration. Those observations do not define the selected revision's runtime limits or establish a supported private route. Private execution remains unsupported until compatible holdings and the complete transaction contract are implemented and verified. See [verification boundaries](../adr/0022-verification-boundaries.md).

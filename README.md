@@ -4,13 +4,15 @@ Token sales on the Logos Execution Zone (LEZ), with three sale types: fixed-pric
 
 The target product lets creators launch sales and participants trade through clear, reusable tools. Independent namespaces give launchpad operators their own administration, fee settings and treasury. A future shared core can support all three sale types without making them use the same sale rules.
 
-This repository contains an imported PoC baseline and design documentation. The baseline keeps the root curve crates, CLI, methods and on-chain program IDLs. Fixed-price creation and funding are implemented. The repository does not implement the full production specification. Fixed-price trading, weighted sales, shared core and QML apps remain future work.
+This repository contains an imported PoC baseline and design documentation. The baseline keeps the root curve crates, CLI, methods and on-chain program IDLs. Fixed-price creation, funding, public buys and fee collection are implemented. The repository does not implement the full production specification. Close and payout handlers, weighted sales, shared core and QML apps remain future work.
+
+Nothing from this project is deployed to testnet or production. The application is migrated to one fixed LEZ actor-development revision, using the [actor development base](packages/lez-compat/README.md). The [migration record](plans/lez-v04-migration.md) lists passed local checks and the remaining execution and package-loading gaps. There is no supported old-platform lane or deployed state to transfer.
 
 ## Three sale types
 
 | Sale type | How it works | When it ends |
 | --- | --- | --- |
-| Fixed-price sale | Tokens sell at a set price in collateral. | At the scheduled end time. |
+| Fixed-price sale | Tokens sell at a set price in collateral. | At its optional end time or sellout. |
 | Bonding-curve sale | Reserve-based pricing changes as participants buy or sell. Selling back is available when the sale mode permits it. | When all sale tokens are purchased, or at an optional expiry. |
 | Weighted sale | Pool weights change over a chosen time schedule to support price discovery. | At the scheduled end time. |
 

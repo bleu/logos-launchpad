@@ -12,15 +12,15 @@ The original inactive hook provided no executable adapter boundary. A post-close
 
 This amendment supersedes the inactive-hook decision. Keep creator-authorized manual settlement and add an optional adapter program and opaque configuration saved at creation. Configuration requires an adapter program. Neither can change or be overridden at execution. The adapter interprets its settings and checks its result.
 
-After creation completes and the sale closes, anyone can submit the separate hook transaction. Closure does not call it. Hook execution is public only; private manual settlement remains available. Automation and payer policy are deferred.
+After creation completes and the sale closes, anyone can submit the separate hook transaction. Closure does not call it. Hook execution is public only. Private manual settlement is unsupported on the selected actor revision because the temporary token implementation has no private holdings. Automation and payer policy are deferred.
 
 Both routes share custody preparation, [fee collection](0015-fee-accounting.md) and [unsold-`D` burn](0025-sale-closing.md). Preparation is idempotent. The adapter must first initialize and claim its canonical custody PDA, derived under its program from the saved sale identity. The factory rejects missing or wrongly owned custody before preparing its ATAs. It cannot claim custody for the adapter.
 
-The final hook stage transfers full `R` and recorded real collateral to those ATAs, then calls the saved adapter. Exclude fees, surplus deposits and creator allocation. The callback receives trusted context and credited ATA snapshots, but no factory signing rights or PDA seeds. Require unauthorized factory and remaining-account snapshots; reject protected aliases, duplicates and extra factory-owned accounts. The adapter verifies its runtime caller and authorizes its own PDAs. See the [handler](../../crates/factory-core/src/hook.rs) for the account contract.
+The final hook stage transfers full `R` and recorded real collateral to those ATAs, then calls the saved adapter. Exclude fees, surplus deposits and creator allocation. The [actor migration](0034-lez-v04-migration.md) replaces the snapshot callback with a typed graduation message. It forwards no arbitrary remaining accounts and grants no factory PDA seed to the adapter. Transaction signer permissions remain available under the runtime rules, so the old generic unauthorized extra-account guard is not reproduced. The adapter must verify its runtime caller and authorize its own PDAs. See the [handler](../../crates/factory-core/src/hook.rs) for the message contract.
 
 The first actual settlement payout selects the route and blocks competing or duplicate payouts. Preparation and creator-allocation claims do not select it. Empty manual transfers (`NoPayout`) must still permit one uncalled zero-amount hook, including after a creator-allocation claim.
 
-The final transfers, callback and `Graduated` marker succeed or roll back together. Earlier completed stages remain complete. A failure permits retry or creator-authorized manual recovery until a payout selects a route. `Graduated` proves callback success, not a DEX liquidity result.
+The required atomic boundary contains the final transfers, callback and `Graduated` marker. They must succeed or roll back together. Earlier completed stages remain complete. A failure permits retry or creator-authorized manual recovery until a payout selects a route. `Graduated` proves callback success, not a DEX liquidity result. Sale execution and callback rollback still need verification on the selected actor revision; host checks and the token fixture do not prove them.
 
 ## Consequences
 
