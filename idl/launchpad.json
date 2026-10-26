@@ -1,5 +1,13 @@
 {
   "encoding": "borsh",
+  "imports": {
+    "fixed_price": [
+      "factory"
+    ],
+    "hook": [
+      "factory"
+    ]
+  },
   "modules": {
     "curve": {
       "AdminCandidate": {
@@ -690,6 +698,38 @@
           }
         ]
       },
+      "Pending": {
+        "fields": [
+          {
+            "name": "command",
+            "type": "Message"
+          },
+          {
+            "name": "proof",
+            "type": "bool"
+          },
+          {
+            "name": "reads",
+            "type": "Vec<Read>"
+          },
+          {
+            "name": "values",
+            "type": "Vec<Vec<u8>>"
+          }
+        ]
+      },
+      "Read": {
+        "fields": [
+          {
+            "name": "actor",
+            "type": "Actor"
+          },
+          {
+            "name": "message",
+            "type": "Vec<u8>"
+          }
+        ]
+      },
       "SettlementStage": {
         "variants": [
           {
@@ -1199,6 +1239,18 @@
             "fields": [],
             "name": "ReadState",
             "tag": 2
+          }
+        ]
+      },
+      "Pending": {
+        "fields": [
+          {
+            "name": "activate",
+            "type": "bool"
+          },
+          {
+            "name": "step",
+            "type": "u8"
           }
         ]
       },
