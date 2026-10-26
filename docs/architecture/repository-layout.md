@@ -13,7 +13,7 @@ The table defines architectural responsibilities. Ownership here means responsib
 | `crates/curve-core/` | Curve wire and account state, namespace validation, factory custody and authorization | Product UI, curve factory allocation policy or a selected cross-factory namespace schema |
 | `crates/factory-core/` | Shared launch setup: new-token creation, allocations, namespace binding and matching setup checks; separate typed curve, fixed-price sale and weighted sale inputs | Generic pool lifecycle, pool pricing, custody or fee policy |
 | `crates/private-flow-core/` | Existing private helper and its on-chain validation | The complete SDK privacy or provider integration contract |
-| `crates/lbp-core/` | Fixed-price sale pool state, token vault setup and allocation escrow; future fixed-price sale pricing, trading, lifecycle and fee rules remain separate | Curve semantics hidden behind a generic pool interface |
+| `crates/lbp-core/` | Fixed-price sale pool state, token vault setup, allocation escrow, pricing, buys and fees; future close and payout rules remain separate | Curve semantics hidden behind a generic pool interface |
 | `packages/weighted-math/` | Standalone math kernel, harness, fixtures, proof material, fuzz target and parity workspace | Custody, authorities or product flow |
 | `packages/lez-compat/` | Temporary actor token, ATA and role-authority handlers; thin guests; maintained build and wire tools | Sale pricing or lifecycle, a replacement wallet, fee mechanism or execution engine |
 | `methods/guest/` | Thin dispatch entry points and guest-specific build profiles | A second copy of handler logic |

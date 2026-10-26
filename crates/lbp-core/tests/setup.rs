@@ -25,7 +25,7 @@ fn prepare() -> ReceiveInput {
             token_units: 2,
         },
         start_timestamp: 100,
-        end_timestamp: 200,
+        end_timestamp: Some(200),
         creator_allocation_release: CreatorAllocationRelease::AfterSetup,
     };
     ReceiveInput {
@@ -97,7 +97,7 @@ fn preparation_requires_fresh_canonical_pool_and_positive_distinct_terms() {
                 lbp_core::Error::InvalidTerms
             }
             5 => {
-                inputs.end_timestamp = 100;
+                inputs.end_timestamp = Some(100);
                 lbp_core::Error::InvalidTerms
             }
             6 => {
@@ -215,7 +215,10 @@ fn preparation_saves_pending_terms_and_initializes_canonical_vaults() {
     let state = lbp_core::PoolAccount::decode(response.post_state.as_ref().unwrap()).unwrap();
     assert!(!state.funded);
     assert_eq!(state.recorded_collateral, 0);
-    assert_eq!((state.start_timestamp, state.end_timestamp), (100, 200));
+    assert_eq!(
+        (state.start_timestamp, state.end_timestamp),
+        (100, Some(200))
+    );
     assert_eq!((state.sale_inventory, state.creator_allocation), (800, 200));
     assert_eq!(
         state.price,
@@ -390,6 +393,505 @@ fn setup_rejects_substituted_token_actor_sources_and_invalid_canonical_holdings(
     }
 }
 
+fn config(fee: u16, treasury: AccountId, frozen: bool) -> Vec<u8> {
+    let mut config = curve_core::Config::decode(&namespace_state()).unwrap();
+    config.protocol_fee_bps = fee;
+    config.treasury = treasury;
+    config.emergency.is_frozen = frozen;
+    borsh::to_vec(&config).unwrap()
+}
+fn funded() -> (ReceiveInput, lbp_core::PoolAccount) {
+    let (mut input, response) = activation(0);
+    let state = lbp_core::PoolAccount::decode(response.post_state.as_ref().unwrap()).unwrap();
+    input.from = Some(Actor::new(id(50), id(8)));
+    (input, state)
+}
+fn operation(
+    input: &ReceiveInput,
+    state: &lbp_core::PoolAccount,
+    message: Message,
+    config: Vec<u8>,
+    balances: [u128; 3],
+) -> Result<lee_core::program::Response, lbp_core::Error> {
+    let mut input = input.clone();
+    input.pre_state = borsh::to_vec(state).unwrap().into();
+    input.message = borsh::to_vec(&message).unwrap();
+    let mut response = handle(&input)?;
+    let mut values = vec![
+        config,
+        holding(input.receiver.account_id, id(42), balances[0]),
+    ];
+    if !matches!(message, Message::CollectFees) {
+        values.extend([
+            holding(input.receiver.account_id, id(41), balances[1]),
+            holding(id(50), id(42), balances[2]),
+        ]);
+    }
+    for bytes in values {
+        let source = response.sync_messages.last().unwrap().to;
+        input = reply(&input, &response, source, bytes);
+        response = handle(&input)?;
+    }
+    Ok(response)
+}
+fn exact_in(amount_in: u128) -> Message {
+    Message::BuyExactInput {
+        amount_in,
+        min_amount_out: 0,
+        now: 100,
+    }
+}
+fn state_of(response: &lee_core::program::Response) -> lbp_core::PoolAccount {
+    lbp_core::PoolAccount::decode(response.post_state.as_ref().unwrap()).unwrap()
+}
+#[test]
+fn buys_floor_output_ceil_payment_and_charge_live_creator_borne_fees() {
+    let (input, state) = funded();
+    for (message, fee, paid, received, accrued) in [
+        (exact_in(5), 100, 5, 3, 1),
+        (exact_in(5), 0, 5, 3, 0),
+        (exact_in(5), 9_999, 5, 3, 5),
+        (
+            Message::BuyExactOutput {
+                amount_out: 3,
+                max_amount_in: 5,
+                now: 100,
+            },
+            100,
+            5,
+            3,
+            1,
+        ),
+    ] {
+        let response = operation(
+            &input,
+            &state,
+            message,
+            config(fee, id(43), false),
+            [17, 900, 100],
+        )
+        .unwrap();
+        let next = state_of(&response);
+        assert_eq!(next.remaining_inventory, 800 - received);
+        assert_eq!(next.sale_inventory, 800);
+        assert_eq!(next.recorded_collateral, paid - accrued);
+        assert_eq!(next.accrued_fees, accrued);
+        assert_eq!(response.sync_messages.len(), 3);
+        assert_eq!(
+            response.sync_messages[1].to,
+            Actor::new(id(50), curve_core::TOKEN_PROGRAM_ACCOUNT_ID)
+        );
+        assert_eq!(
+            response.sync_messages[2].to,
+            Actor::new(
+                input.receiver.account_id,
+                curve_core::TOKEN_PROGRAM_ACCOUNT_ID
+            )
+        );
+        for (call, definition, recipient, amount) in [
+            (
+                &response.sync_messages[1],
+                id(42),
+                input.receiver.account_id,
+                paid,
+            ),
+            (&response.sync_messages[2], id(41), id(50), received),
+        ] {
+            assert_eq!(
+                borsh::from_slice::<lez_compat_core::token::Message>(&call.message).unwrap(),
+                lez_compat_core::token::Message::Transfer {
+                    definition,
+                    recipient,
+                    amount
+                }
+            );
+        }
+        assert!(response.sync_messages[1].pda_seeds.is_empty());
+        assert_eq!(
+            response.sync_messages[2].pda_seeds,
+            [lbp_core::compute_pool_pda_seed(
+                state.namespace,
+                id(41),
+                id(42),
+                state.factory_owner
+            )]
+            .into_iter()
+            .collect()
+        );
+        assert_eq!(
+            borsh::from_slice::<clock_core::Message>(&response.sync_messages[0].message).unwrap(),
+            clock_core::Message::AssertTimestamp {
+                at_least: 100_000,
+                at_most: 199_999
+            }
+        );
+    }
+}
+#[test]
+fn buys_reject_limits_zero_inventory_time_freeze_and_underbacking() {
+    let (input, state) = funded();
+    for message in [
+        exact_in(0),
+        exact_in(1),
+        exact_in(1_202),
+        Message::BuyExactInput {
+            amount_in: 5,
+            min_amount_out: 4,
+            now: 100,
+        },
+        Message::BuyExactOutput {
+            amount_out: 3,
+            max_amount_in: 4,
+            now: 100,
+        },
+        Message::BuyExactOutput {
+            amount_out: 0,
+            max_amount_in: 100,
+            now: 100,
+        },
+        Message::BuyExactOutput {
+            amount_out: 801,
+            max_amount_in: 2_000,
+            now: 100,
+        },
+        Message::BuyExactInput {
+            amount_in: 5,
+            min_amount_out: 0,
+            now: 99,
+        },
+        Message::BuyExactInput {
+            amount_in: 5,
+            min_amount_out: 0,
+            now: 200,
+        },
+    ] {
+        assert!(
+            operation(
+                &input,
+                &state,
+                message,
+                config(100, id(43), false),
+                [0, 900, 2_000]
+            )
+            .is_err()
+        );
+    }
+    assert_eq!(
+        operation(
+            &input,
+            &state,
+            exact_in(5),
+            config(100, id(43), true),
+            [0, 800, 100]
+        )
+        .err()
+        .unwrap(),
+        lbp_core::Error::Frozen
+    );
+    assert_eq!(
+        operation(
+            &input,
+            &state,
+            exact_in(5),
+            config(10_000, id(43), false),
+            [0, 800, 100]
+        )
+        .err()
+        .unwrap(),
+        lbp_core::Error::InvalidFee
+    );
+    for balances in [[0, 2, 100], [0, 800, 4]] {
+        assert_eq!(
+            operation(
+                &input,
+                &state,
+                exact_in(5),
+                config(100, id(43), false),
+                balances
+            )
+            .err()
+            .unwrap(),
+            lbp_core::Error::Underfunded
+        );
+    }
+    let mut state = state;
+    state.recorded_collateral = 5;
+    state.accrued_fees = 1;
+    for message in [exact_in(5), Message::CollectFees] {
+        assert_eq!(
+            operation(
+                &input,
+                &state,
+                message,
+                config(100, id(43), false),
+                [5, 800, 100]
+            )
+            .err()
+            .unwrap(),
+            lbp_core::Error::Underfunded
+        );
+    }
+}
+#[test]
+fn no_end_sellout_donations_and_anytime_collection_keep_separate_accounts() {
+    let (mut input, mut state) = funded();
+    state.end_timestamp = None;
+    let response = operation(
+        &input,
+        &state,
+        Message::BuyExactOutput {
+            amount_out: 800,
+            max_amount_in: 1_200,
+            now: 500,
+        },
+        config(100, id(43), false),
+        [17, 900, 1_200],
+    )
+    .unwrap();
+    state = state_of(&response);
+    assert_eq!(
+        (
+            state.remaining_inventory,
+            state.recorded_collateral,
+            state.accrued_fees
+        ),
+        (0, 1_188, 12)
+    );
+    assert_eq!(
+        borsh::from_slice::<clock_core::Message>(&response.sync_messages[0].message).unwrap(),
+        clock_core::Message::AssertTimestamp {
+            at_least: 500_000,
+            at_most: u64::MAX
+        }
+    );
+    assert_eq!(
+        operation(
+            &input,
+            &state,
+            exact_in(5),
+            config(100, id(43), false),
+            [1_217, 100, 100]
+        )
+        .err()
+        .unwrap(),
+        lbp_core::Error::Closed
+    );
+    input.from = None;
+    let response = operation(
+        &input,
+        &state,
+        Message::CollectFees,
+        config(100, id(70), true),
+        [1_217, 0, 0],
+    )
+    .unwrap();
+    state = state_of(&response);
+    assert_eq!((state.recorded_collateral, state.accrued_fees), (1_188, 0));
+    assert_eq!(response.sync_messages.len(), 1);
+    assert_eq!(
+        borsh::from_slice::<lez_compat_core::token::Message>(&response.sync_messages[0].message)
+            .unwrap(),
+        lez_compat_core::token::Message::Transfer {
+            definition: id(42),
+            recipient: id(70),
+            amount: 12
+        }
+    );
+    let repeated = operation(
+        &input,
+        &state,
+        Message::CollectFees,
+        config(100, id(70), true),
+        [1_205, 0, 0],
+    )
+    .unwrap();
+    assert!(repeated.sync_messages.is_empty());
+    state.accrued_fees = 12;
+    let response = operation(
+        &input,
+        &state,
+        Message::CollectFees,
+        config(100, input.receiver.account_id, true),
+        [1_217, 0, 0],
+    )
+    .unwrap();
+    assert!(response.sync_messages.is_empty());
+    assert_eq!(
+        (
+            state_of(&response).recorded_collateral,
+            state_of(&response).accrued_fees
+        ),
+        (1_188, 0)
+    );
+}
+#[test]
+fn execute_authenticates_buyer_and_rejects_recursive_or_setup_forwarding() {
+    let (mut input, state) = funded();
+    input.pre_state = vec![].into();
+    input.receiver.account_id = id(50);
+    input.from = None;
+    input.message = borsh::to_vec(&Message::Execute {
+        pool: prepare().receiver.account_id,
+        instruction: Box::new(exact_in(5)),
+    })
+    .unwrap();
+    assert_eq!(handle(&input).err().unwrap(), lbp_core::Error::Unauthorized);
+    input.is_authorized = true;
+    let forwarded = handle(&input).unwrap();
+    assert_eq!(forwarded.sync_messages.len(), 1);
+    assert_eq!(forwarded.sync_messages[0].to, prepare().receiver);
+    assert_eq!(
+        borsh::from_slice::<Message>(&forwarded.sync_messages[0].message).unwrap(),
+        exact_in(5)
+    );
+    for message in [
+        Message::ActivateFixedPrice,
+        Message::ReadState,
+        Message::CollectFees,
+        Message::Execute {
+            pool: id(99),
+            instruction: Box::new(exact_in(5)),
+        },
+    ] {
+        input.message = borsh::to_vec(&Message::Execute {
+            pool: prepare().receiver.account_id,
+            instruction: Box::new(message),
+        })
+        .unwrap();
+        assert_eq!(handle(&input).err().unwrap(), lbp_core::Error::Unauthorized);
+    }
+    let (mut input, _) = funded();
+    for from in [None, Some(Actor::new(id(50), id(99))), Some(input.receiver)] {
+        input.from = from;
+        input.pre_state = borsh::to_vec(&state).unwrap().into();
+        input.message = borsh::to_vec(&exact_in(5)).unwrap();
+        assert_eq!(handle(&input).err().unwrap(), lbp_core::Error::Unauthorized);
+    }
+}
+#[test]
+fn trade_callbacks_authenticate_program_account_owner_definition_and_pool() {
+    let (mut input, state) = funded();
+    input.pre_state = borsh::to_vec(&state).unwrap().into();
+    input.message = borsh::to_vec(&exact_in(5)).unwrap();
+    let mut response = handle(&input).unwrap();
+    for (step, bytes) in [
+        config(100, id(43), false),
+        holding(input.receiver.account_id, id(42), 0),
+        holding(input.receiver.account_id, id(41), 800),
+        holding(id(50), id(42), 100),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let source = response.sync_messages[0].to;
+        input = reply(&input, &response, source, bytes);
+        for from in [
+            None,
+            Some(Actor::new(id(99), source.program_account_id)),
+            Some(Actor::new(source.account_id, id(99))),
+        ] {
+            let mut forged = input.clone();
+            forged.from = from;
+            assert_eq!(
+                handle(&forged).err().unwrap(),
+                lbp_core::Error::Unauthorized
+            );
+        }
+        let mut wrong_pool = input.clone();
+        wrong_pool.receiver.account_id = id(99);
+        assert_eq!(
+            handle(&wrong_pool).err().unwrap(),
+            lbp_core::Error::WrongAccount
+        );
+        let invalid = if step == 0 {
+            let mut c = curve_core::Config::decode(&namespace_state()).unwrap();
+            c.namespace = id(99);
+            borsh::to_vec(&c).unwrap()
+        } else {
+            holding(id(99), id(99), 100)
+        };
+        assert!(handle(&reply(&input, &response, source, invalid)).is_err());
+        let mut malformed = input.clone();
+        malformed.message = vec![255];
+        assert!(handle(&malformed).is_err());
+        response = handle(&input).unwrap();
+    }
+}
+#[test]
+fn arithmetic_and_pending_funding_fail_closed() {
+    let (input, mut state) = funded();
+    state.price.token_units = u128::MAX;
+    assert_eq!(
+        operation(
+            &input,
+            &state,
+            exact_in(u128::MAX),
+            config(100, id(43), false),
+            [0, 800, u128::MAX]
+        )
+        .err()
+        .unwrap(),
+        lbp_core::Error::Arithmetic
+    );
+    state.price.token_units = 2;
+    state.recorded_collateral = u128::MAX;
+    state.accrued_fees = 1;
+    assert_eq!(
+        operation(
+            &input,
+            &state,
+            Message::CollectFees,
+            config(100, id(43), false),
+            [u128::MAX, 800, 100]
+        )
+        .err()
+        .unwrap(),
+        lbp_core::Error::Arithmetic
+    );
+    state.recorded_collateral = 0;
+    state.accrued_fees = 0;
+    state.funded = false;
+    for message in [exact_in(5), Message::CollectFees] {
+        assert_eq!(
+            operation(
+                &input,
+                &state,
+                message,
+                config(100, id(43), false),
+                [0, 800, 100]
+            )
+            .err()
+            .unwrap(),
+            lbp_core::Error::PendingFunding
+        );
+    }
+}
+#[test]
+fn actor_message_tags_keep_setup_and_read_state_order() {
+    for (message, tag) in [
+        (Message::ActivateFixedPrice, 1),
+        (Message::ReadState, 2),
+        (exact_in(5), 3),
+        (
+            Message::BuyExactOutput {
+                amount_out: 3,
+                max_amount_in: 5,
+                now: 100,
+            },
+            4,
+        ),
+        (Message::CollectFees, 5),
+        (
+            Message::Execute {
+                pool: id(50),
+                instruction: Box::new(exact_in(5)),
+            },
+            6,
+        ),
+    ] {
+        assert_eq!(borsh::to_vec(&message).unwrap()[0], tag);
+    }
+}
 #[test]
 fn setup_uses_the_trusted_clock_with_a_strict_saved_end() {
     for (_, response) in [prepared(), activation(17)] {

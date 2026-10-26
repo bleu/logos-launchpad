@@ -18,7 +18,7 @@ The account layer enforces direction; pure pricing state has no factory mode pol
 
 Fixed-price and weighted sales both support exact-input buys with a minimum output and exact-output buys with a maximum full input. Fixed-price sale exact input spends the full input and floors output; exact output ceils payment. Reject oversized buys in full, without partial fills or rounding-remainder refunds.
 
-Fixed-price and weighted sales require `end > start`, with no product minimum duration. Resolve start-now at creation execution; scheduled starts cannot be in the past. [ADR 0026](0026-lbp-clock-and-poke.md) owns chain-time weights and permissionless `poke` checkpoints.
+A fixed-price sale may omit its end time. When it has an end time, it must be after the resolved start. A weighted sale requires an end time after its resolved start. Fixed-price start-now and scheduled starts use the actor clock bounds in [ADR 0032](0032-fixed-price-lbp-setup.md). The future weighted-sale design resolves start-now at creation execution; scheduled starts cannot be in the past. [ADR 0025](0025-sale-closing.md) defines when each sale closes. [ADR 0026](0026-lbp-clock-and-poke.md) owns chain-time weights and permissionless `poke` checkpoints.
 
 Only the current creator authority holder can pause/resume before the original end, including before start. Authorized repeated calls succeed without another state change or event. Authority must still be checked. Pause does not stop weighted-sale weight changes or move either sale's end, and resume cannot reopen an ended sale. This settles the previously open fixed-price and weighted-sale pause authority; it does not grant sale control to namespace administrators or select platform freeze gates.
 

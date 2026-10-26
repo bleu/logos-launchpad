@@ -10,7 +10,7 @@ Independent operators need separate fee settings and treasuries. Moving a namesp
 
 ## Partial supersession
 
-[ADR 0032](0032-fixed-price-lbp-setup.md) partially supersedes this record's open fixed-price sale creation and funding gap. The curve stages, pending guard and factory custody remain curve-specific and do not define fixed-price sale behavior. Fixed-price sale trading and verification remain pending.
+[ADR 0032](0032-fixed-price-lbp-setup.md) partially supersedes this record's open fixed-price sale creation and funding gap. The curve stages, pending guard and factory custody remain curve-specific and do not define fixed-price sale behavior. Fixed-price public buys and fee collection are implemented; setup execution, close and payout remain pending. See the [workspace guide](../architecture/workspace-guide.md#execution-and-evidence-limits) for current checks.
 
 [ADR 0034](0034-lez-v04-migration.md) supersedes the platform integration described below. The actor implementation uses separate role actors from `lez-compat-core::authority` instead of the embedded upstream library. It preserves the selected role lifecycle. Host tests do not establish signed runtime administration or PDA-owner integration.
 

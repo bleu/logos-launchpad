@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       execution:
-        description: Run optional node-free token and seeded curve trade fixtures
+        description: Run optional node-free token, sale trade and fee fixtures
         type: boolean
         default: false
 
@@ -135,4 +135,4 @@ jobs:
           source verify/actor-tools.env
           RISC0_BUILD_LOCKED=1 cargo +"$ACTOR_RUST_VERSION" test --manifest-path packages/lez-compat/execution/Cargo.toml --locked
           RISC0_BUILD_LOCKED=1 cargo +"$ACTOR_RUST_VERSION" test --manifest-path methods/Cargo.toml --release --locked --features actor-execution-tests --test actor_sale
-          printf 'Sale setup, lifecycle and settlement execution remain deferred; seeded timed trades cover only the trade path.\n'
+          printf 'Sale setup, lifecycle and settlement execution remain deferred; seeded fixtures cover trades and fixed-price fee collection.\n'

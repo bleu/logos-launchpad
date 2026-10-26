@@ -1592,6 +1592,7 @@ dependencies = [
  "borsh",
  "clock_core",
  "curve-core",
+ "lbp-core",
  "lee",
  "lee_core",
  "lez-compat-core",
@@ -1633,6 +1634,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
 dependencies = [
  "spin",
+]
+
+[[package]]
+name = "lbp-core"
+version = "0.1.0"
+dependencies = [
+ "borsh",
+ "clock_core",
+ "curve-core",
+ "lee_core",
+ "lez-compat-core",
+ "serde",
 ]
 
 [[package]]

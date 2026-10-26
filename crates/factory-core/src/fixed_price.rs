@@ -17,7 +17,7 @@ pub struct FixedPriceInputs {
     pub creator_allocation: u128,
     pub price: FixedPrice,
     pub start: SaleStart,
-    pub end_timestamp: u64,
+    pub end_timestamp: Option<u64>,
     pub allocation_release: CreatorAllocationRelease,
     pub namespace_program_id: AccountId,
     pub lbp_program_id: AccountId,
@@ -54,7 +54,7 @@ pub struct FixedPriceLaunchState {
     pub total_supply: u128,
     pub price: FixedPrice,
     pub start_timestamp: u64,
-    pub end_timestamp: u64,
+    pub end_timestamp: Option<u64>,
     pub allocation_release: CreatorAllocationRelease,
     pub creator_allocation_released: bool,
     pub name: String,
@@ -86,7 +86,9 @@ pub(super) fn create(input: &ReceiveInput, inputs: FixedPriceInputs) -> Result<R
         || inputs.uri.is_empty()
         || inputs.price.collateral_units == 0
         || inputs.price.token_units == 0
-        || inputs.end_timestamp <= start_timestamp
+        || inputs
+            .end_timestamp
+            .is_some_and(|end| end <= start_timestamp)
         || inputs.collateral_definition_id == token_definition_id
     {
         return Err(Error::InvalidTerms);
@@ -343,15 +345,8 @@ pub(super) fn resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
                 .send_sync(
                     Actor::new(state.pool_id, state.lbp_program_id),
                     &lbp_core::Message::ActivateFixedPrice,
-                )
-                .send_sync(
-                    Actor::new(
-                        clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID,
-                        clock_core::clock_account_id(),
-                    ),
-                    &curve_core::clock_assertion(0, Some(state.end_timestamp))
-                        .map_err(|_| Error::InvalidTerms)?,
                 );
+                let response = state.with_setup_deadline(response)?;
                 return Ok(if state.creator_allocation_released {
                     transfer(
                         response,
@@ -397,20 +392,10 @@ pub(super) fn resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
                     end_timestamp: state.end_timestamp,
                     creator_allocation_release: state.allocation_release,
                 };
-                return Ok(state
-                    .response()
-                    .send_sync(
-                        Actor::new(state.pool_id, state.lbp_program_id),
-                        &lbp_core::Message::PrepareFixedPrice { inputs },
-                    )
-                    .send_sync(
-                        Actor::new(
-                            clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID,
-                            clock_core::clock_account_id(),
-                        ),
-                        &curve_core::clock_assertion(0, Some(state.end_timestamp))
-                            .map_err(|_| Error::InvalidTerms)?,
-                    ));
+                return state.with_setup_deadline(state.response().send_sync(
+                    Actor::new(state.pool_id, state.lbp_program_id),
+                    &lbp_core::Message::PrepareFixedPrice { inputs },
+                ));
             }
             if expected_stage != FixedPriceCreationStage::Minted {
                 return Err(Error::StaleStage);
@@ -439,21 +424,13 @@ pub(super) fn resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
                 input.receiver.account_id,
                 state.sale_inventory,
             );
-            return Ok(transfer(
+            return state.with_setup_deadline(transfer(
                 response,
                 mint,
                 compute_mint_seed(state.namespace, state.launch_salt),
                 state.token_definition_id,
                 state.creator_escrow_id,
                 state.creator_allocation,
-            )
-            .send_sync(
-                Actor::new(
-                    clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID,
-                    clock_core::clock_account_id(),
-                ),
-                &curve_core::clock_assertion(0, Some(state.end_timestamp))
-                    .map_err(|_| Error::InvalidTerms)?,
             ));
         }
         let Message::CreateFixedPriceLbp { inputs } = pending.command.clone() else {
@@ -519,25 +496,29 @@ pub(super) fn resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
                 curve_core::timestamp_millis(timestamp).map_err(|_| Error::InvalidTerms)?,
             ),
         };
-        Ok(response
-            .send_sync(
-                Actor::new(
-                    clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID,
-                    clock_core::clock_account_id(),
-                ),
-                &clock_core::Message::AssertTimestamp { at_least, at_most },
-            )
-            .send_sync(
-                Actor::new(
-                    clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID,
-                    clock_core::clock_account_id(),
-                ),
-                &curve_core::clock_assertion(0, Some(state.end_timestamp))
-                    .map_err(|_| Error::InvalidTerms)?,
-            ))
+        state.with_setup_deadline(response.send_sync(
+            Actor::new(
+                clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID,
+                clock_core::clock_account_id(),
+            ),
+            &clock_core::Message::AssertTimestamp { at_least, at_most },
+        ))
     })())
 }
 impl FixedPriceLaunchState {
+    fn with_setup_deadline(&self, response: Response) -> Result<Response, Error> {
+        let Some(end_timestamp) = self.end_timestamp else {
+            return Ok(response);
+        };
+        Ok(response.send_sync(
+            Actor::new(
+                clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID,
+                clock_core::clock_account_id(),
+            ),
+            &curve_core::clock_assertion(0, Some(end_timestamp))
+                .map_err(|_| Error::InvalidTerms)?,
+        ))
+    }
     fn response(&self) -> Response {
         Response::set_state(borsh::to_vec(self).unwrap())
     }

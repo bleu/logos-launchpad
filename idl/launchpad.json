@@ -879,7 +879,7 @@
           },
           {
             "name": "end_timestamp",
-            "type": "u64"
+            "type": "Option<u64>"
           },
           {
             "name": "allocation_release",
@@ -983,7 +983,7 @@
           },
           {
             "name": "end_timestamp",
-            "type": "u64"
+            "type": "Option<u64>"
           },
           {
             "name": "allocation_release",
@@ -1210,7 +1210,7 @@
           },
           {
             "name": "end_timestamp",
-            "type": "u64"
+            "type": "Option<u64>"
           },
           {
             "name": "creator_allocation_release",
@@ -1239,6 +1239,61 @@
             "fields": [],
             "name": "ReadState",
             "tag": 2
+          },
+          {
+            "fields": [
+              {
+                "name": "amount_in",
+                "type": "u128"
+              },
+              {
+                "name": "min_amount_out",
+                "type": "u128"
+              },
+              {
+                "name": "now",
+                "type": "u64"
+              }
+            ],
+            "name": "BuyExactInput",
+            "tag": 3
+          },
+          {
+            "fields": [
+              {
+                "name": "amount_out",
+                "type": "u128"
+              },
+              {
+                "name": "max_amount_in",
+                "type": "u128"
+              },
+              {
+                "name": "now",
+                "type": "u64"
+              }
+            ],
+            "name": "BuyExactOutput",
+            "tag": 4
+          },
+          {
+            "fields": [],
+            "name": "CollectFees",
+            "tag": 5
+          },
+          {
+            "fields": [
+              {
+                "name": "pool",
+                "type": "AccountId"
+              },
+              {
+                "name": "instruction",
+                "type": "Box<Message>"
+              }
+            ],
+            "name": "Execute",
+            "tag": 6
           }
         ]
       },
@@ -1297,6 +1352,10 @@
             "type": "u128"
           },
           {
+            "name": "remaining_inventory",
+            "type": "u128"
+          },
+          {
             "name": "creator_allocation",
             "type": "u128"
           },
@@ -1310,7 +1369,7 @@
           },
           {
             "name": "end_timestamp",
-            "type": "u64"
+            "type": "Option<u64>"
           },
           {
             "name": "creator_allocation_release",
@@ -1318,6 +1377,10 @@
           },
           {
             "name": "recorded_collateral",
+            "type": "u128"
+          },
+          {
+            "name": "accrued_fees",
             "type": "u128"
           },
           {

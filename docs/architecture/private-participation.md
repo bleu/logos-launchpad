@@ -29,7 +29,7 @@ Private and public routes use the same mechanism state, custody checks, price ru
 | Fixed-price sale buy | Collateral | Launch tokens | Creator-borne claim on collateral proceeds. Full buyer collateral enters pricing. |
 | Weighted sale buy | Collateral | Launch tokens | Creator-borne claim on collateral proceeds. Full buyer collateral enters pricing. |
 
-A curve sell is available only when the sale mode permits it. Fixed-price and weighted sale selling is not added by this specification. Fixed-price and weighted sale buys retain their separate price rules and close at their scheduled endpoints. See [sale closing](../adr/0025-sale-closing.md), [weighted sale clock](../adr/0026-lbp-clock-and-poke.md) and [fee accounting](../adr/0015-fee-accounting.md).
+A curve sell is available only when the sale mode permits it. Fixed-price and weighted sale selling is not added by this specification. Fixed-price and weighted sale buys retain their separate price rules. Fixed-price buys stop at the optional end or sellout; weighted sales close at their scheduled end. See [sale closing](../adr/0025-sale-closing.md), [weighted sale clock](../adr/0026-lbp-clock-and-poke.md) and [fee accounting](../adr/0015-fee-accounting.md).
 
 The SDK obtains a fresh quote from current chain state and retains explicit participant-selected bounds. Apply the [quote and slippage decision](../adr/0017-quotes-and-slippage.md) to each supported operation. This specification does not add an on-chain instruction or change exact-input and exact-output meanings.
 

@@ -22,7 +22,7 @@ fn inputs() -> FixedPriceInputs {
             token_units: 2,
         },
         start: SaleStart::Now { timestamp: 0 },
-        end_timestamp: 200,
+        end_timestamp: Some(200),
         allocation_release: CreatorAllocationRelease::AfterEnd,
         namespace_program_id: id(6),
         lbp_program_id: id(8),
@@ -81,7 +81,7 @@ fn creation_rejects_invalid_or_reused_sale_terms() {
                 Error::InvalidTerms
             }
             7 => {
-                value.end_timestamp = 0;
+                value.end_timestamp = Some(0);
                 Error::InvalidTerms
             }
             8 => {
@@ -307,7 +307,7 @@ fn pool_preparation_uses_saved_terms_and_separate_setup_stage() {
     };
     assert_eq!(inputs.sale_inventory, 800);
     assert_eq!(inputs.start_timestamp, 0);
-    assert_eq!(inputs.end_timestamp, 200);
+    assert_eq!(inputs.end_timestamp, Some(200));
     assert_eq!(inputs.factory_program_id, input.receiver.program_account_id);
     let clock = response
         .sync_messages
@@ -508,27 +508,131 @@ fn final_setup_releases_after_setup_allocation_to_the_current_creator() {
 }
 
 #[test]
-fn every_fixed_price_setup_stage_has_an_independent_strict_expiry_assertion() {
-    let (input, mint) = minted();
-    let (_, allocation) = continue_sale(
-        &input,
-        &mint,
-        factory_core::FixedPriceCreationStage::Minted,
-        1000,
-        0,
-        0,
-    );
-    for response in [mint, allocation] {
-        assert!(response.sync_messages.iter().any(|m| m.to
-            == Actor::new(
-                clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID,
-                clock_core::clock_account_id()
-            )
-            && borsh::from_slice::<clock_core::Message>(&m.message).unwrap()
-                == clock_core::Message::AssertTimestamp {
+fn setup_checks_optional_expiry_at_every_stage_and_callback() {
+    for end_timestamp in [None, Some(200)] {
+        let mut input = creation();
+        let mut terms = inputs();
+        terms.end_timestamp = end_timestamp;
+        terms.now = 1_000;
+        input.message = borsh::to_vec(&Message::CreateFixedPriceLbp { inputs: terms }).unwrap();
+        let mut mint = handle(&input).unwrap();
+        for bytes in [namespace_state(), collateral()] {
+            input = reply(&input, &mint, bytes);
+            mint = handle(&input).unwrap();
+        }
+        let (input, allocated) = continue_sale(
+            &input,
+            &mint,
+            factory_core::FixedPriceCreationStage::Minted,
+            1000,
+            0,
+            0,
+        );
+        let (input, prepared) = continue_sale(
+            &input,
+            &allocated,
+            factory_core::FixedPriceCreationStage::Allocated,
+            0,
+            800,
+            200,
+        );
+        let prepared_state =
+            factory_core::FixedPriceLaunchState::decode(prepared.post_state.as_ref().unwrap())
+                .unwrap();
+        let prepare = prepared
+            .sync_messages
+            .iter()
+            .find(|m| m.to == Actor::new(prepared_state.pool_id, prepared_state.lbp_program_id))
+            .unwrap();
+        let lbp_core::Message::PrepareFixedPrice { inputs } =
+            borsh::from_slice(&prepare.message).unwrap()
+        else {
+            panic!("pool preparation")
+        };
+        assert_eq!(inputs.end_timestamp, end_timestamp);
+        let (mut input, mut complete) = continue_sale(
+            &input,
+            &prepared,
+            factory_core::FixedPriceCreationStage::PoolPrepared,
+            0,
+            800,
+            200,
+        );
+        for bytes in [
+            prepared_pool(&prepared_state, input.receiver),
+            holding(
+                prepared_state.pool_id,
+                prepared_state.token_definition_id,
+                0,
+            ),
+            holding(
+                prepared_state.pool_id,
+                prepared_state.collateral_definition_id,
+                17,
+            ),
+        ] {
+            input = reply(&input, &complete, bytes);
+            complete = handle(&input).unwrap();
+        }
+        for (stage, response) in [mint, allocated, prepared, complete].iter().enumerate() {
+            let state =
+                factory_core::FixedPriceLaunchState::decode(response.post_state.as_ref().unwrap())
+                    .unwrap();
+            assert_eq!(state.end_timestamp, end_timestamp);
+            assert!(!state.creator_allocation_released);
+            let clocks: Vec<clock_core::Message> = response
+                .sync_messages
+                .iter()
+                .filter(|m| {
+                    m.to == Actor::new(
+                        clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID,
+                        clock_core::clock_account_id(),
+                    )
+                })
+                .map(|m| borsh::from_slice(&m.message).unwrap())
+                .collect();
+            let mut expected = vec![];
+            if stage == 0 {
+                expected.push(clock_core::Message::AssertTimestamp {
                     at_least: 0,
-                    at_most: 199_999
-                }));
+                    at_most: u64::MAX,
+                });
+            }
+            if let Some(end) = end_timestamp {
+                expected.push(clock_core::Message::AssertTimestamp {
+                    at_least: 0,
+                    at_most: end * 1000 - 1,
+                });
+            }
+            assert_eq!(clocks, expected, "stage {stage}, end {end_timestamp:?}");
+        }
+    }
+}
+
+#[test]
+fn optional_end_must_be_strictly_after_the_saved_start() {
+    for start in [
+        SaleStart::Now { timestamp: 100 },
+        SaleStart::At { timestamp: 100 },
+    ] {
+        for (end_timestamp, valid) in [
+            (None, true),
+            (Some(99), false),
+            (Some(100), false),
+            (Some(101), true),
+        ] {
+            let mut input = creation();
+            let mut terms = inputs();
+            terms.start = start;
+            terms.end_timestamp = end_timestamp;
+            input.message = borsh::to_vec(&Message::CreateFixedPriceLbp { inputs: terms }).unwrap();
+            let result = handle(&input);
+            if valid {
+                assert!(result.is_ok());
+            } else {
+                assert!(matches!(result, Err(Error::InvalidTerms)));
+            }
+        }
     }
 }
 

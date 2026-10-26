@@ -188,6 +188,125 @@ fn fixed_price_lbp_price_and_activation_have_independent_wire_bytes() {
 }
 
 #[test]
+fn fixed_price_buys_and_collection_keep_explicit_limits_on_wire() {
+    let exact_input = lbp_core::Message::BuyExactInput {
+        amount_in: 100,
+        min_amount_out: 25,
+        now: 9,
+    };
+    let exact_output = lbp_core::Message::BuyExactOutput {
+        amount_out: 25,
+        max_amount_in: 100,
+        now: 9,
+    };
+    for (message, encoded) in [
+        (
+            exact_input,
+            concat!(
+                "03",
+                "64000000000000000000000000000000",
+                "19000000000000000000000000000000",
+                "0900000000000000"
+            ),
+        ),
+        (
+            exact_output,
+            concat!(
+                "04",
+                "19000000000000000000000000000000",
+                "64000000000000000000000000000000",
+                "0900000000000000"
+            ),
+        ),
+        (lbp_core::Message::CollectFees, "05"),
+    ] {
+        let expected = hex::decode(encoded).unwrap();
+        assert_eq!(borsh::to_vec(&message).unwrap(), expected);
+        assert_eq!(
+            borsh::from_slice::<lbp_core::Message>(&expected).unwrap(),
+            message
+        );
+    }
+    assert_eq!(
+        variant("lbp", "Message", "BuyExactInput"),
+        json!({"tag":3,"name":"BuyExactInput","fields":[
+            {"name":"amount_in","type":"u128"},
+            {"name":"min_amount_out","type":"u128"},
+            {"name":"now","type":"u64"}
+        ]})
+    );
+    assert_eq!(
+        variant("lbp", "Message", "BuyExactOutput"),
+        json!({"tag":4,"name":"BuyExactOutput","fields":[
+            {"name":"amount_out","type":"u128"},
+            {"name":"max_amount_in","type":"u128"},
+            {"name":"now","type":"u64"}
+        ]})
+    );
+    assert_eq!(
+        variant("lbp", "Message", "CollectFees"),
+        json!({"tag":5,"name":"CollectFees","fields":[]})
+    );
+}
+
+#[test]
+fn fixed_price_forwarding_keeps_pool_and_purchase_on_wire() {
+    let message = lbp_core::Message::Execute {
+        pool: AccountId::new([3; 32]),
+        instruction: Box::new(lbp_core::Message::BuyExactInput {
+            amount_in: 100,
+            min_amount_out: 25,
+            now: 9,
+        }),
+    };
+    let expected = hex::decode(concat!(
+        "06",
+        "0303030303030303030303030303030303030303030303030303030303030303",
+        "03",
+        "64000000000000000000000000000000",
+        "19000000000000000000000000000000",
+        "0900000000000000"
+    ))
+    .unwrap();
+    assert_eq!(borsh::to_vec(&message).unwrap(), expected);
+    assert_eq!(
+        borsh::from_slice::<lbp_core::Message>(&expected).unwrap(),
+        message
+    );
+    assert_eq!(
+        variant("lbp", "Message", "Execute"),
+        json!({"tag":6,"name":"Execute","fields":[
+            {"name":"pool","type":"AccountId"},
+            {"name":"instruction","type":"Box<Message>"}
+        ]})
+    );
+}
+
+#[test]
+fn fixed_price_optional_end_is_part_of_factory_and_pool_schemas() {
+    for (module, name) in [
+        ("fixed_price", "FixedPriceInputs"),
+        ("fixed_price", "FixedPriceLaunchState"),
+        ("lbp", "FixedPricePoolInputs"),
+        ("lbp", "PoolAccount"),
+    ] {
+        let schema = schema();
+        let field = schema["modules"][module][name]["fields"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|field| field["name"] == "end_timestamp")
+            .unwrap();
+        assert_eq!(field["type"], "Option<u64>", "{module}::{name}");
+    }
+    assert_eq!(borsh::to_vec(&None::<u64>).unwrap(), [0]);
+    assert_eq!(
+        borsh::to_vec(&Some(9u64)).unwrap(),
+        [1, 9, 0, 0, 0, 0, 0, 0, 0]
+    );
+}
+
+#[test]
 fn namespace_initialization_has_independent_borsh_bytes_and_schema() {
     let message = curve_core::Message::InitializeNamespace {
         namespace: AccountId::new([1; 32]),

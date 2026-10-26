@@ -77,8 +77,8 @@ run 'weighted-math guest parity (execution only, release, locked)' cargo +"$ACTO
 run 'release overflow tests (host and guest execution, locked)' cargo +"$ACTOR_RUST_VERSION" test --manifest-path methods/Cargo.toml --release --features overflow-tests --test release_overflow --locked
 if [ "${1:-}" = --execution ]; then
   run 'node-free token actor execution (locked)' cargo +"$ACTOR_RUST_VERSION" test --manifest-path "$base/execution/Cargo.toml" --locked
-  run 'seeded curve trade actor execution (release, locked)' cargo +"$ACTOR_RUST_VERSION" test --manifest-path methods/Cargo.toml --release --locked --features actor-execution-tests --test actor_sale
-  printf 'check-builds: sale setup, lifecycle and settlement execution deferred; seeded timed trades cover only the trade path\n'
+  run 'seeded sale trade and fee actor execution (release, locked)' cargo +"$ACTOR_RUST_VERSION" test --manifest-path methods/Cargo.toml --release --locked --features actor-execution-tests --test actor_sale
+  printf 'check-builds: sale setup, lifecycle and settlement execution deferred; seeded fixtures cover trades and fixed-price fee collection\n'
 else
   printf 'check-builds: token and sale actor execution deferred; select --execution for available real fixtures\n'
 fi

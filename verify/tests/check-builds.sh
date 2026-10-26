@@ -70,7 +70,7 @@ execution_lane() {
   assert_contains "$(< "$COMMAND_LOG")" 'cargo +1.98.1 test --manifest-path packages/lez-compat/execution/Cargo.toml --locked'
   assert_contains "$(< "$COMMAND_LOG")" 'cargo +1.98.1 test --manifest-path methods/Cargo.toml --release --locked --features actor-execution-tests --test actor_sale'
   assert_contains "$output" 'sale setup, lifecycle and settlement execution deferred'
-  assert_contains "$output" 'seeded timed trades cover only the trade path'
+  assert_contains "$output" 'seeded fixtures cover trades and fixed-price fee collection'
   printf 'execution-lane: passed\n'
 }
 regressions() {
