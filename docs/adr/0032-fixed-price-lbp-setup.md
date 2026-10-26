@@ -1,6 +1,6 @@
 # ADR 0032: Define fixed-price sale creation and funding
 
-Status: Four-stage implementation; locked local verification passed using development receipts. Real proofs and deployment readiness pending.
+Status: Four-stage implementation migrated; local actor host and guest-build checks passed. Setup execution, real proofs and deployment readiness remain pending.
 
 Date: 2026-10-13
 
@@ -12,11 +12,11 @@ This record partially supersedes [ADR 0006](0006-namespaces-and-authority.md) by
 
 ## Decision
 
-Reuse the curve-owned `NamespaceConfig` as the canonical namespace configuration for fixed-price sale validation. Namespace role administration remains separate from a sale creator role. Each fixed-price sale embeds its own `AdminConfig`, initialized with the creator signer in the same creation claim. This leaves no public claim window. Readonly namespace account data exposes its format version, not a duplicate administrator or hidden role-authority bytes. This work does not migrate existing curve creator Authority NFTs.
+Reuse the curve-owned `NamespaceConfig` as the canonical namespace configuration for fixed-price sale validation. Namespace role administration remains separate from a sale creator role. Each fixed-price sale has a separate creator role, initialized with the creator signer in the same creation claim. This leaves no public claim window. Readonly namespace account data exposes its format version, not a duplicate administrator or hidden role-authority bytes. This work does not migrate existing curve creator Authority NFTs.
 
 A fixed-price sale creates a new launch token with a strictly positive sale inventory and an optional separate creator allocation. It has no curve `R` allocation and starts with zero recorded collateral under [ADR 0033](0033-fixed-price-lbp-recorded-collateral.md). Its price is a strictly positive exact rational ratio of collateral smallest units to launch-token smallest units. Token decimals affect display only.
 
-A `StartNow` schedule uses the trusted creation time. A scheduled start must be at or after trusted current time, and the end must be after the selected start. Late final setup does not change the configured end. Activation requires trusted current time before that end.
+Amended for the [actor migration](0034-lez-v04-migration.md): public timestamps remain Unix seconds. `SaleStart::Now { timestamp }` supplies a lower bound for a trusted clock assertion. Save that seconds value verbatim as the start, including zero. The internal native-clock upper bound is `u64::MAX`; there is no freshness check. This replaces the earlier rule that saved trusted creation time. A scheduled start is separate and must not precede trusted current time. The end must follow the saved start. Late final setup keeps the configured end. Activation requires trusted time strictly before the end, not equality with a client timestamp. Convert bounds to native clock milliseconds with checked arithmetic; the inclusive upper bound is one millisecond before the converted end. See [sale closing](0025-sale-closing.md) for the shared time-unit boundary.
 
 Creation saves an immutable creator-allocation release choice: `AfterSetup` or `AfterEnd`. The implementation uses four atomic transactions: claim the exact mint and per-sale creator role; split supply into sale inventory and allocation escrow; prepare the pool, vaults and immediate recipient ATA; then fund inventory into the fixed-price sale vault, pay an `AfterSetup` allocation only on successful funding and mark the sale `Complete`. The workflow can span those transactions. `AfterEnd` retains the allocation in escrow; its later settlement or payout handler is future work. Any unpaid allocation or future proceeds belong to the current creator-role holder. This scope does not add creator-role transfer or renunciation.
 
@@ -26,7 +26,7 @@ Creation saves an immutable creator-allocation release choice: `AfterSetup` or `
 
 Fixed-price sale creation and funding does not add buys, sells, weighted virtual accounting, fees, close, end payout, end hooks, delayed settlement, cancellation or expired-recovery handlers, private fixed-price sale routes, allowlists, or full SDK and CLI flows. Weighted-sale work remains separate.
 
-Public curve-factory variants with tags 0 through 4 remain unchanged. Public fixed-price variants use tags 5 and later. SDK-only private variants move after all public variants. This deliberately changes private encoding. Clients and guest IDs need rebuild for the implemented encoding.
+The actor migration replaces the old instruction encoding with typed messages. Rebuild clients, guest binaries and image IDs together. See the [workspace guide](../architecture/workspace-guide.md) for interface generation and checks.
 
 ## Sources
 

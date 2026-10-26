@@ -1,6 +1,6 @@
 //! Resumable factory workflows. Every stage is confirmed before the next is built.
 use super::*;
-use factory_core::{CreationStage, SettlementStage};
+use factory_core::CreationStage;
 
 #[derive(Debug, Default)]
 pub struct LifecycleReceipt {
@@ -11,9 +11,8 @@ pub struct LifecycleReceipt {
 /// A factory workflow bound to one namespace and NFT authority location.
 pub struct FactorySession<'a> {
     wallet: &'a mut WalletCore,
-    factory: &'a Program,
-    curve: &'a Program,
-    router: Option<&'a Program>,
+    factory: &'a ProgramHandle,
+    curve: &'a ProgramHandle,
     namespace: AccountId,
     authority: AccountLocation,
 }
@@ -21,9 +20,9 @@ pub struct FactorySession<'a> {
 impl<'a> FactorySession<'a> {
     pub fn new(
         wallet: &'a mut WalletCore,
-        factory: &'a Program,
-        curve: &'a Program,
-        router: Option<&'a Program>,
+        factory: &'a ProgramHandle,
+        curve: &'a ProgramHandle,
+        _router: Option<&'a ProgramHandle>,
         namespace: AccountId,
         authority: AccountLocation,
     ) -> Self {
@@ -31,7 +30,6 @@ impl<'a> FactorySession<'a> {
             wallet,
             factory,
             curve,
-            router,
             namespace,
             authority,
         }
@@ -39,8 +37,8 @@ impl<'a> FactorySession<'a> {
 
     fn validate_sale(&self, sale: FactorySale) -> Result<()> {
         if sale.namespace != self.namespace
-            || sale.factory_program_id != self.factory.id()
-            || sale.curve_program_id != self.curve.id()
+            || sale.factory_program_id != self.factory.account_id
+            || sale.curve_program_id != self.curve.account_id
         {
             return Err(ClientError::FactorySaleMismatch);
         }
@@ -58,13 +56,14 @@ impl<'a> FactorySession<'a> {
             ))
             .await
             .map_err(|source| ClientError::ReadFactoryState(source.into_boxed_dyn_error()))?;
-        if account == lee_core::account::Account::default() {
+        let Some(account) = account else {
+            return Ok(None);
+        };
+        let bytes = account.data.actor_state(sale.factory_program_id);
+        if bytes.as_ref().is_empty() {
             return Ok(None);
         }
-        if account.program_owner != sale.factory_program_id {
-            return Err(ClientError::FactoryProgramMismatch);
-        }
-        let state = FactoryState::try_from(&account.data)
+        let state = FactoryState::decode(bytes.as_ref())
             .map_err(ClientError::DecodeResumableFactoryState)?;
         validate_factory_state(sale, &state)?;
         Ok(Some(state))
@@ -76,22 +75,7 @@ impl<'a> FactorySession<'a> {
         receipt: &mut LifecycleReceipt,
     ) -> Result<()> {
         match self.authority {
-            AccountLocation::Private(source) => {
-                let result = submit_private_authority(
-                    self.wallet,
-                    self.router
-                        .ok_or(ClientError::PrivateAuthorityRouterRequired)?,
-                    self.factory,
-                    vec![self.curve.clone()],
-                    source,
-                    build,
-                )
-                .await?;
-                receipt.transaction_hashes.push(result.transaction_hash);
-                receipt
-                    .authority_holders
-                    .push(result.transient_public_account);
-            }
+            AccountLocation::Private(_) => return Err(ClientError::UnsupportedPrivateAuthority),
             AccountLocation::Public(source) => {
                 receipt.transaction_hashes.push(
                     submit_public_invocation(self.wallet, self.factory, build(source)?).await?,
@@ -109,6 +93,9 @@ impl<'a> FactorySession<'a> {
         request: CreateSaleRequest,
     ) -> Result<LifecycleReceipt> {
         self.validate_sale(sale)?;
+        if self.authority.is_private() {
+            return Err(ClientError::UnsupportedPrivateAuthority);
+        }
         let mut receipt = LifecycleReceipt::default();
         for _ in 0..4 {
             let state = self.state(sale).await?;
@@ -142,8 +129,11 @@ impl<'a> FactorySession<'a> {
     }
 
     /// Resume the exact withdrawal, burn and payout sequence without paying a stage twice.
-    pub async fn withdraw(&mut self, sale: FactorySale) -> Result<LifecycleReceipt> {
+    pub async fn withdraw(&mut self, sale: FactorySale, now: u64) -> Result<LifecycleReceipt> {
         self.validate_sale(sale)?;
+        if self.authority.is_private() {
+            return Err(ClientError::UnsupportedPrivateAuthority);
+        }
         let mut receipt = LifecycleReceipt::default();
         for _ in 0..5 {
             let state = self
@@ -152,20 +142,6 @@ impl<'a> FactorySession<'a> {
                 .ok_or(ClientError::FactoryLaunchMissing)?;
             if state.settlement_stage.is_manual_settlement_complete() {
                 return Ok(receipt);
-            }
-            if self.authority.is_private() && state.settlement_stage == SettlementStage::Ready {
-                receipt.transaction_hashes.extend(
-                    collect_pool_fees(
-                        self.wallet,
-                        sale.namespace,
-                        self.curve,
-                        &[PoolFeeTarget {
-                            pool: state.pool_id,
-                            collateral_definition: sale.collateral_definition,
-                        }],
-                    )
-                    .await?,
-                );
             }
             let treasury = prepare_fee_collection(
                 self.wallet,
@@ -177,7 +153,11 @@ impl<'a> FactorySession<'a> {
             self.submit(
                 |holder| {
                     Ok(build_withdraw_factory_proceeds_invocation(
-                        sale, holder, treasury,
+                        sale,
+                        holder,
+                        treasury,
+                        state.creator_nft_definition,
+                        now,
                     ))
                 },
                 &mut receipt,
@@ -211,7 +191,10 @@ pub fn next_creation_invocation(
             && state.creator_allocation == request.creator_allocation
             && state.virtual_token_reserve == request.virtual_token_reserve
             && state.virtual_collateral_reserve == request.virtual_collateral_reserve
-            && state.end_timestamp == request.end_timestamp)
+            && state.end_timestamp == request.end_timestamp
+            && state.name == request.name
+            && state.uri == request.uri
+            && state.creator_nft_definition == request.creator_nft_definition)
         {
             return Err(ClientError::LaunchParametersMismatch);
         }
@@ -219,9 +202,13 @@ pub fn next_creation_invocation(
             return Ok(None);
         }
     }
+    let now = request.now;
     let mut call = build_create_sale_invocation(sale, holder, request)?;
     if state.is_some() {
-        call.instruction = FactoryInstruction::ContinueCreation;
+        call.instruction = FactoryInstruction::ContinueCreation {
+            creator: holder,
+            now,
+        };
     }
     Ok(Some(call))
 }

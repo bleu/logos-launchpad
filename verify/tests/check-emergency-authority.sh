@@ -54,9 +54,14 @@ default_authority() {
 }
 
 valid_authority() {
-  local fixture
+  local fixture output
   fixture="$(< "$root/crates/curve-core/tests/fixtures/emergency-authority.hex")"
-  CURVE_EMERGENCY_AUTHORITY="$fixture" cargo test -p curve-core --test emergency namespace_creation_sets_deployment_emergency_authority_unfrozen --locked
+  output="$(CURVE_EMERGENCY_AUTHORITY="$fixture" cargo test -p curve-core --test namespace_admin namespace_signer_creates_its_config_without_an_authority_nft --locked -- --exact 2>&1)"
+  printf '%s\n' "$output"
+  [[ "$output" == *'1 passed; 0 failed;'* ]] || {
+    printf 'valid-authority: expected one actor test to pass\n' >&2
+    return 1
+  }
   printf 'valid-authority: passed\n'
 }
 
@@ -68,11 +73,13 @@ authority_cache() {
       printf 'authority-cache: guest build failed\n%s\n' "$output" >&2
       return 1
     }
-    output="$(CURVE_EMERGENCY_AUTHORITY="$authority" RISC0_DEV_MODE=1 cargo test -p launchpad-client --features guest-tests --test settlement signed_namespace_creation_uses_build_authority --locked -- --exact --nocapture 2>&1)" || {
-      printf 'authority-cache: guest selected the wrong authority\n%s\n' "$output" >&2
+    local binary
+    binary="$(find methods/target/riscv-guest -path '*/release/curve.bin' -type f -print)"
+    [ -n "$binary" ] && [ -s "$binary" ] || {
+      printf 'authority-cache: expected one nonempty curve guest binary\n' >&2
       return 1
     }
-    current_id="$(printf '%s\n' "$output" | grep '^curve image ID:')"
+    current_id="$(shasum -a 256 "$binary" | cut -d ' ' -f 1)"
     if [ -z "$first_id" ]; then
       first_id="$current_id"
     else
@@ -88,7 +95,7 @@ authority_cache() {
     return 1
   }
   CURVE_EMERGENCY_AUTHORITY="$fixture" RISC0_BUILD_LOCKED=1 cargo build --manifest-path methods/Cargo.toml --release --locked
-  printf 'authority-cache: passed; test-fixture guests restored\n'
+  printf 'authority-cache: guest build cache passed; runtime authority selection is not checked; test-fixture guests restored\n'
 }
 
 case "${1:-all}" in

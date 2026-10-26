@@ -1,6 +1,6 @@
 # Create a fixed-price sale pool
 
-This diagram describes the implemented four-transaction fixed-price sale setup. Locked local verification passed using development receipts; real proofs and deployment readiness remain pending. See [ADR 0032](../../adr/0032-fixed-price-lbp-setup.md).
+This diagram describes the four-transaction fixed-price sale setup. The implementation is migrated and local actor host and guest-build checks passed. Setup execution, real proofs and deployment readiness remain pending. See [ADR 0032](../../adr/0032-fixed-price-lbp-setup.md).
 
 ## Preconditions
 
@@ -19,7 +19,7 @@ sequenceDiagram
     Creator->>Factory: Stage 1: claim exact mint and creator role
     Factory->>Namespace: Validate namespace binding
     Namespace-->>Factory: Namespace configuration
-    Factory->>Factory: Initialize embedded creator AdminConfig
+    Factory->>Factory: Initialize per-sale creator role
     Creator->>Factory: Stage 2: split minted supply
     Factory->>Pool: Store sale inventory and allocation escrow
     Creator->>Factory: Stage 3: prepare pool
@@ -35,7 +35,7 @@ sequenceDiagram
 
 ## Notes
 
-The creator signer initializes the embedded creator role in the same claim. Namespace administration stays separate from that role. `StartNow` uses trusted creation time. A scheduled start cannot precede trusted current time, and the end must follow the selected start. Late final setup keeps the configured end and requires current time before it.
+The creator signer initializes the creator role in the same claim. Namespace administration stays separate from that role. Immediate start saves the supplied timestamp as a clock lower bound; it does not read and save current time. Scheduled starts and activation use separate trusted-clock checks. See [ADR 0032](../../adr/0032-fixed-price-lbp-setup.md) for the time rules.
 
 Each stage is atomic. The workflow spans four transactions. Final setup can fund the fixed-price sale vault before a scheduled start. `AfterSetup` pays the creator allocation only after successful final funding. `AfterEnd` retains the already placed allocation in escrow; later settlement or payout is future work. The fixed-price sale setup does not use curve `R` allocation or curve factory custody.
 

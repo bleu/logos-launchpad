@@ -7,9 +7,6 @@ license = "MIT"
 
 [dependencies]
 lee_core.workspace = true
-serde.workspace = true
-curve-core.workspace = true
-token_core.workspace = true
 
 [lints]
 workspace = true

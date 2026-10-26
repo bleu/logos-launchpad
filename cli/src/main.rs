@@ -13,10 +13,11 @@ use clap::{Args, Parser, Subcommand, builder::Styles};
 use eyre::{Context, ContextCompat, Result};
 use launchpad_client::{
     AccountLocation, CreateSaleRequest, ExactInputTradeTerms, ExactOutputTradeTerms, FactorySale,
-    PoolFeeTarget, PrivateAccountId, PrivateBuyRequest, PrivateBuyRoute, build_buy_invocation,
-    build_buy_with_collateral_invocation, build_claim_creator_allocation_invocation,
-    build_sell_invocation, load_curve_config, load_factory_pool, load_factory_state, load_program,
-    quote_buy, quote_buy_with_collateral, quote_sell, submit_private_buy, submit_public_invocation,
+    PoolFeeTarget, PrivateAccountId, PrivateBuyRequest, ProgramHandle,
+    build_claim_creator_allocation_invocation, load_curve_config, load_factory_pool,
+    load_factory_state, prepare_buy_invocation, prepare_buy_with_collateral_invocation,
+    prepare_sell_invocation, quote_buy, quote_buy_with_collateral, quote_sell,
+    submit_public_invocation,
 };
 use serde::Serialize;
 use wallet::WalletCore;
@@ -44,7 +45,7 @@ struct Cli {
     #[arg(long, global = true)]
     #[arg(value_parser = parse_account_location)]
     namespace: Option<AccountLocation>,
-    /// Router guest for creator operations with a Private/ NFT holder.
+    /// Legacy private authority router path; unsupported on the actor development base.
     #[arg(long, global = true)]
     authority_router_path: Option<PathBuf>,
     #[command(subcommand)]
@@ -53,6 +54,47 @@ struct Cli {
 
 impl Cli {
     fn validate_route(&self) -> Result<()> {
+        if let Command::TransferAuthority(args) = &self.command
+            && (args.from.is_private() || args.to.is_private())
+        {
+            return Err(launchpad_client::ClientError::UnsupportedPrivateAuthority.into());
+        }
+        let creator = match &self.command {
+            Command::CreateSale(args) => Some(args.creator),
+            Command::Withdraw(args) | Command::Claim(args) => Some(args.creator),
+            _ => None,
+        };
+        if creator.is_some_and(AccountLocation::is_private)
+            || (creator.is_some() && self.authority_router_path.is_some())
+        {
+            return Err(launchpad_client::ClientError::UnsupportedPrivateAuthority.into());
+        }
+        let collateral = match &self.command {
+            Command::CreateSale(args) => Some(args.collateral_definition),
+            Command::Withdraw(args) | Command::Claim(args) => Some(args.collateral_definition),
+            Command::Buy(args) => Some(args.trade.collateral_definition),
+            Command::BuyWithCollateral(args) => Some(args.trade.collateral_definition),
+            Command::Sell(args) => Some(args.trade.collateral_definition),
+            Command::Price(args) => Some(args.launch.collateral_definition),
+            Command::Status(args) | Command::SaleInfo(args) => Some(args.collateral_definition),
+            Command::CollectFees(args) => Some(args.collateral_definition),
+            _ => None,
+        };
+        if self.namespace.is_some_and(AccountLocation::is_private)
+            || collateral.is_some_and(AccountLocation::is_private)
+            || matches!(&self.command, Command::CollectFees(args) if args.pool.iter().any(|pool| pool.is_private()))
+        {
+            return Err(launchpad_client::ClientError::UnsupportedPrivateRoute.into());
+        }
+        let participant = match &self.command {
+            Command::Buy(args) => Some(args.trade.participant),
+            Command::BuyWithCollateral(args) => Some(args.trade.participant),
+            Command::Sell(args) => Some(args.trade.participant),
+            _ => None,
+        };
+        if participant.is_some_and(AccountLocation::is_private) {
+            return Err(launchpad_client::ClientError::UnsupportedPrivateRoute.into());
+        }
         if matches!(
             self.command,
             Command::Configure(_) | Command::RenounceAdmin(_) | Command::NamespaceInfo(_)
@@ -94,7 +136,7 @@ enum Command {
     Buy(BuyArgs),
     /// Spend an exact collateral amount, with a minimum launch-token output.
     BuyWithCollateral(BuyWithCollateralArgs),
-    /// Buy through the SDK-owned private lifecycle.
+    /// Private purchase request; unsupported on the actor development base.
     PrivateBuy(PrivateBuyArgs),
     Sell(SellArgs),
     Price(PriceArgs),
@@ -113,12 +155,20 @@ enum Command {
 #[derive(Debug, Args)]
 struct CreateAuthorityArgs {
     #[arg(long)]
+    token_program_path: PathBuf,
+    #[arg(long, value_parser = parse_public_account_id)]
+    fee_payer: lee::AccountId,
+    #[arg(long)]
     name: String,
     #[arg(long)]
     uri: String,
 }
 #[derive(Debug, Args)]
 struct TransferAuthorityArgs {
+    #[arg(long)]
+    token_program_path: PathBuf,
+    #[arg(long, value_parser = parse_public_account_id)]
+    definition: lee::AccountId,
     #[arg(long, value_parser = parse_account_location)]
     from: AccountLocation,
     #[arg(long, value_parser = parse_account_location)]
@@ -129,11 +179,15 @@ struct TransferAuthorityArgs {
 struct NamespaceReadArgs {
     #[arg(long)]
     curve_program_path: PathBuf,
+    #[arg(long, value_parser = parse_public_account_id)]
+    curve_program_account: lee::AccountId,
 }
 #[derive(Debug, Args)]
 struct NamespaceAdminArgs {
     #[arg(long)]
     curve_program_path: PathBuf,
+    #[arg(long, value_parser = parse_public_account_id)]
+    curve_program_account: lee::AccountId,
     #[arg(long, value_parser = parse_public_account_id)]
     admin: lee::AccountId,
 }
@@ -166,9 +220,9 @@ impl From<launchpad_client::TradeMode> for TradeModeArg {
 struct CreateSaleArgs {
     #[arg(long, value_enum)]
     trade_mode: TradeModeArg,
-    /// Saved adapter ImageID as 64 hexadecimal characters (little-endian u32 words).
-    #[arg(long, value_parser = parse_program_id)]
-    graduation_hook_program_id: Option<lee::ProgramId>,
+    /// Saved adapter deployment address.
+    #[arg(long, value_parser = parse_public_account_id)]
+    graduation_hook_program_id: Option<lee::AccountId>,
     /// Saved opaque adapter configuration as hexadecimal bytes.
     #[arg(long, value_parser = parse_hook_configuration, requires = "graduation_hook_program_id")]
     graduation_hook_configuration: Option<HookConfiguration>,
@@ -188,6 +242,7 @@ struct CreateSaleArgs {
     virtual_token_reserve: u128,
     #[arg(long = "virtual-collateral-reserve", alias = "vc")]
     virtual_collateral_reserve: u128,
+    /// Optional sale end time in Unix seconds.
     #[arg(long = "end-timestamp")]
     end_timestamp: Option<u64>,
     #[arg(long = "collateral-definition", value_parser = parse_account_location)]
@@ -195,12 +250,21 @@ struct CreateSaleArgs {
     /// Account that authorizes the factory launch.
     #[arg(long, value_parser = parse_account_location)]
     creator: AccountLocation,
+    #[arg(long, value_parser = parse_public_account_id)]
+    creator_nft_definition: lee::AccountId,
+    /// Clock lower bound in Unix seconds, preserved as supplied, including zero.
+    #[arg(long, default_value_t = 0)]
+    now: u64,
     /// Compiled factory guest binary deployed for this walkthrough.
     #[arg(long = "factory-program-path")]
     factory_program_path: PathBuf,
+    #[arg(long, value_parser = parse_public_account_id)]
+    factory_program_account: lee::AccountId,
     /// Compiled curve guest binary paired with the factory launch.
     #[arg(long = "curve-program-path")]
     curve_program_path: PathBuf,
+    #[arg(long, value_parser = parse_public_account_id)]
+    curve_program_account: lee::AccountId,
 }
 
 impl CreateSaleArgs {
@@ -224,6 +288,8 @@ impl CreateSaleArgs {
             virtual_token_reserve: self.virtual_token_reserve,
             virtual_collateral_reserve: self.virtual_collateral_reserve,
             end_timestamp: self.end_timestamp,
+            creator_nft_definition: self.creator_nft_definition,
+            now: self.now,
         }
     }
 }
@@ -246,8 +312,12 @@ struct FactoryTradeArgs {
     participant: AccountLocation,
     #[arg(long = "factory-program-path")]
     factory_program_path: PathBuf,
+    #[arg(long, value_parser = parse_public_account_id)]
+    factory_program_account: lee::AccountId,
     #[arg(long = "curve-program-path")]
     curve_program_path: PathBuf,
+    #[arg(long, value_parser = parse_public_account_id)]
+    curve_program_account: lee::AccountId,
 }
 
 #[derive(Debug, Args)]
@@ -291,8 +361,12 @@ struct PrivateBuyArgs {
     gas_reserve: u128,
     #[arg(long = "factory-program-path")]
     factory_program_path: PathBuf,
+    #[arg(long, value_parser = parse_public_account_id)]
+    factory_program_account: lee::AccountId,
     #[arg(long = "curve-program-path")]
     curve_program_path: PathBuf,
+    #[arg(long, value_parser = parse_public_account_id)]
+    curve_program_account: lee::AccountId,
     #[arg(long = "private-buy-program-path")]
     private_buy_program_path: PathBuf,
 }
@@ -307,8 +381,12 @@ struct FactoryLifecycleArgs {
     creator: AccountLocation,
     #[arg(long = "factory-program-path")]
     factory_program_path: PathBuf,
+    #[arg(long, value_parser = parse_public_account_id)]
+    factory_program_account: lee::AccountId,
     #[arg(long = "curve-program-path")]
     curve_program_path: PathBuf,
+    #[arg(long, value_parser = parse_public_account_id)]
+    curve_program_account: lee::AccountId,
 }
 
 #[derive(Debug, Args)]
@@ -319,21 +397,28 @@ struct GraduationArgs {
     collateral_definition: lee::AccountId,
     #[arg(long)]
     factory_program_path: PathBuf,
+    #[arg(long, value_parser = parse_public_account_id)]
+    factory_program_account: lee::AccountId,
     #[arg(long)]
     curve_program_path: PathBuf,
-    /// Repeat in the order required by the saved adapter.
     #[arg(long, value_parser = parse_public_account_id)]
-    adapter_account: Vec<lee::AccountId>,
+    curve_program_account: lee::AccountId,
+    #[arg(long, value_parser = parse_public_account_id)]
+    fee_payer: lee::AccountId,
 }
 
 #[derive(Debug, Args)]
 struct CollectFeesArgs {
+    #[arg(long, value_parser = parse_public_account_id)]
+    fee_payer: lee::AccountId,
     #[arg(long, required = true, num_args = 1.., value_parser = parse_account_location)]
     pool: Vec<AccountLocation>,
     #[arg(long, value_parser = parse_account_location)]
     collateral_definition: AccountLocation,
     #[arg(long)]
     curve_program_path: PathBuf,
+    #[arg(long, value_parser = parse_public_account_id)]
+    curve_program_account: lee::AccountId,
 }
 
 #[derive(Debug, Args)]
@@ -344,8 +429,12 @@ struct LaunchReadArgs {
     collateral_definition: AccountLocation,
     #[arg(long = "factory-program-path")]
     factory_program_path: PathBuf,
+    #[arg(long, value_parser = parse_public_account_id)]
+    factory_program_account: lee::AccountId,
     #[arg(long = "curve-program-path")]
     curve_program_path: PathBuf,
+    #[arg(long, value_parser = parse_public_account_id)]
+    curve_program_account: lee::AccountId,
 }
 
 #[derive(Debug, Args)]
@@ -384,6 +473,8 @@ struct ConfigArgs {
     treasury: lee::AccountId,
     #[arg(long = "curve-program-path")]
     curve_program_path: PathBuf,
+    #[arg(long, value_parser = parse_public_account_id)]
+    curve_program_account: lee::AccountId,
 }
 
 fn parse_account_location(raw: &str) -> Result<AccountLocation, String> {
@@ -405,31 +496,35 @@ fn parse_private_account_id(raw: &str) -> Result<PrivateAccountId, String> {
 
 fn factory_sale(
     namespace: lee::AccountId,
-    factory_program: &lee::program::Program,
-    curve_program: &lee::program::Program,
+    factory_program: &ProgramHandle,
+    curve_program: &ProgramHandle,
     launch_salt: [u8; 32],
     collateral_definition: lee::AccountId,
 ) -> FactorySale {
     FactorySale {
         namespace,
-        factory_program_id: factory_program.id(),
-        curve_program_id: curve_program.id(),
+        factory_program_id: factory_program.account_id,
+        curve_program_id: curve_program.account_id,
         launch_salt,
         collateral_definition,
     }
 }
 
-fn parse_program_id(raw: &str) -> Result<lee::ProgramId, String> {
-    let bytes: [u8; 32] = hex::decode(raw)
-        .map_err(|_| "hook program ID must be hexadecimal".to_owned())?
-        .try_into()
-        .map_err(|_| {
-            "hook program ID must contain exactly 32 bytes (64 hex characters)".to_owned()
-        })?;
-    Ok(std::array::from_fn(|index| {
-        let start = index * 4;
-        u32::from_le_bytes(bytes[start..start + 4].try_into().unwrap())
-    }))
+fn load_deployment(
+    path: &Path,
+    account_id: lee::AccountId,
+) -> launchpad_client::Result<ProgramHandle> {
+    Ok(ProgramHandle {
+        account_id,
+        image: launchpad_client::load_program(path)?,
+    })
+}
+
+fn current_time() -> Result<u64> {
+    Ok(SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .context("reading the current time")?
+        .as_secs())
 }
 
 #[derive(Debug, Clone)]
@@ -489,12 +584,7 @@ struct HookSnapshot {
 impl From<&launchpad_client::GraduationHook> for HookSnapshot {
     fn from(hook: &launchpad_client::GraduationHook) -> Self {
         Self {
-            program_id: hex::encode(
-                hook.program_id
-                    .iter()
-                    .flat_map(|word| word.to_le_bytes())
-                    .collect::<Vec<_>>(),
-            ),
+            program_id: hook.program_id.to_string(),
             configuration: hex::encode(&hook.configuration),
         }
     }
@@ -576,19 +666,26 @@ async fn run(json: bool, cli: Cli) -> Result<()> {
                 .map_err(|error| eyre::eyre!(error.into_boxed_dyn_error()))?;
             let (definition, _) = wallet.create_new_account_public(None);
             let (holder, _) = wallet.create_new_account_public(None);
-            let (metadata, _) = wallet.create_new_account_public(None);
             wallet
                 .store_config_changes()
                 .await
                 .map_err(|error| eyre::eyre!(error.into_boxed_dyn_error()))?;
-            let invocation = launchpad_client::build_create_authority_invocation(
+            let mut invocation = launchpad_client::build_create_authority_invocation(
                 definition,
                 holder,
-                metadata,
                 args.name.clone(),
                 args.uri.clone(),
             );
-            let hash = submit_public_invocation(&wallet, &programs::token(), invocation).await?;
+            invocation.fee_payer = Some(args.fee_payer);
+            let hash = submit_public_invocation(
+                &wallet,
+                &load_deployment(
+                    &args.token_program_path,
+                    launchpad_client::TOKEN_PROGRAM_ACCOUNT_ID,
+                )?,
+                invocation,
+            )
+            .await?;
             println!(
                 "{}",
                 serde_json::json!({"status":"submitted", "authority":definition.to_string(), "holder":format!("Public/{holder}"), "transaction_hash":hex::encode(hash)})
@@ -598,8 +695,17 @@ async fn run(json: bool, cli: Cli) -> Result<()> {
         Command::TransferAuthority(args) => {
             let mut wallet = WalletCore::from_env()
                 .map_err(|error| eyre::eyre!(error.into_boxed_dyn_error()))?;
-            let hash =
-                launchpad_client::transfer_authority(&mut wallet, args.from, args.to).await?;
+            let hash = launchpad_client::transfer_authority(
+                &mut wallet,
+                &load_deployment(
+                    &args.token_program_path,
+                    launchpad_client::TOKEN_PROGRAM_ACCOUNT_ID,
+                )?,
+                args.from,
+                args.to,
+                args.definition,
+            )
+            .await?;
             println!(
                 "{}",
                 serde_json::json!({"status":"submitted", "transaction_hash":hex::encode(hash)})
@@ -618,7 +724,7 @@ async fn run(json: bool, cli: Cli) -> Result<()> {
         Command::CollectFees(args) => {
             let wallet = WalletCore::from_env()
                 .map_err(|error| eyre::eyre!(error.into_boxed_dyn_error()))?;
-            let curve = load_program(&args.curve_program_path)?;
+            let curve = load_deployment(&args.curve_program_path, args.curve_program_account)?;
             let collateral_definition = args.collateral_definition.account_id();
             let pools = args
                 .pool
@@ -628,8 +734,14 @@ async fn run(json: bool, cli: Cli) -> Result<()> {
                     collateral_definition,
                 })
                 .collect::<Vec<_>>();
-            let hashes =
-                launchpad_client::collect_pool_fees(&wallet, namespace, &curve, &pools).await?;
+            let hashes = launchpad_client::collect_pool_fees(
+                &wallet,
+                namespace,
+                &curve,
+                &pools,
+                args.fee_payer,
+            )
+            .await?;
             println!(
                 "{}",
                 serde_json::json!({"transaction_hashes": hashes.into_iter().map(hex::encode).collect::<Vec<_>>()})
@@ -650,10 +762,10 @@ async fn run(json: bool, cli: Cli) -> Result<()> {
         Command::Configure(args) => configure(namespace, json, args).await,
         Command::CreateAuthority(_) | Command::TransferAuthority(_) => unreachable!(),
         Command::NamespaceInfo(args) => {
-            let program = load_program(&args.curve_program_path)?;
+            let program = load_deployment(&args.curve_program_path, args.curve_program_account)?;
             let wallet = WalletCore::from_env()
                 .map_err(|error| eyre::eyre!(error.into_boxed_dyn_error()))?;
-            let config = load_curve_config(namespace, &wallet, program.id()).await?;
+            let config = load_curve_config(namespace, &wallet, program.account_id).await?;
             println!(
                 "{}",
                 serde_json::json!({"namespace": namespace.to_string(), "protocol_fee_bps": config.protocol_fee_bps, "treasury": config.treasury.to_string()})
@@ -661,12 +773,12 @@ async fn run(json: bool, cli: Cli) -> Result<()> {
             Ok(())
         }
         Command::RenounceAdmin(args) => {
-            let program = load_program(&args.curve_program_path)?;
+            let program = load_deployment(&args.curve_program_path, args.curve_program_account)?;
             let wallet = WalletCore::from_env()
                 .map_err(|error| eyre::eyre!(error.into_boxed_dyn_error()))?;
             let invocation = launchpad_client::build_renounce_admin_invocation(
                 namespace,
-                program.id(),
+                program.account_id,
                 args.admin,
             );
             let hash = submit_public_invocation(&wallet, &program, invocation).await?;
@@ -704,12 +816,12 @@ fn error_category(error: &eyre::Report) -> ErrorCategory {
 }
 
 async fn configure(namespace: lee::AccountId, json: bool, args: ConfigArgs) -> Result<()> {
-    let curve_program = load_program(&args.curve_program_path)?;
+    let curve_program = load_deployment(&args.curve_program_path, args.curve_program_account)?;
     let wallet =
         WalletCore::from_env().map_err(|error| eyre::eyre!(error.into_boxed_dyn_error()))?;
     let invocation = launchpad_client::build_initialize_namespace_invocation(
         namespace,
-        curve_program.id(),
+        curve_program.account_id,
         args.protocol_fee_bps,
         args.treasury,
     );
@@ -737,8 +849,9 @@ async fn withdraw_factory_proceeds(
     args: FactoryLifecycleArgs,
     router: Option<&Path>,
 ) -> Result<()> {
-    let factory_program = load_program(&args.factory_program_path)?;
-    let curve_program = load_program(&args.curve_program_path)?;
+    let factory_program =
+        load_deployment(&args.factory_program_path, args.factory_program_account)?;
+    let curve_program = load_deployment(&args.curve_program_path, args.curve_program_account)?;
     let sale = factory_sale(
         namespace,
         &factory_program,
@@ -749,7 +862,10 @@ async fn withdraw_factory_proceeds(
     let mut wallet = WalletCore::from_env()
         .map_err(|error| eyre::eyre!(error.into_boxed_dyn_error()))
         .context("opening the project wallet")?;
-    let router = router.map(load_program).transpose()?;
+    if router.is_some() {
+        return Err(launchpad_client::ClientError::UnsupportedPrivateAuthority.into());
+    }
+    let router = None;
     let receipt = launchpad_client::FactorySession::new(
         &mut wallet,
         &factory_program,
@@ -758,14 +874,14 @@ async fn withdraw_factory_proceeds(
         namespace,
         args.creator,
     )
-    .withdraw(sale)
+    .withdraw(sale, current_time()?)
     .await?;
     print_lifecycle(json, "factory withdrawal", args.launch.launch_salt, receipt)
 }
 
 async fn graduate(namespace: lee::AccountId, json: bool, args: GraduationArgs) -> Result<()> {
-    let factory = load_program(&args.factory_program_path)?;
-    let curve = load_program(&args.curve_program_path)?;
+    let factory = load_deployment(&args.factory_program_path, args.factory_program_account)?;
+    let curve = load_deployment(&args.curve_program_path, args.curve_program_account)?;
     let sale = factory_sale(
         namespace,
         &factory,
@@ -784,16 +900,13 @@ async fn graduate(namespace: lee::AccountId, json: bool, args: GraduationArgs) -
     let treasury = launchpad_client::prepare_fee_collection(
         &wallet,
         namespace,
-        curve.id(),
+        curve.account_id,
         sale.collateral_definition,
     )
     .await?;
-    let invocation = launchpad_client::build_graduation_invocation(
-        sale,
-        &state,
-        treasury,
-        args.adapter_account,
-    )?;
+    let mut invocation =
+        launchpad_client::build_graduation_invocation(sale, &state, treasury, current_time()?)?;
+    invocation.fee_payer = Some(args.fee_payer);
     let transaction_hash = submit_public_invocation(&wallet, &factory, invocation).await?;
     print_submission(
         json,
@@ -804,8 +917,14 @@ async fn graduate(namespace: lee::AccountId, json: bool, args: GraduationArgs) -
 }
 
 async fn price(namespace: lee::AccountId, json: bool, args: PriceArgs) -> Result<()> {
-    let factory_program = load_program(&args.launch.factory_program_path)?;
-    let curve_program = load_program(&args.launch.curve_program_path)?;
+    let factory_program = load_deployment(
+        &args.launch.factory_program_path,
+        args.launch.factory_program_account,
+    )?;
+    let curve_program = load_deployment(
+        &args.launch.curve_program_path,
+        args.launch.curve_program_account,
+    )?;
     let sale = factory_sale(
         namespace,
         &factory_program,
@@ -817,7 +936,7 @@ async fn price(namespace: lee::AccountId, json: bool, args: PriceArgs) -> Result
         .map_err(|error| eyre::eyre!(error.into_boxed_dyn_error()))
         .context("opening the project wallet")?;
     let pool = load_factory_pool(&wallet, sale).await?;
-    let config = load_curve_config(namespace, &wallet, curve_program.id()).await?;
+    let config = load_curve_config(namespace, &wallet, curve_program.account_id).await?;
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .context("reading the current time")?
@@ -865,8 +984,9 @@ async fn price(namespace: lee::AccountId, json: bool, args: PriceArgs) -> Result
 }
 
 async fn sale_snapshot(namespace: lee::AccountId, json: bool, args: LaunchReadArgs) -> Result<()> {
-    let factory_program = load_program(&args.factory_program_path)?;
-    let curve_program = load_program(&args.curve_program_path)?;
+    let factory_program =
+        load_deployment(&args.factory_program_path, args.factory_program_account)?;
+    let curve_program = load_deployment(&args.curve_program_path, args.curve_program_account)?;
     let sale = factory_sale(
         namespace,
         &factory_program,
@@ -902,7 +1022,7 @@ async fn sale_snapshot(namespace: lee::AccountId, json: bool, args: LaunchReadAr
     } else {
         0
     };
-    let config = load_curve_config(namespace, &wallet, curve_program.id()).await?;
+    let config = load_curve_config(namespace, &wallet, curve_program.account_id).await?;
     let snapshot = SaleSnapshot {
         trade_mode: factory.trade_mode.into(),
         graduation_hook: factory.graduation_hook.as_ref().map(HookSnapshot::from),
@@ -911,11 +1031,7 @@ async fn sale_snapshot(namespace: lee::AccountId, json: bool, args: LaunchReadAr
         protocol_fee_bps: config.protocol_fee_bps,
         treasury: config.treasury.to_string(),
         launch_salt: hex::encode(args.launch.launch_salt),
-        factory_program: factory_program
-            .id()
-            .iter()
-            .map(|word| format!("{word:08x}"))
-            .collect(),
+        factory_program: factory_program.account_id.to_string(),
         pool: factory.pool_id.to_string(),
         token_definition: factory.token_definition_id.to_string(),
         collateral_definition: factory.collateral_definition_id.to_string(),
@@ -978,8 +1094,14 @@ async fn sale_snapshot(namespace: lee::AccountId, json: bool, args: LaunchReadAr
 }
 
 async fn buy(namespace: lee::AccountId, json: bool, args: BuyArgs) -> Result<()> {
-    let factory_program = load_program(&args.trade.factory_program_path)?;
-    let curve_program = load_program(&args.trade.curve_program_path)?;
+    let factory_program = load_deployment(
+        &args.trade.factory_program_path,
+        args.trade.factory_program_account,
+    )?;
+    let curve_program = load_deployment(
+        &args.trade.curve_program_path,
+        args.trade.curve_program_account,
+    )?;
     let sale = factory_sale(
         namespace,
         &factory_program,
@@ -991,32 +1113,23 @@ async fn buy(namespace: lee::AccountId, json: bool, args: BuyArgs) -> Result<()>
     let wallet = WalletCore::from_env()
         .map_err(|error| eyre::eyre!(error.into_boxed_dyn_error()))
         .context("opening the project wallet")?;
-    let config = load_curve_config(namespace, &wallet, curve_program.id()).await?;
+    let config = load_curve_config(namespace, &wallet, curve_program.account_id).await?;
     let pool = load_factory_pool(&wallet, sale).await?;
-    if args.tokens > pool.pool.real_reserve0 {
-        return Err(launchpad_client::ClientError::QuoteBuy(
-            pool::SwapError::InsufficientRealOutputReserve,
-        )
-        .into());
-    }
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .context("reading the current time")?
         .as_secs();
-    let quote = quote_buy(&pool, &config, args.tokens, now)?;
-    if quote.amount_in > args.max_collateral {
-        return Err(
-            launchpad_client::ClientError::QuoteBuy(pool::SwapError::SlippageExceeded).into(),
-        );
-    }
-    let invocation = build_buy_invocation(
+    let invocation = prepare_buy_invocation(
         sale,
         participant,
+        &pool,
+        &config,
         ExactOutputTradeTerms {
             amount_out: args.tokens,
             max_amount_in: args.max_collateral,
         },
-    );
+        now,
+    )?;
     let transaction_hash = submit_public_invocation(&wallet, &curve_program, invocation).await?;
     print_submission(
         json,
@@ -1031,8 +1144,14 @@ async fn buy_with_collateral(
     json: bool,
     args: BuyWithCollateralArgs,
 ) -> Result<()> {
-    let factory_program = load_program(&args.trade.factory_program_path)?;
-    let curve_program = load_program(&args.trade.curve_program_path)?;
+    let factory_program = load_deployment(
+        &args.trade.factory_program_path,
+        args.trade.factory_program_account,
+    )?;
+    let curve_program = load_deployment(
+        &args.trade.curve_program_path,
+        args.trade.curve_program_account,
+    )?;
     let sale = factory_sale(
         namespace,
         &factory_program,
@@ -1044,27 +1163,23 @@ async fn buy_with_collateral(
     let wallet = WalletCore::from_env()
         .map_err(|error| eyre::eyre!(error.into_boxed_dyn_error()))
         .context("opening the project wallet")?;
-    let config = load_curve_config(namespace, &wallet, curve_program.id()).await?;
+    let config = load_curve_config(namespace, &wallet, curve_program.account_id).await?;
     let pool = load_factory_pool(&wallet, sale).await?;
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .context("reading the current time")?
         .as_secs();
-    let quote = quote_buy_with_collateral(&pool, &config, args.collateral, now)?;
-    if quote.amount_out < args.min_tokens {
-        return Err(launchpad_client::ClientError::QuoteBuyWithCollateral(
-            pool::SwapError::SlippageExceeded,
-        )
-        .into());
-    }
-    let invocation = build_buy_with_collateral_invocation(
+    let invocation = prepare_buy_with_collateral_invocation(
         sale,
         participant,
+        &pool,
+        &config,
         ExactInputTradeTerms {
             amount_in: args.collateral,
             min_amount_out: args.min_tokens,
         },
-    );
+        now,
+    )?;
     let transaction_hash = submit_public_invocation(&wallet, &curve_program, invocation).await?;
     print_submission(
         json,
@@ -1074,48 +1189,26 @@ async fn buy_with_collateral(
     )
 }
 
-async fn private_buy(namespace: lee::AccountId, args: PrivateBuyArgs) -> Result<()> {
-    let factory_program = load_program(&args.factory_program_path)?;
-    let curve_program = load_program(&args.curve_program_path)?;
-    let private_buy_program = load_program(&args.private_buy_program_path)?;
-    let sale = factory_sale(
-        namespace,
-        &factory_program,
-        &curve_program,
-        args.launch.launch_salt,
-        args.collateral_definition.account_id(),
-    );
-    let mut wallet = WalletCore::from_env()
-        .map_err(|error| eyre::eyre!(error.into_boxed_dyn_error()))
-        .context("opening the project wallet")?;
-    let receipt = submit_private_buy(
-        &mut wallet,
-        sale,
-        PrivateBuyRoute {
-            private_buy_program: &private_buy_program,
-            curve_program: &curve_program,
-        },
-        PrivateBuyRequest {
-            amount_out: args.tokens,
-            max_collateral_in: args.max_collateral,
-            from_private: args.from_private,
-            to_private: args.to_private,
-            gas_reserve: args.gas_reserve,
-        },
-    )
-    .await?;
-    println!(
-        "private purchase submitted: transaction_hash={} transient_public_account={} private_destination={}",
-        hex::encode(receipt.transaction_hash),
-        receipt.transient_public_account,
-        receipt.private_destination
-    );
-    Ok(())
+async fn private_buy(_namespace: lee::AccountId, args: PrivateBuyArgs) -> Result<()> {
+    launchpad_client::validate_private_buy_request(PrivateBuyRequest {
+        amount_out: args.tokens,
+        max_collateral_in: args.max_collateral,
+        from_private: args.from_private,
+        to_private: args.to_private,
+        gas_reserve: args.gas_reserve,
+    })?;
+    Err(launchpad_client::ClientError::UnsupportedPrivateRoute.into())
 }
 
 async fn sell(namespace: lee::AccountId, json: bool, args: SellArgs) -> Result<()> {
-    let factory_program = load_program(&args.trade.factory_program_path)?;
-    let curve_program = load_program(&args.trade.curve_program_path)?;
+    let factory_program = load_deployment(
+        &args.trade.factory_program_path,
+        args.trade.factory_program_account,
+    )?;
+    let curve_program = load_deployment(
+        &args.trade.curve_program_path,
+        args.trade.curve_program_account,
+    )?;
     let sale = factory_sale(
         namespace,
         &factory_program,
@@ -1127,32 +1220,23 @@ async fn sell(namespace: lee::AccountId, json: bool, args: SellArgs) -> Result<(
     let wallet = WalletCore::from_env()
         .map_err(|error| eyre::eyre!(error.into_boxed_dyn_error()))
         .context("opening the project wallet")?;
-    let config = load_curve_config(namespace, &wallet, curve_program.id()).await?;
+    let config = load_curve_config(namespace, &wallet, curve_program.account_id).await?;
     let pool = load_factory_pool(&wallet, sale).await?;
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .context("reading the current time")?
         .as_secs();
-    let quote = quote_sell(&pool, &config, args.tokens, now)?;
-    if quote.amount_out > pool.pool.real_reserve1 {
-        return Err(launchpad_client::ClientError::QuoteSell(
-            pool::SwapError::InsufficientRealOutputReserve,
-        )
-        .into());
-    }
-    if quote.amount_out < args.min_collateral {
-        return Err(
-            launchpad_client::ClientError::QuoteSell(pool::SwapError::SlippageExceeded).into(),
-        );
-    }
-    let invocation = build_sell_invocation(
+    let invocation = prepare_sell_invocation(
         sale,
         participant,
+        &pool,
+        &config,
         ExactInputTradeTerms {
             amount_in: args.tokens,
             min_amount_out: args.min_collateral,
         },
-    );
+        now,
+    )?;
     let transaction_hash = submit_public_invocation(&wallet, &curve_program, invocation).await?;
     print_submission(
         json,
@@ -1190,8 +1274,9 @@ async fn claim_creator_allocation(
     args: FactoryLifecycleArgs,
     router: Option<&Path>,
 ) -> Result<()> {
-    let factory_program = load_program(&args.factory_program_path)?;
-    let curve_program = load_program(&args.curve_program_path)?;
+    let factory_program =
+        load_deployment(&args.factory_program_path, args.factory_program_account)?;
+    let curve_program = load_deployment(&args.curve_program_path, args.curve_program_account)?;
     let sale = factory_sale(
         namespace,
         &factory_program,
@@ -1199,10 +1284,20 @@ async fn claim_creator_allocation(
         args.launch.launch_salt,
         args.collateral_definition.account_id(),
     );
-    let build = |creator| Ok(build_claim_creator_allocation_invocation(sale, creator));
+
     let mut wallet = WalletCore::from_env()
         .map_err(|error| eyre::eyre!(error.into_boxed_dyn_error()))
         .context("opening the project wallet")?;
+    let state = load_factory_state(&wallet, sale).await?;
+    let now = current_time()?;
+    let build = |creator| {
+        Ok(build_claim_creator_allocation_invocation(
+            sale,
+            creator,
+            state.creator_nft_definition,
+            now,
+        ))
+    };
     let transaction_hash = submit_role(
         &mut wallet,
         &factory_program,
@@ -1234,8 +1329,9 @@ async fn create_sale(
     args: CreateSaleArgs,
     router: Option<&Path>,
 ) -> Result<()> {
-    let factory_program = load_program(&args.factory_program_path)?;
-    let curve_program = load_program(&args.curve_program_path)?;
+    let factory_program =
+        load_deployment(&args.factory_program_path, args.factory_program_account)?;
+    let curve_program = load_deployment(&args.curve_program_path, args.curve_program_account)?;
     let sale = factory_sale(
         namespace,
         &factory_program,
@@ -1247,7 +1343,10 @@ async fn create_sale(
     let mut wallet = WalletCore::from_env()
         .map_err(|error| eyre::eyre!(error.into_boxed_dyn_error()))
         .context("opening the project wallet")?;
-    let router = router.map(load_program).transpose()?;
+    if router.is_some() {
+        return Err(launchpad_client::ClientError::UnsupportedPrivateAuthority.into());
+    }
+    let router = None;
     let receipt = launchpad_client::FactorySession::new(
         &mut wallet,
         &factory_program,
@@ -1293,29 +1392,17 @@ fn print_lifecycle(
 
 async fn submit_role<I: launchpad_client::PrivateInstruction>(
     wallet: &mut WalletCore,
-    program: &lee::program::Program,
-    dependencies: Vec<lee::program::Program>,
+    program: &ProgramHandle,
+    _dependencies: Vec<ProgramHandle>,
     holder: AccountLocation,
-    router: Option<&Path>,
+    _router: Option<&Path>,
     build: impl FnOnce(
         lee::AccountId,
     ) -> launchpad_client::Result<launchpad_client::PublicInvocation<I>>,
 ) -> Result<common::HashType> {
     match holder {
-        AccountLocation::Private(holder) => {
-            let router = load_program(
-                router.context("--authority-router-path is required for a private NFT holder")?,
-            )?;
-            Ok(launchpad_client::submit_private_authority(
-                wallet,
-                &router,
-                program,
-                dependencies,
-                holder,
-                build,
-            )
-            .await?
-            .transaction_hash)
+        AccountLocation::Private(_) => {
+            Err(launchpad_client::ClientError::UnsupportedPrivateAuthority.into())
         }
         AccountLocation::Public(holder) => {
             Ok(submit_public_invocation(wallet, program, build(holder)?).await?)
@@ -1329,11 +1416,172 @@ mod tests {
     use clap::{CommandFactory, Parser};
 
     #[test]
+    fn create_authority_requires_a_public_fee_payer() {
+        let command = [
+            "launchpad",
+            "create-authority",
+            "--token-program-path",
+            "token.bin",
+            "--name",
+            "Creator",
+            "--uri",
+            "https://example.invalid/creator",
+        ];
+        let error = Cli::try_parse_from(command).unwrap_err();
+        assert_eq!(
+            error.kind(),
+            clap::error::ErrorKind::MissingRequiredArgument
+        );
+        assert!(error.to_string().contains("--fee-payer"));
+        for payer in [
+            "11111111111111111111111111111111",
+            "Public/11111111111111111111111111111111",
+        ] {
+            let cli =
+                Cli::try_parse_from(command.into_iter().chain(["--fee-payer", payer])).unwrap();
+            let Command::CreateAuthority(args) = cli.command else {
+                panic!("expected create-authority");
+            };
+            assert_eq!(args.fee_payer, parse_public_account_id(payer).unwrap());
+        }
+        assert!(
+            Cli::try_parse_from(
+                command
+                    .into_iter()
+                    .chain(["--fee-payer", "Private/11111111111111111111111111111111",])
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn private_nft_transfer_is_rejected_before_wallet_access() {
+        let cli = Cli::try_parse_from([
+            "launchpad",
+            "transfer-authority",
+            "--token-program-path",
+            "token.bin",
+            "--definition",
+            "11111111111111111111111111111111",
+            "--from",
+            "Public/11111111111111111111111111111111",
+            "--to",
+            "Private/11111111111111111111111111111111",
+        ])
+        .unwrap();
+        let error = cli.validate_route().unwrap_err();
+        assert!(matches!(
+            error.downcast_ref::<launchpad_client::ClientError>(),
+            Some(launchpad_client::ClientError::UnsupportedPrivateAuthority)
+        ));
+    }
+
+    #[test]
+    fn private_creator_lifecycle_is_rejected_before_wallet_access() {
+        let salt = "11".repeat(32);
+        for command in ["withdraw", "claim"] {
+            let cli = Cli::try_parse_from([
+                "launchpad",
+                command,
+                "--launch-salt",
+                &salt,
+                "--collateral-definition",
+                "11111111111111111111111111111111",
+                "--creator",
+                "Private/11111111111111111111111111111111",
+                "--factory-program-path",
+                "factory.bin",
+                "--factory-program-account",
+                "11111111111111111111111111111111",
+                "--curve-program-path",
+                "curve.bin",
+                "--curve-program-account",
+                "11111111111111111111111111111111",
+            ])
+            .unwrap();
+            assert!(matches!(
+                cli.validate_route()
+                    .unwrap_err()
+                    .downcast_ref::<launchpad_client::ClientError>(),
+                Some(launchpad_client::ClientError::UnsupportedPrivateAuthority)
+            ));
+        }
+    }
+
+    #[test]
+    fn private_sale_selectors_cannot_alias_public_actors() {
+        let salt = "11".repeat(32);
+        let public = "11111111111111111111111111111111";
+        let private = "Private/11111111111111111111111111111111";
+        for (namespace, collateral) in [(private, public), (public, private)] {
+            let cli = Cli::try_parse_from([
+                "launchpad",
+                "--namespace",
+                namespace,
+                "buy",
+                "--launch-salt",
+                &salt,
+                "--tokens",
+                "1",
+                "--max-collateral",
+                "2",
+                "--collateral-definition",
+                collateral,
+                "--participant",
+                public,
+                "--factory-program-path",
+                "factory.bin",
+                "--factory-program-account",
+                public,
+                "--curve-program-path",
+                "curve.bin",
+                "--curve-program-account",
+                public,
+            ])
+            .unwrap();
+            assert!(cli.validate_route().is_err());
+        }
+    }
+
+    #[test]
+    fn public_trade_rejects_private_participant_before_wallet_access() {
+        let salt = "11".repeat(32);
+        let cli = Cli::try_parse_from([
+            "launchpad",
+            "buy",
+            "--launch-salt",
+            &salt,
+            "--tokens",
+            "1",
+            "--max-collateral",
+            "2",
+            "--collateral-definition",
+            "11111111111111111111111111111111",
+            "--participant",
+            "Private/11111111111111111111111111111111",
+            "--factory-program-path",
+            "factory.bin",
+            "--factory-program-account",
+            "11111111111111111111111111111111",
+            "--curve-program-path",
+            "curve.bin",
+            "--curve-program-account",
+            "11111111111111111111111111111111",
+        ])
+        .unwrap();
+        assert!(cli.validate_route().is_err());
+    }
+
+    #[test]
     fn authority_commands_keep_nft_transfers_and_reject_private_namespace_admin() {
         assert!(
             Cli::try_parse_from([
                 "launchpad",
                 "create-authority",
+                "--token-program-path",
+                "token.bin",
+                "--fee-payer",
+                "11111111111111111111111111111111",
                 "--name",
                 "Admin",
                 "--uri",
@@ -1351,6 +1599,8 @@ mod tests {
                 "configure",
                 "--curve-program-path",
                 "curve.bin",
+                "--curve-program-account",
+                "11111111111111111111111111111111",
                 "--admin",
                 "Private/11111111111111111111111111111111",
                 "--treasury",
@@ -1362,6 +1612,10 @@ mod tests {
             Cli::try_parse_from([
                 "launchpad",
                 "transfer-authority",
+                "--token-program-path",
+                "token.bin",
+                "--definition",
+                "11111111111111111111111111111111",
                 "--from",
                 "Public/11111111111111111111111111111111",
                 "--to",
@@ -1380,6 +1634,8 @@ mod tests {
             "configure",
             "--curve-program-path",
             "curve.bin",
+            "--curve-program-account",
+            "11111111111111111111111111111111",
             "--admin",
             "Public/11111111111111111111111111111111",
             "--protocol-fee-bps",
@@ -1402,6 +1658,8 @@ mod tests {
                 command,
                 "--curve-program-path",
                 "curve.bin",
+                "--curve-program-account",
+                "11111111111111111111111111111111",
             ];
             if command == "renounce-admin" {
                 args.extend(["--admin", "Public/11111111111111111111111111111111"]);
@@ -1449,8 +1707,12 @@ mod tests {
             "Public/11111111111111111111111111111111",
             "--factory-program-path",
             "factory.bin",
+            "--factory-program-account",
+            "11111111111111111111111111111111",
             "--curve-program-path",
             "curve.bin",
+            "--curve-program-account",
+            "11111111111111111111111111111111",
         ])
         .expect("buy command should parse");
         assert!(matches!(
@@ -1531,8 +1793,12 @@ mod tests {
             "Public/11111111111111111111111111111111",
             "--factory-program-path",
             "factory.bin",
+            "--factory-program-account",
+            "11111111111111111111111111111111",
             "--curve-program-path",
             "curve.bin",
+            "--curve-program-account",
+            "11111111111111111111111111111111",
         ])
         .expect("sell command should parse");
         assert!(matches!(cli.command, Command::Sell(_)));
@@ -1555,52 +1821,41 @@ mod tests {
             "Public/11111111111111111111111111111111",
             "--factory-program-path",
             "factory.bin",
+            "--factory-program-account",
+            "11111111111111111111111111111111",
             "--curve-program-path",
             "curve.bin",
+            "--curve-program-account",
+            "11111111111111111111111111111111",
         ])
         .expect("collateral buy command should parse");
         assert!(matches!(cli.command, Command::BuyWithCollateral(_)));
     }
 
     #[test]
-    fn graduate_accepts_ordered_public_adapter_accounts_without_creator_authority() {
+    fn graduation_uses_a_typed_callback_without_arbitrary_adapter_accounts() {
         let salt = "11".repeat(32);
-        let first = lee::AccountId::new([1; 32]).to_string();
-        let second = lee::AccountId::new([2; 32]).to_string();
-        let cli = Cli::try_parse_from([
+        let mut base = vec![
             "launchpad",
             "graduate",
             "--launch-salt",
             &salt,
             "--collateral-definition",
-            "Public/11111111111111111111111111111111",
+            "11111111111111111111111111111111",
             "--factory-program-path",
             "factory.bin",
+            "--factory-program-account",
+            "11111111111111111111111111111111",
             "--curve-program-path",
             "curve.bin",
-            "--adapter-account",
-            &first,
-            "--adapter-account",
-            &second,
-        ])
-        .unwrap();
-        let Command::Graduate(args) = cli.command else {
-            panic!("graduate")
-        };
-        assert_eq!(
-            args.adapter_account,
-            [lee::AccountId::new([1; 32]), lee::AccountId::new([2; 32])]
-        );
-        let command = Cli::command();
-        let graduate = command
-            .get_subcommands()
-            .find(|command| command.get_name() == "graduate")
-            .unwrap();
-        assert!(
-            !graduate
-                .get_arguments()
-                .any(|argument| argument.get_long() == Some("creator"))
-        );
+            "--curve-program-account",
+            "11111111111111111111111111111111",
+            "--fee-payer",
+            "11111111111111111111111111111111",
+        ];
+        assert!(Cli::try_parse_from(&base).is_ok());
+        base.extend(["--adapter-account", "11111111111111111111111111111111"]);
+        assert!(Cli::try_parse_from(base).is_err());
     }
 
     #[test]
@@ -1609,14 +1864,20 @@ mod tests {
         let base = vec![
             "launchpad",
             "graduate",
+            "--fee-payer",
+            "11111111111111111111111111111111",
             "--launch-salt",
             &salt,
             "--collateral-definition",
             "Public/11111111111111111111111111111111",
             "--factory-program-path",
             "factory.bin",
+            "--factory-program-account",
+            "11111111111111111111111111111111",
             "--curve-program-path",
             "curve.bin",
+            "--curve-program-account",
+            "11111111111111111111111111111111",
         ];
         assert!(Cli::try_parse_from(&base).unwrap().validate_route().is_ok());
         let mut routed = base.clone();
@@ -1642,7 +1903,7 @@ mod tests {
         ]);
         assert!(Cli::try_parse_from(private_adapter).is_err());
         let mut private_collateral = base;
-        private_collateral[5] = "Private/11111111111111111111111111111111";
+        private_collateral[7] = "Private/11111111111111111111111111111111";
         assert!(Cli::try_parse_from(private_collateral).is_err());
     }
 
@@ -1659,8 +1920,12 @@ mod tests {
             "Public/11111111111111111111111111111111",
             "--factory-program-path",
             "factory.bin",
+            "--factory-program-account",
+            "11111111111111111111111111111111",
             "--curve-program-path",
             "curve.bin",
+            "--curve-program-account",
+            "11111111111111111111111111111111",
         ])
         .expect("withdraw command should parse");
         assert!(matches!(cli.command, Command::Withdraw(_)));
@@ -1712,12 +1977,18 @@ mod tests {
             "100",
             "--collateral-definition",
             "11111111111111111111111111111111",
+            "--creator-nft-definition",
+            "11111111111111111111111111111111",
             "--creator",
             "Public/11111111111111111111111111111111",
             "--factory-program-path",
             "factory.bin",
+            "--factory-program-account",
+            "11111111111111111111111111111111",
             "--curve-program-path",
             "curve.bin",
+            "--curve-program-account",
+            "11111111111111111111111111111111",
         ])
         .expect("create sale command should parse");
         assert!(matches!(cli.command, Command::CreateSale(_)));
@@ -1726,7 +1997,7 @@ mod tests {
     #[test]
     fn create_sale_saves_optional_hook_program_and_hex_configuration() {
         let salt = "11".repeat(32);
-        let program = "01000000".repeat(8);
+        let program = lee::AccountId::new([1; 32]).to_string();
         let mut arguments = vec![
             "launchpad",
             "create-sale",
@@ -1750,12 +2021,18 @@ mod tests {
             "100",
             "--collateral-definition",
             "11111111111111111111111111111111",
+            "--creator-nft-definition",
+            "11111111111111111111111111111111",
             "--creator",
             "Public/11111111111111111111111111111111",
             "--factory-program-path",
             "factory.bin",
+            "--factory-program-account",
+            "11111111111111111111111111111111",
             "--curve-program-path",
             "curve.bin",
+            "--curve-program-account",
+            "11111111111111111111111111111111",
         ];
         let without_hook = Cli::try_parse_from(&arguments).unwrap();
         let Command::CreateSale(args) = without_hook.command else {
@@ -1787,7 +2064,7 @@ mod tests {
         assert_eq!(
             args.sale_request().graduation_hook,
             Some(launchpad_client::GraduationHook {
-                program_id: [1; 8],
+                program_id: lee::AccountId::new([1; 32]),
                 configuration: vec![],
             })
         );
@@ -1804,7 +2081,7 @@ mod tests {
         assert_eq!(
             args.sale_request().graduation_hook,
             Some(launchpad_client::GraduationHook {
-                program_id: [1; 8],
+                program_id: lee::AccountId::new([1; 32]),
                 configuration: vec![7, 11],
             })
         );
@@ -1826,8 +2103,12 @@ mod tests {
             "11111111111111111111111111111111",
             "--factory-program-path",
             "factory.bin",
+            "--factory-program-account",
+            "11111111111111111111111111111111",
             "--curve-program-path",
             "curve.bin",
+            "--curve-program-account",
+            "11111111111111111111111111111111",
         ])
         .expect("status command should parse");
         assert!(matches!(cli.command, Command::Status(_)));
@@ -1846,8 +2127,12 @@ mod tests {
             "11111111111111111111111111111111",
             "--factory-program-path",
             "factory.bin",
+            "--factory-program-account",
+            "11111111111111111111111111111111",
             "--curve-program-path",
             "curve.bin",
+            "--curve-program-account",
+            "11111111111111111111111111111111",
         ])
         .expect("price command should parse");
         assert!(matches!(cli.command, Command::Price(_)));
@@ -1865,6 +2150,8 @@ mod tests {
             "Public/11111111111111111111111111111111",
             "--curve-program-path",
             "curve.bin",
+            "--curve-program-account",
+            "11111111111111111111111111111111",
         ])
         .expect("configure command should parse");
         assert!(matches!(cli.command, Command::Configure(_)));
@@ -1925,13 +2212,13 @@ mod tests {
     #[test]
     fn saved_hook_and_settlement_json_values_are_explicit() {
         let hook = launchpad_client::GraduationHook {
-            program_id: [1; 8],
+            program_id: lee::AccountId::new([1; 32]),
             configuration: vec![7, 11],
         };
         assert_eq!(
             serde_json::to_value(HookSnapshot::from(&hook)).unwrap(),
             serde_json::json!({
-                "program_id": "0100000001000000010000000100000001000000010000000100000001000000",
+                "program_id": lee::AccountId::new([1; 32]).to_string(),
                 "configuration": "070b",
             })
         );

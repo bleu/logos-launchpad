@@ -19,8 +19,12 @@ Make `nix` and `lgpm` available in your shell. Set `BASECAMP` to your installed 
 One command builds all three `.lgx` archives:
 
 ```sh
-nix build --no-update-lock-file path:./packages/launchpad --out-link packages/launchpad/result-packages
+nix --extra-experimental-features 'nix-command flakes' build --no-update-lock-file path:./packages/launchpad --out-link packages/launchpad/result-packages
 ```
+
+## Verification status
+
+The command above built all three archives during the actor migration. Installation, loading and the `Test backend` action remain blocked locally: `lgpm` is not available and no Basecamp executable was found. No `Backend OK` result is recorded. Archive builds do not prove module loading, wallet compatibility or sale execution.
 
 ## Install
 

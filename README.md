@@ -6,7 +6,7 @@ The target product lets creators launch sales and participants trade through cle
 
 This repository contains an imported PoC baseline and design documentation. The baseline keeps the root curve crates, CLI, methods and on-chain program IDLs. Fixed-price creation and funding are implemented. The repository does not implement the full production specification. Fixed-price trading, weighted sales, shared core and QML apps remain future work.
 
-Nothing from this project is deployed to testnet or production. The [LEZ v0.4 migration plan](plans/lez-v04-migration.md) has a tested [actor development base](packages/lez-compat/README.md). The application still uses its v0.2 pins and awaits migration. There is no deployed state to transfer.
+Nothing from this project is deployed to testnet or production. The application is migrated to one fixed LEZ actor-development revision, using the [actor development base](packages/lez-compat/README.md). The [migration record](plans/lez-v04-migration.md) lists passed local checks and the remaining execution and package-loading gaps. There is no supported old-platform lane or deployed state to transfer.
 
 ## Three sale types
 

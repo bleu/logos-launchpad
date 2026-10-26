@@ -6,6 +6,20 @@ use lee::AccountId;
 #[derive(Debug, thiserror::Error, strum::IntoStaticStr)]
 #[strum(serialize_all = "snake_case")]
 pub enum ClientError {
+    #[error("private purchases are not supported by canonical public token holdings")]
+    UnsupportedPrivateRoute,
+    #[error("private authority actions are not supported by canonical public token holdings")]
+    UnsupportedPrivateAuthority,
+    #[error("serializing actor message")]
+    EncodeMessage(#[source] std::io::Error),
+    #[error("reading deployed program header")]
+    ReadProgramHeader(#[source] Box<dyn Error + Send + Sync>),
+    #[error("invalid deployed program header")]
+    DecodeProgramHeader,
+    #[error("deployed program image differs from the supplied binary")]
+    InvocationImageMismatch,
+    #[error("destination actor is not declared")]
+    InvocationDestinationMissing,
     #[error("not a valid 32-byte base58 account id: {input}")]
     #[strum(serialize = "invalid_account_id")]
     InvalidAccountId {
@@ -54,6 +68,8 @@ pub enum ClientError {
     SubmitPrivateBuy(#[source] Box<wallet::ExecutionFailureKind>),
     #[error("input token is restricted by the pool")]
     InputTokenRestricted,
+    #[error("namespace is frozen")]
+    NamespaceFrozen,
     #[error("pool funding is pending")]
     PoolFundingPending,
     #[error("cannot quote purchase: {0}")]
@@ -73,19 +89,19 @@ pub enum ClientError {
     ReadCurveConfig(#[source] Box<dyn Error + Send + Sync>),
     #[error("decoding the live curve configuration")]
     #[strum(serialize = "decode_curve_config")]
-    DecodeCurveConfig(#[source] std::io::Error),
+    DecodeCurveConfig(#[source] curve_core::Error),
     #[error("reading the factory launch state")]
     #[strum(serialize = "read_factory_state")]
     ReadFactoryState(#[source] Box<dyn Error + Send + Sync>),
     #[error("decoding the factory launch state")]
     #[strum(serialize = "decode_factory_state")]
-    DecodeFactoryState(#[source] std::io::Error),
+    DecodeFactoryState(#[source] factory_core::Error),
     #[error("reading the factory curve pool")]
     #[strum(serialize = "read_factory_pool")]
     ReadFactoryPool(#[source] Box<dyn Error + Send + Sync>),
     #[error("decoding the factory curve pool")]
     #[strum(serialize = "decode_factory_pool")]
-    DecodeFactoryPool(#[source] std::io::Error),
+    DecodeFactoryPool(#[source] curve_core::Error),
     #[error("program binary does not match the invocation program ID")]
     InvocationProgramMismatch,
     #[error("wallet has no public signing key for {0}")]
@@ -98,7 +114,7 @@ pub enum ClientError {
     EncodeInstruction(#[source] Box<lee::error::LeeError>),
     #[error("submitting public launchpad transaction")]
     #[strum(serialize = "submit_public_transaction")]
-    SubmitPublicTransaction(#[source] sequencer_service_rpc::ClientError),
+    SubmitPublicTransaction(#[source] Box<wallet::ExecutionFailureKind>),
     #[error("private authority action must use its NFT holder as the only signer")]
     InvalidAuthoritySigners,
     #[error("action does not include the authority holder")]
@@ -124,9 +140,9 @@ pub enum ClientError {
     ReadAuthorityHolding(#[source] Box<dyn Error + Send + Sync>),
     #[error("authority holding must belong to the token program")]
     AuthorityHoldingProgramMismatch,
-    #[error("decoding authority holding")]
+    #[error("decoding authority holding: {0:?}")]
     #[strum(serialize = "decode_authority_holding")]
-    DecodeAuthorityHolding(#[source] std::io::Error),
+    DecodeAuthorityHolding(lez_compat_core::Error),
     #[error("authority requires an NFT master with one remaining unit")]
     InvalidAuthorityHolding,
     #[error("authority source and destination must differ")]
@@ -181,14 +197,14 @@ pub enum ClientError {
     PoolProgramMismatch,
     #[error("decoding collection pool")]
     #[strum(serialize = "decode_collection_pool")]
-    DecodeCollectionPool(#[source] std::io::Error),
+    DecodeCollectionPool(#[source] curve_core::Error),
     #[error("pool does not match selected namespace or collateral")]
     PoolSelectionMismatch,
     #[error("factory account belongs to another program")]
     FactoryProgramMismatch,
     #[error("decoding resumable factory state")]
     #[strum(serialize = "decode_resumable_factory_state")]
-    DecodeResumableFactoryState(#[source] std::io::Error),
+    DecodeResumableFactoryState(#[source] factory_core::Error),
     #[error("loaded factory state or pool does not match the selected sale")]
     FactorySaleMismatch,
     #[error("private authority router is required")]
@@ -312,18 +328,16 @@ mod tests {
                 .map(Box::as_ref),
             Some(wallet::ExecutionFailureKind::KeyNotFoundError)
         ));
-        let error: ClientError =
-            lee::error::LeeError::InstructionSerializationError("invalid instruction".into())
-                .into();
-        assert!(matches!(error, ClientError::EncodeInstruction(_)));
-        assert!(matches!(
+        let error = ClientError::EncodeMessage(std::io::Error::other("invalid actor message"));
+        assert_eq!(
             error
                 .source()
                 .unwrap()
-                .downcast_ref::<Box<lee::error::LeeError>>()
-                .map(Box::as_ref),
-            Some(lee::error::LeeError::InstructionSerializationError(_))
-        ));
+                .downcast_ref::<std::io::Error>()
+                .unwrap()
+                .kind(),
+            std::io::ErrorKind::Other
+        );
     }
 
     #[test]

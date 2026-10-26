@@ -1,6 +1,6 @@
 # Repository baseline and planned layout
 
-The repository contains an imported PoC baseline and future product design. The root curve crates, `cli/`, `methods/`, `idl-src/` and `idl/` retain their existing behavior. Weighted math is an independent nested workspace at `packages/weighted-math/`. These imports do not implement the full production specification. Product package boundaries are under `packages/launchpad/`. Keep working PoC boundaries before changing names or extracting shared code. See [architecture and interfaces](system.md) for component diagrams, the [product brief](../product/prd.md) for use cases and the [workspace guide](workspace-guide.md) for commands.
+The repository contains an imported PoC baseline and future product design. The root curve crates, `cli/`, `methods/` and on-chain interfaces use the selected LEZ actor revision. There is no supported legacy platform lane. Weighted math is an independent nested workspace at `packages/weighted-math/`. These imports do not implement the full production specification. Product package boundaries are under `packages/launchpad/`. Keep working PoC boundaries before changing names or extracting shared code. See [architecture and interfaces](system.md), the [product brief](../product/prd.md) and the [workspace guide](workspace-guide.md).
 
 ## Code ownership
 
@@ -17,7 +17,7 @@ The table defines architectural responsibilities. Ownership here means responsib
 | `packages/weighted-math/` | Standalone math kernel, harness, fixtures, proof material, fuzz target and parity workspace | Custody, authorities or product flow |
 | `packages/lez-compat/` | Temporary actor token, ATA and role-authority handlers; thin guests; maintained build and wire tools | Sale pricing or lifecycle, a replacement wallet, fee mechanism or execution engine |
 | `methods/guest/` | Thin dispatch entry points and guest-specific build profiles | A second copy of handler logic |
-| `crates/launchpad-client/` | Quotes, authoritative reads, transaction construction and the PoC single-transaction private-buy flow | QML state, direct indexer HTTP calls or duplicated pricing rules |
+| `crates/launchpad-client/` | Quotes, authoritative reads and actor transaction construction; explicit unsupported private-helper errors | QML state, direct indexer HTTP calls or duplicated pricing rules |
 | `cli/` | Argument parsing, command output and SDK calls | Independent protocol logic |
 | `packages/launchpad/core/` | Non-UI shared SDK boundary, backend module read API and generated app-facing adapter from a module `.lidl` contract | Separate pricing or transaction rules, user-key custody or an on-chain program IDL |
 | `packages/launchpad/apps/admin/` | Namespace administration and indexed namespace monitoring only | Creator or participant operations |
@@ -33,8 +33,8 @@ Weighted math is an imported independent workspace under `packages/weighted-math
 
 | Artifact | Producer/owner | Consumer | Required check |
 | --- | --- | --- | --- |
-| On-chain source IDLs in `idl-src/` | Program interface owner | On-chain program IDL generator | Handler and interface review |
-| Generated on-chain program IDLs in `idl/` | Existing source-IDL generation path | SDK, CLI and bindings | `verify/check-idl.sh` regeneration and drift check |
+| Actor message declarations in Rust | Program interface owner | Repository schema generator | Handler and wire review |
+| Generated application schema in `idl/launchpad.json` | `verify/generate-idl.sh` | SDK, CLI and bindings | `verify/check-idl.sh` regeneration and Borsh wire checks |
 | Guest binaries and program identities | Separate `methods/guest/` build | Deployment and client configuration | Pinned guest build and identity consistency |
 | Weighted kernel library | Math package | Weighted-sale program and test harness | Math tests, input qualification and guest parity |
 | Client library and CLI binary | `launchpad-client` and `cli` | Developers and operators | Include their tests, not only pure/core crates |
@@ -56,4 +56,4 @@ Live E2E verification remains future work and must use isolated disposable walle
 
 ## Review rules
 
-A public interface change needs matching on-chain source IDL or module `.lidl` contract, generated output, client behavior and compatibility review. A math change needs updated numerical evidence and a review of its input envelope. A lifecycle change needs authorization, accounting and settlement tests. A packaging change must prove that its module can be installed and called. The [verification ADR](../adr/0022-verification-boundaries.md) defines the evidence limits.
+A public interface change needs matching actor message declarations or module `.lidl` contract, generated output, client behavior and compatibility review. A math change needs updated numerical evidence and a review of its input envelope. A lifecycle change needs authorization, accounting and settlement tests. A packaging change must prove that its module can be installed and called. The [verification ADR](../adr/0022-verification-boundaries.md) defines the evidence limits.
