@@ -6,8 +6,8 @@ on:
     branches: [main]
   workflow_dispatch:
     inputs:
-      execution:
-        description: Run optional node-free token, sale trade and fee fixtures
+      full:
+        description: Run full builds, client/CLI, guests and execution tests
         type: boolean
         default: false
 
@@ -24,7 +24,7 @@ defaults:
 
 jobs:
   checks:
-    name: Actor formatting, pins and shell commands
+    name: Light host tests, formatting and pins
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -61,9 +61,13 @@ jobs:
           bash verify/tests/application-pins.sh
           bash verify/tests/check-builds.sh
           bash verify/tests/check-builds.sh missing-artifacts
+          bash verify/tests/check-dev.sh
+      - name: Run light host tests
+        run: bash verify/check-dev.sh
 
   builds:
-    name: Actor repository locked builds, tests and IDL
+    name: Manual full builds, tests and IDL
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.full }}
     needs: checks
     runs-on: ubuntu-24.04
     timeout-minutes: 120
@@ -126,13 +130,6 @@ jobs:
           bash verify/tests/application-idl-drift.sh
           bash verify/tests/actor-tools.sh
       - name: Run actor repository locked builds and tests
-        run: bash verify/check-builds.sh
+        run: bash verify/check-builds.sh --execution
       - name: Check generated actor program interfaces
         run: bash verify/check-idl.sh
-      - name: Run optional node-free actor execution
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.execution }}
-        run: |
-          source verify/actor-tools.env
-          RISC0_BUILD_LOCKED=1 cargo +"$ACTOR_RUST_VERSION" test --manifest-path packages/lez-compat/execution/Cargo.toml --locked
-          RISC0_BUILD_LOCKED=1 cargo +"$ACTOR_RUST_VERSION" test --manifest-path methods/Cargo.toml --release --locked --features actor-execution-tests --test actor_sale
-          printf 'Sale setup, lifecycle and settlement execution remain deferred; seeded fixtures cover trades and fixed-price fee collection.\n'
