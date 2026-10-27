@@ -216,19 +216,92 @@ pub(super) fn begin(
         },
     ))
 }
+pub(super) fn begin_payout(input: &ReceiveInput, command: Message) -> Result<Response, Error> {
+    let mut state = FixedPriceLaunchState::decode(&input.pre_state)?;
+    if input.receiver.account_id
+        != compute_factory_pda(
+            state.namespace,
+            input.receiver.program_account_id,
+            state.launch_salt,
+        )
+    {
+        return Err(Error::WrongAccount);
+    }
+    if state.creation_stage != FixedPriceCreationStage::Complete {
+        return Err(Error::CreationPending);
+    }
+    let creator = match command {
+        Message::WithdrawFactoryProceeds { creator, .. }
+        | Message::ClaimCreatorAllocation { creator, .. } => creator,
+        _ => return Err(Error::InvalidMessage),
+    };
+    let mut reads = vec![];
+    if matches!(command, Message::ClaimCreatorAllocation { .. }) {
+        reads.push(Read::new(
+            Actor::new(state.pool_id, state.lbp_program_id),
+            &lbp_core::Message::ReadState,
+        ));
+        if state.creator_allocation != 0 {
+            reads.push(holding_read(
+                state.creator_escrow_id,
+                state.token_definition_id,
+            ));
+        }
+    }
+    state.pending = Some(Pending {
+        command,
+        proof: true,
+        reads,
+        values: vec![],
+    });
+    Ok(state.response().send_sync(
+        Actor::new(creator, AUTHORITY_PROGRAM_ACCOUNT_ID),
+        &authority::Message::Check {
+            role: state.creator_role_id,
+            callback: input.receiver,
+        },
+    ))
+}
+
 pub(super) fn resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
     let mut state = FixedPriceLaunchState::decode(&input.pre_state).ok()?;
     let mut pending = state.pending.take()?;
     Some((|| {
+        if input.receiver.account_id
+            != compute_factory_pda(
+                state.namespace,
+                input.receiver.program_account_id,
+                state.launch_salt,
+            )
+        {
+            return Err(Error::WrongAccount);
+        }
         if pending.proof {
-            let Message::ContinueFixedPriceCreation { creator, .. } = pending.command else {
-                return Err(Error::InvalidState);
+            let creator = match pending.command {
+                Message::ContinueFixedPriceCreation { creator, .. }
+                | Message::ClaimCreatorAllocation { creator, .. }
+                | Message::WithdrawFactoryProceeds { creator, .. } => creator,
+                _ => return Err(Error::InvalidState),
             };
             authority::verify(
                 input,
                 Actor::new(state.creator_role_id, AUTHORITY_PROGRAM_ACCOUNT_ID),
                 creator,
             )?;
+            if let Message::WithdrawFactoryProceeds { creator, now } = pending.command {
+                return Ok(state.response().send_sync(
+                    Actor::new(state.pool_id, state.lbp_program_id),
+                    &lbp_core::Message::SettleFixedPrice { creator, now },
+                ));
+            }
+            if matches!(pending.command, Message::ClaimCreatorAllocation { .. }) {
+                if state.creator_allocation_released {
+                    return Ok(state.response());
+                }
+                pending.proof = false;
+                state.pending = Some(pending);
+                return Ok(state.next());
+            }
             pending.proof = false;
             state.pending = Some(pending);
             return Ok(state
@@ -260,6 +333,67 @@ pub(super) fn resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
         if pending.values.len() < pending.reads.len() {
             state.pending = Some(pending);
             return Ok(state.next());
+        }
+        if let Message::ClaimCreatorAllocation { creator, now } = pending.command {
+            let pool = lbp_core::PoolAccount::decode(&pending.values[0])
+                .map_err(|_| Error::InvalidState)?;
+            if pool.namespace != state.namespace
+                || pool.namespace_program_id != state.namespace_program_id
+                || pool.factory_owner != input.receiver.account_id
+                || pool.factory_program_id != input.receiver.program_account_id
+                || pool.factory_seed
+                    != *compute_factory_seed(state.namespace, state.launch_salt).as_bytes()
+                || pool.token_definition_id != state.token_definition_id
+                || pool.collateral_definition_id != state.collateral_definition_id
+                || pool.sale_inventory != state.sale_inventory
+                || pool.creator_allocation != state.creator_allocation
+                || pool.price != state.price
+                || pool.start_timestamp != state.start_timestamp
+                || pool.end_timestamp != state.end_timestamp
+                || pool.creator_allocation_release != state.allocation_release
+            {
+                return Err(Error::InvalidState);
+            }
+            if !pool.funded {
+                return Err(Error::CreationPending);
+            }
+            let clock = if pool.remaining_inventory == 0 {
+                None
+            } else {
+                let end = state.end_timestamp.ok_or(Error::NotClosed)?;
+                if now < end {
+                    return Err(Error::NotClosed);
+                }
+                Some(curve_core::clock_assertion(now, None).map_err(|_| Error::InvalidTerms)?)
+            };
+            if state.creator_allocation != 0
+                && balance(
+                    &pending.values[1],
+                    state.creator_escrow_id,
+                    state.token_definition_id,
+                )? < state.creator_allocation
+            {
+                return Err(Error::InvalidCustody);
+            }
+            state.creator_allocation_released = true;
+            let mut response = state.response();
+            if let Some(clock) = clock {
+                response = response.send_sync(
+                    Actor::new(
+                        clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID,
+                        clock_core::clock_account_id(),
+                    ),
+                    &clock,
+                );
+            }
+            return Ok(transfer(
+                response,
+                state.creator_escrow_id,
+                compute_escrow_seed(state.namespace, state.launch_salt),
+                state.token_definition_id,
+                creator,
+                state.creator_allocation,
+            ));
         }
         if let Message::ContinueFixedPriceCreation {
             expected_stage,

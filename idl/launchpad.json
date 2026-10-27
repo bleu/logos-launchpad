@@ -1294,6 +1294,20 @@
             ],
             "name": "Execute",
             "tag": 6
+          },
+          {
+            "fields": [
+              {
+                "name": "creator",
+                "type": "AccountId"
+              },
+              {
+                "name": "now",
+                "type": "u64"
+              }
+            ],
+            "name": "SettleFixedPrice",
+            "tag": 7
           }
         ]
       },
@@ -1382,6 +1396,10 @@
           {
             "name": "accrued_fees",
             "type": "u128"
+          },
+          {
+            "name": "proceeds_settled",
+            "type": "bool"
           },
           {
             "name": "pending",

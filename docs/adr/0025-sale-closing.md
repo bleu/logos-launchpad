@@ -14,7 +14,11 @@ The [actor migration](0034-lez-v04-migration.md) keeps public application, SDK a
 
 After expiry, settlement burns unsold `D` once; it cannot become creator allocation. `R` and the separate creator allocation retain their [post-close payout rules](0020-settlement-and-graduation.md). Retries must not burn or pay twice.
 
-Fixed-price sales close at their configured end, if present, or when all sale inventory sells, whichever occurs first. If no end is configured, sellout closes the sale. Weighted sales close at their scheduled end. For a weighted sale, this is also the weight-interpolation endpoint. Closure permits post-close operations; settlement is separate. Fixed-price close and settlement handlers remain future work. See [bonding-curve settlement](0020-settlement-and-graduation.md) and [fixed-price and weighted-sale fees and withdrawals](0016-lbp-live-fees.md).
+Fixed-price sales close at their configured end, if present, or when all sale inventory sells, whichever occurs first. If no end is configured, sellout closes the sale. No final trade or separate close transaction is required. Only the current creator-role holder can authorize settlement, which pays all recorded creator proceeds to that creator, collects remaining fees to the current namespace treasury and burns exactly the unsold sale inventory. Partial withdrawals are not supported. Extra deposits remain surplus. Freeze blocks buys, not settlement. Successful retries do not pay or burn twice.
+
+The separate `AfterEnd` creator allocation can be claimed at expiry or sellout, independently of proceeds settlement. Burning unsold inventory does not count as sellout: the pool preserves the unsold count and records completed proceeds settlement separately. Expiry-based payouts require a trusted clock assertion. Host-handler tests check state and requested operations; actual transfer, burn and transaction rollback execution remain unverified.
+
+Weighted sales close at their scheduled end, which is also the weight-interpolation endpoint. Their settlement handlers remain future work. See [bonding-curve settlement](0020-settlement-and-graduation.md) and [fixed-price and weighted-sale fees and withdrawals](0016-lbp-live-fees.md).
 
 ## Sources
 

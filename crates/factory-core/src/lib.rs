@@ -1,4 +1,4 @@
-//! Launch setup and bonding-curve settlement over synchronous actor calls.
+//! Launch setup and mechanism-specific settlement over synchronous actor calls.
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
     account::{AccountId, Actor},
@@ -1291,6 +1291,12 @@ pub fn handle(input: &ReceiveInput) -> Result<Response, Error> {
     }
     let message: Message = borsh::from_slice(&input.message).map_err(|_| Error::InvalidMessage)?;
     match message {
+        message @ (Message::ClaimCreatorAllocation { .. }
+        | Message::WithdrawFactoryProceeds { .. })
+            if FixedPriceLaunchState::decode(&input.pre_state).is_ok() =>
+        {
+            fixed_price::begin_payout(input, message)
+        }
         message @ Message::ClaimCreatorAllocation { .. } => begin_claim(input, message),
         message @ (Message::WithdrawFactoryProceeds { .. }
         | Message::ExecuteGraduationHook { .. }) => begin_settlement(input, message),

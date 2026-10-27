@@ -1,4 +1,4 @@
-//! Fixed-price sale setup, buys and creator-borne protocol fees.
+//! Fixed-price sale setup, buys, fees and creator settlement.
 mod trading;
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
@@ -63,6 +63,10 @@ pub enum Message {
         pool: AccountId,
         instruction: Box<Message>,
     },
+    SettleFixedPrice {
+        creator: AccountId,
+        now: u64,
+    },
 }
 pub type Instruction = Message;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -89,6 +93,7 @@ pub struct PoolAccount {
     pub creator_allocation_release: CreatorAllocationRelease,
     pub recorded_collateral: u128,
     pub accrued_fees: u128,
+    pub proceeds_settled: bool,
     pending: Option<Pending>,
 }
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -111,6 +116,7 @@ pub enum Error {
     PendingFunding,
     Frozen,
     Closed,
+    NotClosed,
     InvalidFee,
     InvalidAmount,
     Slippage,
@@ -343,6 +349,7 @@ pub fn handle(input: &ReceiveInput) -> Result<Response, Error> {
                 creator_allocation_release: inputs.creator_allocation_release,
                 recorded_collateral: 0,
                 accrued_fees: 0,
+                proceeds_settled: false,
                 pending: Some(Pending {
                     activate: false,
                     step: 0,
@@ -408,9 +415,10 @@ pub fn handle(input: &ReceiveInput) -> Result<Response, Error> {
                 &*instruction,
             ))
         }
-        Message::BuyExactInput { .. } | Message::BuyExactOutput { .. } | Message::CollectFees => {
-            trading::begin(input, message)
-        }
+        Message::BuyExactInput { .. }
+        | Message::BuyExactOutput { .. }
+        | Message::CollectFees
+        | Message::SettleFixedPrice { .. } => trading::begin(input, message),
         Message::ReadState => {
             PoolAccount::decode(&input.pre_state)?.validate_address(input.receiver)?;
             Ok(Response::keep_state().send_sync(

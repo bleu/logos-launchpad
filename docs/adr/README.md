@@ -37,10 +37,10 @@ Read [CONTEXT.md](../../CONTEXT.md) for terms and [repository layout](../archite
 | [0017](0017-quotes-and-slippage.md) | Fresh quotes and explicit slippage limits | Accepted |
 | [0018](0018-private-participation.md) | SDK-managed single-transaction private route and recovery | Product and recovery rules accepted; platform, wallet and proof verification pending |
 | [0019](0019-product-packages.md) | Two QML mini-apps and a non-UI shared core | Accepted |
-| [0020](0020-settlement-and-graduation.md) | Manual settlement and optional adapter hook | Accepted and implemented for bonding-curve settlement; fixed-price and weighted-sale settlement remain future work; production readiness and live DEX integration pending |
+| [0020](0020-settlement-and-graduation.md) | Manual settlement and optional adapter hook | Accepted and implemented for bonding-curve settlement; fixed-price settlement follows [0025](0025-sale-closing.md); weighted-sale settlement remains future work; production readiness and live DEX integration pending |
 | [0021](0021-modes-and-open-limits.md) | Sale types, trade modes, deferred ceiling and allowlist rules | Accepted internally; ceiling deferral: To be reviewed by Logos team; proof design open |
 | [0022](0022-verification-boundaries.md) | Verification and M1/M2 scope | Accepted |
-| [0025](0025-sale-closing.md) | Mechanism-specific sale closing | Accepted internally; fixed-price and weighted-sale close and settlement handlers remain future work; expiry-validation departure: To be reviewed by Logos team |
+| [0025](0025-sale-closing.md) | Mechanism-specific sale closing | Accepted internally; fixed-price settlement has host-handler coverage only; weighted-sale handlers remain future work; expiry-validation departure: To be reviewed by Logos team |
 | [0026](0026-lbp-clock-and-poke.md) | Fixed-total clock weights and timestamp-keyed buy/poke checkpoints | Accepted; historical clock evidence; live freshness and weighted-sale integration unverified |
 | [0027](0027-events-and-history.md) | Platform events and existing history tooling | Accepted internally; failed-event retention: To be reviewed by Logos team; actor event emission and ingestion unverified |
 | [0028](0028-token-custody-and-freeze.md) | Token custody and namespace emergency controls | Accepted; actor bonding-curve controls have host checks; fixed-price buy freeze has seeded guest checks; broader runtime and weighted-sale checks pending |
@@ -48,7 +48,7 @@ Read [CONTEXT.md](../../CONTEXT.md) for terms and [repository layout](../archite
 | [0030](0030-lbp-pricing-collateral.md) | Fee-neutral weighted-sale pricing collateral and separate custody records | Accepted internally; weighted-sale execution and custody/numerical verification pending; fee departures: To be reviewed by Logos team |
 | [0031](0031-shared-launch-factory.md) | Share matching launch setup without sharing mechanism rules | Shared fixed-price sale creation and funding implementation; historical pre-actor setup checks used development receipts; actor setup execution, real proofs and deployment readiness pending |
 | [0032](0032-fixed-price-lbp-setup.md) | Fixed-price sale creation and funding | Migrated four-stage implementation; local host and guest-build checks passed; setup execution, real proofs and deployment readiness pending; collateral activation rule superseded by [0033](0033-fixed-price-lbp-recorded-collateral.md) |
-| [0033](0033-fixed-price-lbp-recorded-collateral.md) | Recorded fixed-price sale collateral excludes unsolicited vault transfers | Accepted; fixed-price setup, public buys and fees implemented; close and settlement pending |
+| [0033](0033-fixed-price-lbp-recorded-collateral.md) | Recorded fixed-price sale collateral excludes unsolicited vault transfers | Accepted; fixed-price setup, public buys and fees implemented; settlement has host-handler coverage under [0025](0025-sale-closing.md) |
 | [0034](0034-lez-v04-migration.md) | Fixed development target, temporary local compatibility support and maintained tooling | Application and development base migrated; local checks include seeded curve trades and fixed-price buys, fees and rollback; see the [workspace guide](../architecture/workspace-guide.md#execution-and-evidence-limits) for remaining gaps |
 
 IDs 0023 and 0024 are intentionally unused.

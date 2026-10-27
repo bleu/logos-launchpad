@@ -42,7 +42,10 @@ impl Pending {
         )
     }
     fn advance(self, receiver: Actor) -> Result<Response, Error> {
-        if self.step == 4 || (self.step == 2 && matches!(self.message, Message::CollectFees)) {
+        if self.step == 4
+            || (self.step == 2 && matches!(self.message, Message::CollectFees))
+            || (self.step == 3 && matches!(self.message, Message::SettleFixedPrice { .. }))
+        {
             return self.finish(receiver);
         }
         let expected = self.expected(receiver);
@@ -78,6 +81,70 @@ impl Pending {
                 self.state.collateral_definition_id,
                 config.treasury,
                 amount,
+            ));
+        }
+        if let Message::SettleFixedPrice { creator, now } = self.message {
+            let clock = if self.state.remaining_inventory == 0 {
+                None
+            } else {
+                let end = self.state.end_timestamp.ok_or(Error::NotClosed)?;
+                if now < end {
+                    return Err(Error::NotClosed);
+                }
+                Some(curve_core::clock_assertion(now, None).map_err(|_| Error::InvalidTerms)?)
+            };
+            if self.balances[1] < self.state.remaining_inventory {
+                return Err(Error::Underfunded);
+            }
+            let fees = self.state.accrued_fees;
+            let proceeds = self.state.recorded_collateral;
+            self.state.accrued_fees = 0;
+            self.state.recorded_collateral = 0;
+            self.state.proceeds_settled = true;
+            let mut response = self.state.response();
+            if let Some(clock) = clock {
+                response = response.send_sync(
+                    Actor::new(
+                        clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID,
+                        clock_core::clock_account_id(),
+                    ),
+                    &clock,
+                );
+            }
+            let response = payout(
+                response,
+                &self.state,
+                receiver,
+                self.state.collateral_definition_id,
+                config.treasury,
+                fees,
+            );
+            let response = if self.state.remaining_inventory == 0 {
+                response
+            } else {
+                response.send(
+                    SyncMessage::new(
+                        Actor::new(receiver.account_id, TOKEN_PROGRAM_ACCOUNT_ID),
+                        &token::Message::Burn {
+                            definition: self.state.token_definition_id,
+                            amount: self.state.remaining_inventory,
+                        },
+                    )
+                    .with_pda_seeds([compute_pool_pda_seed(
+                        self.state.namespace,
+                        self.state.token_definition_id,
+                        self.state.collateral_definition_id,
+                        self.state.factory_owner,
+                    )]),
+                )
+            };
+            return Ok(payout(
+                response,
+                &self.state,
+                receiver,
+                self.state.collateral_definition_id,
+                creator,
+                proceeds,
             ));
         }
         if config.emergency.is_frozen {
@@ -121,7 +188,8 @@ impl Pending {
             }
             _ => return Err(Error::InvalidMessage),
         };
-        if now < self.state.start_timestamp
+        if self.state.proceeds_settled
+            || now < self.state.start_timestamp
             || self.state.end_timestamp.is_some_and(|end| now >= end)
             || self.state.remaining_inventory == 0
         {
@@ -194,7 +262,17 @@ pub(super) fn begin(input: &ReceiveInput, message: Message) -> Result<Response, 
     if !state.funded {
         return Err(Error::PendingFunding);
     }
-    let buyer = if matches!(message, Message::CollectFees) {
+    let buyer = if let Message::SettleFixedPrice { creator, .. } = message {
+        if input.from != Some(Actor::new(state.factory_owner, state.factory_program_id))
+            || creator == AccountId::default()
+        {
+            return Err(Error::Unauthorized);
+        }
+        if state.proceeds_settled {
+            return Ok(state.response());
+        }
+        creator
+    } else if matches!(message, Message::CollectFees) {
         AccountId::default()
     } else {
         let sender = input.from.ok_or(Error::Unauthorized)?;

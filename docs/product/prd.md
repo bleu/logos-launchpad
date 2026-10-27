@@ -15,15 +15,15 @@ The admin mini-app serves namespace administrators only. The configured-sales mi
 | Actor | Goal | Interface | Expected outcome | Rule or open detail |
 | --- | --- | --- | --- | --- |
 | Namespace administrator | Manage a launchpad namespace | Admin app or CLI | Change the fee rate and current treasury through separate operations; manage admin authority | AccountId administration; creator rights remain separate ([0006](../adr/0006-namespaces-and-authority.md)) |
-| Creator | Create a fixed-price sale | Planned configured-sales app or CLI | Claim a new launch token, supply fixed-price setup inputs and fund final setup through the shared launch factory | Four-stage setup is implemented and locked local verification passed using development receipts. Real proofs, deployment readiness, and all trading, fees, close, settlement, allowlists, private fixed-price sales and full client flows remain pending ([Sale overview](lbp-contract.md), [0032](../adr/0032-fixed-price-lbp-setup.md)) |
+| Creator | Create a fixed-price sale | Planned configured-sales app or CLI | Claim a new launch token, supply fixed-price setup inputs and fund final setup through the shared launch factory | See the [sale overview](lbp-contract.md) for implemented setup, buys, fees and creator payouts, and their execution limits |
 | Creator | Create a bonding-curve sale | Configured-sales app or CLI | Choose a trade mode, fund allocations, and optionally set expiry and an adapter | See the [bonding-curve overview](curve-contract.md) for decisions and implementation status |
 | Creator | Create a weighted sale | Future configured-sales app or CLI | Configure sale inventory, scheduled weights and the sale period | Weighted-sale setup, trading, fees and lifecycle remain future work ([Sale overview](lbp-contract.md), [0026](../adr/0026-lbp-clock-and-poke.md)) |
 | Participant | Find a sale and trade | Configured-sales app or CLI | Inspect the sale, request a fresh quote and submit a buy with an explicit slippage limit; sell back to a curve when its mode permits | Execution uses current state; a quote does not reserve a price ([0017](../adr/0017-quotes-and-slippage.md)) |
 | Participant | Use the private route | Configured-sales app or CLI through the SDK | Deshield, trade through fresh public accounts, and return received tokens, unused input and unused gas to participant-controlled private accounts in one transaction | Actual fees are excluded; public effects stay visible. Whole-route execution and wallet support remain unverified ([0018](../adr/0018-private-participation.md)) |
 | Participant | Resolve an interrupted private trade | Configured-sales app or CLI through the SDK | Restore minimal local progress, reconcile the original attempt and synchronize confirmed private state | Unknown outcomes block replacement; confirmation and recovery support need provider verification ([private participation contract](../architecture/private-participation.md)) |
 | Participant | Use a fixed-price or weighted sale allowlist | Future public or private route | Prove membership and approved-account control, then make one successful purchase within the common public collateral limit | This product policy is outside fixed-price setup scope. Routes share one allowance; roster remains private; proof construction and enforcement need verification ([0021](../adr/0021-modes-and-open-limits.md)) |
-| Any caller | Collect accrued curve protocol fees | SDK or CLI | Transfer all accrued collateral fees to the current treasury, at any time | Caller cannot redirect funds; zero accrued fees cause no transfer. Future fixed-price and weighted sale fee design is outside fixed-price setup scope ([0015](../adr/0015-fee-accounting.md), [0016](../adr/0016-lbp-live-fees.md)) |
-| Creator | Settle a closed bonding-curve sale manually | Configured-sales app or CLI | Collect remaining curve fees and permitted allocations or proceeds | Future fixed-price and weighted sale settlement is outside fixed-price setup scope ([Settlement rules](../adr/0020-settlement-and-graduation.md)) |
+| Any caller | Collect accrued protocol fees | SDK or CLI | Transfer all accrued collateral fees to the current treasury, at any time | Caller cannot redirect funds; zero accrued fees cause no transfer. Fixed-price and curve handlers exist; weighted-sale fees remain future work ([0015](../adr/0015-fee-accounting.md), [0016](../adr/0016-lbp-live-fees.md)) |
+| Creator | Settle a closed sale manually | Configured-sales app or CLI | Collect remaining fees and permitted allocations or proceeds | Separate [fixed-price](../adr/0025-sale-closing.md) and [curve](../adr/0020-settlement-and-graduation.md) rules apply; weighted-sale settlement remains future work |
 | Any caller | Execute or retry a configured curve adapter hook | SDK or CLI | Submit the public post-close settlement stages | [Hook and recovery rules](../adr/0020-settlement-and-graduation.md); [implementation limits](curve-contract.md#acceptance-evidence) |
 | Participant or operator | Inspect history | App history or existing explorer tools | Request indexed trades and sale events through the backend module read API without exposing persistent private participant identifiers | History and monitoring remain in scope; a separate analytics view does not ([0027](../adr/0027-events-and-history.md)) |
 
@@ -36,7 +36,7 @@ flowchart TB
     Namespace[Administrator configures namespace] --> Create[Creator configures and funds sale in configured-sales app]
     Create --> Trade[Participant inspects, quotes and trades]
     Trade --> SaleType{Sale type}
-    SaleType --> FixedPrice[Fixed-price sale: scheduled end]
+    SaleType --> FixedPrice[Fixed-price sale: optional end or sellout]
     SaleType --> Curve[Bonding-curve sale: all D sold or optional expiry]
     SaleType --> Weighted[Weighted sale: scheduled end]
     FixedPrice --> Closed[Trading closed]
@@ -51,13 +51,13 @@ See the planned [curve pool creation](../architecture/sequence-diagrams/create-c
 
 ## Sale rules
 
-The fixed-price and weighted sale columns record future trading and lifecycle design. They do not describe the implemented fixed-price setup.
+These rules describe the selected sale designs. The [sale overview](lbp-contract.md) records fixed-price implementation and evidence limits; weighted-sale execution remains future work.
 
 | Rule | Fixed-price sale | Bonding-curve sale | Weighted sale |
 | --- | --- | --- | --- |
 | Price | Positive exact ratio in collateral and launch-token smallest units | Constant-product pricing with virtual reserves and real-reserve limits | Execution-time linear weights with timestamp-keyed checkpoints |
 | Buy forms | Exact input or exact output; no partial fills or exact-input rounding refunds | Exact input or exact output with an explicit limit | Exact input or exact output; no partial fills or exact-input rounding refunds |
-| Close | Original scheduled end, even while paused | All `D` sold, or optional expiry, whichever occurs first | Original scheduled end, even while paused |
+| Close | Optional end or sellout, whichever occurs first; no separate close call | All `D` sold, or optional expiry, whichever occurs first | Original scheduled end, even while paused |
 | Minimum duration | No contract minimum; require `end > start` and no past scheduled start | No contract minimum for optional expiry; a frontend rule is undecided | No contract minimum; require `end > start` and no past scheduled start |
 | Protocol fee | Creator-borne collateral claim; full buyer input enters pricing | Collateral deducted from buy input or sell output | Creator-borne collateral claim; full buyer input enters pricing |
 | Fee collection | Permissionless, anytime, to current treasury; fixed price unchanged | Permissionless, anytime, to current treasury | Permissionless, anytime, to current treasury; pricing reserves unchanged |
@@ -66,7 +66,7 @@ The fixed-price and weighted sale columns record future trading and lifecycle de
 
 ## Scope limits and open work
 
-- Current fixed-price sale scope is limited to implemented creation and funding. Locked local verification passed using development receipts; real proofs and deployment readiness remain pending. It excludes buys, sells, weighted virtual accounting, fees, close, end payout, end hooks, delayed settlement, cancellation or expired-recovery handlers, private fixed-price or weighted sales, allowlists, and full SDK or CLI flows.
+- See the [sale overview](lbp-contract.md) for fixed-price setup, buy, fee and payout support. Settlement has host-handler coverage only. End hooks, delayed settlement, cancellation or expired-recovery handlers, weighted-sale execution, private fixed-price or weighted sales, allowlists and full SDK or CLI flows remain future work.
 - Private bonding-curve buys/sells and future fixed-price and weighted sale buys follow the [private participation and recovery contract](../architecture/private-participation.md). Runtime implementation, full returns, late-failure behavior and safe reconciliation remain unverified. The [private purchase sequence](../architecture/sequence-diagrams/private-purchase.md) is a required route, not a working-implementation claim.
 - Fixed-price and weighted sale allowlist product policy is accepted: one purchase across both routes, approved-account control, one public collateral cap and a private roster. The proof method, enrollment details and compatible verifier remain open.
 - Privacy warnings are required before transaction approval. Acknowledgement frequency is deferred.
