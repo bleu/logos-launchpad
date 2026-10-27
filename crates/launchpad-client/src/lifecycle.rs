@@ -8,7 +8,7 @@ pub struct LifecycleReceipt {
     pub authority_holders: Vec<AccountId>,
 }
 
-/// A factory workflow bound to one namespace and NFT authority location.
+/// A factory workflow bound to one namespace and creator role holder.
 pub struct FactorySession<'a> {
     wallet: &'a mut WalletCore,
     factory: &'a ProgramHandle,
@@ -153,11 +153,7 @@ impl<'a> FactorySession<'a> {
             self.submit(
                 |holder| {
                     Ok(build_withdraw_factory_proceeds_invocation(
-                        sale,
-                        holder,
-                        treasury,
-                        state.creator_nft_definition,
-                        now,
+                        sale, holder, treasury, now,
                     ))
                 },
                 &mut receipt,
@@ -193,8 +189,7 @@ pub fn next_creation_invocation(
             && state.virtual_collateral_reserve == request.virtual_collateral_reserve
             && state.end_timestamp == request.end_timestamp
             && state.name == request.name
-            && state.uri == request.uri
-            && state.creator_nft_definition == request.creator_nft_definition)
+            && state.uri == request.uri)
         {
             return Err(ClientError::LaunchParametersMismatch);
         }

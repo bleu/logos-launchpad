@@ -18,15 +18,22 @@ for path in methods/guest/src/bin/curve.rs packages/lez-compat/methods/guest/src
 done
 cat_script='#!/bin/bash
 printf "cargo %s\n" "$*" >> "$COMMAND_LOG"
+if [[ "$*" == *"metadata --format-version 1 --locked"* ]]; then
+  mkdir -p upstream/artifacts/lez/programs upstream/programs/clock/core
+  printf binary > upstream/artifacts/lez/programs/clock.bin
+  printf "{\"packages\":[{\"name\":\"clock_core\",\"manifest_path\":\"%s/upstream/programs/clock/core/Cargo.toml\"}]}\n" "$PWD"
+fi
 if [[ -n "${FAIL_COMMAND:-}" && "$*" == *"$FAIL_COMMAND"* ]]; then exit 19; fi
 if [[ -n "${DRIFT_LOCK:-}" ]]; then printf "changed\n" >> "$DRIFT_LOCK"; fi
 if [[ "${NO_ARTIFACTS:-}" != 1 && "$*" == *"build --manifest-path methods/Cargo.toml"* ]]; then
   mkdir -p methods/target/riscv-guest/fixture/release
   printf binary > methods/target/riscv-guest/fixture/release/curve.bin
+  printf binary > methods/target/riscv-guest/fixture/release/factory.bin
 fi
 if [[ "${NO_ARTIFACTS:-}" != 1 && "$*" == *"build --manifest-path packages/lez-compat/methods/Cargo.toml"* ]]; then
   mkdir -p packages/lez-compat/methods/target/riscv-guest/fixture/release
   printf binary > packages/lez-compat/methods/target/riscv-guest/fixture/release/compat_token.bin
+  printf binary > packages/lez-compat/methods/target/riscv-guest/fixture/release/compat_authority.bin
 fi
 '
 printf '%s' "$cat_script" > "$tmp/bin/cargo"
@@ -65,12 +72,19 @@ missing_artifacts() {
   printf 'missing-artifacts: passed\n'
 }
 execution_lane() {
+  unset LAUNCHPAD_CLOCK_ELF
   run_check --execution
   [ "$status" = 0 ] || exit 1
   assert_contains "$(< "$COMMAND_LOG")" 'cargo +1.98.1 test --manifest-path packages/lez-compat/execution/Cargo.toml --locked'
   assert_contains "$(< "$COMMAND_LOG")" 'cargo +1.98.1 test --manifest-path methods/Cargo.toml --release --locked --features actor-execution-tests --test actor_sale'
-  assert_contains "$output" 'sale setup, lifecycle and settlement execution deferred'
-  assert_contains "$output" 'seeded fixtures cover trades and fixed-price fee collection'
+  assert_contains "$(< "$COMMAND_LOG")" 'cargo +1.98.1 test -p launchpad-client --release --locked --test role_authority_guest -- --ignored'
+  assert_contains "$output" 'selected actor execution fixtures passed; full lifecycle coverage, real proofs and deployment readiness not tested'
+  export LAUNCHPAD_CLOCK_ELF="$tmp/missing-clock.bin"
+  run_check --execution
+  [ "$status" = 1 ] || { printf 'missing role clock accepted\n' >&2; exit 1; }
+  assert_contains "$output" 'set LAUNCHPAD_CLOCK_ELF to the pinned upstream'
+  [[ "$(< "$COMMAND_LOG")" != *'--test role_authority_guest'* ]] || exit 1
+  unset LAUNCHPAD_CLOCK_ELF
   printf 'execution-lane: passed\n'
 }
 regressions() {

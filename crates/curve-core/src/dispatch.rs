@@ -9,7 +9,7 @@ use lez_compat_core::token::{self, TokenKind, TokenState};
 
 #[derive(Debug, Clone, BorshSerialize, BorshDeserialize)]
 pub(crate) enum Query {
-    OwnerNft,
+    OwnerRole,
     Namespace,
     Definition0,
     Definition1,
@@ -45,8 +45,21 @@ impl Pending {
     }
     fn expected(&self, query: &Query, program: AccountId) -> Actor {
         let account = match query {
-            Query::OwnerNft => {
-                token::holding_address(TOKEN_PROGRAM_ACCOUNT_ID, self.authority, self.state.owner)
+            Query::OwnerRole => {
+                return Actor::new(
+                    crate::compute_pool_owner_role(
+                        self.state.namespace,
+                        crate::compute_pool_pda(
+                            self.state.namespace,
+                            program,
+                            self.state.token0_definition_id,
+                            self.state.token1_definition_id,
+                            self.state.owner,
+                        ),
+                        program,
+                    ),
+                    crate::AUTHORITY_PROGRAM_ACCOUNT_ID,
+                );
             }
             Query::Namespace => {
                 return Actor::new(compute_config_pda(self.state.namespace, program), program);
@@ -87,10 +100,10 @@ impl Pending {
             };
         };
         let call = match query {
-            Query::OwnerNft => SyncMessage::new(
-                Actor::new(self.authority, TOKEN_PROGRAM_ACCOUNT_ID),
-                &token::Message::AssertNft {
-                    definition: self.state.owner,
+            Query::OwnerRole => SyncMessage::new(
+                Actor::new(self.authority, crate::AUTHORITY_PROGRAM_ACCOUNT_ID),
+                &lez_compat_core::authority::Message::Check {
+                    role: self.expected(query, receiver.program_account_id).account_id,
                     callback: receiver,
                 },
             ),
@@ -122,13 +135,10 @@ pub fn resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
             return Err(Error::Unauthorized);
         }
         match query {
-            Query::OwnerNft => token::verify_nft_holder(
-                input,
-                TOKEN_PROGRAM_ACCOUNT_ID,
-                pending.state.owner,
-                pending.authority,
-            )
-            .map_err(|_| Error::Unauthorized)?,
+            Query::OwnerRole => {
+                lez_compat_core::authority::verify(input, expected, pending.authority)
+                    .map_err(|_| Error::Unauthorized)?
+            }
             Query::Namespace => {
                 let reply: StateReply =
                     borsh::from_slice(&input.message).map_err(|_| Error::InvalidMessage)?;

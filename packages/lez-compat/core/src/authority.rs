@@ -55,6 +55,9 @@ pub enum Message {
         program: AccountId,
         seed: PdaSeed,
     },
+    BootstrapTransferOnly {
+        authority: AccountId,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -116,6 +119,7 @@ struct Role {
     holder: Option<AccountId>,
     pending: Option<AccountId>,
     epoch: u64,
+    can_renounce: bool,
 }
 
 impl Role {
@@ -207,6 +211,9 @@ pub fn handle(input: &ReceiveInput) -> Result<Response, Error> {
             {
                 return Err(Error::Unauthorized);
             }
+            if !role.can_renounce {
+                return Err(Error::Unauthorized);
+            }
             role.holder = None;
             role.pending = None;
             role.epoch = role.epoch.checked_add(1).ok_or(Error::Overflow)?;
@@ -248,7 +255,7 @@ pub fn handle(input: &ReceiveInput) -> Result<Response, Error> {
                 },
             ))
         }
-        Message::Bootstrap { authority } => {
+        Message::Bootstrap { authority } | Message::BootstrapTransferOnly { authority } => {
             if !input.is_authorized {
                 return Err(Error::Unauthorized);
             }
@@ -262,6 +269,7 @@ pub fn handle(input: &ReceiveInput) -> Result<Response, Error> {
                 holder: None,
                 pending: Some(authority),
                 epoch: 0,
+                can_renounce: matches!(message, Message::Bootstrap { .. }),
             }
             .response()
             .send_sync(

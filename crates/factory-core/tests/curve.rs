@@ -3,7 +3,10 @@ use lee_core::{
     account::{AccountId, Actor},
     program::{ReceiveInput, Response, StateReply},
 };
-use lez_compat_core::token::{self, TokenKind, TokenState};
+use lez_compat_core::{
+    authority,
+    token::{self, TokenKind, TokenState},
+};
 fn id(n: u8) -> AccountId {
     AccountId::new([n; 32])
 }
@@ -30,7 +33,6 @@ fn creation() -> ReceiveInput {
             curve_program_id: id(6),
             collateral_definition_id: id(41),
             creator: id(42),
-            creator_nft_definition: id(43),
             now: 100,
         })
         .unwrap(),
@@ -79,14 +81,14 @@ fn proof(input: &ReceiveInput, response: &Response, creator: AccountId) -> Recei
     ReceiveInput {
         receiver: input.receiver,
         from: Some(Actor::new(
-            token::holding_address(TOKEN_PROGRAM_ACCOUNT_ID, creator, id(43)),
-            TOKEN_PROGRAM_ACCOUNT_ID,
+            compute_curve_creator_role_pda(id(40), id(7), [3; 32]),
+            AUTHORITY_PROGRAM_ACCOUNT_ID,
         )),
         is_authorized: false,
         pre_state: response.post_state.clone().unwrap(),
-        message: borsh::to_vec(&token::NftHolder {
-            definition: id(43),
-            owner: creator,
+        message: borsh::to_vec(&authority::Authorized {
+            role: compute_curve_creator_role_pda(id(40), id(7), [3; 32]),
+            authority: creator,
         })
         .unwrap(),
     }
@@ -94,8 +96,6 @@ fn proof(input: &ReceiveInput, response: &Response, creator: AccountId) -> Recei
 fn minted() -> (ReceiveInput, Response) {
     let mut input = creation();
     let mut response = handle(&input).unwrap();
-    input = proof(&input, &response, id(42));
-    response = handle(&input).unwrap();
     for bytes in [config(), definition()] {
         input = reply(&input, &response, bytes);
         response = handle(&input).unwrap()
@@ -194,14 +194,18 @@ fn curve_allocation_reserves_d_plus_r_and_locks_creator_tokens() {
 fn curve_preparation_uses_neutral_restriction_and_defers_funding() {
     let (input, mint) = minted();
     let (input, allocated) = continued(&input, &mint, 1000, 0, 0);
-    let (_, response) = continued(&input, &allocated, 0, 900, 100);
+    let (input, response) = continued(&input, &allocated, 0, 900, 100);
     let state = FactoryState::decode(response.post_state.as_ref().unwrap()).unwrap();
     assert_eq!(state.creation_stage, CreationStage::PoolPrepared);
     let call = response
         .sync_messages
         .iter()
-        .find(|m| m.to == Actor::new(state.pool_id, id(6)))
+        .find(|m| m.to == Actor::new(input.receiver.account_id, id(6)))
         .unwrap();
+    assert_eq!(
+        call.pda_seeds,
+        [compute_factory_seed(state.namespace, state.launch_salt)].into()
+    );
     let curve_core::Message::CreatePool {
         allowed_input_token,
         defer_funding,
@@ -489,7 +493,7 @@ fn manual_settlement_pays_only_r_then_recorded_collateral_and_rejects_replay() {
     assert!(matches!(handle(&input), Err(Error::AlreadySettled)));
 }
 #[test]
-fn creator_allocation_follows_the_nft_to_its_current_holder_after_closure() {
+fn creator_allocation_follows_the_role_to_its_current_holder_after_closure() {
     let (mut input, active) = active();
     let state = FactoryState::decode(active.post_state.as_ref().unwrap()).unwrap();
     input.pre_state = active.post_state.unwrap();
@@ -501,7 +505,7 @@ fn creator_allocation_follows_the_nft_to_its_current_holder_after_closure() {
     let response = handle(&input).unwrap();
     assert_eq!(
         response.sync_messages.last().unwrap().to,
-        Actor::new(id(99), TOKEN_PROGRAM_ACCOUNT_ID)
+        Actor::new(id(99), AUTHORITY_PROGRAM_ACCOUNT_ID)
     );
     input = proof(&input, &response, id(99));
     let mut response = handle(&input).unwrap();
@@ -739,8 +743,8 @@ fn public_supply_and_address_rules_preserve_the_original_factory_contract() {
         compute_factory_pda(id(40), id(7), [4; 32])
     );
     assert_ne!(
-        compute_creator_commitment(id(40), id(43), [3; 32]),
-        compute_creator_commitment(id(40), id(44), [3; 32])
+        compute_curve_creator_role_pda(id(40), id(7), [3; 32]),
+        compute_curve_creator_role_pda(id(40), id(7), [4; 32])
     );
 }
 
@@ -794,8 +798,6 @@ fn zero_manual_payout_keeps_one_saved_zero_hook_available() {
         *creator_allocation = 200
     }
     input.message = borsh::to_vec(&command).unwrap();
-    let response = handle(&input).unwrap();
-    input = proof(&input, &response, id(42));
     let mut response = handle(&input).unwrap();
     for bytes in [config(), definition()] {
         input = reply(&input, &response, bytes);
@@ -855,20 +857,31 @@ fn zero_manual_payout_keeps_one_saved_zero_hook_available() {
 }
 
 #[test]
-fn curve_creation_authenticates_nft_creator_and_mints_the_three_way_supply() {
+fn curve_creation_reads_namespace_before_bootstrapping_its_creator_role() {
     let input = creation();
     let response = handle(&input).unwrap();
     assert_eq!(
         response.sync_messages[0].to,
-        Actor::new(id(42), TOKEN_PROGRAM_ACCOUNT_ID)
+        Actor::new(curve_core::compute_config_pda(id(40), id(6)), id(6))
     );
+}
+
+#[test]
+fn curve_creation_bootstraps_a_transfer_only_creator_role_with_the_mint() {
+    let (_, response) = minted();
+    let call = response
+        .sync_messages
+        .iter()
+        .find(|call| call.to.program_account_id == AUTHORITY_PROGRAM_ACCOUNT_ID)
+        .expect("creator role bootstrap");
+    assert_eq!(
+        borsh::from_slice::<authority::Message>(&call.message).unwrap(),
+        authority::Message::BootstrapTransferOnly { authority: id(42) }
+    );
+    assert_eq!(call.pda_seeds.len(), 1);
     let (_, response) = minted();
     let state = FactoryState::decode(response.post_state.as_ref().unwrap()).unwrap();
     assert_eq!(state.total_supply, 1000);
-    assert_eq!(
-        state.creator_commitment,
-        compute_creator_commitment(id(40), id(43), [3; 32])
-    );
     let call = response
         .sync_messages
         .iter()
@@ -882,4 +895,421 @@ fn curve_creation_authenticates_nft_creator_and_mints_the_three_way_supply() {
     };
     assert_eq!(supply, 1000);
     assert_eq!(recipient, compute_mint_pda(id(40), id(7), [3; 32]));
+}
+
+#[test]
+fn curve_rejects_a_creator_role_from_another_namespace() {
+    let (mut input, response) = minted();
+    let mut state = FactoryState::decode(response.post_state.as_ref().unwrap()).unwrap();
+    state.creator_role_id = compute_curve_creator_role_pda(id(41), id(7), [3; 32]);
+    input.pre_state = borsh::to_vec(&state).unwrap().into();
+    input.from = None;
+    input.message = borsh::to_vec(&Message::ContinueCreation {
+        creator: id(42),
+        now: 100,
+    })
+    .unwrap();
+    assert!(matches!(handle(&input), Err(Error::WrongAccount)));
+}
+
+#[test]
+fn continuation_checks_the_creator_before_any_custody_call() {
+    let (mut input, response) = minted();
+    let state = FactoryState::decode(response.post_state.as_ref().unwrap()).unwrap();
+    input.pre_state = response.post_state.unwrap();
+    input.message = borsh::to_vec(&Message::ContinueCreation {
+        creator: id(42),
+        now: 100,
+    })
+    .unwrap();
+    let response = handle(&input).unwrap();
+    assert_eq!(response.sync_messages.len(), 1);
+    assert_eq!(
+        response.sync_messages[0].to,
+        Actor::new(id(42), AUTHORITY_PROGRAM_ACCOUNT_ID)
+    );
+    assert_eq!(
+        borsh::from_slice::<authority::Message>(&response.sync_messages[0].message).unwrap(),
+        authority::Message::Check {
+            role: state.creator_role_id,
+            callback: input.receiver
+        }
+    );
+}
+
+fn role_route(
+    role: Actor,
+    state: &mut Vec<u8>,
+    mut sender: Actor,
+    mut call: lee_core::program::SyncMessage,
+    signers: &[AccountId],
+    mut grant: bool,
+    callback: Option<Actor>,
+) -> Result<Option<(Actor, Vec<u8>)>, lez_compat_core::Error> {
+    loop {
+        if Some(call.to) == callback {
+            return Ok(Some((sender, call.message.to_vec())));
+        }
+        let receiver = call.to;
+        let response = authority::handle(&ReceiveInput {
+            receiver,
+            from: Some(sender),
+            is_authorized: grant || signers.contains(&receiver.account_id),
+            pre_state: if receiver == role {
+                state.clone().into()
+            } else {
+                vec![].into()
+            },
+            message: call.message.to_vec(),
+        })?;
+        if receiver == role
+            && let Some(post_state) = response.post_state
+        {
+            *state = post_state.to_vec();
+        }
+        let Some(next) = response.sync_messages.into_iter().next() else {
+            return Ok(None);
+        };
+        sender = receiver;
+        call = next;
+        grant = false;
+    }
+}
+
+#[test]
+fn creator_transfer_requires_consent_and_moves_all_remaining_factory_rights() {
+    let (input, minted) = minted();
+    let original = FactoryState::decode(minted.post_state.as_ref().unwrap()).unwrap();
+    let role = Actor::new(original.creator_role_id, AUTHORITY_PROGRAM_ACCOUNT_ID);
+    let bootstrap = minted
+        .sync_messages
+        .iter()
+        .find(|call| call.to == role)
+        .unwrap()
+        .clone();
+    let mut role_state = vec![];
+    assert!(matches!(
+        role_route(
+            role,
+            &mut vec![],
+            input.receiver,
+            bootstrap.clone(),
+            &[],
+            true,
+            None
+        ),
+        Err(lez_compat_core::Error::Unauthorized)
+    ));
+    role_route(
+        role,
+        &mut role_state,
+        input.receiver,
+        bootstrap,
+        &[id(42)],
+        true,
+        None,
+    )
+    .unwrap();
+    let transfer = lee_core::program::SyncMessage::new(
+        Actor::new(id(42), AUTHORITY_PROGRAM_ACCOUNT_ID),
+        &authority::Message::Transfer {
+            role: role.account_id,
+            successor: id(99),
+        },
+    );
+    assert!(matches!(
+        role_route(
+            role,
+            &mut role_state.clone(),
+            input.receiver,
+            transfer.clone(),
+            &[id(42)],
+            false,
+            None
+        ),
+        Err(lez_compat_core::Error::Unauthorized)
+    ));
+    role_route(
+        role,
+        &mut role_state,
+        input.receiver,
+        transfer,
+        &[id(42), id(99)],
+        false,
+        None,
+    )
+    .unwrap();
+
+    for (creation_stage, settlement_stage, command) in [
+        (
+            CreationStage::Minted,
+            SettlementStage::Unstarted,
+            Message::ContinueCreation {
+                creator: id(99),
+                now: 100,
+            },
+        ),
+        (
+            CreationStage::Active,
+            SettlementStage::Unstarted,
+            Message::ClaimCreatorAllocation {
+                creator: id(99),
+                now: 200,
+            },
+        ),
+        (
+            CreationStage::Active,
+            SettlementStage::Burned { collateral_due: 50 },
+            Message::WithdrawFactoryProceeds {
+                creator: id(99),
+                now: 200,
+            },
+        ),
+    ] {
+        let mut state = original.clone();
+        state.creation_stage = creation_stage;
+        state.settlement_stage = settlement_stage;
+        let mut request = input.clone();
+        request.from = None;
+        request.pre_state = borsh::to_vec(&state).unwrap().into();
+        request.message = borsh::to_vec(&command).unwrap();
+        let response = handle(&request).unwrap();
+        let check = response.sync_messages.last().unwrap().clone();
+        let (sender, message) = role_route(
+            role,
+            &mut role_state,
+            request.receiver,
+            check.clone(),
+            &[id(99)],
+            false,
+            Some(request.receiver),
+        )
+        .unwrap()
+        .unwrap();
+        let mut callback = request.clone();
+        callback.from = Some(sender);
+        callback.message = message;
+        callback.pre_state = response.post_state.unwrap();
+        let resumed = handle(&callback).unwrap();
+        let current = FactoryState::decode(resumed.post_state.as_ref().unwrap()).unwrap();
+        assert_eq!(
+            (
+                current.namespace,
+                current.launch_salt,
+                current.creator_role_id
+            ),
+            (id(40), [3; 32], role.account_id)
+        );
+        assert_eq!(
+            (
+                current.sale_reserve,
+                current.dex_seed_reserve,
+                current.creator_allocation,
+                current.total_supply
+            ),
+            (800, 100, 100, 1000)
+        );
+        assert_eq!(
+            (
+                current.virtual_token_reserve,
+                current.virtual_collateral_reserve,
+                current.end_timestamp
+            ),
+            (1000, 100, Some(200))
+        );
+        assert_eq!(
+            (
+                current.token_definition_id,
+                current.pool_id,
+                current.creator_escrow_id
+            ),
+            (
+                state.token_definition_id,
+                state.pool_id,
+                state.creator_escrow_id
+            )
+        );
+        if matches!(command, Message::WithdrawFactoryProceeds { .. }) {
+            let mut saved = pool_state(&state, input.receiver, true);
+            saved.pool.real_reserve0 = 0;
+            saved.pool.real_reserve1 = 0;
+            let mut response = resumed;
+            for bytes in [
+                borsh::to_vec(&saved).unwrap(),
+                holding(input.receiver.account_id, state.token_definition_id, 100),
+                holding(
+                    input.receiver.account_id,
+                    state.collateral_definition_id,
+                    50,
+                ),
+            ] {
+                callback = reply(&callback, &response, bytes);
+                response = handle(&callback).unwrap();
+            }
+            assert_eq!(
+                borsh::from_slice::<token::Message>(&response.sync_messages[0].message).unwrap(),
+                token::Message::Transfer {
+                    definition: state.token_definition_id,
+                    recipient: id(99),
+                    amount: 100
+                }
+            );
+        }
+
+        let previous_command = match command {
+            Message::ContinueCreation { now, .. } => Message::ContinueCreation {
+                creator: id(42),
+                now,
+            },
+            Message::ClaimCreatorAllocation { now, .. } => Message::ClaimCreatorAllocation {
+                creator: id(42),
+                now,
+            },
+            Message::WithdrawFactoryProceeds { now, .. } => Message::WithdrawFactoryProceeds {
+                creator: id(42),
+                now,
+            },
+            _ => unreachable!(),
+        };
+        request.message = borsh::to_vec(&previous_command).unwrap();
+        let rejected = handle(&request).unwrap();
+        assert!(matches!(
+            role_route(
+                role,
+                &mut role_state.clone(),
+                request.receiver,
+                rejected.sync_messages.last().unwrap().clone(),
+                &[id(42)],
+                false,
+                Some(request.receiver)
+            ),
+            Err(lez_compat_core::Error::Unauthorized)
+        ));
+        request.message = borsh::to_vec(&match command {
+            Message::ContinueCreation { now, .. } => Message::ContinueCreation {
+                creator: id(40),
+                now,
+            },
+            Message::ClaimCreatorAllocation { now, .. } => Message::ClaimCreatorAllocation {
+                creator: id(40),
+                now,
+            },
+            Message::WithdrawFactoryProceeds { now, .. } => Message::WithdrawFactoryProceeds {
+                creator: id(40),
+                now,
+            },
+            _ => unreachable!(),
+        })
+        .unwrap();
+        let admin = handle(&request).unwrap();
+        assert!(matches!(
+            role_route(
+                role,
+                &mut role_state.clone(),
+                request.receiver,
+                admin.sync_messages.last().unwrap().clone(),
+                &[id(40)],
+                false,
+                Some(request.receiver)
+            ),
+            Err(lez_compat_core::Error::Unauthorized)
+        ));
+    }
+}
+
+#[test]
+fn creator_callbacks_reject_wrong_program_role_holder_and_legacy_nft_proofs() {
+    let (input, minted) = minted();
+    for command in [
+        Message::ContinueCreation {
+            creator: id(42),
+            now: 100,
+        },
+        Message::ClaimCreatorAllocation {
+            creator: id(42),
+            now: 200,
+        },
+        Message::WithdrawFactoryProceeds {
+            creator: id(42),
+            now: 200,
+        },
+    ] {
+        let mut request = input.clone();
+        let mut state = FactoryState::decode(minted.post_state.as_ref().unwrap()).unwrap();
+        if !matches!(command, Message::ContinueCreation { .. }) {
+            state.creation_stage = CreationStage::Active;
+        }
+        request.pre_state = borsh::to_vec(&state).unwrap().into();
+        request.message = borsh::to_vec(&command).unwrap();
+        let response = handle(&request).unwrap();
+        let valid = proof(&request, &response, id(42));
+        for (sender, role, holder) in [
+            (
+                Actor::new(state.creator_role_id, id(99)),
+                state.creator_role_id,
+                id(42),
+            ),
+            (
+                Actor::new(id(99), AUTHORITY_PROGRAM_ACCOUNT_ID),
+                state.creator_role_id,
+                id(42),
+            ),
+            (
+                Actor::new(state.creator_role_id, AUTHORITY_PROGRAM_ACCOUNT_ID),
+                id(99),
+                id(42),
+            ),
+            (
+                Actor::new(state.creator_role_id, AUTHORITY_PROGRAM_ACCOUNT_ID),
+                state.creator_role_id,
+                id(99),
+            ),
+        ] {
+            let mut forged = valid.clone();
+            forged.from = Some(sender);
+            forged.message = borsh::to_vec(&authority::Authorized {
+                role,
+                authority: holder,
+            })
+            .unwrap();
+            assert!(matches!(handle(&forged), Err(Error::Unauthorized)));
+        }
+        let mut legacy = valid.clone();
+        legacy.from = Some(Actor::new(
+            token::holding_address(TOKEN_PROGRAM_ACCOUNT_ID, id(42), id(43)),
+            TOKEN_PROGRAM_ACCOUNT_ID,
+        ));
+        legacy.message = borsh::to_vec(&token::NftHolder {
+            definition: id(43),
+            owner: id(42),
+        })
+        .unwrap();
+        assert!(matches!(handle(&legacy), Err(Error::Unauthorized)));
+        let _ = handle(&valid).unwrap();
+    }
+}
+
+#[test]
+fn creator_role_addresses_are_separate_from_other_sales_roles_and_namespace_admin() {
+    let role = compute_curve_creator_role_pda(id(40), id(7), [3; 32]);
+    for other in [
+        compute_curve_creator_role_pda(id(41), id(7), [3; 32]),
+        compute_curve_creator_role_pda(id(40), id(7), [4; 32]),
+        compute_curve_creator_role_pda(id(40), id(8), [3; 32]),
+        compute_creator_role_pda(id(40), id(7), [3; 32]),
+        curve_core::compute_config_pda(id(40), id(6)),
+    ] {
+        assert_ne!(role, other);
+    }
+}
+
+#[test]
+fn curve_creation_wire_rejects_the_removed_creator_nft_argument() {
+    let mut input = creation();
+    let legacy_argument = [43; 32];
+    input.message.splice(
+        input.message.len() - 8..input.message.len() - 8,
+        legacy_argument,
+    );
+    assert!(matches!(handle(&input), Err(Error::InvalidMessage)));
 }

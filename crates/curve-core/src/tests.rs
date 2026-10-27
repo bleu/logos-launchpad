@@ -203,122 +203,59 @@ fn reply_to(
     })
 }
 #[test]
-fn nft_owner_creates_and_funds_both_ordered_reserves() {
-    let mut signed = call(
-        HOLDER,
+fn direct_creation_requires_the_creation_identity_signer() {
+    assert!(matches!(
+        handle(&call(
+            pool_id(),
+            ActorState::empty(),
+            Some(Actor::new(HOLDER, PROGRAM)),
+            create_message(false),
+        )),
+        Err(crate::Error::Unauthorized)
+    ));
+}
+
+#[test]
+fn direct_creator_bootstraps_a_transfer_only_role_and_funds_reserves() {
+    let pending = handle(&call(
+        pool_id(),
         ActorState::empty(),
-        None,
-        Message::Execute {
-            pool: pool_id(),
-            instruction: Box::new(create_message(false)),
-        },
-    );
-    signed.is_authorized = true;
-    let forward = handle(&signed).unwrap().sync_messages.remove(0);
-    let mut response = handle(&ReceiveInput {
-        receiver: forward.to,
-        from: Some(signed.receiver),
-        is_authorized: false,
-        pre_state: ActorState::empty(),
-        message: forward.message,
-    })
+        Some(Actor::new(OWNER, PROGRAM)),
+        create_message(false),
+    ))
     .unwrap();
-    // Each reply is supplied at the public message boundary, with its authoritative actor origin.
-    for _ in 0..4 {
-        let query = response.sync_messages.remove(0);
-        let message = if query.to.program_account_id == TOKEN_PROGRAM_ACCOUNT_ID
-            && query.to.account_id == HOLDER
-        {
-            let checked = lez_compat_core::token::handle(&ReceiveInput {
-                receiver: query.to,
-                from: Some(Actor::new(pool_id(), PROGRAM)),
-                is_authorized: true,
-                pre_state: ActorState::empty(),
-                message: query.message,
-            })
-            .unwrap()
-            .sync_messages
-            .remove(0);
-            let proof = lez_compat_core::token::handle(&ReceiveInput {
-                receiver: checked.to,
-                from: Some(query.to),
-                is_authorized: false,
-                pre_state: borsh::to_vec(&TokenState::Holding {
-                    definition: OWNER,
-                    owner: HOLDER,
-                    kind: TokenKind::NftMaster,
-                    balance: 1,
-                })
-                .unwrap()
-                .into(),
-                message: checked.message,
-            })
-            .unwrap()
-            .sync_messages
-            .remove(0);
-            response = handle(&ReceiveInput {
-                receiver: proof.to,
-                from: Some(checked.to),
-                is_authorized: false,
-                pre_state: response.post_state.unwrap(),
-                message: proof.message,
-            })
-            .unwrap();
-            continue;
-        } else if query.to == Actor::new(compute_config_pda(NS, PROGRAM), PROGRAM) {
-            borsh::to_vec(&StateReply { state: namespace() }).unwrap()
-        } else {
-            borsh::to_vec(&StateReply {
-                state: borsh::to_vec(&TokenState::Definition {
-                    name: "Token".into(),
-                    kind: TokenKind::Fungible,
-                    supply: 10000,
-                    metadata: None,
-                })
-                .unwrap()
-                .into(),
-            })
-            .unwrap()
-        };
-        response = reply_to(response.post_state.unwrap(), &query, message).unwrap();
-    }
-    let pool = PoolAccount::decode(&response.post_state.unwrap()).unwrap();
-    assert_eq!(pool.owner, OWNER);
-    assert_eq!(pool.pool.k, 100000);
     assert_eq!(
-        (pool.pool.real_reserve0, pool.pool.real_reserve1),
+        pending.sync_messages[0].to,
+        Actor::new(compute_config_pda(NS, PROGRAM), PROGRAM)
+    );
+    let response = answer_reads(pending, &pool_state(), namespace(), [0, 0]).unwrap();
+    let state = PoolAccount::decode(response.post_state.as_ref().unwrap()).unwrap();
+    assert_eq!(state.owner, OWNER);
+    assert!(state.funded);
+    assert_eq!(
+        (state.pool.real_reserve0, state.pool.real_reserve1),
         (800, 25)
     );
-    assert!(pool.funded);
+    let bootstrap = response.sync_messages.last().unwrap();
+    assert_eq!(
+        bootstrap.to.program_account_id,
+        crate::AUTHORITY_PROGRAM_ACCOUNT_ID
+    );
+    assert_eq!(
+        borsh::from_slice::<lez_compat_core::authority::Message>(&bootstrap.message).unwrap(),
+        lez_compat_core::authority::Message::BootstrapTransferOnly { authority: OWNER }
+    );
+    assert_eq!(bootstrap.pda_seeds.len(), 1);
+    assert_eq!(
+        AccountId::for_public_pda(&PROGRAM, bootstrap.pda_seeds.first().unwrap()),
+        bootstrap.to.account_id
+    );
     let transfers: Vec<_> = response
         .sync_messages
         .iter()
-        .filter_map(|c| borsh::from_slice::<lez_compat_core::token::Message>(&c.message).ok())
-        .filter(|m| matches!(m, lez_compat_core::token::Message::Transfer { .. }))
+        .filter(|m| m.to == Actor::new(OWNER, TOKEN_PROGRAM_ACCOUNT_ID))
         .collect();
-    assert_eq!(
-        transfers,
-        vec![
-            lez_compat_core::token::Message::Transfer {
-                definition: TOKEN0,
-                recipient: pool_id(),
-                amount: 800
-            },
-            lez_compat_core::token::Message::Transfer {
-                definition: TOKEN1,
-                recipient: pool_id(),
-                amount: 25
-            }
-        ]
-    );
-    assert!(
-        response
-            .sync_messages
-            .iter()
-            .filter(|m| m.to.account_id == HOLDER)
-            .all(|m| m.to.program_account_id == TOKEN_PROGRAM_ACCOUNT_ID)
-    );
-    assert_eq!(Config::decode(&namespace()).unwrap().namespace, NS);
+    assert_eq!(transfers.len(), 2);
 }
 
 #[test]
@@ -444,62 +381,323 @@ fn namespace_and_vault_replies_require_the_exact_account_and_program() {
     ));
 }
 
+fn role_call(
+    receiver: Actor,
+    state: ActorState,
+    from: Option<Actor>,
+    authorized: bool,
+    message: Vec<u8>,
+) -> Result<Response, lez_compat_core::Error> {
+    lez_compat_core::authority::handle(&ReceiveInput {
+        receiver,
+        pre_state: state,
+        from,
+        is_authorized: authorized,
+        message,
+    })
+}
+
 #[test]
-fn owner_actions_require_a_signed_current_master_nft_holder() {
-    let state = pool_state();
-    let response = start(&state, Message::ClosePool { now: 1 }).unwrap();
-    let request = response.sync_messages.into_iter().next().unwrap();
-    let mut owner_input = ReceiveInput {
-        receiver: request.to,
-        from: Some(Actor::new(pool_id(), PROGRAM)),
-        is_authorized: false,
-        pre_state: ActorState::empty(),
-        message: request.message,
-    };
-    assert!(lez_compat_core::token::handle(&owner_input).is_err());
-    owner_input.is_authorized = true;
-    let query = lez_compat_core::token::handle(&owner_input)
-        .unwrap()
-        .sync_messages
-        .remove(0);
-    for (definition, owner, kind, balance) in [
-        (OWNER, HOLDER, TokenKind::NftMaster, 0),
-        (OWNER, HOLDER, TokenKind::Fungible, 1),
-        (OWNER, AccountId::new([90; 32]), TokenKind::NftMaster, 1),
-        (TOKEN0, HOLDER, TokenKind::NftMaster, 1),
-    ] {
-        let holding = TokenState::Holding {
-            definition,
-            owner,
-            kind,
-            balance,
-        };
+fn direct_pool_role_transfer_requires_consent_and_preserves_pool_identity() {
+    use lez_compat_core::authority::{self, Message as RoleMessage};
+    let pending = handle(&call(
+        pool_id(),
+        ActorState::empty(),
+        Some(Actor::new(OWNER, PROGRAM)),
+        create_message(false),
+    ))
+    .unwrap();
+    let created = answer_reads(pending, &pool_state(), namespace(), [0, 0]).unwrap();
+    let pool_bytes = created.post_state.unwrap();
+    let bootstrap = created.sync_messages.last().unwrap();
+    let role_actor = bootstrap.to;
+    let initial = role_call(
+        role_actor,
+        ActorState::empty(),
+        Some(Actor::new(pool_id(), PROGRAM)),
+        true,
+        bootstrap.message.clone(),
+    )
+    .unwrap();
+    let consent = &initial.sync_messages[0];
+    assert!(
+        role_call(
+            consent.to,
+            ActorState::empty(),
+            Some(role_actor),
+            false,
+            consent.message.clone()
+        )
+        .is_err()
+    );
+    let accepted = role_call(
+        consent.to,
+        ActorState::empty(),
+        Some(role_actor),
+        true,
+        consent.message.clone(),
+    )
+    .unwrap();
+    let installed = role_call(
+        role_actor,
+        initial.post_state.unwrap(),
+        Some(consent.to),
+        false,
+        accepted.sync_messages[0].message.clone(),
+    )
+    .unwrap()
+    .post_state
+    .unwrap();
+    let transfer = borsh::to_vec(&RoleMessage::Transfer {
+        role: role_actor.account_id,
+        successor: HOLDER,
+    })
+    .unwrap();
+    assert!(
+        role_call(
+            consent.to,
+            ActorState::empty(),
+            None,
+            false,
+            transfer.clone()
+        )
+        .is_err()
+    );
+    let proposed = role_call(consent.to, ActorState::empty(), None, true, transfer).unwrap();
+    let proposal = role_call(
+        role_actor,
+        installed.clone(),
+        Some(consent.to),
+        false,
+        proposed.sync_messages[0].message.clone(),
+    )
+    .unwrap();
+    let successor = &proposal.sync_messages[0];
+    assert!(
+        role_call(
+            successor.to,
+            ActorState::empty(),
+            Some(role_actor),
+            false,
+            successor.message.clone()
+        )
+        .is_err()
+    );
+    let approved = role_call(
+        successor.to,
+        ActorState::empty(),
+        Some(role_actor),
+        true,
+        successor.message.clone(),
+    )
+    .unwrap();
+    let transferred = role_call(
+        role_actor,
+        proposal.post_state.unwrap(),
+        Some(successor.to),
+        false,
+        approved.sync_messages[0].message.clone(),
+    )
+    .unwrap()
+    .post_state
+    .unwrap();
+    for caller in [OWNER, NS, AccountId::new([92; 32])] {
+        let request = handle(&call(
+            pool_id(),
+            pool_bytes.clone(),
+            Some(Actor::new(caller, PROGRAM)),
+            Message::ClosePool { now: 1 },
+        ))
+        .unwrap();
+        let check = &request.sync_messages[0];
+        let assertion = role_call(
+            check.to,
+            ActorState::empty(),
+            Some(Actor::new(pool_id(), PROGRAM)),
+            true,
+            check.message.clone(),
+        )
+        .unwrap();
         assert!(
-            lez_compat_core::token::handle(&ReceiveInput {
-                receiver: query.to,
-                from: Some(owner_input.receiver),
+            role_call(
+                role_actor,
+                transferred.clone(),
+                Some(check.to),
+                false,
+                assertion.sync_messages[0].message.clone()
+            )
+            .is_err()
+        );
+    }
+    let request = handle(&call(
+        pool_id(),
+        pool_bytes.clone(),
+        Some(Actor::new(HOLDER, PROGRAM)),
+        Message::ClosePool { now: 1 },
+    ))
+    .unwrap();
+    let check = &request.sync_messages[0];
+    let assertion = role_call(
+        check.to,
+        ActorState::empty(),
+        Some(Actor::new(pool_id(), PROGRAM)),
+        true,
+        check.message.clone(),
+    )
+    .unwrap();
+    let proof = role_call(
+        role_actor,
+        transferred.clone(),
+        Some(check.to),
+        false,
+        assertion.sync_messages[0].message.clone(),
+    )
+    .unwrap();
+    let authorized: authority::Authorized =
+        borsh::from_slice(&proof.sync_messages[0].message).unwrap();
+    assert_eq!(authorized.authority, HOLDER);
+    let closed = handle(&ReceiveInput {
+        receiver: proof.sync_messages[0].to,
+        pre_state: request.post_state.unwrap(),
+        from: Some(role_actor),
+        is_authorized: false,
+        message: proof.sync_messages[0].message.clone(),
+    })
+    .unwrap();
+    let state = PoolAccount::decode(&closed.post_state.unwrap()).unwrap();
+    assert_eq!(state.owner, OWNER);
+    assert_eq!(state.namespace, NS);
+    assert_eq!(state.pool.lifecycle, pool::PoolLifecycle::Closed);
+    assert!(
+        state
+            .validate_address(Actor::new(pool_id(), PROGRAM))
+            .is_ok()
+    );
+    let revoke = role_call(
+        successor.to,
+        ActorState::empty(),
+        None,
+        true,
+        borsh::to_vec(&RoleMessage::Renounce {
+            role: role_actor.account_id,
+        })
+        .unwrap(),
+    )
+    .unwrap();
+    assert!(
+        role_call(
+            role_actor,
+            transferred,
+            Some(successor.to),
+            false,
+            revoke.sync_messages[0].message.clone()
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn pool_owner_proofs_reject_wrong_namespace_role_holder_program_and_callback() {
+    use crate::{AUTHORITY_PROGRAM_ACCOUNT_ID, compute_pool_owner_role};
+    use lez_compat_core::authority::Authorized;
+    let state = pool_state();
+    let pending = start(&state, Message::ClosePool { now: 1 })
+        .unwrap()
+        .post_state
+        .unwrap();
+    let role = compute_pool_owner_role(NS, pool_id(), PROGRAM);
+    let valid = Authorized {
+        role,
+        authority: HOLDER,
+    };
+    let wrong_namespace = compute_pool_owner_role(AccountId::new([93; 32]), pool_id(), PROGRAM);
+    let admin_role = crate::compute_admin_role(NS, PROGRAM);
+    for (receiver, sender, proof) in [
+        (pool_id(), Actor::new(role, PROGRAM), valid.clone()),
+        (
+            pool_id(),
+            Actor::new(admin_role, AUTHORITY_PROGRAM_ACCOUNT_ID),
+            Authorized {
+                role: admin_role,
+                authority: HOLDER,
+            },
+        ),
+        (
+            pool_id(),
+            Actor::new(wrong_namespace, AUTHORITY_PROGRAM_ACCOUNT_ID),
+            Authorized {
+                role: wrong_namespace,
+                authority: HOLDER,
+            },
+        ),
+        (
+            pool_id(),
+            Actor::new(role, AUTHORITY_PROGRAM_ACCOUNT_ID),
+            Authorized {
+                role: admin_role,
+                authority: HOLDER,
+            },
+        ),
+        (
+            pool_id(),
+            Actor::new(role, AUTHORITY_PROGRAM_ACCOUNT_ID),
+            Authorized {
+                role,
+                authority: OWNER,
+            },
+        ),
+        (
+            AccountId::new([94; 32]),
+            Actor::new(role, AUTHORITY_PROGRAM_ACCOUNT_ID),
+            valid,
+        ),
+    ] {
+        assert!(
+            handle(&ReceiveInput {
+                receiver: Actor::new(receiver, PROGRAM),
+                from: Some(sender),
                 is_authorized: false,
-                pre_state: borsh::to_vec(&holding).unwrap().into(),
-                message: query.message.clone()
+                pre_state: pending.clone(),
+                message: borsh::to_vec(&proof).unwrap(),
             })
             .is_err()
         );
     }
-    let proof = borsh::to_vec(&lez_compat_core::token::NftHolder {
+    let legacy = lez_compat_core::token::NftHolder {
         definition: OWNER,
         owner: HOLDER,
-    })
-    .unwrap();
-    assert!(matches!(
+    };
+    assert!(
         handle(&ReceiveInput {
             receiver: Actor::new(pool_id(), PROGRAM),
-            from: Some(Actor::new(query.to.account_id, PROGRAM)),
+            from: Some(Actor::new(
+                lez_compat_core::token::holding_address(TOKEN_PROGRAM_ACCOUNT_ID, HOLDER, OWNER),
+                TOKEN_PROGRAM_ACCOUNT_ID
+            )),
             is_authorized: false,
-            pre_state: response.post_state.unwrap(),
-            message: proof
-        }),
-        Err(crate::Error::Unauthorized)
-    ));
+            pre_state: pending,
+            message: borsh::to_vec(&legacy).unwrap(),
+        })
+        .is_err()
+    );
+}
+
+#[test]
+fn owner_actions_check_the_separate_stable_pool_role() {
+    let state = pool_state();
+    let response = start(&state, Message::ClosePool { now: 1 }).unwrap();
+    let request = &response.sync_messages[0];
+    assert_eq!(
+        request.to,
+        Actor::new(HOLDER, crate::AUTHORITY_PROGRAM_ACCOUNT_ID)
+    );
+    assert_eq!(
+        borsh::from_slice::<lez_compat_core::authority::Message>(&request.message).unwrap(),
+        lez_compat_core::authority::Message::Check {
+            role: crate::compute_pool_owner_role(NS, pool_id(), PROGRAM),
+            callback: Actor::new(pool_id(), PROGRAM),
+        }
+    );
 }
 
 #[test]
@@ -583,7 +781,7 @@ fn zero_reserves_initialize_both_holdings_without_zero_transfers() {
     let response = handle(&call(
         pool_id(),
         ActorState::empty(),
-        Some(Actor::new(HOLDER, PROGRAM)),
+        Some(Actor::new(OWNER, PROGRAM)),
         message,
     ))
     .unwrap();
@@ -653,7 +851,7 @@ fn creation_rejects_invalid_bounds_sides_program_fields_and_existing_state() {
             handle(&call(
                 pool_id(),
                 ActorState::empty(),
-                Some(Actor::new(HOLDER, PROGRAM)),
+                Some(Actor::new(OWNER, PROGRAM)),
                 invalid
             ))
             .is_err()
@@ -667,7 +865,7 @@ fn creation_rejects_invalid_bounds_sides_program_fields_and_existing_state() {
         handle(&call(
             AccountId::new([77; 32]),
             ActorState::empty(),
-            Some(Actor::new(HOLDER, PROGRAM)),
+            Some(Actor::new(OWNER, PROGRAM)),
             message
         )),
         Err(crate::Error::WrongAccount)
@@ -854,14 +1052,14 @@ fn prepared_pool_cannot_trade_or_settle_until_funding_and_activates_only_once() 
     let created = handle(&call(
         pool_id(),
         ActorState::empty(),
-        Some(Actor::new(HOLDER, PROGRAM)),
+        Some(Actor::new(OWNER, PROGRAM)),
         message,
     ))
     .unwrap();
     let response = answer_reads(created, &pool_state(), namespace(), [0, 0]).unwrap();
     let state = PoolAccount::decode(&response.post_state.unwrap()).unwrap();
     assert!(!state.funded);
-    assert_eq!(response.sync_messages.len(), 3);
+    assert_eq!(response.sync_messages.len(), 4);
     for message in [
         Message::ClosePool { now: 1 },
         Message::WithdrawReserves { now: 42 },
@@ -904,6 +1102,78 @@ fn prepared_pool_cannot_trade_or_settle_until_funding_and_activates_only_once() 
         start(&funded, Message::ActivatePool { now: 2 }),
         Err(crate::Error::AlreadyInitialized)
     ));
+}
+
+#[test]
+fn factory_creation_relay_requires_its_owner_program_and_grants_only_the_pool_seed() {
+    let factory = AccountId::new([61; 32]);
+    let seed = [62; 32];
+    let owner = AccountId::for_public_pda(&factory, &lee_core::program::PdaSeed::new(seed));
+    let id = compute_pool_pda(NS, PROGRAM, TOKEN0, TOKEN1, owner);
+    let mut message = create_message(true);
+    if let Message::CreatePool {
+        owner: stored,
+        owner_program_id,
+        owner_program_seed,
+        ..
+    } = &mut message
+    {
+        *stored = owner;
+        *owner_program_id = Some(factory);
+        *owner_program_seed = Some(seed);
+    }
+    let mut request = call(
+        owner,
+        ActorState::empty(),
+        Some(Actor::new(owner, factory)),
+        message.clone(),
+    );
+    request.is_authorized = true;
+    let forwarded = handle(&request).unwrap();
+    assert!(forwarded.post_state.is_none());
+    assert_eq!(forwarded.sync_messages.len(), 1);
+    let forwarded = &forwarded.sync_messages[0];
+    assert_eq!(forwarded.to, Actor::new(id, PROGRAM));
+    assert_eq!(
+        borsh::from_slice::<Message>(&forwarded.message).unwrap(),
+        message
+    );
+    assert_eq!(
+        forwarded.pda_seeds,
+        [crate::compute_pool_pda_seed(NS, TOKEN0, TOKEN1, owner)].into()
+    );
+    let pending = handle(&ReceiveInput {
+        receiver: forwarded.to,
+        pre_state: ActorState::empty(),
+        from: Some(request.receiver),
+        is_authorized: true,
+        message: forwarded.message.clone(),
+    })
+    .unwrap();
+    assert_eq!(
+        pending.sync_messages[0].to,
+        Actor::new(compute_config_pda(NS, PROGRAM), PROGRAM)
+    );
+    for sender in [
+        Actor::new(NS, PROGRAM),
+        Actor::new(owner, PROGRAM),
+        Actor::new(OWNER, factory),
+    ] {
+        let mut forged = request.clone();
+        forged.from = Some(sender);
+        assert!(matches!(handle(&forged), Err(crate::Error::Unauthorized)));
+    }
+    request.is_authorized = false;
+    assert!(matches!(handle(&request), Err(crate::Error::Unauthorized)));
+    request.is_authorized = true;
+    if let Message::CreatePool {
+        owner_program_seed, ..
+    } = &mut message
+    {
+        *owner_program_seed = Some([63; 32]);
+    }
+    request.message = borsh::to_vec(&message).unwrap();
+    assert!(matches!(handle(&request), Err(crate::Error::Unauthorized)));
 }
 
 #[test]
@@ -1083,7 +1353,7 @@ fn pool_creation_treats_setup_time_as_a_lower_bound_and_checks_live_expiry() {
         let pending = handle(&call(
             pool_id(),
             ActorState::empty(),
-            Some(Actor::new(HOLDER, PROGRAM)),
+            Some(Actor::new(OWNER, PROGRAM)),
             message,
         ))
         .unwrap();
@@ -1232,19 +1502,13 @@ fn answer_reads(
         .is_some_and(|s| s.starts_with(b"LZCVPEND"))
     {
         let query = response.sync_messages.remove(0);
-        let (from, bytes) = if query.to == Actor::new(HOLDER, TOKEN_PROGRAM_ACCOUNT_ID) {
+        let (from, bytes) = if query.to == Actor::new(HOLDER, crate::AUTHORITY_PROGRAM_ACCOUNT_ID) {
+            let role = crate::compute_pool_owner_role(NS, pool_id(), PROGRAM);
             (
-                Actor::new(
-                    lez_compat_core::token::holding_address(
-                        TOKEN_PROGRAM_ACCOUNT_ID,
-                        HOLDER,
-                        OWNER,
-                    ),
-                    TOKEN_PROGRAM_ACCOUNT_ID,
-                ),
-                borsh::to_vec(&lez_compat_core::token::NftHolder {
-                    definition: OWNER,
-                    owner: HOLDER,
+                Actor::new(role, crate::AUTHORITY_PROGRAM_ACCOUNT_ID),
+                borsh::to_vec(&lez_compat_core::authority::Authorized {
+                    role,
+                    authority: HOLDER,
                 })
                 .unwrap(),
             )
@@ -1560,7 +1824,7 @@ fn expired_withdrawal_pays_current_fees_and_principal_once_leaving_surplus() {
 }
 
 #[test]
-fn pool_close_rights_follow_the_current_nft_holder() {
+fn pool_close_rights_follow_the_current_role_holder() {
     let state = pool_state();
     let response = answer_reads(
         start(&state, Message::ClosePool { now: 1 }).unwrap(),

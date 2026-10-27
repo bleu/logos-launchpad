@@ -486,11 +486,7 @@
             "type": "AccountId"
           },
           {
-            "name": "creator_commitment",
-            "type": "[u8;32]"
-          },
-          {
-            "name": "creator_nft_definition",
+            "name": "creator_role_id",
             "type": "AccountId"
           },
           {
@@ -597,10 +593,6 @@
               },
               {
                 "name": "creator",
-                "type": "AccountId"
-              },
-              {
-                "name": "creator_nft_definition",
                 "type": "AccountId"
               },
               {
