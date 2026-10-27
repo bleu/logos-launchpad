@@ -1,6 +1,6 @@
 # ADR 0020: Manual settlement and an optional adapter hook
 
-Status: Accepted and implemented for bonding-curve settlement; fixed-price and weighted-sale settlement remain future work; production-readiness limits remain; live DEX integration deferred
+Status: Accepted and implemented for bonding-curve settlement; fixed-price settlement follows [ADR 0025](0025-sale-closing.md); weighted-sale settlement remains future work; production-readiness limits remain; live DEX integration deferred
 
 Date: 2026-09-29; amended 2026-10-01
 
