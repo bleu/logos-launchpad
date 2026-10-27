@@ -61,12 +61,35 @@ pub fn begin(input: &ReceiveInput, message: Message) -> Result<Response, Error> 
     match owner_program {
         Some((program, seed)) => {
             if AccountId::for_public_pda(&program, &lee_core::program::PdaSeed::new(seed)) != owner
-                || sender != Actor::new(owner, program)
             {
                 return Err(Error::Unauthorized);
             }
+            if input.receiver.account_id == owner {
+                if !input.is_authorized || sender != Actor::new(owner, program) {
+                    return Err(Error::Unauthorized);
+                }
+                let seed = crate::compute_pool_pda_seed(
+                    namespace,
+                    token0_definition_id,
+                    token1_definition_id,
+                    owner,
+                );
+                return Ok(Response::keep_state().send(
+                    lee_core::program::SyncMessage::new(
+                        Actor::new(
+                            AccountId::for_public_pda(&curve_program_id, &seed),
+                            curve_program_id,
+                        ),
+                        &message,
+                    )
+                    .with_pda_seeds([seed]),
+                ));
+            }
+            if sender != Actor::new(owner, curve_program_id) {
+                return Err(Error::Unauthorized);
+            }
         }
-        None if sender.program_account_id == input.receiver.program_account_id => (),
+        None if sender == Actor::new(owner, input.receiver.program_account_id) => (),
         None => return Err(Error::Unauthorized),
     }
     let state = PoolAccount {
@@ -88,11 +111,7 @@ pub fn begin(input: &ReceiveInput, message: Message) -> Result<Response, Error> 
         .map_err(|_| Error::InvalidPool)?,
     };
     state.validate_address(input.receiver)?;
-    let mut queries = vec![];
-    if owner_program.is_none() {
-        queries.push(Query::OwnerNft);
-    }
-    queries.extend([Query::Namespace, Query::Definition0, Query::Definition1]);
+    let mut queries = vec![Query::Namespace, Query::Definition0, Query::Definition1];
     if owner_program.is_some() && !defer_funding {
         queries.extend([Query::Vault0, Query::Vault1]);
     }
@@ -228,6 +247,27 @@ pub(crate) fn finish(mut pending: Pending, receiver: Actor) -> Result<Response, 
                 amount,
             );
         }
+    }
+    if pending.state.owner_program.is_none() {
+        response = response.send(
+            lee_core::program::SyncMessage::new(
+                Actor::new(
+                    crate::compute_pool_owner_role(
+                        pending.state.namespace,
+                        receiver.account_id,
+                        receiver.program_account_id,
+                    ),
+                    crate::AUTHORITY_PROGRAM_ACCOUNT_ID,
+                ),
+                &lez_compat_core::authority::Message::BootstrapTransferOnly {
+                    authority: pending.state.owner,
+                },
+            )
+            .with_pda_seeds([crate::compute_pool_owner_role_seed(
+                pending.state.namespace,
+                receiver.account_id,
+            )]),
+        );
     }
     Ok(response)
 }

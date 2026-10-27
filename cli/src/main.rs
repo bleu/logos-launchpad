@@ -59,6 +59,14 @@ impl Cli {
         {
             return Err(launchpad_client::ClientError::UnsupportedPrivateAuthority.into());
         }
+        if matches!(
+            self.command,
+            Command::CreateAuthority(_) | Command::TransferAuthority(_)
+        ) {
+            eyre::bail!(
+                "legacy NFT authority commands are unsupported; launch roles use role authority"
+            );
+        }
         let creator = match &self.command {
             Command::CreateSale(args) => Some(args.creator),
             Command::Withdraw(args) | Command::Claim(args) => Some(args.creator),
@@ -146,7 +154,9 @@ enum Command {
     CollectFees(CollectFeesArgs),
     /// Initialize a namespace once, using its signing AccountId as administrator.
     Configure(ConfigArgs),
+    /// Unsupported legacy NFT command. Launch roles use role authority.
     CreateAuthority(CreateAuthorityArgs),
+    /// Unsupported legacy NFT command. Launch roles use role authority.
     TransferAuthority(TransferAuthorityArgs),
     NamespaceInfo(NamespaceReadArgs),
     RenounceAdmin(NamespaceAdminArgs),
@@ -250,8 +260,6 @@ struct CreateSaleArgs {
     /// Account that authorizes the factory launch.
     #[arg(long, value_parser = parse_account_location)]
     creator: AccountLocation,
-    #[arg(long, value_parser = parse_public_account_id)]
-    creator_nft_definition: lee::AccountId,
     /// Clock lower bound in Unix seconds, preserved as supplied, including zero.
     #[arg(long, default_value_t = 0)]
     now: u64,
@@ -288,7 +296,6 @@ impl CreateSaleArgs {
             virtual_token_reserve: self.virtual_token_reserve,
             virtual_collateral_reserve: self.virtual_collateral_reserve,
             end_timestamp: self.end_timestamp,
-            creator_nft_definition: self.creator_nft_definition,
             now: self.now,
         }
     }
@@ -660,60 +667,6 @@ async fn main() {
 
 async fn run(json: bool, cli: Cli) -> Result<()> {
     cli.validate_route()?;
-    match &cli.command {
-        Command::CreateAuthority(args) => {
-            let mut wallet = WalletCore::from_env()
-                .map_err(|error| eyre::eyre!(error.into_boxed_dyn_error()))?;
-            let (definition, _) = wallet.create_new_account_public(None);
-            let (holder, _) = wallet.create_new_account_public(None);
-            wallet
-                .store_config_changes()
-                .await
-                .map_err(|error| eyre::eyre!(error.into_boxed_dyn_error()))?;
-            let mut invocation = launchpad_client::build_create_authority_invocation(
-                definition,
-                holder,
-                args.name.clone(),
-                args.uri.clone(),
-            );
-            invocation.fee_payer = Some(args.fee_payer);
-            let hash = submit_public_invocation(
-                &wallet,
-                &load_deployment(
-                    &args.token_program_path,
-                    launchpad_client::TOKEN_PROGRAM_ACCOUNT_ID,
-                )?,
-                invocation,
-            )
-            .await?;
-            println!(
-                "{}",
-                serde_json::json!({"status":"submitted", "authority":definition.to_string(), "holder":format!("Public/{holder}"), "transaction_hash":hex::encode(hash)})
-            );
-            return Ok(());
-        }
-        Command::TransferAuthority(args) => {
-            let mut wallet = WalletCore::from_env()
-                .map_err(|error| eyre::eyre!(error.into_boxed_dyn_error()))?;
-            let hash = launchpad_client::transfer_authority(
-                &mut wallet,
-                &load_deployment(
-                    &args.token_program_path,
-                    launchpad_client::TOKEN_PROGRAM_ACCOUNT_ID,
-                )?,
-                args.from,
-                args.to,
-                args.definition,
-            )
-            .await?;
-            println!(
-                "{}",
-                serde_json::json!({"status":"submitted", "transaction_hash":hex::encode(hash)})
-            );
-            return Ok(());
-        }
-        _ => {}
-    }
     let router = cli.authority_router_path.as_deref();
     let namespace = cli
         .namespace
@@ -1288,14 +1241,11 @@ async fn claim_creator_allocation(
     let mut wallet = WalletCore::from_env()
         .map_err(|error| eyre::eyre!(error.into_boxed_dyn_error()))
         .context("opening the project wallet")?;
-    let state = load_factory_state(&wallet, sale).await?;
+    load_factory_state(&wallet, sale).await?;
     let now = current_time()?;
     let build = |creator| {
         Ok(build_claim_creator_allocation_invocation(
-            sale,
-            creator,
-            state.creator_nft_definition,
-            now,
+            sale, creator, now,
         ))
     };
     let transaction_hash = submit_role(
@@ -1455,6 +1405,29 @@ mod tests {
     }
 
     #[test]
+    fn legacy_authority_command_cannot_claim_to_create_a_launch_role() {
+        let cli = Cli::try_parse_from([
+            "launchpad",
+            "create-authority",
+            "--token-program-path",
+            "token.bin",
+            "--fee-payer",
+            "11111111111111111111111111111111",
+            "--name",
+            "Creator",
+            "--uri",
+            "https://example.invalid/creator",
+        ])
+        .unwrap();
+        assert!(
+            cli.validate_route()
+                .unwrap_err()
+                .to_string()
+                .contains("role authority")
+        );
+    }
+
+    #[test]
     fn private_nft_transfer_is_rejected_before_wallet_access() {
         let cli = Cli::try_parse_from([
             "launchpad",
@@ -1573,7 +1546,7 @@ mod tests {
     }
 
     #[test]
-    fn authority_commands_keep_nft_transfers_and_reject_private_namespace_admin() {
+    fn legacy_authority_syntax_and_private_namespace_admin_are_distinct() {
         assert!(
             Cli::try_parse_from([
                 "launchpad",
@@ -1977,8 +1950,6 @@ mod tests {
             "100",
             "--collateral-definition",
             "11111111111111111111111111111111",
-            "--creator-nft-definition",
-            "11111111111111111111111111111111",
             "--creator",
             "Public/11111111111111111111111111111111",
             "--factory-program-path",
@@ -2020,8 +1991,6 @@ mod tests {
             "--virtual-collateral-reserve",
             "100",
             "--collateral-definition",
-            "11111111111111111111111111111111",
-            "--creator-nft-definition",
             "11111111111111111111111111111111",
             "--creator",
             "Public/11111111111111111111111111111111",

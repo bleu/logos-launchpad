@@ -1,6 +1,6 @@
 # ADR 0006: Namespace isolation and AccountId administration
 
-Status: Accepted; actor namespace host checks passed; runtime administration checks pending
+Status: Accepted; separate curve role checks implemented; see the workspace guide for execution evidence and limits
 
 Date: 2026-09-29; configuration review: 2026-10-01; role-pattern review: 2026-10-06; namespace integration: 2026-10-09
 
@@ -26,7 +26,9 @@ Fee-rate and treasury changes are separate, explicit administration operations. 
 
 Use separate `spel-admin-authority` state for namespace administration, each sale's creator role and each direct pool-owner role. Do not use Authority NFTs for these roles. One account may hold several roles, but namespace administration grants no creator or pool-owner rights. Curve factory-created pools stay under curve factory program custody.
 
-Creator and direct pool-owner migration is separate work. It must cover stored role state, transfer acceptance, client inputs and existing account compatibility. Decide whether these roles may renounce before enabling renunciation; it must not leave required settlement or recovery unavailable. Existing NFT checks remain until that migration is implemented and tested.
+Curve creator and direct pool-owner roles start with the creation signer in the creation transaction. Curve creator roles use the sale namespace and launch salt; direct pool-owner roles use the namespace and pool identity. The role address stays fixed when its holder changes. Transfers require the current holder and the successor's consent in the same transaction, or owner-program approval for a PDA successor. The new holder receives all remaining role rights, including unclaimed creator allocation and manual settlement; the former holder loses them. Transfer does not change sale terms or factory custody.
+
+Curve creator and direct pool-owner roles cannot renounce. Required setup, settlement and reserve recovery must retain an authorized caller. Namespace administrator renunciation keeps its separate terminal lifecycle. No existing development accounts or client formats need compatibility support. There are no users, production deployments or important stored data to migrate; breaking changes are allowed.
 
 Retain the reviewed curve factory's resumable creation and settlement. Pending curve pools cannot trade before funding is complete. Each curve stage rechecks the relevant authority and commits atomically with its child calls; the whole curve workflow can span transactions. This reviewed curve behavior does not define fixed-price or weighted-sale creation stages, pending guards or custody.
 
@@ -38,7 +40,7 @@ The [historical authority experiments](https://github.com/bleu/logos-launchpad/b
 
 On candidate LEZ `c31a6bca60537ec08f595cf786f1ae6275ab7f43`, the legacy PDA check rejected an authorized account because the old whole-account owner field was absent. A probe checked the derived address and owner-program approval in the same transaction, then used the library's authorized-signer branch. Direct calls without owner approval were rejected. This is limited compatibility evidence, not an adopted production adapter or a complete authority lifecycle. NFT-holder transfer checks also passed on that candidate, but do not justify retaining the rejected NFT role design.
 
-The experiments are no longer maintained. The [historical signed namespace guest tests](https://github.com/bleu/logos-launchpad/blob/5b6927cbd3b5a12941f3956bcab8458446ed52db/crates/launchpad-client/tests/namespace_admin.rs) covered real signatures, runtime config claims, separate settings, isolation, co-signed transfer, program-owned administration and terminal renunciation before the actor migration. They used development receipts, not production proofs or deployed nodes. They do not establish compatibility on the selected actor revision. See the [workspace guide](../architecture/workspace-guide.md#execution-and-evidence-limits) for current checks and gaps. Creator and pool-owner migration remain separate work.
+The experiments are no longer maintained. The [historical signed namespace guest tests](https://github.com/bleu/logos-launchpad/blob/5b6927cbd3b5a12941f3956bcab8458446ed52db/crates/launchpad-client/tests/namespace_admin.rs) covered real signatures, runtime config claims, separate settings, isolation, co-signed transfer, program-owned administration and terminal renunciation before the actor migration. They used development receipts, not production proofs or deployed nodes. They do not establish compatibility on the selected actor revision. See the [workspace guide](../architecture/workspace-guide.md#execution-and-evidence-limits) for current checks and gaps. Curve creator and direct pool-owner roles follow the separate lifecycle above.
 
 ## Sources
 

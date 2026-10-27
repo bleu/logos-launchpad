@@ -73,12 +73,11 @@ fn an_authorized_role_creation_installs_a_cosigning_authority() {
 }
 
 fn bootstrap() -> ActorState {
-    let creation = input(
-        ROLE,
-        ActorState::empty(),
-        true,
-        Message::Bootstrap { authority: ALICE },
-    );
+    bootstrap_with(Message::Bootstrap { authority: ALICE })
+}
+
+fn bootstrap_with(message: Message) -> ActorState {
+    let creation = input(ROLE, ActorState::empty(), true, message);
     let response = authority::handle(&creation).unwrap();
     let challenge = &response.sync_messages[0];
     let approved = authority::handle(&ReceiveInput {
@@ -127,6 +126,36 @@ fn check(
 
 #[test]
 fn transfer_requires_the_current_authority_and_the_successor_signature() {
+    transfer_with_consent(bootstrap());
+}
+
+#[test]
+fn a_transfer_only_role_keeps_its_policy_after_a_consented_transfer() {
+    let transferred = transfer_with_consent(bootstrap_with(Message::BootstrapTransferOnly {
+        authority: ALICE,
+    }));
+    let bob = AccountId::new([3; 32]);
+    let request = input(
+        bob,
+        ActorState::empty(),
+        true,
+        Message::Renounce { role: ROLE },
+    );
+    let revoke = authority::handle(&request).unwrap().sync_messages.remove(0);
+    assert!(matches!(
+        authority::handle(&ReceiveInput {
+            receiver: revoke.to,
+            from: Some(request.receiver),
+            is_authorized: false,
+            pre_state: transferred.clone(),
+            message: revoke.message,
+        }),
+        Err(lez_compat_core::Error::Unauthorized)
+    ));
+    assert!(check(transferred, bob).is_ok());
+}
+
+fn transfer_with_consent(initial: ActorState) -> ActorState {
     let bob = AccountId::new([3; 32]);
     let request = input(
         ALICE,
@@ -142,7 +171,7 @@ fn transfer_requires_the_current_authority_and_the_successor_signature() {
         receiver: proposal.to,
         from: Some(request.receiver),
         is_authorized: false,
-        pre_state: bootstrap(),
+        pre_state: initial,
         message: proposal.message,
     })
     .unwrap();
@@ -171,7 +200,8 @@ fn transfer_requires_the_current_authority_and_the_successor_signature() {
     .post_state
     .unwrap();
     assert!(check(transferred.clone(), ALICE).is_err());
-    assert!(check(transferred, bob).is_ok());
+    assert!(check(transferred.clone(), bob).is_ok());
+    transferred
 }
 
 #[test]
@@ -203,6 +233,30 @@ fn renunciation_is_terminal_and_cannot_reopen_bootstrap() {
         ))
         .is_err()
     );
+}
+
+#[test]
+fn a_transfer_only_role_rejects_renunciation_and_keeps_its_holder() {
+    let state = bootstrap_with(Message::BootstrapTransferOnly { authority: ALICE });
+    let request = input(
+        ALICE,
+        ActorState::empty(),
+        true,
+        Message::Renounce { role: ROLE },
+    );
+    let revoke = authority::handle(&request).unwrap().sync_messages.remove(0);
+    let rejected = authority::handle(&ReceiveInput {
+        receiver: revoke.to,
+        from: Some(request.receiver),
+        is_authorized: false,
+        pre_state: state.clone(),
+        message: revoke.message,
+    });
+    assert!(matches!(
+        rejected,
+        Err(lez_compat_core::Error::Unauthorized)
+    ));
+    assert!(check(state, ALICE).is_ok());
 }
 
 #[test]

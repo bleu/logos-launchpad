@@ -183,6 +183,16 @@
             ],
             "name": "AcceptPda",
             "tag": 11
+          },
+          {
+            "fields": [
+              {
+                "name": "authority",
+                "type": "AccountId"
+              }
+            ],
+            "name": "BootstrapTransferOnly",
+            "tag": 12
           }
         ]
       },

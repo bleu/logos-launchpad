@@ -78,7 +78,28 @@ run 'release overflow tests (host and guest execution, locked)' cargo +"$ACTOR_R
 if [ "${1:-}" = --execution ]; then
   run 'node-free token actor execution (locked)' cargo +"$ACTOR_RUST_VERSION" test --manifest-path "$base/execution/Cargo.toml" --locked
   run 'seeded sale trade and fee actor execution (release, locked)' cargo +"$ACTOR_RUST_VERSION" test --manifest-path methods/Cargo.toml --release --locked --features actor-execution-tests --test actor_sale
-  printf 'check-builds: sale setup, lifecycle and settlement execution deferred; seeded fixtures cover trades and fixed-price fee collection\n'
+  if [ -z "${LAUNCHPAD_CLOCK_ELF:-}" ]; then
+    LAUNCHPAD_CLOCK_ELF="$(cargo +"$ACTOR_RUST_VERSION" metadata --format-version 1 --locked | python3 -c '
+import json, sys
+from pathlib import Path
+package = next(p for p in json.load(sys.stdin)["packages"] if p["name"] == "clock_core")
+for parent in Path(package["manifest_path"]).parents:
+    artifact = parent / "artifacts/lez/programs/clock.bin"
+    if artifact.is_file():
+        print(artifact)
+        break
+')" || fail 'cannot locate pinned upstream clock artifact'
+  fi
+  [ -s "${LAUNCHPAD_CLOCK_ELF:-}" ] || fail 'set LAUNCHPAD_CLOCK_ELF to the pinned upstream artifacts/lez/programs/clock.bin'
+  export LAUNCHPAD_CLOCK_ELF
+  for entry in "AUTHORITY:$base/methods:compat_authority" "TOKEN:$base/methods:compat_token" "CURVE:methods:curve" "FACTORY:methods:factory"; do
+    IFS=: read -r role methods guest <<< "$entry"
+    artifact="$(find "$methods/target/riscv-guest" -type f -path "*/release/$guest.bin" -size +0c -print -quit)"
+    [ -n "$artifact" ] || fail "missing role execution guest: $guest.bin"
+    export "LAUNCHPAD_${role}_ELF=$root/$artifact"
+  done
+  run 'creator and direct pool-owner role actor execution (release, locked)' cargo +"$ACTOR_RUST_VERSION" test -p launchpad-client --release --locked --test role_authority_guest -- --ignored
+  printf 'check-builds: selected actor execution fixtures passed; full lifecycle coverage, real proofs and deployment readiness not tested\n'
 else
   printf 'check-builds: token and sale actor execution deferred; select --execution for available real fixtures\n'
 fi

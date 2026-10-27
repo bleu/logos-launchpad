@@ -45,14 +45,14 @@ This page explains technical shorthand used in this repository. [CONTEXT.md](../
 | Namespace | An independent launchpad identity with its own administrator, fee rate and treasury. Sales remain bound to their creation namespace. |
 | Namespace state | Logical per-namespace administration and configuration state used for creation validation and applicable runtime checks. This term does not select a registry, shared physical schema or cross-factory account owner. |
 | Namespace administrator | The holder of namespace-configuration rights. This role does not receive creator rights or approve every permitted creator action. |
-| Creator | The sale authority holder with permitted creation and lifecycle actions. Fixed-price sale setup creates a separate embedded per-sale role for its creator. |
+| Creator | The sale authority holder with permitted creation and lifecycle actions. Curve and fixed-price sales create a separate per-sale role for their creator. |
 | Participant | A person or client that uses a configured sale to inspect, quote or trade. |
 | Pool owner | A separate authority role for an applicable pool. |
 | Authority | Permission to perform a defined action. It is checked per action and role. |
 | App placement | Which mini-app presents a flow. The admin app presents namespace administration only, while the configured-sales app presents creator and participant flows. Placement does not change authority. |
 | `AccountId` | The account identifier used for namespace administration in the planned design. |
-| Role authority | A role's own `spel-admin-authority` state. Roles share library code, not permissions. Creator and direct pool-owner migration is pending. |
-| Authority NFT / NFT master | The legacy PoC role mechanism: a unique token whose holder can act. The selected design replaces it with role authority; existing code still needs migration. |
+| Role authority | A role's own authority state. Roles share code, not permissions. Current holders can transfer curve creator and direct pool-owner roles with successor consent. Those two roles cannot renounce. |
+| Authority NFT / NFT master | The legacy PoC role mechanism: a unique token whose holder could act. Launchpad role checks now use separate role authority. |
 | Token definition / mint authority | The token's defining record, and authority to create or manage that token definition when platform rules allow it. |
 | Custody / vault | Control of tokens, and an account that holds tokens for a program or sale. |
 | ATA | Associated token account: an account derived for an owner and token definition. |
