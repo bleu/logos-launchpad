@@ -40,7 +40,6 @@ fn creation() -> CreateSaleRequest {
         virtual_token_reserve: 2_000,
         virtual_collateral_reserve: 100,
         end_timestamp: None,
-        creator_nft_definition: AccountId::new([8; 32]),
         now: 0,
     }
 }
@@ -104,8 +103,11 @@ fn valid_factory_state(sale: FactorySale) -> FactoryState {
     field!(2_000u128);
     field!(100u128);
     field!(sale.curve_program_id);
-    field!([0u8; 32]);
-    field!(AccountId::new([8; 32]));
+    field!(factory_core::compute_curve_creator_role_pda(
+        sale.namespace,
+        sale.factory_program_id,
+        sale.launch_salt
+    ));
     field!("E2E token".to_owned());
     field!("https://example.invalid/e2e-token.json".to_owned());
     field!(addresses.creator_escrow);
@@ -222,13 +224,23 @@ fn factory_launch_builds_derived_accounts_and_creator_authorization() {
         )
     );
     assert_eq!(call.signer_accounts, [creator]);
+    let role = factory_core::compute_curve_creator_role_pda(
+        sale().namespace,
+        FACTORY_PROGRAM_ID,
+        sale().launch_salt,
+    );
     assert!(
         call.actors
-            .contains(&super::token_actor(super::associated_token_account(
-                creator,
-                creation().creator_nft_definition
-            )))
+            .contains(&Actor::new(role, curve_core::AUTHORITY_PROGRAM_ACCOUNT_ID))
     );
+    assert!(call.actors.contains(&Actor::new(
+        creator,
+        curve_core::AUTHORITY_PROGRAM_ACCOUNT_ID
+    )));
+    assert!(call.account_mentions().iter().any(|mention| mention.actor()
+        == Actor::new(role, curve_core::AUTHORITY_PROGRAM_ACCOUNT_ID)
+        && !mention.authorizes
+        && matches!(mention.identity, wallet::AccountIdentity::PublicPda { .. })));
 }
 
 #[test]
@@ -255,7 +267,11 @@ fn factory_creation_admits_derived_launch_accounts_and_canonical_holdings() {
             a.token_definition,
         ),
         super::associated_token_account(a.creator_escrow, a.token_definition),
-        super::associated_token_account(creator, creation().creator_nft_definition),
+        factory_core::compute_curve_creator_role_pda(
+            sale().namespace,
+            FACTORY_PROGRAM_ID,
+            sale().launch_salt,
+        ),
     ] {
         let mention = mentions
             .iter()
@@ -273,13 +289,7 @@ fn factory_creation_admits_derived_launch_accounts_and_canonical_holdings() {
 fn settlement_admits_escrow_and_current_creator_and_treasury_holdings() {
     let creator = AccountId::new([9; 32]);
     let treasury = AccountId::new([10; 32]);
-    let call = build_withdraw_factory_proceeds_invocation(
-        sale(),
-        creator,
-        treasury,
-        creation().creator_nft_definition,
-        0,
-    );
+    let call = build_withdraw_factory_proceeds_invocation(sale(), creator, treasury, 0);
     let a = super::factory_pool_addresses(sale());
     let mentions = call.account_mentions();
     for account in [
@@ -302,12 +312,7 @@ fn settlement_admits_escrow_and_current_creator_and_treasury_holdings() {
 #[test]
 fn allocation_claim_admits_the_creator_output_holding() {
     let creator = AccountId::new([9; 32]);
-    let call = build_claim_creator_allocation_invocation(
-        sale(),
-        creator,
-        creation().creator_nft_definition,
-        0,
-    );
+    let call = build_claim_creator_allocation_invocation(sale(), creator, 0);
     let holding = super::associated_token_account(
         creator,
         super::factory_pool_addresses(sale()).token_definition,
@@ -509,12 +514,7 @@ fn factory_instruction_wire_slots_follow_the_source_idl_order() {
 fn creator_claim_uses_factory_escrow_and_derived_recipient_ata() {
     let creator = AccountId::new([9; 32]);
     let a = super::factory_pool_addresses(sale());
-    let call = build_claim_creator_allocation_invocation(
-        sale(),
-        creator,
-        creation().creator_nft_definition,
-        0,
-    );
+    let call = build_claim_creator_allocation_invocation(sale(), creator, 0);
     assert_eq!(call.destination, Actor::new(a.factory, FACTORY_PROGRAM_ID));
     assert_eq!(call.signer_accounts, [creator]);
     assert!(
@@ -565,19 +565,9 @@ fn saved_settlement_stages_identify_completed_manual_work() {
 #[test]
 fn settlement_builders_use_factory_actor_and_creator_signature() {
     let creator = AccountId::new([9; 32]);
-    let claim = build_claim_creator_allocation_invocation(
-        sale(),
-        creator,
-        creation().creator_nft_definition,
-        0,
-    );
-    let withdrawal = build_withdraw_factory_proceeds_invocation(
-        sale(),
-        creator,
-        AccountId::new([4; 32]),
-        creation().creator_nft_definition,
-        0,
-    );
+    let claim = build_claim_creator_allocation_invocation(sale(), creator, 0);
+    let withdrawal =
+        build_withdraw_factory_proceeds_invocation(sale(), creator, AccountId::new([4; 32]), 0);
     assert_eq!(claim.destination, withdrawal.destination);
     assert_eq!(claim.signer_accounts, [creator]);
     assert_eq!(withdrawal.signer_accounts, [creator]);
@@ -783,13 +773,7 @@ fn collection_is_unsigned_and_factory_withdrawal_removes_duplicate_treasury_ata(
                 sale().collateral_definition
             )))
     );
-    let withdrawal = build_withdraw_factory_proceeds_invocation(
-        sale(),
-        creator,
-        creator,
-        creation().creator_nft_definition,
-        0,
-    );
+    let withdrawal = build_withdraw_factory_proceeds_invocation(sale(), creator, creator, 0);
     assert_eq!(
         withdrawal.actors.len(),
         withdrawal
@@ -849,13 +833,8 @@ fn graduation_builder_uses_typed_callback_and_adapter_custody() {
 fn factory_withdrawal_routes_reserves_through_factory_policy() {
     let creator = AccountId::new([9; 32]);
     let a = super::factory_pool_addresses(sale());
-    let call = build_withdraw_factory_proceeds_invocation(
-        sale(),
-        creator,
-        AccountId::new([4; 32]),
-        creation().creator_nft_definition,
-        0,
-    );
+    let call =
+        build_withdraw_factory_proceeds_invocation(sale(), creator, AccountId::new([4; 32]), 0);
     assert_eq!(call.destination, Actor::new(a.factory, FACTORY_PROGRAM_ID));
     assert_eq!(call.signer_accounts, [creator]);
     assert_eq!(
@@ -949,4 +928,56 @@ fn factory_state_rejects_a_mismatched_derived_pool_id() {
         validate_factory_state(sale, &state),
         Err(ClientError::FactorySaleMismatch)
     ));
+}
+
+#[test]
+fn factory_state_rejects_a_mismatched_creator_role() {
+    let mut state = valid_factory_state(sale());
+    state.creator_role_id = AccountId::new([94; 32]);
+    assert!(matches!(
+        validate_factory_state(sale(), &state),
+        Err(ClientError::FactorySaleMismatch)
+    ));
+}
+
+#[test]
+fn creation_and_continuations_admit_the_factory_curve_relay_without_authorization() {
+    let selected = sale();
+    let factory = factory_core::compute_factory_pda(
+        selected.namespace,
+        selected.factory_program_id,
+        selected.launch_salt,
+    );
+    for stage in [
+        None,
+        Some(CreationStage::Minted),
+        Some(CreationStage::Allocated),
+        Some(CreationStage::PoolPrepared),
+    ] {
+        let state = stage.map(|stage| {
+            let mut state = valid_factory_state(selected);
+            state.creation_stage = stage;
+            state
+        });
+        let call = super::next_creation_invocation(
+            selected,
+            AccountId::new([9; 32]),
+            creation(),
+            state.as_ref(),
+        )
+        .unwrap()
+        .unwrap();
+        let mentions = call.account_mentions();
+        let relay = mentions
+            .iter()
+            .find(|mention| mention.actor() == Actor::new(factory, selected.curve_program_id))
+            .expect("factory curve relay");
+        assert!(!relay.authorizes);
+        assert!(matches!(relay.identity,
+            wallet::AccountIdentity::PublicPda { program, seed }
+                if program == selected.factory_program_id
+                    && seed == factory_core::compute_factory_seed(selected.namespace, selected.launch_salt)
+        ));
+        assert_eq!(call.message_bytes().unwrap()[0], u8::from(stage.is_some()));
+    }
 }

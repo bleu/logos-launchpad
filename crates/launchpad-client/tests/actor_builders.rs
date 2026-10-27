@@ -336,7 +336,6 @@ fn creation_request_preserves_unix_seconds_on_the_public_wire() {
             virtual_token_reserve: 1_000,
             virtual_collateral_reserve: 100,
             end_timestamp: Some(1_700_003_600),
-            creator_nft_definition: AccountId::new([7; 32]),
             now: 1_700_000_000,
         },
     )
@@ -349,6 +348,7 @@ fn creation_request_preserves_unix_seconds_on_the_public_wire() {
             ..
         }
     ));
+    assert_eq!(call.message_bytes().unwrap().len(), 287);
     assert!(
         call.message_bytes()
             .unwrap()

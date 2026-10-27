@@ -1,4 +1,4 @@
-//! Pool-owner NFTs remain separate from namespace roles.
+//! Direct pool roles are separate from factory program custody.
 use crate::{Error, PoolAccount, dispatch::Query};
 use lee_core::{
     account::{AccountId, Actor},
@@ -23,7 +23,7 @@ pub(crate) fn owner(
             if sender.program_account_id != input.receiver.program_account_id {
                 return Err(Error::Unauthorized);
             }
-            Ok((sender.account_id, vec![Query::OwnerNft]))
+            Ok((sender.account_id, vec![Query::OwnerRole]))
         }
     }
 }

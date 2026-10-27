@@ -1,6 +1,6 @@
 # Bonding-curve sale overview
 
-Trade modes and the optional adapter hook are part of the implemented baseline. They are [migrated to the selected actor revision](../../plans/lez-v04-migration.md), with local checks passed and narrow seeded trade and expiry execution evidence. Broader execution remains deferred. This page links the governing decisions and checks; it does not claim production readiness. Use the terms in [CONTEXT.md](../../CONTEXT.md).
+Trade modes and the optional adapter hook are part of the implemented baseline. They are [migrated to the selected actor revision](../../plans/lez-v04-migration.md). Creator and direct pool-owner checks use separate role authority under [ADR 0006](../adr/0006-namespaces-and-authority.md). See the [workspace guide](../architecture/workspace-guide.md#execution-and-evidence-limits) for local execution evidence and its limits. Use the terms in [CONTEXT.md](../../CONTEXT.md).
 
 ## Rules
 
@@ -21,10 +21,11 @@ State and message encodings have changed. Rebuild guests and clients together an
 
 ## Acceptance evidence
 
-Local application host tests, guest builds and the repository execution gate passed on the selected actor revision. Seeded curve tests executed buys, stale-cap rejection and deadline checks with unchanged state and nonce on rejection. The clock case uses the upstream assertion guest with seeded clock data; sequencer `Tick`, setup, factory clocks, settlement, graduation and fee execution remain outside that evidence. See the [workspace guide](../architecture/workspace-guide.md#execution-and-evidence-limits) for the exact scope. Relevant sources include:
+Local host tests, guest builds and execution checks passed on the selected actor revision. Seeded curve tests cover buys and deadline checks. Signed role-authority guest tests cover fresh setup, role transfer, funding, manual settlement and unchanged state on rejection. See the [workspace guide](../architecture/workspace-guide.md#execution-and-evidence-limits) for exact coverage and remaining gaps. Relevant sources include:
 
 - [Curve handlers](../../crates/curve-core/src/tests.rs): trade restrictions, fees, slippage and treasury aliases.
-- [Factory graduation host tests](../../crates/factory-core/tests/graduation.rs): typed callback and custody checks; not runtime settlement evidence.
+- [Role-authority guest tests](../../crates/launchpad-client/tests/role_authority_guest.rs): signed creation, transfer, direct-owner actions and curve factory manual settlement.
+- [Factory graduation host tests](../../crates/factory-core/tests/graduation.rs): typed callback and custody checks; not runtime graduation evidence.
 - [SDK](../../crates/launchpad-client/src/tests.rs) and [CLI](../../cli/src/main.rs): quotes, resume and transaction construction.
 - [Guest settlement](https://github.com/bleu/logos-launchpad/blob/5b6927cbd3b5a12941f3956bcab8458446ed52db/crates/launchpad-client/tests/settlement.rs): historical payout, rollback, retry and recovery cases; not current actor execution evidence.
 - [Wire tests](../../crates/launchpad-client/tests/idl_wire.rs): actor schema and message encoding checks.

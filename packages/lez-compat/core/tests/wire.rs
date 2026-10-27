@@ -23,6 +23,19 @@ fn token_transfer_matches_the_documented_borsh_layout() {
 }
 
 #[test]
+fn transfer_only_bootstrap_has_a_separate_wire_tag() {
+    let expected = [vec![12], vec![2; 32]].concat();
+    let message = authority::Message::BootstrapTransferOnly {
+        authority: AccountId::new([2; 32]),
+    };
+    assert_eq!(borsh::to_vec(&message).unwrap(), expected);
+    assert_eq!(
+        borsh::from_slice::<authority::Message>(&expected).unwrap(),
+        message
+    );
+}
+
+#[test]
 fn authority_transfer_and_renounce_match_the_documented_borsh_layout() {
     let expected = [vec![5], vec![1; 32], vec![2; 32]].concat();
     let message = authority::Message::Transfer {

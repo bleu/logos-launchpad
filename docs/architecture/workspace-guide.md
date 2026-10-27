@@ -56,21 +56,23 @@ Application, SDK and CLI timestamps use Unix seconds. The native LEZ clock uses 
 
 ## Execution and evidence limits
 
-Add `--execution` to `check-builds.sh` to select the optional node-free token, seeded curve and seeded fixed-price fixtures. They need compatible guest binaries and an executor that can start local processes and use local IPC. A sandbox rejection is not a passing result. The token fixture's successful transfer and rollback checks cover disposable token actors only; they do not prove sale rollback.
+Add `--execution` to `check-builds.sh` to select the optional node-free token, seeded sale and role-authority fixtures. The script builds the application and compatibility guests and locates the pinned upstream clock guest; `LAUNCHPAD_CLOCK_ELF` can override that path. Execution needs local processes and IPC. A sandbox rejection is not a passing result. Token-only rollback checks do not prove sale rollback.
 
 The two [seeded curve tests](../../methods/tests/actor_sale.rs) passed through real curve and compatibility-token guests on `V03State`. Public buys passed, and stale-cap rejection preserved full state and buyer nonce. A delayed pre-expiry trade passed with the upstream `AssertTimestamp` guest and seeded native clock data; expiry rejection also preserved state and nonce. See the tests for exact amounts and timestamps.
 
 The four seeded fixed-price tests passed through real fixed-price, namespace and compatibility-token guests. They cover exact-input and exact-output buys, live fees, current-treasury collection, surplus, no-end sellout, clock bounds, slippage and freeze. A failed output transfer preserved full state and buyer nonce, including the earlier input transfer. Fee collection passed after expiry while frozen and without a signer; a zero-fee retry left state unchanged.
 
-These checks do not exercise sequencer `Tick`, setup, factory clocks, settlement, graduation, curve fee collection, wallet submission or real proofs. To run them directly:
+The four [role-authority guest tests](../../crates/launchpad-client/tests/role_authority_guest.rs) use signed `V03State` transactions. They create namespaces, direct pools and a curve factory sale through real guests, without seeded role, pool or factory state. They cover co-signed role transfer, missing successor consent, former-holder rejection, blocked renunciation, cross-namespace isolation and direct-owner reserve recovery. The factory journey covers transferred-creator funding, allocation claim, expiry settlement, unsold-token burn and successor payouts while preserving factory custody. Rejected calls preserve full state and signer nonce. A failed allocation payout also preserves state; a valid retry pays once. Successful PDA-successor acceptance has public-handler tests but no owner-program guest execution test.
+
+The seeded sale checks do not exercise fresh setup or settlement. To run those trade fixtures directly:
 
 ```sh
 RISC0_BUILD_LOCKED=1 cargo +1.98.1 test --manifest-path methods/Cargo.toml --release --locked --features actor-execution-tests --test actor_sale
 ```
 
-The local `bash verify/check-builds.sh --execution` gate passed with unchanged lockfiles. It covered release host tests, application and compatibility guests, weighted-math parity, release-overflow checks, token execution and all six seeded sale tests. Debug workspace tests, strict root and compatibility Clippy, formatting across maintained workspaces, IDL and wire checks, and pin and shell regressions also passed. Linux CI has not run.
+The local `bash verify/check-builds.sh --execution` gate passed with unchanged lockfiles. It covered release host tests, application and compatibility guests, weighted-math parity, release-overflow checks, token execution, all six seeded sale tests and all four role-authority guest tests. Debug workspace tests, strict root and compatibility Clippy, Rust formatting, IDL and wire checks, and pin and shell regressions also passed. Linux CI has not run.
 
-Setup, factory-clock, settlement, graduation, curve-fee and PDA-administration runtime checks remain deferred, as do sequencer `Tick`, wallet/service integration and real proofs. Old namespace, private-helper and settlement guest evidence predates this actor migration and cannot establish compatibility on the selected revision. Private purchase and authority helpers return explicit unsupported errors because the compatibility token implementation has no private holdings.
+Fixed-price setup and payout, graduation, curve-fee collection and PDA-administration runtime checks remain deferred, as do sequencer `Tick`, wallet/service integration and real proofs. Old namespace and private-helper guest evidence predates this actor migration and cannot establish compatibility on the selected revision. Private purchase and authority helpers return explicit unsupported errors because the compatibility token implementation has no private holdings.
 
 The three launchpad package archives passed the Nix build. Installation, loading and `Test backend` are blocked by missing Basecamp and `lgpm`; no `Backend OK` result is recorded. See the [package README](../../packages/launchpad/README.md) for the command and local requirements.
 

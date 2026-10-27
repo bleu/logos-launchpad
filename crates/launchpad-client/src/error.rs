@@ -115,7 +115,7 @@ pub enum ClientError {
     #[error("submitting public launchpad transaction")]
     #[strum(serialize = "submit_public_transaction")]
     SubmitPublicTransaction(#[source] Box<wallet::ExecutionFailureKind>),
-    #[error("private authority action must use its NFT holder as the only signer")]
+    #[error("private authority action must use its authority holder as the only signer")]
     InvalidAuthoritySigners,
     #[error("action does not include the authority holder")]
     AuthorityHolderMissing,
