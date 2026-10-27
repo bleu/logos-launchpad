@@ -84,15 +84,7 @@ impl Pending {
             ));
         }
         if let Message::SettleFixedPrice { creator, now } = self.message {
-            let clock = if self.state.remaining_inventory == 0 {
-                None
-            } else {
-                let end = self.state.end_timestamp.ok_or(Error::NotClosed)?;
-                if now < end {
-                    return Err(Error::NotClosed);
-                }
-                Some(curve_core::clock_assertion(now, None).map_err(|_| Error::InvalidTerms)?)
-            };
+            let clock = self.state.close_clock_assertion(now)?;
             if self.balances[1] < self.state.remaining_inventory {
                 return Err(Error::Underfunded);
             }

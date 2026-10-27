@@ -357,15 +357,12 @@ pub(super) fn resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
             if !pool.funded {
                 return Err(Error::CreationPending);
             }
-            let clock = if pool.remaining_inventory == 0 {
-                None
-            } else {
-                let end = state.end_timestamp.ok_or(Error::NotClosed)?;
-                if now < end {
-                    return Err(Error::NotClosed);
-                }
-                Some(curve_core::clock_assertion(now, None).map_err(|_| Error::InvalidTerms)?)
-            };
+            let clock = pool
+                .close_clock_assertion(now)
+                .map_err(|error| match error {
+                    lbp_core::Error::NotClosed => Error::NotClosed,
+                    _ => Error::InvalidTerms,
+                })?;
             if state.creator_allocation != 0
                 && balance(
                     &pending.values[1],
