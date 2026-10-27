@@ -11,6 +11,14 @@ members = [
     "crates/private-flow-core",
     "cli",
 ]
+default-members = [
+    "crates/curve-core",
+    "crates/curve-math",
+    "crates/factory-core",
+    "crates/lbp-core",
+    "crates/pool",
+    "crates/private-flow-core",
+]
 exclude = [
     "methods",
     "methods/guest",

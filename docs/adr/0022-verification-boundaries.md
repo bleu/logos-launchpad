@@ -10,7 +10,7 @@ The imported curve CI omitted client/CLI tests and guest builds. Root Cargo comm
 
 ## Decision
 
-Keep local tests with each package. Put cross-package build, pin, IDL and integration checks in root `verify/`, called by root CI. Preserve separate guest workspaces and pinned toolchains/lockfiles. Explicitly include client/CLI tests, guest builds and weighted-math integration.
+Keep local tests with each package. Put cross-package build, pin, IDL and integration checks in root `verify/`. Use light host tests, formatting and static checks for local defaults and automatic CI. Keep client/CLI tests, guest builds, weighted-math integration and execution checks available through explicit manual commands and a manual full CI run for now. Preserve separate guest workspaces and pinned toolchains/lockfiles. A passing light check does not establish full compatibility.
 
 Repair stale E2E commands before execution and use disposable state. Report ignored, unavailable and opt-in checks. Verify each mechanism's qualified math limits, rounding and trade guards, plus namespace isolation, custody, clock, events, administration, freeze authority, private-route failure behavior and Basecamp packaging.
 

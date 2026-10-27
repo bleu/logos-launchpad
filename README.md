@@ -41,6 +41,10 @@ This is the planned product view. The QML apps and shared core are future work. 
 | Bonding-curve launchpad | [RFP-015](https://github.com/logos-co/rfp/blob/master/RFPs/RFP-015-bonding-curve-launchpad.md) | [Proposal #118](https://github.com/logos-co/rfp/issues/118) |
 | Fixed-price and weighted sales | [RFP-016](https://github.com/logos-co/rfp/blob/master/RFPs/RFP-016-lbp-launchpad.md) | [Proposal #119](https://github.com/logos-co/rfp/issues/119) |
 
+## Development
+
+Run `bash verify/check-dev.sh` for light host tests. Plain `cargo test --locked` selects the core crates; client and CLI tests remain available with `--workspace`. Automatic CI runs light checks. Full checks are manual for now; see the [workspace guide](docs/architecture/workspace-guide.md#manual-full-checks).
+
 ## Read more
 
 - [Product goals and use cases](docs/product/prd.md)

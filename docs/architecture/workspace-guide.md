@@ -2,9 +2,15 @@
 
 The application is [migrated to the selected LEZ actor revision](../../plans/lez-v04-migration.md). Local checks below passed with the stated evidence gaps. There is no second supported legacy platform. See [repository layout](repository-layout.md) for package roles and [ADR 0034](../adr/0034-lez-v04-migration.md) for the decision.
 
+## Light development checks
+
+Run `bash verify/check-dev.sh` for everyday work. It runs locked host tests for the core sale crates, compatibility support, weighted math and launchpad core logic. It uses the checked-in emergency-authority fixture when the variable is unset and omits debug symbols unless the caller selects another setting. It needs host Rust, but no RISC0 tools, node or wallet setup.
+
+Plain `cargo test --locked` selects only the root core crates. Client and CLI tests need explicit package selection or `--workspace`. Guest builds, execution tests and package builds are manual. Light checks do not establish client, wire or runtime compatibility.
+
 ## Build contexts
 
-Use LEZ `578ce58a71b79c49d48e97e51c520bf71f0252d9`, host Rust 1.98.1, guest Rust 1.94.1, RISC0 3.0.5 and zkOS wrapper 2.2.2. The [development base guide](../../packages/lez-compat/README.md) gives installation requirements. Check local tools with `bash verify/check-builds.sh --preflight`. Scaffold and SPEL CLI are not required.
+Full checks use LEZ `578ce58a71b79c49d48e97e51c520bf71f0252d9`, host Rust 1.98.1, guest Rust 1.94.1, RISC0 3.0.5 and zkOS wrapper 2.2.2. The [development base guide](../../packages/lez-compat/README.md) gives installation requirements. Check local tools with `bash verify/check-builds.sh --preflight`. Scaffold and SPEL CLI are not required.
 
 Curve host and guest builds require `CURVE_EMERGENCY_AUTHORITY`, a nonzero 64-character hex account ID. For local tests, run this from the repository root:
 
@@ -26,13 +32,13 @@ The built guest contains that selection; transaction callers cannot replace it. 
 
 Root Cargo commands do not include nested workspaces. Keep their lockfiles separate. `RISC0_BUILD_LOCKED=1` locks nested guest builds; outer Cargo `--locked` alone does not. Fuzzing needs nightly Rust and `cargo-fuzz`.
 
-## Repository checks
+## Manual full checks
 
-Run from the repository root:
+Run from the repository root after setting `CURVE_EMERGENCY_AUTHORITY` as above:
 
 ```sh
 bash verify/check-pins.sh
-bash verify/check-builds.sh
+bash verify/check-builds.sh --execution
 bash verify/check-idl.sh
 ```
 
@@ -46,7 +52,7 @@ Application, SDK and CLI timestamps use Unix seconds. The native LEZ clock uses 
 
 ## CI
 
-[Root CI](../../.github/workflows/ci.yml) is configured for actor formatting, pin and shell checks, locked repository builds and tests, and generated-interface checks. Manual runs can select node-free actor fixtures. This configuration does not establish a passing run. Package installation, app smoke actions, live service integration, fuzz campaigns and real proofs remain separate checks.
+[Root CI](../../.github/workflows/ci.yml) runs formatting, static pins, mock shell regressions and the light host tests on pushes and pull requests. Full builds, client/CLI and IDL checks, guest parity and node-free execution run only through `workflow_dispatch` with `full` enabled. The full job is manual for now. Package installation, app smoke actions, live service integration, fuzz campaigns and real proofs remain separate checks.
 
 ## Execution and evidence limits
 
