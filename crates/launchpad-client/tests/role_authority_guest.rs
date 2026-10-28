@@ -10,6 +10,11 @@ use lez_compat_core::{
 };
 use std::{borrow::Cow, collections::BTreeMap};
 
+#[path = "role_authority_guest/controls.rs"]
+mod controls;
+#[path = "role_authority_guest/settlement.rs"]
+mod settlement;
+
 const AUTHORITY: AccountId = curve_core::AUTHORITY_PROGRAM_ACCOUNT_ID;
 const TOKEN: AccountId = curve_core::TOKEN_PROGRAM_ACCOUNT_ID;
 const CURVE: AccountId = AccountId::new([7; 32]);
@@ -183,11 +188,23 @@ fn execute(
     instruction: impl borsh::BorshSerialize,
     keys: &[&PrivateKey],
 ) -> Result<(), lee::error::LeeError> {
+    execute_with_evidence(state, receiver, actors, instruction, keys, vec![])
+}
+
+fn execute_with_evidence(
+    state: &mut V03State,
+    receiver: Actor,
+    actors: Vec<Actor>,
+    instruction: impl borsh::BorshSerialize,
+    keys: &[&PrivateKey],
+    evidence: Vec<lee::PublicAccountEvidence>,
+) -> Result<(), lee::error::LeeError> {
     let nonces = keys
         .iter()
         .map(|key| (id(key), state.get_account_by_id(id(key)).nonce))
         .collect::<BTreeMap<_, _>>();
-    let message = Message::try_new(receiver, actors, nonces, instruction).unwrap();
+    let mut message = Message::try_new(receiver, actors, nonces, instruction).unwrap();
+    message.admission_evidence.extend(evidence);
     let witnesses = WitnessSet::for_message(&message, keys);
     state
         .transition_from_public_transaction(&PublicTransaction::new(message, witnesses), 1, 1_000)
@@ -274,6 +291,104 @@ fn factory_fixture() -> FactoryFixture {
         pool,
         definition,
     }
+}
+
+#[test]
+#[ignore = "requires fresh application and compatibility ELFs and the pinned clock ELF"]
+fn program_controlled_admin_accepts_and_updates_namespace_fee() {
+    let namespace = key(44);
+    let controller = key(50);
+    let owner_program = AccountId::new([18; 32]);
+    let seed = lee_core::program::PdaSeed::new(*id(&controller).value());
+    let successor = AccountId::for_public_pda(&owner_program, &seed);
+    let namespace_id = id(&namespace);
+    let (state, mut actors) = base_state(&namespace, &[id(&controller)]);
+    actors.extend([
+        Actor::new(id(&controller), owner_program),
+        Actor::new(successor, owner_program),
+        Actor::new(successor, CURVE),
+        Actor::new(successor, AUTHORITY),
+    ]);
+    let mut state = state.with_named_programs([(owner_program, guest("LAUNCHPAD_OWNER_ELF"))]);
+    execute_with_evidence(
+        &mut state,
+        Actor::new(namespace_id, CURVE),
+        actors.clone(),
+        curve_core::Message::TransferAdmin {
+            namespace: namespace_id,
+            new_admin: successor,
+            candidate: curve_core::AdminCandidate::Pda {
+                program_id: owner_program,
+                seed: *seed.as_bytes(),
+            },
+        },
+        &[&namespace],
+        vec![lee::PublicAccountEvidence::Pda {
+            program: owner_program,
+            seed,
+        }],
+    )
+    .expect("program-controlled successor accepts its role");
+    rejected_without_changes(
+        &mut state,
+        |state| {
+            execute_with_evidence(
+                state,
+                Actor::new(id(&controller), owner_program),
+                actors.clone(),
+                (
+                    CURVE,
+                    curve_core::Message::UpdateFee {
+                        namespace: namespace_id,
+                        protocol_fee_bps: 250,
+                    },
+                ),
+                &[],
+                vec![lee::PublicAccountEvidence::Key(
+                    PublicKey::new_from_private_key(&controller),
+                )],
+            )
+        },
+        "owner controller must sign",
+    );
+    execute(
+        &mut state,
+        Actor::new(id(&controller), owner_program),
+        actors.clone(),
+        (
+            CURVE,
+            curve_core::Message::UpdateFee {
+                namespace: namespace_id,
+                protocol_fee_bps: 250,
+            },
+        ),
+        &[&controller],
+    )
+    .expect("successor exercises namespace administration");
+    let config = curve_core::Config::decode(
+        state
+            .get_account_by_id(curve_core::compute_config_pda(namespace_id, CURVE))
+            .data
+            .actor_state(CURVE),
+    )
+    .unwrap();
+    assert_eq!(config.protocol_fee_bps, 250);
+    rejected_without_changes(
+        &mut state,
+        |state| {
+            execute(
+                state,
+                Actor::new(namespace_id, CURVE),
+                actors,
+                curve_core::Message::UpdateFee {
+                    namespace: namespace_id,
+                    protocol_fee_bps: 500,
+                },
+                &[&namespace],
+            )
+        },
+        "Unauthorized",
+    );
 }
 
 #[test]

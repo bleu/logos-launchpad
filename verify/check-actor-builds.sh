@@ -92,14 +92,14 @@ for parent in Path(package["manifest_path"]).parents:
   fi
   [ -s "${LAUNCHPAD_CLOCK_ELF:-}" ] || fail 'set LAUNCHPAD_CLOCK_ELF to the pinned upstream artifacts/lez/programs/clock.bin'
   export LAUNCHPAD_CLOCK_ELF
-  for entry in "AUTHORITY:$base/methods:compat_authority" "TOKEN:$base/methods:compat_token" "CURVE:methods:curve" "FACTORY:methods:factory"; do
+  for entry in "AUTHORITY:$base/methods:compat_authority" "TOKEN:$base/methods:compat_token" "OWNER:$base/methods:authority_owner_fixture" "CURVE:methods:curve" "FACTORY:methods:factory" "ADAPTER:methods:graduation_adapter" "GRADUATION_FAULT:methods:graduation_fault_adapter"; do
     IFS=: read -r role methods guest <<< "$entry"
     artifact="$(find "$methods/target/riscv-guest" -type f -path "*/release/$guest.bin" -size +0c -print -quit)"
     [ -n "$artifact" ] || fail "missing role execution guest: $guest.bin"
     export "LAUNCHPAD_${role}_ELF=$root/$artifact"
   done
-  run 'creator and direct pool-owner role actor execution (release, locked)' cargo +"$ACTOR_RUST_VERSION" test -p launchpad-client --release --locked --test role_authority_guest -- --ignored
-  printf 'check-builds: selected actor execution fixtures passed; full lifecycle coverage, real proofs and deployment readiness not tested\n'
+  run 'public curve contract actor execution (release, locked)' cargo +"$ACTOR_RUST_VERSION" test -p launchpad-client --release --locked --test role_authority_guest -- --ignored
+  printf 'check-builds: selected actor execution fixtures passed; service integration, real proofs and deployment readiness not tested\n'
 else
   printf 'check-builds: token and sale actor execution deferred; select --execution for available real fixtures\n'
 fi

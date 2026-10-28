@@ -29,11 +29,14 @@ if [[ "${NO_ARTIFACTS:-}" != 1 && "$*" == *"build --manifest-path methods/Cargo.
   mkdir -p methods/target/riscv-guest/fixture/release
   printf binary > methods/target/riscv-guest/fixture/release/curve.bin
   printf binary > methods/target/riscv-guest/fixture/release/factory.bin
+  printf binary > methods/target/riscv-guest/fixture/release/graduation_adapter.bin
+  printf binary > methods/target/riscv-guest/fixture/release/graduation_fault_adapter.bin
 fi
 if [[ "${NO_ARTIFACTS:-}" != 1 && "$*" == *"build --manifest-path packages/lez-compat/methods/Cargo.toml"* ]]; then
   mkdir -p packages/lez-compat/methods/target/riscv-guest/fixture/release
   printf binary > packages/lez-compat/methods/target/riscv-guest/fixture/release/compat_token.bin
   printf binary > packages/lez-compat/methods/target/riscv-guest/fixture/release/compat_authority.bin
+  printf binary > packages/lez-compat/methods/target/riscv-guest/fixture/release/authority_owner_fixture.bin
 fi
 '
 printf '%s' "$cat_script" > "$tmp/bin/cargo"
@@ -78,7 +81,7 @@ execution_lane() {
   assert_contains "$(< "$COMMAND_LOG")" 'cargo +1.98.1 test --manifest-path packages/lez-compat/execution/Cargo.toml --locked'
   assert_contains "$(< "$COMMAND_LOG")" 'cargo +1.98.1 test --manifest-path methods/Cargo.toml --release --locked --features actor-execution-tests --test actor_sale'
   assert_contains "$(< "$COMMAND_LOG")" 'cargo +1.98.1 test -p launchpad-client --release --locked --test role_authority_guest -- --ignored'
-  assert_contains "$output" 'selected actor execution fixtures passed; full lifecycle coverage, real proofs and deployment readiness not tested'
+  assert_contains "$output" 'selected actor execution fixtures passed; service integration, real proofs and deployment readiness not tested'
   export LAUNCHPAD_CLOCK_ELF="$tmp/missing-clock.bin"
   run_check --execution
   [ "$status" = 1 ] || { printf 'missing role clock accepted\n' >&2; exit 1; }
