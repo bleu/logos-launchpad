@@ -17,7 +17,7 @@ cargo +"$ACTOR_RUST_VERSION" run --quiet --manifest-path packages/lez-compat/Car
   curve=crates/curve-core/src/lib.rs \
   pool=crates/pool/src/lib.rs \
   factory=crates/factory-core/src/lib.rs \
-  fixed_price=crates/factory-core/src/fixed_price.rs \
+  lbp_setup=crates/factory-core/src/lbp_setup.rs \
   hook=crates/factory-core/src/hook.rs \
   lbp=crates/lbp-core/src/lib.rs > "$temporary/launchpad.json"
 cargo +"$ACTOR_RUST_VERSION" run --quiet --manifest-path packages/lez-compat/Cargo.toml -p lez-compat-tools --locked -- idl > "$temporary/compat.json"

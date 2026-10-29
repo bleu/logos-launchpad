@@ -1160,6 +1160,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "factory-core"
+version = "0.1.0"
+dependencies = [
+ "borsh",
+ "clock_core",
+ "curve-core",
+ "lbp-core",
+ "lee_core",
+ "lez-compat-core",
+ "pool",
+ "risc0-zkvm",
+ "serde",
+]
+
+[[package]]
 name = "fastrand"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1592,6 +1607,7 @@ dependencies = [
  "borsh",
  "clock_core",
  "curve-core",
+ "factory-core",
  "lbp-core",
  "lee",
  "lee_core",
@@ -1646,6 +1662,7 @@ dependencies = [
  "lee_core",
  "lez-compat-core",
  "serde",
+ "weighted-math-core",
 ]
 
 [[package]]
@@ -3217,6 +3234,10 @@ checksum = "7ef64dbcc55df09c7e5a46182d181c2cfa3e925f3da937ea764728b4bbb9dcbf"
 dependencies = [
  "unicode-ident",
 ]
+
+[[package]]
+name = "weighted-math-core"
+version = "0.0.0"
 
 [[package]]
 name = "windows-core"

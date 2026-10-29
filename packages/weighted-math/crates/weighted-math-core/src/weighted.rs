@@ -159,7 +159,7 @@ fn check_weights(weight_in: u128, weight_out: u128) {
 ///
 /// Wide operands are pre-shifted with upward bias. At SCALE 52, the added
 /// absolute ratio error is below 2^-72 before the final division rounding.
-fn ratio_up(num: u128, den: u128) -> Fixed {
+pub(crate) fn ratio_up(num: u128, den: u128) -> Fixed {
     debug_assert!(num <= den && den > 0);
     let den_bits = 128 - den.leading_zeros();
     let excess = den_bits.saturating_sub(126 - SCALE);
@@ -176,7 +176,7 @@ fn ratio_up(num: u128, den: u128) -> Fixed {
 
 /// `num / den` as a `Fixed`, rounded down, for `num < den` — the mirror
 /// of [`ratio_up`].
-fn ratio_down(num: u128, den: u128) -> Fixed {
+pub(crate) fn ratio_down(num: u128, den: u128) -> Fixed {
     debug_assert!(num < den);
     let den_bits = 128 - den.leading_zeros();
     let excess = den_bits.saturating_sub(126 - SCALE);

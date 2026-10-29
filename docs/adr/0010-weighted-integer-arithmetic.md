@@ -2,7 +2,7 @@
 
 Status: Accepted (reviewed PoC baseline; unaudited)
 
-Date: 2026-09-29
+Date: 2026-09-29; checked-quote amendment: 2026-10-29
 
 ## Context
 
@@ -14,7 +14,9 @@ The historical guest measurements identify `u128` division as a software operati
 
 Keep `i128`/`u128` arithmetic in the kernel. Each swap path has one outer `128 x 128 -> 256` result multiply: the payout for exact input and the payment for exact output. The shifted result must fit `u128`; otherwise the operation halts rather than wraps.
 
-The widening helper also supports the power argument product and public fixed-point multiply helpers for uniformity and scale-sweep headroom. Those uses do not promote the kernel to general 256-bit arithmetic, and no path uses 256-bit division.
+The widening helper also supports the power argument product and public fixed-point multiply helpers for uniformity and scale-sweep headroom. Those uses do not promote the kernel to general 256-bit arithmetic, and the raw pricing paths use no 256-bit division.
+
+The checked-quote layer is an exception to the earlier rule against 256-bit division. It uses bounded wide products and division to check accuracy and exact rational references. Its results must fit `u128`. It has no general big-integer dependency and does not change the raw pricing kernel. This amendment supersedes only the division restriction for these checks. Guest costs remain unmeasured.
 
 ## Consequences
 

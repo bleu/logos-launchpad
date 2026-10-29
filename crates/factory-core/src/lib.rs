@@ -10,14 +10,17 @@ use lez_compat_core::{
 };
 use serde::{Deserialize, Serialize};
 
-mod fixed_price;
 mod hook;
+mod lbp_setup;
 pub use curve_core::{AUTHORITY_PROGRAM_ACCOUNT_ID, TOKEN_PROGRAM_ACCOUNT_ID};
-pub use fixed_price::{
-    CreatorAllocationRelease, FixedPrice, FixedPriceCreationStage, FixedPriceInputs,
-    FixedPriceLaunchState, SaleStart,
-};
 pub use hook::{AdapterMessage, AdapterState, GraduationRequest, GraduationResult, handle_adapter};
+pub use lbp_setup::{
+    CreatorAllocationRelease, FixedPrice, FixedPriceInputs, LbpCreationStage, LbpLaunchState,
+    LbpSetupMode, SaleStart, WeightedInputs,
+};
+pub use lbp_setup::{
+    LbpCreationStage as FixedPriceCreationStage, LbpLaunchState as FixedPriceLaunchState,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum TradeMode {
@@ -170,11 +173,18 @@ pub enum Message {
         inputs: FixedPriceInputs,
     },
     ContinueFixedPriceCreation {
-        expected_stage: FixedPriceCreationStage,
+        expected_stage: LbpCreationStage,
         creator: AccountId,
         now: u64,
     },
     ReadState,
+    CreateWeightedLbp {
+        inputs: WeightedInputs,
+    },
+    ContinueWeightedCreation {
+        expected_stage: LbpCreationStage,
+        creator: AccountId,
+    },
 }
 pub type Instruction = Message;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1286,7 +1296,7 @@ pub fn handle(input: &ReceiveInput) -> Result<Response, Error> {
     if let Some(result) = curve_resume(input) {
         return result;
     }
-    if let Some(result) = fixed_price::resume(input) {
+    if let Some(result) = lbp_setup::resume(input) {
         return result;
     }
     let message: Message = borsh::from_slice(&input.message).map_err(|_| Error::InvalidMessage)?;
@@ -1297,7 +1307,7 @@ pub fn handle(input: &ReceiveInput) -> Result<Response, Error> {
         message @ Message::ContinueCreation { .. } => begin_curve(input, message),
         message @ Message::CreateFactoryPool { .. } => create_curve(input, message),
         Message::ReadState => {
-            if let Ok(state) = FixedPriceLaunchState::decode(&input.pre_state) {
+            if let Ok(state) = LbpLaunchState::decode(&input.pre_state) {
                 if input.receiver.account_id
                     != compute_factory_pda(
                         state.namespace,
@@ -1319,7 +1329,12 @@ pub fn handle(input: &ReceiveInput) -> Result<Response, Error> {
             expected_stage,
             creator,
             now,
-        } => fixed_price::begin(input, expected_stage, creator, now),
-        Message::CreateFixedPriceLbp { inputs } => fixed_price::create(input, inputs),
+        } => lbp_setup::begin(input, expected_stage, creator, now, false),
+        Message::CreateFixedPriceLbp { inputs } => lbp_setup::create_fixed(input, inputs),
+        Message::CreateWeightedLbp { inputs } => lbp_setup::create_weighted(input, inputs),
+        Message::ContinueWeightedCreation {
+            expected_stage,
+            creator,
+        } => lbp_setup::begin(input, expected_stage, creator, 0, true),
     }
 }

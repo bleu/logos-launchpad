@@ -60,7 +60,7 @@ Use `delta_x = 1/H + 1/2^72` as a conservative absolute base error. The old clai
 
 The internally selected target is at most one basis point (`epsilon = 1/10000`) of extra arithmetic loss against the independently rounded ideal trade. One basis point is one fee-rate step. This target keeps approximation loss below that step; it is a product choice, not a tolerance that mathematics can derive. Slippage, protocol fees and the natural raw-unit floor/ceiling remain separate. Do not widen the target to make dust or ill-conditioned trades pass.
 
-The following rational guards are conservative. The test harness evaluates them with `BigUint`, without saturation, floating point or skipped cases. These are qualification checks of pure math outputs. A checked quote implementation and stable program errors remain future handler work.
+The following rational guards are conservative. The test harness evaluates them with `BigUint`, without saturation, floating point or skipped cases. The checked quote interface uses the interval checks below. The original harness guards remain independent qualification checks.
 
 ### Exact input
 
@@ -100,7 +100,26 @@ ideal_out = floor(balance_out*amount_in/(balance_in+amount_in))
 ideal_in = ceil(balance_in*amount_out/(balance_out-amount_out))
 ```
 
-Use these to tighten the guard when a generic one-unit ceiling rejects an otherwise accurate coarse-unit trade. The harness compares those exact references with the actual kernel output. It does not require zero approximation error: for equal reserves and a deposit equal to the reserve, the existing pad can make payout one or more raw units below the exact half-reserve reference. A future checked implementation must use safe widened rational arithmetic.
+Use these to tighten the guard when a generic one-unit ceiling rejects an otherwise accurate coarse-unit trade. The harness compares those exact references with the actual kernel output. It does not require zero approximation error: for equal reserves and a deposit equal to the reserve, the existing pad can make payout one or more raw units below the exact half-reserve reference. The checked interface uses bounded wide division for these references.
+
+## Checked quote interface
+
+`try_calc_out_given_in` and `try_calc_in_given_out` return `QuoteError`. They check reserves, weights, amounts and result fit. The exact-output cap remains 30%. Exact input has no additional ratio cap; the total deposit must fit. Only public scale 52 is qualified. The raw functions keep their existing results and panic contract.
+
+The checks use `S = 2^96` for error bounds only. This does not change either kernel scale. `delta_x`, `delta_b` and `K` have exact representations at this scale. Round a base lower bound down and an exponent upper bound up. Round each positive error term and division up. For exact output, subtract `delta_x` from the base lower bound and add `delta_b` to the exponent upper bound, capped at 99. Thus the computed bounds are at least `E_out` and `E_in` above.
+
+Use the actual padded internal power to tighten the final integer check. Let `m` be the exact-input padded complement, in real units, and `q` the exact-output padded power. The existing error argument gives:
+
+```text
+ideal complement <= min(1, m + E_out)
+ideal power      <= min(1, q + E_in)
+```
+
+For exact input, calculate `ideal_upper = floor(balance_out * min(1, m + E_out))`. Set `loss = ideal_upper - payout`. Accept only when the payout is positive and `loss * 10000 <= payout`. For exact output, set `p_upper = min(1, q + E_in)` and calculate `ideal_lower = ceil(balance_in * (1 - p_upper) / p_upper)`. Set `loss = payment - ideal_lower`. Accept only when `ideal_lower > 0` and `loss * 10000 <= ideal_lower`. These bounds compare rounded ideal amounts. The payment comparison includes both raw-kernel ceilings. Equal weights use their exact rational references instead.
+
+Bound calculations use full 128-by-128 products and bounded wide division. They return an error if a required result cannot fit. Comparisons use division by 10000 to avoid an overflowing error-times-10000 product. No floating point, saturation of an error bound, or panic recovery is used. The existing caps and validated formed inputs establish the power kernel's domain. A zero padded power and an unrepresentable rounded payment return defined errors.
+
+The sale handler uses these quotes. It separately checks current vault coverage, full recorded token inventory, pricing collateral, proceeds, fees and post-buy vault capacity. It saves the new records only after these checks pass. These host checks do not establish guest execution or cross-program rollback.
 
 ## Practical range and rejected corner
 
@@ -112,15 +131,15 @@ Some coarse-unit and smaller buys remain dust or cannot be certified by the gene
 
 ## Panic prevention and evidence limits
 
-The raw kernel intentionally panics on invalid or unrepresentable inputs. An already-returned quote passing these guards cannot prove that the original call was safe. Future handlers need preflight or a checked quote implementation for intermediates, positive padded power, rounded payment, post-buy reserve/vault additions and fees before committing anything. A failed trade must not save a checkpoint or move tokens.
+The raw kernel intentionally panics on invalid or unrepresentable inputs. An already-returned quote passing these guards cannot prove that the original call was safe. Callers of a raw function need preflight for intermediates, positive padded power and rounded payment. The checked interface supplies these checks. Sale handlers must also check post-buy reserve/vault additions and fees before committing anything. A failed trade must not save a checkpoint or move tokens.
 
-For exact-output preflight at scale 52, validate reserves, weights, output cap and formed inputs first. Public `pow_down(formed_base, formed_exponent)` is below the exact formed power. Let `u` be its nonnegative scale-52 representation, `q_min = u*1024-912`, and reject if `q_min <= 0`. The actual internal padded power is at least `q_min`. With checked arithmetic, compute:
+For callers that retain the raw exact-output function, this alternative preflight applies at scale 52. Validate reserves, weights, output cap and formed inputs first. Public `pow_down(formed_base, formed_exponent)` is below the exact formed power. Let `u` be its nonnegative scale-52 representation, `q_min = u*1024-912`, and reject if `q_min <= 0`. The actual internal padded power is at least `q_min`. With checked arithmetic, compute:
 
 ```text
 r_upper = ceil((D-q_min)*D/q_min)
 payment_upper = ceil(balance_in*r_upper/D)
 ```
 
-The ratio numerator fits below `2^124`; its final reserve multiplication is widened. Check the ceiling itself and reject if either `balance_in+payment_upper` or `vault_collateral+payment_upper` cannot fit `u128`. Check fee/counter bounds as well. This is a conservative way to establish that the raw exact-output call will not reach its fit or zero-power panic. It can reject more inputs than the eventual checked implementation. It is a future-handler requirement, not implemented custody or stable-error code.
+The ratio numerator fits below `2^124`; its final reserve multiplication is widened. Check the ceiling itself and reject if either `balance_in+payment_upper` or `vault_collateral+payment_upper` cannot fit `u128`. Check fee/counter bounds as well. This is a conservative way to establish that the raw exact-output call will not reach its fit or zero-power panic. It can reject more inputs than the checked interface. The checked interface calculates the actual internal power and checks the payment directly instead. This alternative does not establish custody safety.
 
 Host fixtures verify finite examples. The hand-derived power and formation bounds support the policy but still require mathematical review. Guest parity verifies the same integer outputs on the selected guest toolchain. A real standalone proof verifies that guest computation; it does not implement or prove weighted sale custody, clock integration, stable errors or full LEZ compatibility.

@@ -1167,6 +1167,7 @@ dependencies = [
  "lee_core",
  "lez-compat-core",
  "serde",
+ "weighted-math-core",
 ]
 
 [[package]]
@@ -2249,6 +2250,10 @@ checksum = "7ef64dbcc55df09c7e5a46182d181c2cfa3e925f3da937ea764728b4bbb9dcbf"
 dependencies = [
  "unicode-ident",
 ]
+
+[[package]]
+name = "weighted-math-core"
+version = "0.0.0"
 
 [[package]]
 name = "windows-core"

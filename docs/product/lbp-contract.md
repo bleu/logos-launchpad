@@ -1,10 +1,14 @@
 # Fixed-price and weighted sale mechanics
 
-The fixed-price sale has a four-transaction setup path, public exact-input and exact-output buys, and permissionless fee collection on the actor interface. Setup execution, real proofs and deployment readiness remain pending. See [ADR 0032](../adr/0032-fixed-price-lbp-setup.md), [ADR 0033](../adr/0033-fixed-price-lbp-recorded-collateral.md) and the [workspace guide](../architecture/workspace-guide.md#execution-and-evidence-limits) for checks and limits.
+The fixed-price sale has a four-transaction setup path, public exact-input and exact-output buys, and permissionless fee collection on the actor interface. Real proofs and deployment readiness remain pending. See [ADR 0032](../adr/0032-fixed-price-lbp-setup.md), [ADR 0033](../adr/0033-fixed-price-lbp-recorded-collateral.md) and the [workspace guide](../architecture/workspace-guide.md#execution-and-evidence-limits) for checks and limits.
 
 ## Fixed-price setup
 
 The shared launch factory can create a new launch token, set positive sale inventory and an optional creator allocation, bind the sale to the curve-owned canonical `NamespaceConfig`, and validate setup. Creation saves an immutable `AfterSetup` or `AfterEnd` allocation release choice. The pool starts with zero recorded collateral. The price is a positive exact ratio in smallest units; token decimals are display data. The start uses the actor clock bounds defined in [ADR 0032](../adr/0032-fixed-price-lbp-setup.md). The end time is optional. Without an end time, setup and activation have no time deadline, and the sale stays open until it sells out. With an end time, setup and activation must finish before it, and buys stop at it. Sellout closes the sale sooner. The per-sale creator role initializes with the creator signer in the creation claim. Final setup funds sale inventory into the fixed-price sale vault. `AfterSetup` pays the creator allocation only after successful final setup; `AfterEnd` keeps it in escrow until the end or sellout makes it eligible. Its payout handler is future work. Unsolicited collateral remains surplus and does not block activation or enter sale accounting. See [ADR 0033](../adr/0033-fixed-price-lbp-recorded-collateral.md). [ADR 0032](../adr/0032-fixed-price-lbp-setup.md) defines setup rules and review limits.
+
+## Weighted setup and buys
+
+The factory creates weighted sales in the same four setup stages. Typed weighted inputs set a positive collateral seed, normalized weight endpoints, and an explicit start and end. Final setup transfers the full seed from the creator. A vault donation stays surplus. Weighted public buys use a buyer-selected time window and the least favourable scheduled pair in that window. Fees do not reduce pricing input. See [ADR 0026](../adr/0026-lbp-clock-and-poke.md), [ADR 0030](../adr/0030-lbp-pricing-collateral.md) and [ADR 0031](../adr/0031-shared-launch-factory.md).
 
 ## Scope
 
@@ -12,4 +16,4 @@ The implemented scope includes creation, funding, public buys and permissionless
 
 ## Future work
 
-Weighted-sale pricing, trading, clock checkpoints, pricing collateral, fees and lifecycle work remain separate. Their target design is recorded in [ADR 0021](../adr/0021-modes-and-open-limits.md), [ADR 0026](../adr/0026-lbp-clock-and-poke.md) and [ADR 0030](../adr/0030-lbp-pricing-collateral.md). The weighted-math kernel is unaudited and does not establish pool behavior.
+Weighted observation records and lifecycle handlers remain future work. The pricing and accounting decisions are in [ADR 0021](../adr/0021-modes-and-open-limits.md), [ADR 0026](../adr/0026-lbp-clock-and-poke.md) and [ADR 0030](../adr/0030-lbp-pricing-collateral.md). The weighted-math kernel is unaudited and does not establish pool behavior.
