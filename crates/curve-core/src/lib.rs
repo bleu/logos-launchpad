@@ -194,6 +194,21 @@ pub fn compute_admin_role(namespace: AccountId, program: AccountId) -> AccountId
     AccountId::for_public_pda(&program, &compute_admin_role_seed(namespace))
 }
 
+pub fn compute_pool_owner_role_seed(namespace: AccountId, pool: AccountId) -> PdaSeed {
+    let domain = AccountId::from_builtin_program_name(b"launchpad/curve-pool-owner/v1");
+    let namespace_domain = AccountId::for_public_pda(&domain, &PdaSeed::new(*namespace.value()));
+    PdaSeed::new(
+        *AccountId::for_public_pda(&namespace_domain, &PdaSeed::new(*pool.value())).value(),
+    )
+}
+pub fn compute_pool_owner_role(
+    namespace: AccountId,
+    pool: AccountId,
+    program: AccountId,
+) -> AccountId {
+    AccountId::for_public_pda(&program, &compute_pool_owner_role_seed(namespace, pool))
+}
+
 mod authority;
 mod dispatch;
 mod emergency;
@@ -234,7 +249,23 @@ pub fn handle(input: &ReceiveInput) -> Result<Response, Error> {
             {
                 return Err(Error::Unauthorized);
             }
-            Ok(Response::keep_state().send_sync(Actor::new(pool, program), &*instruction))
+            let mut call = SyncMessage::new(Actor::new(pool, program), &*instruction);
+            if let Message::CreatePool {
+                namespace,
+                token0_definition_id,
+                token1_definition_id,
+                owner,
+                ..
+            } = *instruction
+            {
+                call = call.with_pda_seeds([compute_pool_pda_seed(
+                    namespace,
+                    token0_definition_id,
+                    token1_definition_id,
+                    owner,
+                )]);
+            }
+            Ok(Response::keep_state().send(call))
         }
         Message::WithdrawReserves { .. } | Message::ClosePool { .. } | Message::CollectFees => {
             pool_lifecycle::begin(input, message)
@@ -283,7 +314,10 @@ pub fn handle(input: &ReceiveInput) -> Result<Response, Error> {
                 if !input.is_authorized {
                     return Err(Error::Unauthorized);
                 }
-                return Ok(Response::keep_state().send_sync(config, &message));
+                return Ok(Response::keep_state().send(
+                    SyncMessage::new(config, &message)
+                        .with_pda_seeds([compute_config_pda_seed(namespace)]),
+                ));
             }
             if input.receiver != config {
                 return Err(Error::WrongAccount);

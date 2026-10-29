@@ -486,11 +486,7 @@
             "type": "AccountId"
           },
           {
-            "name": "creator_commitment",
-            "type": "[u8;32]"
-          },
-          {
-            "name": "creator_nft_definition",
+            "name": "creator_role_id",
             "type": "AccountId"
           },
           {
@@ -597,10 +593,6 @@
               },
               {
                 "name": "creator",
-                "type": "AccountId"
-              },
-              {
-                "name": "creator_nft_definition",
                 "type": "AccountId"
               },
               {
@@ -1108,17 +1100,31 @@
           {
             "fields": [
               {
+                "name": "creator",
+                "type": "AccountId"
+              },
+              {
+                "name": "now",
+                "type": "u64"
+              }
+            ],
+            "name": "SettleFixedPrice",
+            "tag": 7
+          },
+          {
+            "fields": [
+              {
                 "name": "inputs",
                 "type": "WeightedPoolInputs"
               }
             ],
             "name": "PrepareWeighted",
-            "tag": 7
+            "tag": 8
           },
           {
             "fields": [],
             "name": "ActivateWeighted",
-            "tag": 8
+            "tag": 9
           },
           {
             "fields": [
@@ -1140,7 +1146,7 @@
               }
             ],
             "name": "BuyWeightedExactInput",
-            "tag": 9
+            "tag": 10
           },
           {
             "fields": [
@@ -1162,7 +1168,7 @@
               }
             ],
             "name": "BuyWeightedExactOutput",
-            "tag": 10
+            "tag": 11
           }
         ]
       },
@@ -1251,6 +1257,10 @@
           {
             "name": "accrued_fees",
             "type": "u128"
+          },
+          {
+            "name": "proceeds_settled",
+            "type": "bool"
           },
           {
             "name": "pending",

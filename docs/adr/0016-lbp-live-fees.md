@@ -12,7 +12,7 @@ RFP-016 F.2 and F.10 require the namespace fee rate to be snapshotted at creatio
 
 The accepted internal fixed-price and weighted-sale fee design keeps fees creator-borne and denominated in collateral. Full collateral input participates in buyer pricing; fees accrue separately against creator proceeds with the proposal's conservative rounding. Use the namespace rate at swap execution, not a creation snapshot. Allow permissionless, full, idempotent collection to the current namespace treasury at any time. The caller cannot choose or redirect the treasury. Terminal settlement collects the remainder.
 
-The RFP baseline does not allow collection before the scheduled end, and creator withdrawal remains gated on that timestamp. The internal fixed-price design allows fee collection at any time, including after sellout or the configured end. Fixed-price closure follows [ADR 0025](0025-sale-closing.md).
+The RFP baseline does not allow collection before the scheduled end and gates creator withdrawal on that timestamp. The internal fixed-price design allows fee collection at any time and creator withdrawal at the configured end or sellout, whichever occurs first. Without an end, withdrawal waits for sellout. Fixed-price closure and settlement follow [ADR 0025](0025-sale-closing.md).
 
 ## Consequences
 

@@ -1177,7 +1177,7 @@ fn weighted_buy_prices_fall_as_weights_shift() {
 
 #[test]
 fn weighted_message_tags_follow_fixed_price_variants() {
-    // Fixed-price tags 0-6 must be unchanged; weighted variants come after.
+    // Fixed-price tags 0-7 must be unchanged; weighted variants come after.
     use lbp_core::Message;
     let factory = AccountId::for_public_pda(&id(7), &PdaSeed::new([3; 32]));
     let pool = compute_pool_pda(id(40), id(8), id(41), id(42), factory);
@@ -1186,9 +1186,9 @@ fn weighted_message_tags_follow_fixed_price_variants() {
             Message::PrepareWeighted {
                 inputs: weighted_inputs(),
             },
-            7u8,
+            8u8,
         ),
-        (Message::ActivateWeighted, 8),
+        (Message::ActivateWeighted, 9),
     ] {
         assert_eq!(
             borsh::to_vec(&msg).unwrap()[0],
@@ -1243,4 +1243,17 @@ fn normalized_weights_keep_fractional_percentage_schedule_steps() {
         state.remaining_inventory - first.remaining_inventory,
         expected
     );
+}
+
+#[test]
+fn fixed_price_settlement_cannot_settle_a_weighted_pool() {
+    let (mut input, state) = funded();
+    input.from = Some(Actor::new(state.factory_owner, state.factory_program_id));
+    input.pre_state = borsh::to_vec(&state).unwrap().into();
+    input.message = borsh::to_vec(&Message::SettleFixedPrice {
+        creator: id(50),
+        now: state.end_timestamp.unwrap(),
+    })
+    .unwrap();
+    assert_eq!(handle(&input).err(), Some(lbp_core::Error::InvalidMessage));
 }

@@ -233,6 +233,7 @@ fn fixed_state(buyer: AccountId, end: Option<u64>) -> (V03State, AccountId) {
             lbp_core::CreatorAllocationRelease::AfterEnd,
             0u128,
             0u128,
+            false,
             None::<(bool, u8)>,
         ),
     ))

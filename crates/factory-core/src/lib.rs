@@ -1,4 +1,4 @@
-//! Launch setup and bonding-curve settlement over synchronous actor calls.
+//! Launch setup and mechanism-specific settlement over synchronous actor calls.
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
     account::{AccountId, Actor},
@@ -84,8 +84,7 @@ pub struct FactoryState {
     pub virtual_token_reserve: u128,
     pub virtual_collateral_reserve: u128,
     pub curve_program_id: AccountId,
-    pub creator_commitment: [u8; 32],
-    pub creator_nft_definition: AccountId,
+    pub creator_role_id: AccountId,
     pub name: String,
     pub uri: String,
     pub creator_escrow_id: AccountId,
@@ -109,6 +108,12 @@ impl FactoryState {
             != compute_factory_pda(self.namespace, actor.program_account_id, self.launch_salt)
             || self.token_definition_id
                 != compute_definition_pda(
+                    self.namespace,
+                    actor.program_account_id,
+                    self.launch_salt,
+                )
+            || self.creator_role_id
+                != compute_curve_creator_role_pda(
                     self.namespace,
                     actor.program_account_id,
                     self.launch_salt,
@@ -151,7 +156,6 @@ pub enum Message {
         curve_program_id: AccountId,
         collateral_definition_id: AccountId,
         creator: AccountId,
-        creator_nft_definition: AccountId,
         now: u64,
     },
     ContinueCreation {
@@ -321,17 +325,15 @@ pub fn compute_graduation_seed(factory: AccountId) -> PdaSeed {
 pub fn compute_graduation_pda(adapter: AccountId, factory: AccountId) -> AccountId {
     AccountId::for_public_pda(&adapter, &compute_graduation_seed(factory))
 }
-pub fn compute_creator_commitment(
+pub fn compute_curve_creator_role_seed(namespace: AccountId, salt: [u8; 32]) -> PdaSeed {
+    seed(namespace, b"curve-creator-role", salt)
+}
+pub fn compute_curve_creator_role_pda(
     namespace: AccountId,
-    creator: AccountId,
+    program: AccountId,
     salt: [u8; 32],
-) -> [u8; 32] {
-    use risc0_zkvm::sha::{Impl, Sha256 as _};
-    let mut bytes = [0; 96];
-    bytes[..32].copy_from_slice(creator.value());
-    bytes[32..64].copy_from_slice(&salt);
-    bytes[64..].copy_from_slice(namespace.value());
-    Impl::hash_bytes(&bytes).as_bytes().try_into().unwrap()
+) -> AccountId {
+    AccountId::for_public_pda(&program, &compute_curve_creator_role_seed(namespace, salt))
 }
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 struct Pending {
@@ -415,7 +417,6 @@ fn create_curve(input: &ReceiveInput, command: Message) -> Result<Response, Erro
         curve_program_id,
         collateral_definition_id,
         creator,
-        creator_nft_definition,
         now: _,
     } = command.clone()
     else {
@@ -431,7 +432,6 @@ fn create_curve(input: &ReceiveInput, command: Message) -> Result<Response, Erro
     }
     if namespace == AccountId::default()
         || creator == AccountId::default()
-        || creator_nft_definition == AccountId::default()
         || name.is_empty()
         || uri.is_empty()
         || graduation_hook_program_id.is_none() && !graduation_hook_configuration.is_empty()
@@ -471,12 +471,11 @@ fn create_curve(input: &ReceiveInput, command: Message) -> Result<Response, Erro
         virtual_token_reserve,
         virtual_collateral_reserve,
         curve_program_id,
-        creator_commitment: compute_creator_commitment(
+        creator_role_id: compute_curve_creator_role_pda(
             namespace,
-            creator_nft_definition,
+            input.receiver.program_account_id,
             launch_salt,
         ),
-        creator_nft_definition,
         name,
         uri,
         creator_escrow_id: compute_escrow_pda(
@@ -494,7 +493,7 @@ fn create_curve(input: &ReceiveInput, command: Message) -> Result<Response, Erro
         creator_allocation_claimed: false,
         pending: Some(Pending {
             command,
-            proof: true,
+            proof: false,
             reads: vec![
                 Read::new(
                     Actor::new(
@@ -511,13 +510,7 @@ fn create_curve(input: &ReceiveInput, command: Message) -> Result<Response, Erro
             values: vec![],
         }),
     };
-    Ok(state.response().send_sync(
-        Actor::new(creator, TOKEN_PROGRAM_ACCOUNT_ID),
-        &token::Message::AssertNft {
-            definition: creator_nft_definition,
-            callback: input.receiver,
-        },
-    ))
+    Ok(state.next())
 }
 fn validate_pool(
     state: &FactoryState,
@@ -587,27 +580,13 @@ fn begin_curve(input: &ReceiveInput, command: Message) -> Result<Response, Error
             holding_read(state.pool_id, state.token_definition_id),
         ]);
     }
-    Ok(state
-        .response()
-        .send_sync(
-            Actor::new(state.token_definition_id, TOKEN_PROGRAM_ACCOUNT_ID),
-            &token::Message::Initialize {
-                owner: input.receiver.account_id,
-            },
-        )
-        .send_sync(
-            Actor::new(state.token_definition_id, TOKEN_PROGRAM_ACCOUNT_ID),
-            &token::Message::Initialize {
-                owner: state.creator_escrow_id,
-            },
-        )
-        .send_sync(
-            Actor::new(creator, TOKEN_PROGRAM_ACCOUNT_ID),
-            &token::Message::AssertNft {
-                definition: state.creator_nft_definition,
-                callback: input.receiver,
-            },
-        ))
+    Ok(state.response().send_sync(
+        Actor::new(creator, AUTHORITY_PROGRAM_ACCOUNT_ID),
+        &authority::Message::Check {
+            role: state.creator_role_id,
+            callback: input.receiver,
+        },
+    ))
 }
 fn begin_claim(input: &ReceiveInput, command: Message) -> Result<Response, Error> {
     let mut state = FactoryState::decode(&input.pre_state)?;
@@ -638,9 +617,9 @@ fn begin_claim(input: &ReceiveInput, command: Message) -> Result<Response, Error
         values: vec![],
     });
     Ok(state.response().send_sync(
-        Actor::new(creator, TOKEN_PROGRAM_ACCOUNT_ID),
-        &token::Message::AssertNft {
-            definition: state.creator_nft_definition,
+        Actor::new(creator, AUTHORITY_PROGRAM_ACCOUNT_ID),
+        &authority::Message::Check {
+            role: state.creator_role_id,
             callback: input.receiver,
         },
     ))
@@ -715,9 +694,9 @@ fn begin_settlement(input: &ReceiveInput, command: Message) -> Result<Response, 
         Ok(response)
     } else {
         Ok(response.send_sync(
-            Actor::new(creator, TOKEN_PROGRAM_ACCOUNT_ID),
-            &token::Message::AssertNft {
-                definition: state.creator_nft_definition,
+            Actor::new(creator, AUTHORITY_PROGRAM_ACCOUNT_ID),
+            &authority::Message::Check {
+                role: state.creator_role_id,
                 callback: input.receiver,
             },
         ))
@@ -762,15 +741,34 @@ fn curve_resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
                 | Message::WithdrawFactoryProceeds { creator, .. } => creator,
                 _ => return Err(Error::InvalidState),
             };
-            token::verify_nft_holder(
+            authority::verify(
                 input,
-                TOKEN_PROGRAM_ACCOUNT_ID,
-                state.creator_nft_definition,
+                Actor::new(state.creator_role_id, AUTHORITY_PROGRAM_ACCOUNT_ID),
                 creator,
             )?;
             pending.proof = false;
             state.pending = Some(pending);
-            return Ok(state.next());
+            let mut response = state.response();
+            if matches!(
+                state.pending.as_ref().unwrap().command,
+                Message::ContinueCreation { .. }
+            ) {
+                response = response
+                    .send_sync(
+                        Actor::new(state.token_definition_id, TOKEN_PROGRAM_ACCOUNT_ID),
+                        &token::Message::Initialize {
+                            owner: input.receiver.account_id,
+                        },
+                    )
+                    .send_sync(
+                        Actor::new(state.token_definition_id, TOKEN_PROGRAM_ACCOUNT_ID),
+                        &token::Message::Initialize {
+                            owner: state.creator_escrow_id,
+                        },
+                    );
+            }
+            response.sync_messages.extend(state.next().sync_messages);
+            return Ok(response);
         }
         let expected = pending
             .reads
@@ -1170,32 +1168,35 @@ fn curve_resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
                         return Err(Error::InvalidCustody);
                     }
                     state.creation_stage = CreationStage::PoolPrepared;
-                    return Ok(state.response().send_sync(
-                        Actor::new(state.pool_id, state.curve_program_id),
-                        &curve_core::Message::CreatePool {
-                            namespace: state.namespace,
-                            token0_definition_id: state.token_definition_id,
-                            token1_definition_id: state.collateral_definition_id,
-                            allowed_input_token: match state.trade_mode {
-                                TradeMode::BuyOnly => Some(1),
-                                TradeMode::BuyAndSell => None,
+                    return Ok(state.response().send(
+                        SyncMessage::new(
+                            Actor::new(input.receiver.account_id, state.curve_program_id),
+                            &curve_core::Message::CreatePool {
+                                namespace: state.namespace,
+                                token0_definition_id: state.token_definition_id,
+                                token1_definition_id: state.collateral_definition_id,
+                                allowed_input_token: match state.trade_mode {
+                                    TradeMode::BuyOnly => Some(1),
+                                    TradeMode::BuyAndSell => None,
+                                },
+                                defer_funding: true,
+                                token0_amount: state.sale_reserve,
+                                token1_amount: 0,
+                                virtual_reserve0: state.virtual_token_reserve,
+                                virtual_reserve1: state.virtual_collateral_reserve,
+                                close_timestamp: state.end_timestamp,
+                                close_on_depletion: Some(0),
+                                owner: input.receiver.account_id,
+                                owner_program_id: Some(input.receiver.program_account_id),
+                                owner_program_seed: Some(
+                                    *compute_factory_seed(state.namespace, state.launch_salt)
+                                        .as_bytes(),
+                                ),
+                                curve_program_id: state.curve_program_id,
+                                now,
                             },
-                            defer_funding: true,
-                            token0_amount: state.sale_reserve,
-                            token1_amount: 0,
-                            virtual_reserve0: state.virtual_token_reserve,
-                            virtual_reserve1: state.virtual_collateral_reserve,
-                            close_timestamp: state.end_timestamp,
-                            close_on_depletion: Some(0),
-                            owner: input.receiver.account_id,
-                            owner_program_id: Some(input.receiver.program_account_id),
-                            owner_program_seed: Some(
-                                *compute_factory_seed(state.namespace, state.launch_salt)
-                                    .as_bytes(),
-                            ),
-                            curve_program_id: state.curve_program_id,
-                            now,
-                        },
+                        )
+                        .with_pda_seeds([compute_factory_seed(state.namespace, state.launch_salt)]),
                     ));
                 }
                 if state.creation_stage != CreationStage::Minted {
@@ -1237,7 +1238,7 @@ fn curve_resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
                     state.creator_allocation,
                 ))
             }
-            Message::CreateFactoryPool { now, .. } => {
+            Message::CreateFactoryPool { now, creator, .. } => {
                 let config = curve_core::Config::decode(&pending.values[0])
                     .map_err(|_| Error::InvalidState)?;
                 if config.namespace != state.namespace {
@@ -1271,6 +1272,16 @@ fn curve_resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
                     .response()
                     .send(
                         SyncMessage::new(
+                            Actor::new(state.creator_role_id, AUTHORITY_PROGRAM_ACCOUNT_ID),
+                            &authority::Message::BootstrapTransferOnly { authority: creator },
+                        )
+                        .with_pda_seeds([compute_curve_creator_role_seed(
+                            state.namespace,
+                            state.launch_salt,
+                        )]),
+                    )
+                    .send(
+                        SyncMessage::new(
                             Actor::new(state.token_definition_id, TOKEN_PROGRAM_ACCOUNT_ID),
                             &mint,
                         )
@@ -1301,6 +1312,12 @@ pub fn handle(input: &ReceiveInput) -> Result<Response, Error> {
     }
     let message: Message = borsh::from_slice(&input.message).map_err(|_| Error::InvalidMessage)?;
     match message {
+        message @ (Message::ClaimCreatorAllocation { .. }
+        | Message::WithdrawFactoryProceeds { .. })
+            if FixedPriceLaunchState::decode(&input.pre_state).is_ok() =>
+        {
+            lbp_setup::begin_payout(input, message)
+        }
         message @ Message::ClaimCreatorAllocation { .. } => begin_claim(input, message),
         message @ (Message::WithdrawFactoryProceeds { .. }
         | Message::ExecuteGraduationHook { .. }) => begin_settlement(input, message),

@@ -892,6 +892,423 @@ fn actor_message_tags_keep_setup_and_read_state_order() {
         assert_eq!(borsh::to_vec(&message).unwrap()[0], tag);
     }
 }
+fn settle(
+    input: &ReceiveInput,
+    state: &lbp_core::PoolAccount,
+    now: u64,
+    namespace: Vec<u8>,
+    balances: [u128; 2],
+) -> Result<lee_core::program::Response, lbp_core::Error> {
+    let mut input = input.clone();
+    input.from = Some(Actor::new(state.factory_owner, state.factory_program_id));
+    input.pre_state = borsh::to_vec(state).unwrap().into();
+    input.message = borsh::to_vec(&Message::SettleFixedPrice {
+        creator: id(60),
+        now,
+    })
+    .unwrap();
+    let mut response = handle(&input)?;
+    if response.sync_messages.is_empty() {
+        return Ok(response);
+    }
+    for bytes in [
+        namespace,
+        holding(input.receiver.account_id, id(42), balances[0]),
+        holding(input.receiver.account_id, id(41), balances[1]),
+    ] {
+        let source = response.sync_messages.last().unwrap().to;
+        input = reply(&input, &response, source, bytes);
+        response = handle(&input)?;
+    }
+    Ok(response)
+}
+
+#[test]
+fn sellout_settlement_collects_fees_and_pays_all_recorded_creator_proceeds() {
+    let (input, mut state) = funded();
+    state.remaining_inventory = 0;
+    state.recorded_collateral = 1_188;
+    state.accrued_fees = 12;
+    let response = settle(&input, &state, 100, config(100, id(43), false), [1_217, 17]).unwrap();
+    let next = state_of(&response);
+    assert!(next.proceeds_settled);
+    assert_eq!((next.recorded_collateral, next.accrued_fees), (0, 0));
+    assert_eq!(response.sync_messages.len(), 2);
+    for (call, recipient, amount) in [
+        (&response.sync_messages[0], id(43), 12),
+        (&response.sync_messages[1], id(60), 1_188),
+    ] {
+        assert_eq!(
+            call.to,
+            Actor::new(
+                input.receiver.account_id,
+                curve_core::TOKEN_PROGRAM_ACCOUNT_ID
+            )
+        );
+        assert_eq!(
+            borsh::from_slice::<lez_compat_core::token::Message>(&call.message).unwrap(),
+            lez_compat_core::token::Message::Transfer {
+                definition: id(42),
+                recipient,
+                amount,
+            }
+        );
+        assert_eq!(
+            call.pda_seeds,
+            [lbp_core::compute_pool_pda_seed(
+                state.namespace,
+                id(41),
+                id(42),
+                state.factory_owner,
+            )]
+            .into_iter()
+            .collect()
+        );
+    }
+}
+
+#[test]
+fn expiry_settlement_requires_the_trusted_clock_at_the_inclusive_end() {
+    let (input, state) = funded();
+    let response = settle(&input, &state, 200, config(100, id(43), false), [0, 800]).unwrap();
+    let clock = &response.sync_messages[0];
+    assert_eq!(
+        clock.to,
+        Actor::new(
+            clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID,
+            clock_core::clock_account_id()
+        )
+    );
+    assert_eq!(
+        borsh::from_slice::<clock_core::Message>(&clock.message).unwrap(),
+        clock_core::Message::AssertTimestamp {
+            at_least: 200_000,
+            at_most: u64::MAX
+        }
+    );
+    assert!(state_of(&response).proceeds_settled);
+    assert_eq!(state_of(&response).remaining_inventory, 800);
+}
+
+#[test]
+fn expiry_burns_only_unsold_sale_inventory_and_leaves_donations_outside_payouts() {
+    let (input, mut state) = funded();
+    state.remaining_inventory = 797;
+    state.recorded_collateral = 4;
+    state.accrued_fees = 1;
+    let response = settle(&input, &state, 200, config(100, id(43), false), [22, 814]).unwrap();
+    assert_eq!(response.sync_messages.len(), 4);
+    let burn = &response.sync_messages[2];
+    assert_eq!(
+        burn.to,
+        Actor::new(
+            input.receiver.account_id,
+            curve_core::TOKEN_PROGRAM_ACCOUNT_ID
+        )
+    );
+    assert_eq!(
+        borsh::from_slice::<lez_compat_core::token::Message>(&burn.message).unwrap(),
+        lez_compat_core::token::Message::Burn {
+            definition: id(41),
+            amount: 797
+        }
+    );
+    assert_eq!(
+        burn.pda_seeds,
+        [lbp_core::compute_pool_pda_seed(
+            state.namespace,
+            id(41),
+            id(42),
+            state.factory_owner
+        )]
+        .into_iter()
+        .collect()
+    );
+    assert_eq!(
+        borsh::from_slice::<lez_compat_core::token::Message>(&response.sync_messages[3].message)
+            .unwrap(),
+        lez_compat_core::token::Message::Transfer {
+            definition: id(42),
+            recipient: id(60),
+            amount: 4
+        }
+    );
+    assert_eq!(state_of(&response).remaining_inventory, 797);
+}
+
+#[test]
+fn settlement_retry_cannot_burn_or_pay_again_even_with_empty_vaults() {
+    let (input, mut state) = funded();
+    state.remaining_inventory = 797;
+    state.recorded_collateral = 4;
+    state.accrued_fees = 1;
+    let response = settle(&input, &state, 200, config(100, id(43), false), [5, 797]).unwrap();
+    let settled = state_of(&response);
+    let repeated = settle(&input, &settled, 0, config(100, id(70), true), [0, 0]).unwrap();
+    assert_eq!(state_of(&repeated), settled);
+    assert!(repeated.sync_messages.is_empty());
+}
+
+#[test]
+fn settlement_rejects_vaults_that_cannot_cover_all_proceeds_fees_and_unsold_inventory() {
+    let (input, mut state) = funded();
+    state.remaining_inventory = 797;
+    state.recorded_collateral = 4;
+    state.accrued_fees = 1;
+    for balances in [[4, 797], [5, 796]] {
+        assert_eq!(
+            settle(&input, &state, 200, config(100, id(43), false), balances).err(),
+            Some(lbp_core::Error::Underfunded)
+        );
+    }
+}
+
+#[test]
+fn settled_expiry_cannot_reopen_buys_with_a_backdated_timestamp_or_donated_tokens() {
+    let (input, state) = funded();
+    let response = settle(&input, &state, 200, config(100, id(43), false), [0, 800]).unwrap();
+    let settled = state_of(&response);
+    assert_eq!(
+        operation(
+            &input,
+            &settled,
+            exact_in(5),
+            config(100, id(43), false),
+            [0, 800, 100]
+        )
+        .err(),
+        Some(lbp_core::Error::Closed)
+    );
+}
+
+#[test]
+fn settlement_is_factory_only_and_cannot_be_forwarded_through_buyer_execute() {
+    let (mut input, mut state) = funded();
+    state.remaining_inventory = 0;
+    input.pre_state = borsh::to_vec(&state).unwrap().into();
+    let command = Message::SettleFixedPrice {
+        creator: id(60),
+        now: 100,
+    };
+    input.message = borsh::to_vec(&command).unwrap();
+    for from in [
+        None,
+        Some(Actor::new(id(60), input.receiver.program_account_id)),
+        Some(Actor::new(id(99), state.factory_program_id)),
+        Some(Actor::new(state.factory_owner, id(99))),
+    ] {
+        input.from = from;
+        assert_eq!(handle(&input).err(), Some(lbp_core::Error::Unauthorized));
+    }
+    input.from = Some(Actor::new(state.factory_owner, state.factory_program_id));
+    input.message = borsh::to_vec(&Message::SettleFixedPrice {
+        creator: AccountId::default(),
+        now: 100,
+    })
+    .unwrap();
+    assert_eq!(handle(&input).err(), Some(lbp_core::Error::Unauthorized));
+    input.pre_state = vec![].into();
+    input.receiver.account_id = id(60);
+    input.is_authorized = true;
+    input.message = borsh::to_vec(&Message::Execute {
+        pool: prepare().receiver.account_id,
+        instruction: Box::new(command),
+    })
+    .unwrap();
+    assert_eq!(handle(&input).err(), Some(lbp_core::Error::Unauthorized));
+}
+
+#[test]
+fn prior_fee_collection_preserves_proceeds_and_leaves_collected_self_treasury_fees_in_custody() {
+    let (mut input, mut state) = funded();
+    state.remaining_inventory = 0;
+    state.recorded_collateral = 1_188;
+    state.accrued_fees = 12;
+    input.from = None;
+    for (treasury, balance_after_collection) in
+        [(id(70), 1_205), (input.receiver.account_id, 1_217)]
+    {
+        let collected = operation(
+            &input,
+            &state,
+            Message::CollectFees,
+            config(100, treasury, true),
+            [1_217, 0, 0],
+        )
+        .unwrap();
+        let collected = state_of(&collected);
+        assert_eq!(
+            (collected.recorded_collateral, collected.accrued_fees),
+            (1_188, 0)
+        );
+        let response = settle(
+            &input,
+            &collected,
+            100,
+            config(9_999, id(71), true),
+            [balance_after_collection, 17],
+        )
+        .unwrap();
+        assert_eq!(response.sync_messages.len(), 1);
+        assert_eq!(
+            borsh::from_slice::<lez_compat_core::token::Message>(
+                &response.sync_messages[0].message
+            )
+            .unwrap(),
+            lez_compat_core::token::Message::Transfer {
+                definition: id(42),
+                recipient: id(60),
+                amount: 1_188
+            }
+        );
+        let collected_after_close = operation(
+            &input,
+            &state_of(&response),
+            Message::CollectFees,
+            config(100, id(71), true),
+            [17, 0, 0],
+        )
+        .unwrap();
+        assert!(collected_after_close.sync_messages.is_empty());
+    }
+}
+
+#[test]
+fn settlement_uses_only_end_or_sellout_and_checks_clock_conversion() {
+    let (input, mut state) = funded();
+    assert_eq!(
+        settle(&input, &state, 199, config(100, id(43), false), [0, 800]).err(),
+        Some(lbp_core::Error::NotClosed)
+    );
+    state.end_timestamp = None;
+    assert_eq!(
+        settle(
+            &input,
+            &state,
+            u64::MAX,
+            config(100, id(43), false),
+            [0, 800]
+        )
+        .err(),
+        Some(lbp_core::Error::NotClosed)
+    );
+    state.end_timestamp = Some(u64::MAX);
+    assert_eq!(
+        settle(
+            &input,
+            &state,
+            u64::MAX,
+            config(100, id(43), false),
+            [0, 800]
+        )
+        .err(),
+        Some(lbp_core::Error::InvalidTerms)
+    );
+    state.remaining_inventory = 0;
+    for end in [None, Some(200)] {
+        state.end_timestamp = end;
+        let response = settle(&input, &state, 100, config(100, id(43), false), [0, 0]).unwrap();
+        assert!(state_of(&response).proceeds_settled);
+        assert!(response.sync_messages.is_empty());
+    }
+}
+
+#[test]
+fn terminal_fees_use_the_current_treasury_without_repricing_proceeds_while_frozen() {
+    let (input, mut state) = funded();
+    state.remaining_inventory = 0;
+    state.recorded_collateral = 1_188;
+    state.accrued_fees = 12;
+    for treasury in [id(70), input.receiver.account_id] {
+        let response = settle(
+            &input,
+            &state,
+            100,
+            config(9_999, treasury, true),
+            [1_217, 17],
+        )
+        .unwrap();
+        let calls: Vec<lez_compat_core::token::Message> = response
+            .sync_messages
+            .iter()
+            .map(|call| borsh::from_slice(&call.message).unwrap())
+            .collect();
+        let creator_payout = lez_compat_core::token::Message::Transfer {
+            definition: id(42),
+            recipient: id(60),
+            amount: 1_188,
+        };
+        let expected = if treasury == input.receiver.account_id {
+            vec![creator_payout]
+        } else {
+            vec![
+                lez_compat_core::token::Message::Transfer {
+                    definition: id(42),
+                    recipient: id(70),
+                    amount: 12,
+                },
+                creator_payout,
+            ]
+        };
+        assert_eq!(calls, expected);
+        assert_eq!(
+            (
+                state_of(&response).recorded_collateral,
+                state_of(&response).accrued_fees
+            ),
+            (0, 0)
+        );
+    }
+}
+
+#[test]
+fn settlement_callbacks_require_the_saved_namespace_and_canonical_vaults() {
+    let (mut input, state) = funded();
+    input.from = Some(Actor::new(state.factory_owner, state.factory_program_id));
+    input.pre_state = borsh::to_vec(&state).unwrap().into();
+    input.message = borsh::to_vec(&Message::SettleFixedPrice {
+        creator: id(60),
+        now: 200,
+    })
+    .unwrap();
+    let mut response = handle(&input).unwrap();
+    for (step, bytes) in [
+        config(100, id(43), false),
+        holding(input.receiver.account_id, id(42), 0),
+        holding(input.receiver.account_id, id(41), 800),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let source = response.sync_messages[0].to;
+        input = reply(&input, &response, source, bytes);
+        for from in [
+            None,
+            Some(Actor::new(id(99), source.program_account_id)),
+            Some(Actor::new(source.account_id, id(99))),
+        ] {
+            let mut forged = input.clone();
+            forged.from = from;
+            assert_eq!(handle(&forged).err(), Some(lbp_core::Error::Unauthorized));
+        }
+        let mut wrong_pool = input.clone();
+        wrong_pool.receiver.account_id = id(99);
+        assert_eq!(
+            handle(&wrong_pool).err(),
+            Some(lbp_core::Error::WrongAccount)
+        );
+        let invalid = if step == 0 {
+            let mut namespace = curve_core::Config::decode(&namespace_state()).unwrap();
+            namespace.namespace = id(99);
+            borsh::to_vec(&namespace).unwrap()
+        } else {
+            holding(id(99), id(99), 800)
+        };
+        assert!(handle(&reply(&input, &response, source, invalid)).is_err());
+        response = handle(&input).unwrap();
+    }
+}
+
 #[test]
 fn setup_uses_the_trusted_clock_with_a_strict_saved_end() {
     for (_, response) in [prepared(), activation(17)] {

@@ -2,7 +2,7 @@ use crate::Error;
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
     account::{AccountId, Actor, ActorState},
-    program::{PdaSeed, ReceiveInput, Response, StateReply},
+    program::{PdaSeed, ReceiveInput, Response, StateReply, SyncMessage},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -210,14 +210,17 @@ pub fn handle(input: &ReceiveInput) -> Result<Response, Error> {
                 return Err(Error::WrongDefinition);
             };
             let definition = input.receiver.account_id;
-            Ok(Response::keep_state().send_sync(
-                Actor::new(holding_address(program, owner, definition), program),
-                &Message::Credit {
-                    definition,
-                    owner,
-                    kind,
-                    amount: 0,
-                },
+            Ok(Response::keep_state().send(
+                SyncMessage::new(
+                    Actor::new(holding_address(program, owner, definition), program),
+                    &Message::Credit {
+                        definition,
+                        owner,
+                        kind,
+                        amount: 0,
+                    },
+                )
+                .with_pda_seeds([holding_seed(owner, definition)]),
             ))
         }
         Message::Burn { definition, amount } => {
@@ -369,14 +372,17 @@ pub fn handle(input: &ReceiveInput) -> Result<Response, Error> {
                 }
                 .encode(),
             )
-            .send_sync(
-                Actor::new(holding_address(program, recipient, definition), program),
-                &Message::Credit {
-                    definition,
-                    owner: recipient,
-                    kind,
-                    amount: supply,
-                },
+            .send(
+                SyncMessage::new(
+                    Actor::new(holding_address(program, recipient, definition), program),
+                    &Message::Credit {
+                        definition,
+                        owner: recipient,
+                        kind,
+                        amount: supply,
+                    },
+                )
+                .with_pda_seeds([holding_seed(recipient, definition)]),
             ))
         }
         Message::Credit {

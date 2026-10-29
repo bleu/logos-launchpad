@@ -314,3 +314,24 @@ fn weighted_final_setup_requires_creator_seed_and_keeps_surplus_separate() {
         );
     }
 }
+
+#[test]
+fn fixed_price_payout_commands_cannot_release_weighted_sale_funds() {
+    let (mut input, response) = minted(CreatorAllocationRelease::AfterEnd);
+    let mut state = LbpLaunchState::decode(response.post_state.as_ref().unwrap()).unwrap();
+    state.creation_stage = LbpCreationStage::Complete;
+    input.pre_state = borsh::to_vec(&state).unwrap().into();
+    for message in [
+        Message::WithdrawFactoryProceeds {
+            creator: id(42),
+            now: 300,
+        },
+        Message::ClaimCreatorAllocation {
+            creator: id(42),
+            now: 300,
+        },
+    ] {
+        input.message = borsh::to_vec(&message).unwrap();
+        assert_eq!(handle(&input).err(), Some(Error::InvalidState));
+    }
+}

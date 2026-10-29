@@ -72,7 +72,6 @@ pub struct CreateSaleRequest {
     pub virtual_collateral_reserve: u128,
     /// Optional sale end time in Unix seconds.
     pub end_timestamp: Option<u64>,
-    pub creator_nft_definition: AccountId,
     /// Clock lower bound in Unix seconds, preserved as supplied, including zero.
     pub now: u64,
 }
@@ -362,12 +361,20 @@ fn factory_actors(
     sale: FactorySale,
     creator: AccountId,
     treasury: Option<AccountId>,
-    nft: Option<AccountId>,
 ) -> Vec<Actor> {
     let a = factory_pool_addresses(sale);
     let mint =
         factory_core::compute_mint_pda(sale.namespace, sale.factory_program_id, sale.launch_salt);
     let mut actors = vec![
+        Actor::new(
+            factory_core::compute_curve_creator_role_pda(
+                sale.namespace,
+                sale.factory_program_id,
+                sale.launch_salt,
+            ),
+            curve_core::AUTHORITY_PROGRAM_ACCOUNT_ID,
+        ),
+        Actor::new(creator, curve_core::AUTHORITY_PROGRAM_ACCOUNT_ID),
         token_actor(mint),
         token_actor(a.creator_escrow),
         Actor::new(a.factory, sale.factory_program_id),
@@ -393,10 +400,6 @@ fn factory_actors(
             actors.push(token_actor(associated_token_account(owner, definition)));
         }
     }
-    if let Some(definition) = nft {
-        actors.push(token_actor(definition));
-        actors.push(token_actor(associated_token_account(creator, definition)));
-    }
     actors
 }
 
@@ -407,6 +410,7 @@ fn admit_factory_accounts<I>(
     let a = factory_pool_addresses(sale);
     for seed in [
         factory_core::compute_factory_seed(sale.namespace, sale.launch_salt),
+        factory_core::compute_curve_creator_role_seed(sale.namespace, sale.launch_salt),
         factory_core::compute_definition_seed(sale.namespace, sale.launch_salt),
         factory_core::compute_mint_seed(sale.namespace, sale.launch_salt),
         factory_core::compute_escrow_seed(sale.namespace, sale.launch_salt),
@@ -462,11 +466,10 @@ pub fn build_create_sale_invocation(
         request.virtual_collateral_reserve,
     )?;
     let a = factory_pool_addresses(sale);
-    let nft = request.creator_nft_definition;
     Ok(admit_factory_accounts(
         invocation(
             Actor::new(a.factory, sale.factory_program_id),
-            factory_actors(sale, creator, None, Some(nft)),
+            factory_actors(sale, creator, None),
             vec![creator],
             FactoryInstruction::CreateFactoryPool {
                 trade_mode: request.trade_mode as u8,
@@ -487,13 +490,11 @@ pub fn build_create_sale_invocation(
                 curve_program_id: sale.curve_program_id,
                 collateral_definition_id: sale.collateral_definition,
                 creator,
-                creator_nft_definition: nft,
                 now: request.now,
             },
         ),
         sale,
     )
-    .with_holding(creator, nft)
     .with_holding(creator, a.token_definition)
     .with_holding(creator, sale.collateral_definition))
 }
@@ -502,20 +503,18 @@ pub fn build_withdraw_factory_proceeds_invocation(
     sale: FactorySale,
     creator: AccountId,
     treasury: AccountId,
-    creator_nft_definition: AccountId,
     now: u64,
 ) -> PublicInvocation<FactoryInstruction> {
     let a = factory_pool_addresses(sale);
     admit_factory_accounts(
         invocation(
             Actor::new(a.factory, sale.factory_program_id),
-            factory_actors(sale, creator, Some(treasury), Some(creator_nft_definition)),
+            factory_actors(sale, creator, Some(treasury)),
             vec![creator],
             FactoryInstruction::WithdrawFactoryProceeds { creator, now },
         ),
         sale,
     )
-    .with_holding(creator, creator_nft_definition)
     .with_holding(creator, a.token_definition)
     .with_holding(creator, sale.collateral_definition)
     .with_holding(treasury, a.token_definition)
@@ -524,20 +523,18 @@ pub fn build_withdraw_factory_proceeds_invocation(
 pub fn build_claim_creator_allocation_invocation(
     sale: FactorySale,
     creator: AccountId,
-    creator_nft_definition: AccountId,
     now: u64,
 ) -> PublicInvocation<FactoryInstruction> {
     let a = factory_pool_addresses(sale);
     admit_factory_accounts(
         invocation(
             Actor::new(a.factory, sale.factory_program_id),
-            factory_actors(sale, creator, None, Some(creator_nft_definition)),
+            factory_actors(sale, creator, None),
             vec![creator],
             FactoryInstruction::ClaimCreatorAllocation { creator, now },
         ),
         sale,
     )
-    .with_holding(creator, creator_nft_definition)
     .with_holding(creator, a.token_definition)
     .with_holding(creator, sale.collateral_definition)
 }
@@ -556,7 +553,7 @@ pub fn build_graduation_invocation(
         .ok_or(ClientError::GraduationNotConfigured)?;
     let a = factory_pool_addresses(sale);
     let custody = factory_core::compute_graduation_pda(hook.program_id, a.factory);
-    let mut actors = factory_actors(sale, custody, Some(treasury), None);
+    let mut actors = factory_actors(sale, custody, Some(treasury));
     actors.push(Actor::new(custody, hook.program_id));
     Ok(admit_factory_accounts(
         invocation(
@@ -718,6 +715,7 @@ pub fn build_sell_invocation(
     )
 }
 
+/// Legacy NFT helper. This does not create a launch role.
 pub fn build_create_authority_invocation(
     definition: AccountId,
     owner: AccountId,
@@ -742,6 +740,7 @@ pub fn build_create_authority_invocation(
     )
     .with_holding(owner, definition)
 }
+/// Legacy NFT helper. This does not transfer a launch role.
 pub fn build_transfer_authority_invocation(
     owner: AccountId,
     recipient: AccountId,
@@ -863,6 +862,12 @@ pub(crate) fn validate_factory_state(sale: FactorySale, state: &FactoryState) ->
         || state.token_definition_id != a.token_definition
         || state.creator_escrow_id != a.creator_escrow
         || state.pool_id != a.pool
+        || state.creator_role_id
+            != factory_core::compute_curve_creator_role_pda(
+                sale.namespace,
+                sale.factory_program_id,
+                sale.launch_salt,
+            )
     {
         return Err(ClientError::FactorySaleMismatch);
     }
@@ -915,6 +920,7 @@ async fn wait_for_confirmation(wallet: &WalletCore, hash: HashType) -> Result<()
     Ok(())
 }
 
+/// Reads a legacy NFT holding, not a launch role authority.
 pub async fn load_authority_identity(
     wallet: &WalletCore,
     location: AccountLocation,
@@ -940,6 +946,7 @@ pub async fn load_authority_identity(
         _ => Err(ClientError::InvalidAuthorityHolding),
     }
 }
+/// Transfers a legacy NFT, not a launch role authority.
 pub async fn transfer_authority(
     wallet: &mut WalletCore,
     token_program: &ProgramHandle,

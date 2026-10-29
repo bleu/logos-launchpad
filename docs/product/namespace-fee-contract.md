@@ -40,7 +40,7 @@ Fees can be collected at any time. Collection pays all outstanding fees, clears 
 
 Settlement collects remaining fees in the same transaction as the related reserve or proceeds payment. The payment uses the balance after collection. If that stage fails, its state and balances stay unchanged. Earlier stages stay complete. The full process can use several transactions. Completed payments and token burns are recorded so a retry is safe.
 
-Fixed-price and weighted sale creator withdrawal waits for the original end timestamp. A pause keeps the schedule active; weighted-sale weights continue to change. See [ADR 0015](../adr/0015-fee-accounting.md), [ADR 0016](../adr/0016-lbp-live-fees.md), and [ADR 0020](../adr/0020-settlement-and-graduation.md).
+Fixed-price creator withdrawal waits for the configured end or sellout, whichever occurs first; without an end, it waits for sellout. Weighted-sale creator withdrawal waits for its scheduled end. A pause keeps the schedule active; weighted-sale weights continue to change. Fixed-price freeze blocks buys, not settlement. See [ADR 0025](../adr/0025-sale-closing.md), [ADR 0015](../adr/0015-fee-accounting.md), [ADR 0016](../adr/0016-lbp-live-fees.md), and [ADR 0020](../adr/0020-settlement-and-graduation.md).
 
 ## Events and errors
 

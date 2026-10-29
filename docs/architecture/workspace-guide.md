@@ -56,7 +56,7 @@ Application, SDK and CLI timestamps use Unix seconds. The native LEZ clock uses 
 
 ## Execution and evidence limits
 
-Add `--execution` to `check-builds.sh` to select the optional node-free token, seeded curve, fixed-price and weighted-sale fixtures. They need compatible guest binaries and an executor that can start local processes and use local IPC. A sandbox rejection is not a passing result. The token fixture's successful transfer and rollback checks cover disposable token actors only; they do not prove sale rollback.
+Add `--execution` to `check-builds.sh` to select the optional node-free token, seeded sale and role-authority fixtures. The script builds the application and compatibility guests and locates the pinned upstream clock guest; `LAUNCHPAD_CLOCK_ELF` can override that path. Execution needs local processes and IPC. A sandbox rejection is not a passing result. Token-only rollback checks do not prove sale rollback.
 
 The two [seeded curve tests](../../methods/tests/actor_sale.rs) passed through real curve and compatibility-token guests on `V03State`. Public buys passed, and stale-cap rejection preserved full state and buyer nonce. A delayed pre-expiry trade passed with the upstream `AssertTimestamp` guest and seeded native clock data; expiry rejection also preserved state and nonce. See the tests for exact amounts and timestamps.
 
@@ -64,15 +64,21 @@ The four seeded fixed-price tests passed through real fixed-price, namespace and
 
 The four seeded weighted-sale tests passed through real sale, namespace, clock and compatibility-token guests on 29 October 2026. They cover both buy forms, delayed execution within the validity window, window rejection, successive recorded reserves, fee-neutral pricing after collection, accuracy rejection and vault overflow. A failed final token credit preserved the full state and buyer nonce, including the earlier collateral transfer. A separate weighted factory test passed all four creation stages through real factory, authority, token, namespace, sale and clock guests. It covers both allocation choices, normalized fractional weights, full creator seed funding, surplus, and a buy after setup. An insufficient seed and a failed final allocation credit preserved full state and creator nonce. The latter check includes rollback of earlier inventory transfer, seed transfer and pool activation. Public-account admission uses canonical PDA evidence. These local checks do not produce real proofs or check live clock updates.
 
-These checks do not exercise sequencer `Tick`, setup, factory clocks, settlement, graduation, curve fee collection, wallet submission or real proofs. To run them directly:
+The [role-authority guest tests](../../crates/launchpad-client/tests/role_authority_guest.rs) use signed `V03State` transactions through real guests. They cover fresh namespace, direct-pool and factory setup, role transfer and rejection, and a program-controlled namespace admin that accepts its role and changes a fee. The [controls tests](../../crates/launchpad-client/tests/role_authority_guest/controls.rs) cover both trade modes, live fees, current-treasury collection, namespace isolation, expiry and `D` depletion. Freeze blocks swaps while administration, role transfer, collection and close remain available.
+
+The [settlement tests](../../crates/launchpad-client/tests/role_authority_guest/settlement.rs) cover manual and graduation routes, allocation, unsold-token burn, payout failures, callback rejection and invalid final acknowledgment. Failed transactions preserve full state and signer nonces; repaired retries do not repeat completed payments or burns. Tests also cover competing-route rejection, manual recovery, frozen settlement and the permitted zero-payout hook. A real adapter receives payouts and records a successful callback. This proves local graduation execution, not DEX liquidity.
+
+The seeded fixed-price trade checks do not exercise fresh setup or settlement. Weighted setup has the separate factory test above. To run those trade fixtures directly:
 
 ```sh
 RISC0_BUILD_LOCKED=1 cargo +1.98.1 test --manifest-path methods/Cargo.toml --release --locked --features actor-execution-tests --test actor_sale
 ```
 
-The local `bash verify/check-builds.sh --execution` gate passed with unchanged lockfiles. It covered release host tests, application and compatibility guests, weighted-math parity, release-overflow checks, token execution and the six curve and fixed-price tests. A later direct run passed all eleven sale tests, including four seeded weighted-sale tests and the full weighted factory test. Debug workspace tests, strict root and compatibility Clippy, formatting across maintained workspaces, IDL and wire checks, and pin and shell regressions also passed. Linux CI has not run.
+The local `bash verify/check-builds.sh --execution` gate passed with unchanged lockfiles. It checks release host tests, application and compatibility guests, weighted-math parity, release-overflow checks, token execution, seeded sale tests and the signed curve contract guest tests. IDL and wire checks, formatting, pins and shell regressions are separate checks. Linux CI has not run for the expanded curve evidence.
 
-Setup, factory-clock, settlement, graduation, curve-fee and PDA-administration runtime checks remain deferred, as do sequencer `Tick`, wallet/service integration and real proofs. Old namespace, private-helper and settlement guest evidence predates this actor migration and cannot establish compatibility on the selected revision. Private purchase and authority helpers return explicit unsupported errors because the compatibility token implementation has no private holdings.
+A separate direct run passed all eleven sale tests, including the weighted factory test.
+
+Fixed-price setup and payout runtime checks remain deferred, as do sequencer `Tick`, wallet/service integration and real proofs. Old namespace and private-helper guest evidence predates this actor migration and cannot establish compatibility on the selected revision. Private purchase and authority helpers return explicit unsupported errors because the compatibility token implementation has no private holdings.
 
 The three launchpad package archives passed the Nix build. Installation, loading and `Test backend` are blocked by missing Basecamp and `lgpm`; no `Backend OK` result is recorded. See the [package README](../../packages/launchpad/README.md) for the command and local requirements.
 
