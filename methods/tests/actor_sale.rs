@@ -373,7 +373,7 @@ fn fixed_rejected(
 }
 
 #[test]
-fn fixed_price_buys_use_full_input_live_fees_and_current_treasury() {
+fn fixed_price_buys_deduct_live_fees_before_pricing_and_collect_to_current_treasury() {
     use lbp_core::Message::{BuyExactInput, BuyExactOutput, CollectFees};
     let key = PrivateKey::try_new([23; 32]).unwrap();
     let buyer = AccountId::from(&PublicKey::new_from_private_key(&key));
@@ -384,12 +384,12 @@ fn fixed_price_buys_use_full_input_live_fees_and_current_treasury() {
         &key,
         BuyExactInput {
             amount_in: 101,
-            min_amount_out: 67,
+            min_amount_out: 64,
             now: 100,
         },
     )
     .unwrap();
-    assert_eq!(balance(&state, buyer, LAUNCH), 67);
+    assert_eq!(balance(&state, buyer, LAUNCH), 64);
     assert_eq!(balance(&state, buyer, COLLATERAL), 1_899);
     let sale = fixed_pool(&state, pool);
     assert_eq!(
@@ -398,7 +398,7 @@ fn fixed_price_buys_use_full_input_live_fees_and_current_treasury() {
             sale.recorded_collateral,
             sale.accrued_fees
         ),
-        (933, 97, 4)
+        (936, 97, 4)
     );
 
     state = fixed_config(state, 1_001, NEXT_TREASURY, false);
@@ -408,13 +408,13 @@ fn fixed_price_buys_use_full_input_live_fees_and_current_treasury() {
         &key,
         BuyExactOutput {
             amount_out: 13,
-            max_amount_in: 20,
+            max_amount_in: 23,
             now: 100,
         },
     )
     .unwrap();
-    assert_eq!(balance(&state, buyer, LAUNCH), 80);
-    assert_eq!(balance(&state, buyer, COLLATERAL), 1_879);
+    assert_eq!(balance(&state, buyer, LAUNCH), 77);
+    assert_eq!(balance(&state, buyer, COLLATERAL), 1_876);
     let sale = fixed_pool(&state, pool);
     assert_eq!(
         (
@@ -422,18 +422,18 @@ fn fixed_price_buys_use_full_input_live_fees_and_current_treasury() {
             sale.recorded_collateral,
             sale.accrued_fees
         ),
-        (920, 114, 7)
+        (923, 117, 7)
     );
-    assert_eq!(balance(&state, pool, COLLATERAL), 162);
-    assert_eq!(balance(&state, pool, LAUNCH), 927);
+    assert_eq!(balance(&state, pool, COLLATERAL), 165);
+    assert_eq!(balance(&state, pool, LAUNCH), 930);
 
     state = clock_state(fixed_config(state, 1_001, NEXT_TREASURY, true), 200_001);
     fixed_execute(&mut state, pool, &key, CollectFees).unwrap();
     assert_eq!(balance(&state, TREASURY, COLLATERAL), 0);
     assert_eq!(balance(&state, NEXT_TREASURY, COLLATERAL), 7);
-    assert_eq!(balance(&state, pool, COLLATERAL), 155);
+    assert_eq!(balance(&state, pool, COLLATERAL), 158);
     let sale = fixed_pool(&state, pool);
-    assert_eq!((sale.recorded_collateral, sale.accrued_fees), (114, 0));
+    assert_eq!((sale.recorded_collateral, sale.accrued_fees), (117, 0));
     assert_eq!(
         balance(&state, pool, COLLATERAL) - sale.recorded_collateral,
         41
@@ -456,7 +456,7 @@ fn fixed_price_without_end_checks_start_clock_and_stops_at_sellout() {
         pool,
         &key,
         BuyExactInput {
-            amount_in: 3,
+            amount_in: 4,
             min_amount_out: 2,
             now: 100,
         },
@@ -469,7 +469,7 @@ fn fixed_price_without_end_checks_start_clock_and_stops_at_sellout() {
         &key,
         BuyExactOutput {
             amount_out: 1_000,
-            max_amount_in: 1_500,
+            max_amount_in: 1_552,
             now: 100,
         },
     )
@@ -481,23 +481,69 @@ fn fixed_price_without_end_checks_start_clock_and_stops_at_sellout() {
             sale.recorded_collateral,
             sale.accrued_fees
         ),
-        (0, 1_450, 50)
+        (0, 1_500, 52)
     );
+    assert_eq!(balance(&state, buyer, LAUNCH), 1_000);
+    assert_eq!(balance(&state, buyer, COLLATERAL), 448);
+    assert_eq!(balance(&state, pool, COLLATERAL), 1_593);
     assert_eq!(balance(&state, pool, LAUNCH), 7);
     fixed_rejected(
         &mut state,
         pool,
         &key,
         BuyExactInput {
-            amount_in: 3,
+            amount_in: 4,
             min_amount_out: 2,
             now: 100,
         },
         "Closed",
     );
     fixed_execute(&mut state, pool, &key, CollectFees).unwrap();
-    assert_eq!(balance(&state, TREASURY, COLLATERAL), 50);
-    assert_eq!(balance(&state, pool, COLLATERAL), 1_491);
+    assert_eq!(balance(&state, TREASURY, COLLATERAL), 52);
+    assert_eq!(balance(&state, pool, COLLATERAL), 1_541);
+}
+
+#[test]
+fn fixed_price_fee_only_slippage_and_fee_consuming_dust_preserve_state_and_nonce() {
+    use lbp_core::Message::{BuyExactInput, BuyExactOutput};
+    let key = PrivateKey::try_new([23; 32]).unwrap();
+    let buyer = AccountId::from(&PublicKey::new_from_private_key(&key));
+    let (mut state, pool) = fixed_state(buyer, None);
+    fixed_rejected(
+        &mut state,
+        pool,
+        &key,
+        BuyExactInput {
+            amount_in: 101,
+            min_amount_out: 67,
+            now: 100,
+        },
+        "Slippage",
+    );
+    state = fixed_config(state, 1_001, TREASURY, false);
+    fixed_rejected(
+        &mut state,
+        pool,
+        &key,
+        BuyExactOutput {
+            amount_out: 13,
+            max_amount_in: 20,
+            now: 100,
+        },
+        "Slippage",
+    );
+    state = fixed_config(state, 9_999, TREASURY, false);
+    fixed_rejected(
+        &mut state,
+        pool,
+        &key,
+        BuyExactInput {
+            amount_in: 3,
+            min_amount_out: 0,
+            now: 100,
+        },
+        "InvalidAmount",
+    );
 }
 
 #[test]
@@ -534,7 +580,7 @@ fn fixed_price_deadline_slippage_and_frozen_buys_roll_back() {
         pool,
         &key,
         BuyExactInput {
-            amount_in: 3,
+            amount_in: 4,
             min_amount_out: 2,
             now: 100,
         },
@@ -542,7 +588,7 @@ fn fixed_price_deadline_slippage_and_frozen_buys_roll_back() {
     );
     state = fixed_config(state, 333, TREASURY, false);
     let instruction = BuyExactInput {
-        amount_in: 3,
+        amount_in: 4,
         min_amount_out: 2,
         now: 100,
     };
@@ -584,7 +630,7 @@ fn fixed_price_output_transfer_failure_rolls_back_input_and_nonce() {
         pool,
         &key,
         lbp_core::Message::BuyExactInput {
-            amount_in: 3,
+            amount_in: 4,
             min_amount_out: 2,
             now: 100,
         },

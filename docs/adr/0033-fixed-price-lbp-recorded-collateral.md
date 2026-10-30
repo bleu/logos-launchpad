@@ -1,6 +1,6 @@
 # ADR 0033: Separate fixed-price sale collateral accounting from vault balances
 
-Status: Accepted; implemented for fixed-price setup, public buys and fee collection. Settlement follows [ADR 0025](0025-sale-closing.md), with host-handler coverage only.
+Status: Accepted; fixed-price fee burden and pricing superseded by [ADR 0035](0035-fixed-price-swap-fees.md). Recorded collateral rules are implemented for fixed-price setup, public buys and fee collection. Settlement follows [ADR 0025](0025-sale-closing.md), with host-handler coverage only.
 
 Date: 2026-10-14
 
@@ -14,7 +14,7 @@ This record supersedes only the physical collateral-empty activation rule in [AD
 
 Keep recorded collateral separate from the actual collateral vault balance. Preparation initializes recorded collateral to zero. Activation requires that recorded amount to remain zero, but accepts a valid collateral vault containing unsolicited tokens. Funding leaves those tokens untouched and does not credit them to the sale. Canonical account, token-owner and definition checks still apply.
 
-A fixed-price sale is buy-only. Exact-input buys spend the full collateral input and floor token output. Exact-output buys round collateral payment up. Both use the positive saved price and reject a trade that exceeds its inventory, slippage limit or checked arithmetic range. Buys use the full payment for pricing. The live namespace fee is charged against creator proceeds and tracked separately. The fee rate and anytime collection policy remain `To be reviewed by Logos team` under [ADR 0016](0016-lbp-live-fees.md).
+A fixed-price sale is buy-only. Both buy forms use the positive saved price and reject a trade that exceeds its inventory, slippage limit or checked arithmetic range. This record originally used full payment for pricing and charged the live namespace fee against creator proceeds. ADR 0035 replaces only that fee burden and pricing rule: exact input prices tokens after fees, and exact output grosses up the rounded net collateral requirement. Live rates and anytime collection remain under [ADR 0016](0016-lbp-live-fees.md). The fixed-price fee departures remain `To be reviewed by Logos team`.
 
 An optional end time stops buys at that time. A sale with no end time remains open until its inventory sells out. Sellout stops later buys and makes recorded proceeds collectible. Sellout also makes an `AfterEnd` creator allocation eligible for its separate claim under [ADR 0025](0025-sale-closing.md).
 

@@ -33,7 +33,7 @@ Read [CONTEXT.md](../../CONTEXT.md) for terms and [repository layout](../archite
 | ADR | Decision | Status |
 | --- | --- | --- |
 | [0015](0015-fee-accounting.md) | Collateral fees and current-treasury collection | Accepted internally; fixed-price fees implemented; weighted-sale fees pending; RFP departures: To be reviewed by Logos team |
-| [0016](0016-lbp-live-fees.md) | Live creator-borne fixed-price and weighted-sale fees and anytime collection | Accepted internally; fixed-price fees implemented; weighted-sale fees pending; To be reviewed by Logos team |
+| [0016](0016-lbp-live-fees.md) | Live fixed-price and weighted-sale fees and anytime collection | Accepted internally; fixed-price fee burden and pricing superseded by [0035](0035-fixed-price-swap-fees.md); weighted-sale fees remain creator-borne and pending; To be reviewed by Logos team |
 | [0017](0017-quotes-and-slippage.md) | Fresh quotes and explicit slippage limits | Accepted |
 | [0018](0018-private-participation.md) | SDK-managed single-transaction private route and recovery | Product and recovery rules accepted; platform, wallet and proof verification pending |
 | [0019](0019-product-packages.md) | Two QML mini-apps and a non-UI shared core | Accepted |
@@ -48,8 +48,9 @@ Read [CONTEXT.md](../../CONTEXT.md) for terms and [repository layout](../archite
 | [0030](0030-lbp-pricing-collateral.md) | Fee-neutral weighted-sale pricing collateral and separate custody records | Accepted internally; weighted-sale execution and custody/numerical verification pending; fee departures: To be reviewed by Logos team |
 | [0031](0031-shared-launch-factory.md) | Share matching launch setup without sharing mechanism rules | Shared fixed-price sale creation and funding implementation; historical pre-actor setup checks used development receipts; actor setup execution, real proofs and deployment readiness pending |
 | [0032](0032-fixed-price-lbp-setup.md) | Fixed-price sale creation and funding | Migrated four-stage implementation; local host and guest-build checks passed; setup execution, real proofs and deployment readiness pending; collateral activation rule superseded by [0033](0033-fixed-price-lbp-recorded-collateral.md) |
-| [0033](0033-fixed-price-lbp-recorded-collateral.md) | Recorded fixed-price sale collateral excludes unsolicited vault transfers | Accepted; fixed-price setup, public buys and fees implemented; settlement has host-handler coverage under [0025](0025-sale-closing.md) |
+| [0033](0033-fixed-price-lbp-recorded-collateral.md) | Recorded fixed-price sale collateral excludes unsolicited vault transfers | Accepted; fixed-price fee burden and pricing superseded by [0035](0035-fixed-price-swap-fees.md); recorded collateral rules remain; settlement has host-handler coverage under [0025](0025-sale-closing.md) |
 | [0034](0034-lez-v04-migration.md) | Fixed development target, temporary local compatibility support and maintained tooling | Application and development base migrated; local checks include seeded curve trades and fixed-price buys, fees and rollback; see the [workspace guide](../architecture/workspace-guide.md#execution-and-evidence-limits) for remaining gaps |
+| [0035](0035-fixed-price-swap-fees.md) | Fee-first fixed-price buys; curve and future weighted-sale policy unchanged | Accepted internally; trader-borne fixed-price fees are an additional RFP-016 departure: To be reviewed by Logos team |
 
 IDs 0023 and 0024 are intentionally unused.
 

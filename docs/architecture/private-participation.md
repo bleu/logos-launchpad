@@ -26,14 +26,14 @@ Private and public routes use the same mechanism state, custody checks, price ru
 | --- | --- | --- | --- |
 | Curve buy | Collateral | Launch tokens | Deducted from collateral input. |
 | Curve sell | Launch tokens | Collateral | Deducted from collateral output. The output limit uses the applicable net result. |
-| Fixed-price sale buy | Collateral | Launch tokens | Creator-borne claim on collateral proceeds. Full buyer collateral enters pricing. |
+| Fixed-price sale buy | Collateral | Launch tokens | Deducted before pricing. Exact output grosses up required net collateral; the input limit caps gross payment ([ADR 0035](../adr/0035-fixed-price-swap-fees.md)). |
 | Weighted sale buy | Collateral | Launch tokens | Creator-borne claim on collateral proceeds. Full buyer collateral enters pricing. |
 
 A curve sell is available only when the sale mode permits it. Fixed-price and weighted sale selling is not added by this specification. Fixed-price and weighted sale buys retain their separate price rules. Fixed-price buys stop at the optional end or sellout; weighted sales close at their scheduled end. See [sale closing](../adr/0025-sale-closing.md), [weighted sale clock](../adr/0026-lbp-clock-and-poke.md) and [fee accounting](../adr/0015-fee-accounting.md).
 
 The SDK obtains a fresh quote from current chain state and retains explicit participant-selected bounds. Apply the [quote and slippage decision](../adr/0017-quotes-and-slippage.md) to each supported operation. This specification does not add an on-chain instruction or change exact-input and exact-output meanings.
 
-Return accounting uses the actual trade input and output, including the mechanism's fee treatment. An input cap is not the amount necessarily spent. Do not re-shield the full original cap after part of it entered the pool. Do not deduct the creator-borne fixed-price or weighted sale protocol fee again from the participant's returns. Native gas funding and actual transaction charges are separate from collateral protocol fees.
+Return accounting uses the actual trade input and output, including the mechanism's fee treatment. An input cap is not the amount necessarily spent. Do not re-shield the full original cap after part of it entered the pool. Fixed-price input spent includes the protocol fee; do not deduct it again from returns. Future weighted-sale fees remain creator-borne and must not be deducted from participant returns. Native gas funding and actual transaction charges are separate from collateral protocol fees.
 
 Public-state changes can invalidate a private proof even when the displayed price stays within the trade limit. Rebuilding requires fresh state, quote, funding checks and any required proof. Keep explicit limits unless the participant changes them. Never silently lower minimum output, raise maximum input or request an unrestricted trade. Changed transaction contents require renewed wallet approval.
 
@@ -118,7 +118,7 @@ These are required tests for later implementation. They have not been executed f
 | --- | --- |
 | Curve private buy succeeds | Pool and fee state change once. Received launch tokens, unused collateral and unused gas end in participant-controlled private accounts. |
 | Curve private sell succeeds | Permitted sale mode, correct collateral fee treatment and explicit output bound. Received collateral, unused launch input and unused gas end private. |
-| Fixed-price sale private buy succeeds | Fixed-price sale execution follows current chain state. Full buyer collateral enters pricing; creator-borne fees are not charged twice. All user returns end private. |
+| Fixed-price sale private buy succeeds | Fixed-price sale execution follows current chain state. Pricing uses collateral after fees; exact output grosses up required net collateral. Returns use actual gross input spent without charging the fee twice. All user returns end private. |
 | Weighted sale private buy succeeds | Weighted sale execution follows current chain state. Full buyer collateral enters pricing; creator-borne fees are not charged twice. All user returns end private. |
 | Sale closes, pauses or rejects selling | Current mechanism checks reject the trade. No deshield or trade application changes commit. Account for any actual transaction charge separately. |
 | Collateral funding fails | No funding, trade or return application changes commit. No purchase allowance is consumed. |

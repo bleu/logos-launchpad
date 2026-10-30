@@ -12,7 +12,7 @@ A sale closes at its optional end or sellout without a final trade or separate c
 
 ## Scope
 
-The implemented scope includes creation, funding, public buys, permissionless fee collection and creator payouts. Fixed-price sales are buy-only. End hooks, delayed settlement, cancellation and expired-recovery handlers remain future work. Weighted virtual accounting, private fixed-price or weighted sales, allowlists, and full SDK and CLI flows are also out of scope.
+The implemented scope includes creation, funding, public buys, permissionless fee collection and creator payouts. Fixed-price sales are buy-only and use fee-first pricing under [ADR 0035](../adr/0035-fixed-price-swap-fees.md). Trader-borne fixed-price fees are an additional RFP-016 departure with external status `To be reviewed by Logos team`. End hooks, delayed settlement, cancellation and expired-recovery handlers remain future work. Weighted virtual accounting, private fixed-price or weighted sales, allowlists, and full SDK and CLI flows are also out of scope.
 
 ## Future work
 
