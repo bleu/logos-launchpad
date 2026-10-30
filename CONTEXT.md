@@ -49,7 +49,7 @@ This is the shared language for the launchpad and its three sale types. The repo
 
 ## Boundaries
 
-Public sale timestamps use Unix seconds.
+Public sale timestamps use Unix seconds. Lifecycle deadlines use LEZ inclusion-block validity windows, with inclusive starts and exclusive ends. Saved clock time is not the current block timestamp. See [sale closing](docs/adr/0025-sale-closing.md).
 
 Nothing from this project is deployed to testnet or production. There are no users or important stored data to preserve. Breaking changes to code, stored state and client interfaces are allowed. No data migration or backward compatibility is required. The application is [migrated to a fixed LEZ development revision](plans/lez-v04-migration.md) and requires a later official-release compatibility check. The [actor development base](packages/lez-compat/README.md) supplies temporary token, ATA and role-authority support under [ADR 0034](docs/adr/0034-lez-v04-migration.md). Root handlers use the actor interface. Local guest checks cover curve administration, role transfer, both trade modes, freeze, fees, close, manual settlement and graduation callback rollback, plus seeded fixed-price trades. See the [workspace guide](docs/architecture/workspace-guide.md#execution-and-evidence-limits) for exact coverage and remaining gaps. Package loading remains unverified. The old platform is not a second supported lane. Private helpers return explicit unsupported errors because compatibility token holdings are public only.
 

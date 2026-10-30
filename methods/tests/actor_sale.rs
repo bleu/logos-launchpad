@@ -337,14 +337,17 @@ fn fixed_execute(
     key: &PrivateKey,
     instruction: lbp_core::Message,
 ) -> Result<(), lee::error::LeeError> {
+    fixed_execute_at(state, pool, key, instruction, 100_000)
+}
+
+fn fixed_execute_at(
+    state: &mut V03State,
+    pool: AccountId,
+    key: &PrivateKey,
+    instruction: lbp_core::Message,
+    timestamp: u64,
+) -> Result<(), lee::error::LeeError> {
     let transaction = fixed_transaction(state, pool, key, instruction);
-    let timestamp = clock_core::ClockAccountData::from_bytes(
-        state
-            .get_account_by_id(clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID)
-            .data
-            .actor_state(clock_core::clock_account_id()),
-    )
-    .timestamp;
     state
         .transition_from_public_transaction(&transaction, 1, timestamp)
         .map(|_| ())
@@ -428,7 +431,7 @@ fn fixed_price_buys_use_full_input_live_fees_and_current_treasury() {
     assert_eq!(balance(&state, pool, LAUNCH), 927);
 
     state = clock_state(fixed_config(state, 1_001, NEXT_TREASURY, true), 200_001);
-    fixed_execute(&mut state, pool, &key, CollectFees).unwrap();
+    fixed_execute_at(&mut state, pool, &key, CollectFees, 200_001).unwrap();
     assert_eq!(balance(&state, TREASURY, COLLATERAL), 0);
     assert_eq!(balance(&state, NEXT_TREASURY, COLLATERAL), 7);
     assert_eq!(balance(&state, pool, COLLATERAL), 155);
@@ -440,19 +443,18 @@ fn fixed_price_buys_use_full_input_live_fees_and_current_treasury() {
     );
     assert_eq!(balance(&state, pool, LAUNCH) - sale.remaining_inventory, 7);
     let before = state.clone();
-    fixed_execute(&mut state, pool, &key, CollectFees).unwrap();
+    fixed_execute_at(&mut state, pool, &key, CollectFees, 200_001).unwrap();
     assert!(state == before, "zero-fee retry changed runtime state");
 }
 
 #[test]
-fn fixed_price_without_end_checks_start_clock_and_stops_at_sellout() {
+fn fixed_price_without_end_checks_inclusion_start_and_stops_at_sellout() {
     use lbp_core::Message::{BuyExactInput, BuyExactOutput, CollectFees};
     let key = PrivateKey::try_new([23; 32]).unwrap();
     let buyer = AccountId::from(&PublicKey::new_from_private_key(&key));
-    let (state, pool) = fixed_state(buyer, None);
-    let mut state = clock_state(state, 99_999);
-    fixed_rejected(
-        &mut state,
+    let (mut state, pool) = fixed_state(buyer, None);
+    let transaction = fixed_transaction(
+        &state,
         pool,
         &key,
         BuyExactInput {
@@ -460,9 +462,17 @@ fn fixed_price_without_end_checks_start_clock_and_stops_at_sellout() {
             min_amount_out: 2,
             now: 100,
         },
-        "Clock timestamp",
     );
-    state = clock_state(state, 100_000);
+    let before = state.clone();
+    assert!(matches!(
+        state.transition_from_public_transaction(&transaction, 1, 99_999),
+        Err(lee::error::LeeError::OutOfValidityWindow)
+    ));
+    assert!(state == before, "early buy changed runtime state");
+    assert_eq!(
+        state.get_account_by_id(buyer).nonce,
+        before.get_account_by_id(buyer).nonce
+    );
     fixed_execute(
         &mut state,
         pool,
@@ -495,7 +505,7 @@ fn fixed_price_without_end_checks_start_clock_and_stops_at_sellout() {
         },
         "Closed",
     );
-    fixed_execute(&mut state, pool, &key, CollectFees).unwrap();
+    fixed_execute_at(&mut state, pool, &key, CollectFees, 200_001).unwrap();
     assert_eq!(balance(&state, TREASURY, COLLATERAL), 50);
     assert_eq!(balance(&state, pool, COLLATERAL), 1_491);
 }
@@ -547,20 +557,26 @@ fn fixed_price_deadline_slippage_and_frozen_buys_roll_back() {
         now: 100,
     };
     let transaction = fixed_transaction(&state, pool, &key, instruction.clone());
-    let mut before_end = clock_state(state.clone(), 199_999);
-    before_end
-        .transition_from_public_transaction(&transaction, 1, 199_999)
-        .unwrap();
-    assert_eq!(balance(&before_end, buyer, LAUNCH), 2);
-    for timestamp in [200_000, 200_001] {
-        let mut late = clock_state(state.clone(), timestamp);
-        fixed_rejected(
-            &mut late,
-            pool,
-            &key,
-            instruction.clone(),
-            "Clock timestamp",
+    for timestamp in [100_000, 199_999] {
+        let mut admitted = state.clone();
+        admitted
+            .transition_from_public_transaction(&transaction, 1, timestamp)
+            .unwrap();
+        assert_eq!(balance(&admitted, buyer, LAUNCH), 2);
+    }
+    for timestamp in [99_999, 200_000, 200_001] {
+        let mut rejected = state.clone();
+        let before = rejected.clone();
+        let nonce = rejected.get_account_by_id(buyer).nonce;
+        assert!(matches!(
+            rejected.transition_from_public_transaction(&transaction, 1, timestamp),
+            Err(lee::error::LeeError::OutOfValidityWindow)
+        ));
+        assert!(
+            rejected == before,
+            "out-of-window buy changed runtime state"
         );
+        assert_eq!(rejected.get_account_by_id(buyer).nonce, nonce);
     }
 }
 
@@ -624,14 +640,20 @@ fn timed_buy_uses_native_milliseconds_and_execution_deadline() {
     assert_eq!(balance(&state, pool, COLLATERAL), 112);
 
     let transaction = buy_transaction(&state, pool, &bob_key, 200, BUILT_AT);
+    let mut before_end = state.clone();
+    before_end
+        .transition_from_public_transaction(&transaction, 1, DEADLINE * 1_000 - 1)
+        .expect("the last millisecond before expiry must remain valid");
+    assert_eq!(balance(&before_end, bob, LAUNCH), 1_000);
     for timestamp in [DEADLINE * 1_000, DEADLINE * 1_000 + 1] {
-        let mut late = clock_state(state.clone(), timestamp);
+        let mut late = state.clone();
         let before = late.clone();
         let nonce = late.get_account_by_id(bob).nonce;
         let rejected = late.transition_from_public_transaction(&transaction, 1, timestamp);
-        assert!(
-            matches!(rejected, Err(lee::error::LeeError::ProgramExecutionFailed(reason)) if reason.contains("Clock timestamp"))
-        );
+        assert!(matches!(
+            rejected,
+            Err(lee::error::LeeError::OutOfValidityWindow)
+        ));
         assert!(late == before, "late buy changed runtime state");
         assert_eq!(late.get_account_by_id(bob).nonce, nonce);
     }

@@ -39,9 +39,9 @@ pub(crate) fn finish(mut pending: Pending, receiver: Actor) -> Result<Response, 
             .pool
             .close_pool(now)
             .map_err(|_| Error::Closed)?;
-        return crate::pool_create::assert_clock(
+        return crate::with_time_bounds(
             Response::set_state(borsh::to_vec(&pending.state).unwrap()),
-            now,
+            None,
             pending.state.pool.close_timestamp,
         );
     }
@@ -58,11 +58,12 @@ pub(crate) fn finish(mut pending: Pending, receiver: Actor) -> Result<Response, 
     }
     if let Message::WithdrawReserves { now } = pending.message {
         crate::pool_swap::backed(&pending)?;
-        let now = if pending.state.pool.lifecycle == pool::PoolLifecycle::Open {
-            now.max(pending.state.pool.close_timestamp.ok_or(Error::Closed)?)
+        let expiry = if pending.state.pool.lifecycle == pool::PoolLifecycle::Open {
+            Some(pending.state.pool.close_timestamp.ok_or(Error::Closed)?)
         } else {
-            now
+            None
         };
+        let now = expiry.map_or(now, |end| now.max(end));
         let (reserve0, reserve1) = pending
             .state
             .pool
@@ -73,9 +74,9 @@ pub(crate) fn finish(mut pending: Pending, receiver: Actor) -> Result<Response, 
             .pool
             .collect_fees()
             .map_err(|_| Error::Arithmetic)?;
-        let response = crate::pool_create::assert_clock(
+        let response = crate::with_time_bounds(
             Response::set_state(borsh::to_vec(&pending.state).unwrap()),
-            now,
+            expiry,
             None,
         )?;
         let response = payout(

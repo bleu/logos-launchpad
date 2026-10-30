@@ -1,39 +1,6 @@
 //! Public actor-message tests replace the old whole-account adapter tests.
 
 #[test]
-fn native_clock_conversion_checks_overflow_and_keeps_only_unbounded_upper_max() {
-    let largest = u64::MAX / 1000;
-    assert_eq!(crate::timestamp_millis(largest), Ok(largest * 1000));
-    assert_eq!(
-        crate::timestamp_millis(largest + 1),
-        Err(crate::Error::Arithmetic)
-    );
-    assert_eq!(
-        crate::clock_assertion(0, None),
-        Ok(clock_core::Message::AssertTimestamp {
-            at_least: 0,
-            at_most: u64::MAX
-        })
-    );
-    assert_eq!(
-        crate::clock_assertion(u64::MAX, None),
-        Err(crate::Error::Arithmetic)
-    );
-    assert_eq!(
-        crate::clock_assertion(0, Some(u64::MAX)),
-        Err(crate::Error::Arithmetic)
-    );
-    assert_eq!(
-        crate::clock_assertion(0, Some(0)),
-        Err(crate::Error::Arithmetic)
-    );
-    assert_eq!(
-        crate::clock_assertion(42, Some(42)),
-        Err(crate::Error::Closed)
-    );
-}
-
-#[test]
 fn closed_pool_withdrawal_does_not_wait_for_its_future_deadline() {
     let mut state = pool_state();
     state.pool.lifecycle = pool::PoolLifecycle::Closed;
@@ -46,13 +13,8 @@ fn closed_pool_withdrawal_does_not_wait_for_its_future_deadline() {
             [800, 100],
         )
         .unwrap();
-        assert_eq!(
-            borsh::from_slice::<clock_core::Message>(&response.sync_messages[0].message).unwrap(),
-            clock_core::Message::AssertTimestamp {
-                at_least: 1000,
-                at_most: u64::MAX
-            }
-        );
+        assert_eq!(response.validity.timestamps.start(), None);
+        assert_eq!(response.validity.timestamps.end(), None);
         assert_eq!(
             PoolAccount::decode(&response.post_state.unwrap())
                 .unwrap()
@@ -105,13 +67,9 @@ fn pools_without_expiry_keep_time_independent_trading_and_cannot_withdraw_while_
         [800, 100],
     )
     .unwrap();
-    assert_eq!(
-        borsh::from_slice::<clock_core::Message>(&closed.sync_messages[0].message).unwrap(),
-        clock_core::Message::AssertTimestamp {
-            at_least: 1000,
-            at_most: u64::MAX
-        }
-    );
+    assert_eq!(closed.validity.timestamps.start(), None);
+    assert_eq!(closed.validity.timestamps.end(), None);
+    assert!(closed.sync_messages.is_empty());
 }
 use crate::{
     Config, Message, PoolAccount, TOKEN_PROGRAM_ACCOUNT_ID, compute_config_pda, compute_pool_pda,
@@ -1059,7 +1017,7 @@ fn prepared_pool_cannot_trade_or_settle_until_funding_and_activates_only_once() 
     let response = answer_reads(created, &pool_state(), namespace(), [0, 0]).unwrap();
     let state = PoolAccount::decode(&response.post_state.unwrap()).unwrap();
     assert!(!state.funded);
-    assert_eq!(response.sync_messages.len(), 4);
+    assert_eq!(response.sync_messages.len(), 3);
     for message in [
         Message::ClosePool { now: 1 },
         Message::WithdrawReserves { now: 42 },
@@ -1199,7 +1157,8 @@ fn factory_pool_close_requires_the_exact_derived_owner_actor() {
             .lifecycle,
         pool::PoolLifecycle::Closed
     );
-    assert_eq!(response.sync_messages.len(), 1);
+    assert!(response.sync_messages.is_empty());
+    assert_eq!(response.validity.timestamps.end(), Some(42_000));
     for sender in [
         Actor::new(owner, PROGRAM),
         Actor::new(HOLDER, owner_program),
@@ -1269,7 +1228,7 @@ fn signed_pool_entry_cannot_be_used_without_authorization_or_for_namespace_contr
 }
 
 #[test]
-fn swaps_allow_submission_delay_but_require_native_time_before_expiry() {
+fn swaps_require_inclusion_before_expiry_without_client_time_freshness() {
     let mut state = pool_state();
     state.pool.close_timestamp = Some(1_700_000_042);
     for message in [
@@ -1293,13 +1252,8 @@ fn swaps_allow_submission_delay_but_require_native_time_before_expiry() {
             [800, 100],
         )
         .unwrap();
-        assert_eq!(
-            borsh::from_slice::<clock_core::Message>(&response.sync_messages[0].message).unwrap(),
-            clock_core::Message::AssertTimestamp {
-                at_least: 1_700_000_001_000,
-                at_most: 1_700_000_041_999
-            }
-        );
+        assert_eq!(response.validity.timestamps.start(), None);
+        assert_eq!(response.validity.timestamps.end(), Some(1_700_000_042_000));
         assert_eq!(
             PoolAccount::decode(&response.post_state.unwrap())
                 .unwrap()
@@ -1311,7 +1265,7 @@ fn swaps_allow_submission_delay_but_require_native_time_before_expiry() {
 }
 
 #[test]
-fn withdrawal_uses_expiry_as_native_lower_bound_without_client_freshness() {
+fn withdrawal_requires_inclusion_at_expiry_not_a_client_time() {
     let state = pool_state();
     for now in [0, 42, 43] {
         let response = answer_reads(
@@ -1321,13 +1275,8 @@ fn withdrawal_uses_expiry_as_native_lower_bound_without_client_freshness() {
             [800, 100],
         )
         .unwrap();
-        assert_eq!(
-            borsh::from_slice::<clock_core::Message>(&response.sync_messages[0].message).unwrap(),
-            clock_core::Message::AssertTimestamp {
-                at_least: now.max(42) * 1000,
-                at_most: u64::MAX
-            }
-        );
+        assert_eq!(response.validity.timestamps.start(), Some(42_000));
+        assert_eq!(response.validity.timestamps.end(), None);
         assert_eq!(
             PoolAccount::decode(&response.post_state.unwrap())
                 .unwrap()
@@ -1339,12 +1288,12 @@ fn withdrawal_uses_expiry_as_native_lower_bound_without_client_freshness() {
 }
 
 #[test]
-fn pool_creation_treats_setup_time_as_a_lower_bound_and_checks_live_expiry() {
-    for (deferred, now, at_most) in [
-        (false, 0, 41_999),
-        (false, 1, 41_999),
-        (true, 0, u64::MAX),
-        (true, 42, u64::MAX),
+fn pool_creation_limits_inclusion_before_expiry_only_when_funded() {
+    for (deferred, now, before) in [
+        (false, 0, Some(42_000)),
+        (false, 1, Some(42_000)),
+        (true, 0, None),
+        (true, 42, None),
     ] {
         let mut message = create_message(deferred);
         if let Message::CreatePool { now: supplied, .. } = &mut message {
@@ -1358,26 +1307,13 @@ fn pool_creation_treats_setup_time_as_a_lower_bound_and_checks_live_expiry() {
         ))
         .unwrap();
         let response = answer_reads(pending, &pool_state(), namespace(), [0, 0]).unwrap();
-        let assertion = &response.sync_messages[0];
-        assert_eq!(
-            assertion.to,
-            Actor::new(
-                clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID,
-                clock_core::clock_account_id()
-            )
-        );
-        assert_eq!(
-            borsh::from_slice::<clock_core::Message>(&assertion.message).unwrap(),
-            clock_core::Message::AssertTimestamp {
-                at_least: now * 1000,
-                at_most
-            }
-        );
+        assert_eq!(response.validity.timestamps.start(), None);
+        assert_eq!(response.validity.timestamps.end(), before);
     }
 }
 
 #[test]
-fn activation_preserves_zero_lower_bound_without_moving_the_expiry_deadline() {
+fn activation_binds_open_and_expired_branches_to_inclusion_time() {
     let mut state = pool_state();
     state.funded = false;
     for now in [0, 42] {
@@ -1388,14 +1324,16 @@ fn activation_preserves_zero_lower_bound_without_moving_the_expiry_deadline() {
             [0, 0],
         )
         .unwrap();
-        let assertion = &response.sync_messages[0];
-        assert_eq!(
-            borsh::from_slice::<clock_core::Message>(&assertion.message).unwrap(),
-            clock_core::Message::AssertTimestamp {
-                at_least: now * 1000,
-                at_most: u64::MAX
-            }
-        );
+        let window = response.validity.timestamps;
+        if now < 42 {
+            assert_eq!((window.start(), window.end()), (None, Some(42_000)));
+            assert!(window.is_valid_for(41_999));
+            assert!(!window.is_valid_for(42_000));
+        } else {
+            assert_eq!((window.start(), window.end()), (Some(42_000), None));
+            assert!(!window.is_valid_for(41_999));
+            assert!(window.is_valid_for(42_000));
+        }
         let funded = PoolAccount::decode(&response.post_state.unwrap()).unwrap();
         assert_eq!(funded.pool.close_timestamp, Some(42));
         assert_eq!(
@@ -1437,13 +1375,8 @@ fn activation_preserves_zero_lower_bound_without_moving_the_expiry_deadline() {
                 [800, 100],
             )
             .unwrap();
-            assert_eq!(
-                borsh::from_slice::<clock_core::Message>(&swap.sync_messages[0].message).unwrap(),
-                clock_core::Message::AssertTimestamp {
-                    at_least: 1000,
-                    at_most: 41_999
-                }
-            );
+            assert_eq!(swap.validity.timestamps.start(), None);
+            assert_eq!(swap.validity.timestamps.end(), Some(42_000));
         }
         let withdrawn = answer_reads(
             start(&funded, Message::WithdrawReserves { now: 42 }).unwrap(),
@@ -1649,15 +1582,8 @@ fn exact_input_sell_uses_live_collateral_fee_and_synchronous_token_transfers() {
             .pda_seeds
             .contains(&crate::compute_pool_pda_seed(NS, TOKEN0, TOKEN1, OWNER))
     );
-    let clock = &response.sync_messages[0];
-    assert_eq!(clock.to.account_id, clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID);
-    assert_eq!(
-        borsh::from_slice::<clock_core::Message>(&clock.message).unwrap(),
-        clock_core::Message::AssertTimestamp {
-            at_least: 1000,
-            at_most: 41_999
-        }
-    );
+    assert_eq!(response.validity.timestamps.start(), None);
+    assert_eq!(response.validity.timestamps.end(), Some(42_000));
 }
 
 #[test]
@@ -1836,16 +1762,7 @@ fn pool_close_rights_follow_the_current_role_holder() {
     let closed = PoolAccount::decode(&response.post_state.unwrap()).unwrap();
     assert_eq!(closed.pool.lifecycle, pool::PoolLifecycle::Closed);
     assert_eq!(closed.owner, OWNER);
-    assert_eq!(
-        borsh::from_slice::<clock_core::Message>(&response.sync_messages[0].message).unwrap(),
-        clock_core::Message::AssertTimestamp {
-            at_least: 1000,
-            at_most: 41_999
-        }
-    );
-    assert_eq!(response.sync_messages.len(), 1);
-    assert_eq!(
-        response.sync_messages[0].to.account_id,
-        clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID
-    );
+    assert_eq!(response.validity.timestamps.start(), None);
+    assert_eq!(response.validity.timestamps.end(), Some(42_000));
+    assert!(response.sync_messages.is_empty());
 }

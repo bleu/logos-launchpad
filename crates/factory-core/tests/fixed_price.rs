@@ -187,7 +187,7 @@ fn holding(owner: AccountId, definition: AccountId, balance: u128) -> Vec<u8> {
 }
 
 #[test]
-fn scheduled_creation_uses_an_inclusive_upper_clock_bound() {
+fn scheduled_creation_allows_inclusion_at_the_saved_start_millisecond() {
     let mut input = creation();
     let mut value = inputs();
     value.start = SaleStart::At { timestamp: 150 };
@@ -197,18 +197,80 @@ fn scheduled_creation_uses_an_inclusive_upper_clock_bound() {
         input = reply(&input, &response, bytes);
         response = handle(&input).unwrap()
     }
-    let clock = response
-        .sync_messages
-        .iter()
-        .find(|m| m.to.account_id == clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID)
-        .unwrap();
-    assert_eq!(
-        borsh::from_slice::<clock_core::Message>(&clock.message).unwrap(),
-        clock_core::Message::AssertTimestamp {
-            at_least: 0,
-            at_most: 150_000
+    assert_eq!(response.validity.timestamps.start(), None);
+    assert_eq!(response.validity.timestamps.end(), Some(150_001));
+    assert!(response.validity.timestamps.is_valid_for(150_000));
+    assert!(!response.validity.timestamps.is_valid_for(150_001));
+}
+
+#[test]
+fn creation_intersects_saved_start_with_optional_setup_end() {
+    for (start, end_timestamp, lower, upper) in [
+        (
+            SaleStart::Now { timestamp: 0 },
+            Some(200),
+            Some(0),
+            Some(200_000),
+        ),
+        (
+            SaleStart::Now { timestamp: 150 },
+            Some(200),
+            Some(150_000),
+            Some(200_000),
+        ),
+        (SaleStart::Now { timestamp: 150 }, None, Some(150_000), None),
+        (SaleStart::At { timestamp: 0 }, Some(200), None, Some(1)),
+        (
+            SaleStart::At { timestamp: 150 },
+            Some(151),
+            None,
+            Some(150_001),
+        ),
+        (SaleStart::At { timestamp: 150 }, None, None, Some(150_001)),
+    ] {
+        let mut input = creation();
+        let mut terms = inputs();
+        terms.start = start;
+        terms.end_timestamp = end_timestamp;
+        input.message = borsh::to_vec(&Message::CreateFixedPriceLbp { inputs: terms }).unwrap();
+        let mut response = handle(&input).unwrap();
+        for bytes in [namespace_state(), collateral()] {
+            input = reply(&input, &response, bytes);
+            response = handle(&input).unwrap();
         }
-    );
+        assert_eq!(response.validity.timestamps.start(), lower);
+        assert_eq!(response.validity.timestamps.end(), upper);
+    }
+}
+
+#[test]
+fn creation_rejects_timestamp_conversion_overflow_before_minting() {
+    for (start, end_timestamp) in [
+        (
+            SaleStart::Now {
+                timestamp: u64::MAX,
+            },
+            None,
+        ),
+        (
+            SaleStart::At {
+                timestamp: u64::MAX,
+            },
+            None,
+        ),
+        (SaleStart::Now { timestamp: 0 }, Some(u64::MAX)),
+    ] {
+        let mut input = creation();
+        let mut terms = inputs();
+        terms.start = start;
+        terms.end_timestamp = end_timestamp;
+        input.message = borsh::to_vec(&Message::CreateFixedPriceLbp { inputs: terms }).unwrap();
+        let response = handle(&input).unwrap();
+        input = reply(&input, &response, namespace_state());
+        let response = handle(&input).unwrap();
+        input = reply(&input, &response, collateral());
+        assert_eq!(handle(&input).err(), Some(Error::InvalidTerms));
+    }
 }
 
 fn continue_sale(
@@ -309,18 +371,8 @@ fn pool_preparation_uses_saved_terms_and_separate_setup_stage() {
     assert_eq!(inputs.start_timestamp, 0);
     assert_eq!(inputs.end_timestamp, Some(200));
     assert_eq!(inputs.factory_program_id, input.receiver.program_account_id);
-    let clock = response
-        .sync_messages
-        .iter()
-        .find(|m| m.to.account_id == clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID)
-        .unwrap();
-    assert_eq!(
-        borsh::from_slice::<clock_core::Message>(&clock.message).unwrap(),
-        clock_core::Message::AssertTimestamp {
-            at_least: 0,
-            at_most: 199_999
-        }
-    );
+    assert_eq!(response.validity.timestamps.start(), None);
+    assert_eq!(response.validity.timestamps.end(), Some(200_000));
 }
 
 fn prepared_pool(state: &factory_core::FixedPriceLaunchState, factory: Actor) -> Vec<u8> {
@@ -580,31 +632,15 @@ fn setup_checks_optional_expiry_at_every_stage_and_callback() {
                     .unwrap();
             assert_eq!(state.end_timestamp, end_timestamp);
             assert!(!state.creator_allocation_released);
-            let clocks: Vec<clock_core::Message> = response
-                .sync_messages
-                .iter()
-                .filter(|m| {
-                    m.to == Actor::new(
-                        clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID,
-                        clock_core::clock_account_id(),
-                    )
-                })
-                .map(|m| borsh::from_slice(&m.message).unwrap())
-                .collect();
-            let mut expected = vec![];
-            if stage == 0 {
-                expected.push(clock_core::Message::AssertTimestamp {
-                    at_least: 0,
-                    at_most: u64::MAX,
-                });
-            }
-            if let Some(end) = end_timestamp {
-                expected.push(clock_core::Message::AssertTimestamp {
-                    at_least: 0,
-                    at_most: end * 1000 - 1,
-                });
-            }
-            assert_eq!(clocks, expected, "stage {stage}, end {end_timestamp:?}");
+            assert_eq!(
+                response.validity.timestamps.start(),
+                if stage == 0 { Some(0) } else { None }
+            );
+            assert_eq!(
+                response.validity.timestamps.end(),
+                end_timestamp.map(|_| 200_000),
+                "stage {stage}"
+            );
         }
     }
 }
@@ -900,19 +936,14 @@ fn active_pool(
 fn after_end_allocation_claim_at_expiry_does_not_settle_proceeds() {
     let (input, state) = completed();
     let pool = active_pool(&state, input.receiver);
-    let response = claim_allocation(&input, &state, &pool, 200, 217).unwrap();
+    let response = claim_allocation(&input, &state, &pool, 999, 217).unwrap();
     let claimed =
         factory_core::FixedPriceLaunchState::decode(response.post_state.as_ref().unwrap()).unwrap();
     assert!(claimed.creator_allocation_released);
-    assert_eq!(response.sync_messages.len(), 2);
-    assert_eq!(
-        borsh::from_slice::<clock_core::Message>(&response.sync_messages[0].message).unwrap(),
-        clock_core::Message::AssertTimestamp {
-            at_least: 200_000,
-            at_most: u64::MAX
-        }
-    );
-    let payout = &response.sync_messages[1];
+    assert_eq!(response.sync_messages.len(), 1);
+    assert_eq!(response.validity.timestamps.start(), Some(200_000));
+    assert_eq!(response.validity.timestamps.end(), None);
+    let payout = &response.sync_messages[0];
     assert_eq!(
         payout.to,
         Actor::new(
@@ -940,7 +971,7 @@ fn after_end_allocation_claim_at_expiry_does_not_settle_proceeds() {
 }
 
 #[test]
-fn released_allocation_retry_requires_authority_but_no_clock_or_escrow_transfer() {
+fn released_allocation_retry_requires_authority_but_no_time_bound_or_escrow_transfer() {
     let (input, state) = completed();
     let pool = active_pool(&state, input.receiver);
     let response = claim_allocation(&input, &state, &pool, 200, 200).unwrap();
@@ -948,6 +979,8 @@ fn released_allocation_retry_requires_authority_but_no_clock_or_escrow_transfer(
         factory_core::FixedPriceLaunchState::decode(response.post_state.as_ref().unwrap()).unwrap();
     let repeated = claim_allocation(&input, &claimed, &pool, 0, 0).unwrap();
     assert!(repeated.sync_messages.is_empty());
+    assert_eq!(repeated.validity.timestamps.start(), None);
+    assert_eq!(repeated.validity.timestamps.end(), None);
     assert_eq!(
         factory_core::FixedPriceLaunchState::decode(repeated.post_state.as_ref().unwrap()).unwrap(),
         claimed
@@ -1004,6 +1037,8 @@ fn sellout_releases_after_end_allocation_before_or_after_proceeds_settlement() {
             pool.proceeds_settled = settled;
             let response = claim_allocation(&input, &state, &pool, 100, 217).unwrap();
             assert_eq!(response.sync_messages.len(), 1);
+            assert_eq!(response.validity.timestamps.start(), None);
+            assert_eq!(response.validity.timestamps.end(), None);
             assert_eq!(
                 borsh::from_slice::<lez_compat_core::token::Message>(
                     &response.sync_messages[0].message
@@ -1023,10 +1058,9 @@ fn sellout_releases_after_end_allocation_before_or_after_proceeds_settlement() {
 fn allocation_stays_locked_before_close_and_requires_escrow_coverage() {
     let (input, mut state) = completed();
     let pool = active_pool(&state, input.receiver);
-    assert_eq!(
-        claim_allocation(&input, &state, &pool, 199, 200).err(),
-        Some(Error::NotClosed)
-    );
+    let before_end = claim_allocation(&input, &state, &pool, 199, 200).unwrap();
+    assert!(!before_end.validity.timestamps.is_valid_for(199_999));
+    assert!(before_end.validity.timestamps.is_valid_for(200_000));
     assert_eq!(
         claim_allocation(&input, &state, &pool, 200, 199).err(),
         Some(Error::InvalidCustody)
@@ -1047,25 +1081,19 @@ fn allocation_stays_locked_before_close_and_requires_escrow_coverage() {
 }
 
 #[test]
-fn expiry_burn_does_not_replace_the_allocation_clock_check_with_sellout() {
+fn expiry_burn_keeps_the_allocation_inclusion_bound_until_expiry() {
     let (input, state) = completed();
     let mut pool = active_pool(&state, input.receiver);
     pool.proceeds_settled = true;
     pool.recorded_collateral = 0;
     pool.accrued_fees = 0;
-    assert_eq!(
-        claim_allocation(&input, &state, &pool, 199, 200).err(),
-        Some(Error::NotClosed)
-    );
+    let before_end = claim_allocation(&input, &state, &pool, 199, 200).unwrap();
+    assert!(!before_end.validity.timestamps.is_valid_for(199_999));
+    assert!(before_end.validity.timestamps.is_valid_for(200_000));
     let response = claim_allocation(&input, &state, &pool, 200, 200).unwrap();
-    assert_eq!(response.sync_messages.len(), 2);
-    assert_eq!(
-        borsh::from_slice::<clock_core::Message>(&response.sync_messages[0].message).unwrap(),
-        clock_core::Message::AssertTimestamp {
-            at_least: 200_000,
-            at_most: u64::MAX,
-        }
-    );
+    assert_eq!(response.sync_messages.len(), 1);
+    assert_eq!(response.validity.timestamps.start(), Some(200_000));
+    assert_eq!(response.validity.timestamps.end(), None);
 }
 
 #[test]
@@ -1079,11 +1107,9 @@ fn zero_and_after_setup_allocations_never_emit_a_second_token_payout() {
             .unwrap()
             .creator_allocation_released
     );
-    assert_eq!(response.sync_messages.len(), 1);
-    assert_eq!(
-        response.sync_messages[0].to.account_id,
-        clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID
-    );
+    assert!(response.sync_messages.is_empty());
+    assert_eq!(response.validity.timestamps.start(), Some(200_000));
+    assert_eq!(response.validity.timestamps.end(), None);
     state.creator_allocation = 200;
     state.allocation_release = CreatorAllocationRelease::AfterSetup;
     state.creator_allocation_released = true;
@@ -1278,16 +1304,6 @@ fn creation_mints_exact_supply_with_metadata_and_a_separate_creator_role() {
         borsh::from_slice::<lez_compat_core::authority::Message>(&role.message).unwrap(),
         lez_compat_core::authority::Message::Bootstrap { authority: id(42) }
     );
-    let clock = response
-        .sync_messages
-        .iter()
-        .find(|m| m.to.account_id == clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID)
-        .unwrap();
-    assert_eq!(
-        borsh::from_slice::<clock_core::Message>(&clock.message).unwrap(),
-        clock_core::Message::AssertTimestamp {
-            at_least: 0,
-            at_most: u64::MAX
-        }
-    );
+    assert_eq!(response.validity.timestamps.start(), Some(0));
+    assert_eq!(response.validity.timestamps.end(), Some(200_000));
 }
