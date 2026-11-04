@@ -684,13 +684,13 @@ fn factory_resume_keeps_creator_stage_and_clock_lower_bound_on_wire() {
         variant("factory", "Message", "ContinueFixedPriceCreation"),
         json!({
             "tag":6,"name":"ContinueFixedPriceCreation","fields":[
-                {"name":"expected_stage","type":"FixedPriceCreationStage"},
+                {"name":"expected_stage","type":"LbpCreationStage"},
                 {"name":"creator","type":"AccountId"},{"name":"now","type":"u64"}
             ]
         })
     );
     assert_eq!(
-        variant("fixed_price", "FixedPriceCreationStage", "PoolPrepared")["tag"],
+        variant("lbp_setup", "LbpCreationStage", "PoolPrepared")["tag"],
         2
     );
 }
@@ -712,10 +712,10 @@ fn start_now_preserves_zero_and_scheduled_start_has_a_separate_tag() {
         scheduled
     );
     assert_eq!(
-        variant("fixed_price", "SaleStart", "Now"),
+        variant("lbp_setup", "SaleStart", "Now"),
         json!({"tag":0,"name":"Now","fields":[{"name":"timestamp","type":"u64"}]})
     );
-    assert_eq!(variant("fixed_price", "SaleStart", "At")["tag"], 1);
+    assert_eq!(variant("lbp_setup", "SaleStart", "At")["tag"], 1);
 }
 
 #[test]
@@ -895,8 +895,8 @@ fn fixed_price_forwarding_keeps_pool_and_purchase_on_wire() {
 #[test]
 fn fixed_price_optional_end_is_part_of_factory_and_pool_schemas() {
     for (module, name) in [
-        ("fixed_price", "FixedPriceInputs"),
-        ("fixed_price", "FixedPriceLaunchState"),
+        ("lbp_setup", "FixedPriceInputs"),
+        ("lbp_setup", "LbpLaunchState"),
         ("lbp", "FixedPricePoolInputs"),
         ("lbp", "PoolAccount"),
     ] {
@@ -914,6 +914,75 @@ fn fixed_price_optional_end_is_part_of_factory_and_pool_schemas() {
         borsh::to_vec(&Some(9u64)).unwrap(),
         [1, 9, 0, 0, 0, 0, 0, 0, 0]
     );
+}
+
+#[test]
+fn weighted_buys_keep_amount_limits_and_validity_windows_on_wire() {
+    let exact_in = lbp_core::Message::BuyWeightedExactInput {
+        amount_in: 25,
+        min_amount_out: 100,
+        valid_from: 9,
+        valid_until: 69,
+    };
+    let exact_out = lbp_core::Message::BuyWeightedExactOutput {
+        amount_out: 25,
+        max_amount_in: 100,
+        valid_from: 9,
+        valid_until: 69,
+    };
+    for (message, name, tag, amount, limit) in [
+        (
+            exact_in,
+            "BuyWeightedExactInput",
+            "0a",
+            "amount_in",
+            "min_amount_out",
+        ),
+        (
+            exact_out,
+            "BuyWeightedExactOutput",
+            "0b",
+            "amount_out",
+            "max_amount_in",
+        ),
+    ] {
+        let mut expected = hex::decode(tag).unwrap();
+        expected.extend(
+            hex::decode(concat!(
+                "19000000000000000000000000000000",
+                "64000000000000000000000000000000",
+                "0900000000000000",
+                "4500000000000000"
+            ))
+            .unwrap(),
+        );
+        assert_eq!(borsh::to_vec(&message).unwrap(), expected);
+        assert_eq!(
+            borsh::from_slice::<lbp_core::Message>(&expected).unwrap(),
+            message
+        );
+        assert_eq!(
+            variant("lbp", "Message", name),
+            json!({
+                "tag":expected[0], "name":name, "fields":[
+                    {"name":amount,"type":"u128"}, {"name":limit,"type":"u128"},
+                    {"name":"valid_from","type":"u64"}, {"name":"valid_until","type":"u64"}
+                ]
+            })
+        );
+        let envelope = lbp_core::Message::Execute {
+            pool: AccountId::new([3; 32]),
+            instruction: Box::new(message),
+        };
+        let mut expected_envelope = vec![6];
+        expected_envelope.extend([3; 32]);
+        expected_envelope.extend(expected);
+        assert_eq!(borsh::to_vec(&envelope).unwrap(), expected_envelope);
+        assert_eq!(
+            borsh::from_slice::<lbp_core::Message>(&expected_envelope).unwrap(),
+            envelope
+        );
+    }
 }
 
 #[test]
@@ -947,5 +1016,72 @@ fn namespace_initialization_has_independent_borsh_bytes_and_schema() {
                 {"name": "treasury", "type": "AccountId"}
             ]
         })
+    );
+}
+
+#[test]
+fn weighted_factory_messages_keep_distinct_tags_and_normalized_weights() {
+    let creator = AccountId::new([5; 32]);
+    let message = factory_core::Message::ContinueWeightedCreation {
+        expected_stage: factory_core::LbpCreationStage::PoolPrepared,
+        creator,
+    };
+    let mut expected = vec![9, 2];
+    expected.extend_from_slice(&[5; 32]);
+    assert_eq!(borsh::to_vec(&message).unwrap(), expected);
+    assert_eq!(
+        borsh::from_slice::<factory_core::Message>(&expected).unwrap(),
+        message
+    );
+    assert_eq!(variant("factory", "Message", "ReadState")["tag"], 7);
+    assert_eq!(variant("factory", "Message", "CreateWeightedLbp")["tag"], 8);
+    assert_eq!(
+        variant("factory", "Message", "ContinueWeightedCreation")["tag"],
+        9
+    );
+    let inputs = factory_core::WeightedInputs {
+        namespace: creator,
+        launch_salt: [6; 32],
+        name: "W".into(),
+        uri: "u".into(),
+        sale_inventory: 800,
+        creator_allocation: 200,
+        collateral_seed: 100,
+        token_weight_start: lbp_core::WEIGHT_TOTAL / 2 + 1,
+        token_weight_end: lbp_core::WEIGHT_TOTAL / 2 - 1,
+        start_timestamp: 150,
+        end_timestamp: 300,
+        allocation_release: factory_core::CreatorAllocationRelease::AfterEnd,
+        namespace_program_id: creator,
+        lbp_program_id: creator,
+        collateral_definition_id: creator,
+        creator,
+    };
+    let message = factory_core::Message::CreateWeightedLbp {
+        inputs: inputs.clone(),
+    };
+    let mut expected = vec![8];
+    expected.extend_from_slice(creator.value());
+    expected.extend_from_slice(&[6; 32]);
+    expected.extend_from_slice(&[1, 0, 0, 0, b'W', 1, 0, 0, 0, b'u']);
+    for value in [
+        800u128,
+        200,
+        100,
+        inputs.token_weight_start,
+        inputs.token_weight_end,
+    ] {
+        expected.extend_from_slice(&value.to_le_bytes());
+    }
+    expected.extend_from_slice(&150u64.to_le_bytes());
+    expected.extend_from_slice(&300u64.to_le_bytes());
+    expected.push(1); // AfterEnd
+    for _ in 0..4 {
+        expected.extend_from_slice(creator.value());
+    }
+    assert_eq!(borsh::to_vec(&message).unwrap(), expected);
+    assert_eq!(
+        borsh::from_slice::<factory_core::Message>(&expected).unwrap(),
+        message
     );
 }

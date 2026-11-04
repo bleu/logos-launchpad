@@ -1,10 +1,10 @@
 {
   "encoding": "borsh",
   "imports": {
-    "fixed_price": [
+    "hook": [
       "factory"
     ],
-    "hook": [
+    "lbp_setup": [
       "factory"
     ]
   },
@@ -669,7 +669,7 @@
             "fields": [
               {
                 "name": "expected_stage",
-                "type": "FixedPriceCreationStage"
+                "type": "LbpCreationStage"
               },
               {
                 "name": "creator",
@@ -687,6 +687,30 @@
             "fields": [],
             "name": "ReadState",
             "tag": 7
+          },
+          {
+            "fields": [
+              {
+                "name": "inputs",
+                "type": "WeightedInputs"
+              }
+            ],
+            "name": "CreateWeightedLbp",
+            "tag": 8
+          },
+          {
+            "fields": [
+              {
+                "name": "expected_stage",
+                "type": "LbpCreationStage"
+              },
+              {
+                "name": "creator",
+                "type": "AccountId"
+              }
+            ],
+            "name": "ContinueWeightedCreation",
+            "tag": 9
           }
         ]
       },
@@ -805,220 +829,6 @@
           {
             "fields": [],
             "name": "BuyAndSell",
-            "tag": 1
-          }
-        ]
-      }
-    },
-    "fixed_price": {
-      "FixedPriceCreationStage": {
-        "variants": [
-          {
-            "fields": [],
-            "name": "Minted",
-            "tag": 0
-          },
-          {
-            "fields": [],
-            "name": "Allocated",
-            "tag": 1
-          },
-          {
-            "fields": [],
-            "name": "PoolPrepared",
-            "tag": 2
-          },
-          {
-            "fields": [],
-            "name": "Complete",
-            "tag": 3
-          }
-        ]
-      },
-      "FixedPriceInputs": {
-        "fields": [
-          {
-            "name": "namespace",
-            "type": "AccountId"
-          },
-          {
-            "name": "launch_salt",
-            "type": "[u8;32]"
-          },
-          {
-            "name": "name",
-            "type": "String"
-          },
-          {
-            "name": "uri",
-            "type": "String"
-          },
-          {
-            "name": "sale_inventory",
-            "type": "u128"
-          },
-          {
-            "name": "creator_allocation",
-            "type": "u128"
-          },
-          {
-            "name": "price",
-            "type": "FixedPrice"
-          },
-          {
-            "name": "start",
-            "type": "SaleStart"
-          },
-          {
-            "name": "end_timestamp",
-            "type": "Option<u64>"
-          },
-          {
-            "name": "allocation_release",
-            "type": "CreatorAllocationRelease"
-          },
-          {
-            "name": "namespace_program_id",
-            "type": "AccountId"
-          },
-          {
-            "name": "lbp_program_id",
-            "type": "AccountId"
-          },
-          {
-            "name": "collateral_definition_id",
-            "type": "AccountId"
-          },
-          {
-            "name": "creator",
-            "type": "AccountId"
-          },
-          {
-            "name": "now",
-            "type": "u64"
-          }
-        ]
-      },
-      "FixedPriceLaunchState": {
-        "fields": [
-          {
-            "name": "format",
-            "type": "[u8;8]"
-          },
-          {
-            "name": "version",
-            "type": "u16"
-          },
-          {
-            "name": "creator_role_id",
-            "type": "AccountId"
-          },
-          {
-            "name": "mode",
-            "type": "lbp_core::PoolMode"
-          },
-          {
-            "name": "creation_stage",
-            "type": "FixedPriceCreationStage"
-          },
-          {
-            "name": "namespace",
-            "type": "AccountId"
-          },
-          {
-            "name": "launch_salt",
-            "type": "[u8;32]"
-          },
-          {
-            "name": "token_definition_id",
-            "type": "AccountId"
-          },
-          {
-            "name": "collateral_definition_id",
-            "type": "AccountId"
-          },
-          {
-            "name": "creator_escrow_id",
-            "type": "AccountId"
-          },
-          {
-            "name": "pool_id",
-            "type": "AccountId"
-          },
-          {
-            "name": "namespace_program_id",
-            "type": "AccountId"
-          },
-          {
-            "name": "lbp_program_id",
-            "type": "AccountId"
-          },
-          {
-            "name": "sale_inventory",
-            "type": "u128"
-          },
-          {
-            "name": "creator_allocation",
-            "type": "u128"
-          },
-          {
-            "name": "total_supply",
-            "type": "u128"
-          },
-          {
-            "name": "price",
-            "type": "FixedPrice"
-          },
-          {
-            "name": "start_timestamp",
-            "type": "u64"
-          },
-          {
-            "name": "end_timestamp",
-            "type": "Option<u64>"
-          },
-          {
-            "name": "allocation_release",
-            "type": "CreatorAllocationRelease"
-          },
-          {
-            "name": "creator_allocation_released",
-            "type": "bool"
-          },
-          {
-            "name": "name",
-            "type": "String"
-          },
-          {
-            "name": "uri",
-            "type": "String"
-          },
-          {
-            "name": "pending",
-            "type": "Option<Pending>"
-          }
-        ]
-      },
-      "SaleStart": {
-        "variants": [
-          {
-            "fields": [
-              {
-                "name": "timestamp",
-                "type": "u64"
-              }
-            ],
-            "name": "Now",
-            "tag": 0
-          },
-          {
-            "fields": [
-              {
-                "name": "timestamp",
-                "type": "u64"
-              }
-            ],
-            "name": "At",
             "tag": 1
           }
         ]
@@ -1300,6 +1110,65 @@
             ],
             "name": "SettleFixedPrice",
             "tag": 7
+          },
+          {
+            "fields": [
+              {
+                "name": "inputs",
+                "type": "WeightedPoolInputs"
+              }
+            ],
+            "name": "PrepareWeighted",
+            "tag": 8
+          },
+          {
+            "fields": [],
+            "name": "ActivateWeighted",
+            "tag": 9
+          },
+          {
+            "fields": [
+              {
+                "name": "amount_in",
+                "type": "u128"
+              },
+              {
+                "name": "min_amount_out",
+                "type": "u128"
+              },
+              {
+                "name": "valid_from",
+                "type": "u64"
+              },
+              {
+                "name": "valid_until",
+                "type": "u64"
+              }
+            ],
+            "name": "BuyWeightedExactInput",
+            "tag": 10
+          },
+          {
+            "fields": [
+              {
+                "name": "amount_out",
+                "type": "u128"
+              },
+              {
+                "name": "max_amount_in",
+                "type": "u128"
+              },
+              {
+                "name": "valid_from",
+                "type": "u64"
+              },
+              {
+                "name": "valid_until",
+                "type": "u64"
+              }
+            ],
+            "name": "BuyWeightedExactOutput",
+            "tag": 11
           }
         ]
       },
@@ -1405,6 +1274,397 @@
             "fields": [],
             "name": "FixedPrice",
             "tag": 0
+          },
+          {
+            "fields": [
+              {
+                "name": "token_weight_start",
+                "type": "u128"
+              },
+              {
+                "name": "token_weight_end",
+                "type": "u128"
+              },
+              {
+                "name": "collateral_seed",
+                "type": "u128"
+              },
+              {
+                "name": "pricing_collateral",
+                "type": "u128"
+              }
+            ],
+            "name": "Weighted",
+            "tag": 1
+          }
+        ]
+      },
+      "WeightedPoolInputs": {
+        "fields": [
+          {
+            "name": "namespace",
+            "type": "AccountId"
+          },
+          {
+            "name": "namespace_program_id",
+            "type": "AccountId"
+          },
+          {
+            "name": "factory_program_id",
+            "type": "AccountId"
+          },
+          {
+            "name": "factory_seed",
+            "type": "[u8;32]"
+          },
+          {
+            "name": "token_definition_id",
+            "type": "AccountId"
+          },
+          {
+            "name": "collateral_definition_id",
+            "type": "AccountId"
+          },
+          {
+            "name": "sale_inventory",
+            "type": "u128"
+          },
+          {
+            "name": "collateral_seed",
+            "type": "u128"
+          },
+          {
+            "name": "creator_allocation",
+            "type": "u128"
+          },
+          {
+            "name": "token_weight_start",
+            "type": "u128"
+          },
+          {
+            "name": "token_weight_end",
+            "type": "u128"
+          },
+          {
+            "name": "start_timestamp",
+            "type": "u64"
+          },
+          {
+            "name": "end_timestamp",
+            "type": "u64"
+          },
+          {
+            "name": "creator_allocation_release",
+            "type": "CreatorAllocationRelease"
+          }
+        ]
+      }
+    },
+    "lbp_setup": {
+      "FixedPriceInputs": {
+        "fields": [
+          {
+            "name": "namespace",
+            "type": "AccountId"
+          },
+          {
+            "name": "launch_salt",
+            "type": "[u8;32]"
+          },
+          {
+            "name": "name",
+            "type": "String"
+          },
+          {
+            "name": "uri",
+            "type": "String"
+          },
+          {
+            "name": "sale_inventory",
+            "type": "u128"
+          },
+          {
+            "name": "creator_allocation",
+            "type": "u128"
+          },
+          {
+            "name": "price",
+            "type": "FixedPrice"
+          },
+          {
+            "name": "start",
+            "type": "SaleStart"
+          },
+          {
+            "name": "end_timestamp",
+            "type": "Option<u64>"
+          },
+          {
+            "name": "allocation_release",
+            "type": "CreatorAllocationRelease"
+          },
+          {
+            "name": "namespace_program_id",
+            "type": "AccountId"
+          },
+          {
+            "name": "lbp_program_id",
+            "type": "AccountId"
+          },
+          {
+            "name": "collateral_definition_id",
+            "type": "AccountId"
+          },
+          {
+            "name": "creator",
+            "type": "AccountId"
+          },
+          {
+            "name": "now",
+            "type": "u64"
+          }
+        ]
+      },
+      "LbpCreationStage": {
+        "variants": [
+          {
+            "fields": [],
+            "name": "Minted",
+            "tag": 0
+          },
+          {
+            "fields": [],
+            "name": "Allocated",
+            "tag": 1
+          },
+          {
+            "fields": [],
+            "name": "PoolPrepared",
+            "tag": 2
+          },
+          {
+            "fields": [],
+            "name": "Complete",
+            "tag": 3
+          }
+        ]
+      },
+      "LbpLaunchState": {
+        "fields": [
+          {
+            "name": "format",
+            "type": "[u8;8]"
+          },
+          {
+            "name": "version",
+            "type": "u16"
+          },
+          {
+            "name": "creator_role_id",
+            "type": "AccountId"
+          },
+          {
+            "name": "mode",
+            "type": "LbpSetupMode"
+          },
+          {
+            "name": "creation_stage",
+            "type": "LbpCreationStage"
+          },
+          {
+            "name": "namespace",
+            "type": "AccountId"
+          },
+          {
+            "name": "launch_salt",
+            "type": "[u8;32]"
+          },
+          {
+            "name": "token_definition_id",
+            "type": "AccountId"
+          },
+          {
+            "name": "collateral_definition_id",
+            "type": "AccountId"
+          },
+          {
+            "name": "creator_escrow_id",
+            "type": "AccountId"
+          },
+          {
+            "name": "pool_id",
+            "type": "AccountId"
+          },
+          {
+            "name": "namespace_program_id",
+            "type": "AccountId"
+          },
+          {
+            "name": "lbp_program_id",
+            "type": "AccountId"
+          },
+          {
+            "name": "sale_inventory",
+            "type": "u128"
+          },
+          {
+            "name": "creator_allocation",
+            "type": "u128"
+          },
+          {
+            "name": "total_supply",
+            "type": "u128"
+          },
+          {
+            "name": "price",
+            "type": "FixedPrice"
+          },
+          {
+            "name": "start_timestamp",
+            "type": "u64"
+          },
+          {
+            "name": "end_timestamp",
+            "type": "Option<u64>"
+          },
+          {
+            "name": "allocation_release",
+            "type": "CreatorAllocationRelease"
+          },
+          {
+            "name": "creator_allocation_released",
+            "type": "bool"
+          },
+          {
+            "name": "name",
+            "type": "String"
+          },
+          {
+            "name": "uri",
+            "type": "String"
+          },
+          {
+            "name": "pending",
+            "type": "Option<Pending>"
+          }
+        ]
+      },
+      "LbpSetupMode": {
+        "variants": [
+          {
+            "fields": [],
+            "name": "FixedPrice",
+            "tag": 0
+          },
+          {
+            "fields": [
+              {
+                "name": "collateral_seed",
+                "type": "u128"
+              },
+              {
+                "name": "token_weight_start",
+                "type": "u128"
+              },
+              {
+                "name": "token_weight_end",
+                "type": "u128"
+              }
+            ],
+            "name": "Weighted",
+            "tag": 1
+          }
+        ]
+      },
+      "SaleStart": {
+        "variants": [
+          {
+            "fields": [
+              {
+                "name": "timestamp",
+                "type": "u64"
+              }
+            ],
+            "name": "Now",
+            "tag": 0
+          },
+          {
+            "fields": [
+              {
+                "name": "timestamp",
+                "type": "u64"
+              }
+            ],
+            "name": "At",
+            "tag": 1
+          }
+        ]
+      },
+      "WeightedInputs": {
+        "fields": [
+          {
+            "name": "namespace",
+            "type": "AccountId"
+          },
+          {
+            "name": "launch_salt",
+            "type": "[u8;32]"
+          },
+          {
+            "name": "name",
+            "type": "String"
+          },
+          {
+            "name": "uri",
+            "type": "String"
+          },
+          {
+            "name": "sale_inventory",
+            "type": "u128"
+          },
+          {
+            "name": "creator_allocation",
+            "type": "u128"
+          },
+          {
+            "name": "collateral_seed",
+            "type": "u128"
+          },
+          {
+            "name": "token_weight_start",
+            "type": "u128"
+          },
+          {
+            "name": "token_weight_end",
+            "type": "u128"
+          },
+          {
+            "name": "start_timestamp",
+            "type": "u64"
+          },
+          {
+            "name": "end_timestamp",
+            "type": "u64"
+          },
+          {
+            "name": "allocation_release",
+            "type": "CreatorAllocationRelease"
+          },
+          {
+            "name": "namespace_program_id",
+            "type": "AccountId"
+          },
+          {
+            "name": "lbp_program_id",
+            "type": "AccountId"
+          },
+          {
+            "name": "collateral_definition_id",
+            "type": "AccountId"
+          },
+          {
+            "name": "creator",
+            "type": "AccountId"
           }
         ]
       }

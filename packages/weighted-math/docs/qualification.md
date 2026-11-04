@@ -29,4 +29,10 @@ Final image: `3ea031f8c4b2c1c2a57290441b99a5c033348616988c1cbae1650f0db6962eae`.
 
 Main's newer build settings changed the image ID. Final-build execution checks passed, but the original receipt does not verify the final image. No second proof was attempted.
 
-See the [oracle guide](../crates/harness/oracle/README.md) and [zkVM guide](../zkvm/README.md) for commands. Checked weighted-sale handlers, custody, clock integration and full-operation proof costs remain future work.
+See the [oracle guide](../crates/harness/oracle/README.md) and [zkVM guide](../zkvm/README.md) for commands. See the checked-quote follow-up below for later handler checks. Full-operation proof costs remain unmeasured.
+
+## Checked quote follow-up
+
+The checked quote interface adds defined errors and the interval accuracy guards in the [error analysis](error-analysis.md#checked-quote-interface). Its host tests evaluate all 692 trade fixtures. They accept 634 and reject 58. Every accepted result matches the raw kernel and meets the one-basis-point target against the independent oracle. These counts differ from the historical generic-guard counts because interval checks can certify coarse-unit trades. This does not change the raw outputs or the target.
+
+Property tests cover arbitrary inputs, valid extreme weights, full-width reserves and independent big-integer references. An integer-power referee checks the target for unequal weights. Sale host tests cover checked rejection, inventory backing and post-buy vault overflow. Seeded sale guest tests now cover checked quotes, window checks, fee collection, accuracy rejection, vault overflow and rollback after a failed output credit. See the [workspace guide](../../../docs/architecture/workspace-guide.md#execution-and-evidence-limits). Full-fixture checked-quote host/guest parity and guest cost measurements remain pending. The earlier proof and parity results do not cover the checked interface.

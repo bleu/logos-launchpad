@@ -18,7 +18,7 @@ Release arithmetic can wrap when overflow checks are disabled. Correctness must 
 | Fixed-point division numerator fits | `numerator`. |
 | Positive padded power before exact-output inversion | `p62 > 0` assertion. |
 
-These guards panic in the raw kernel. The future weighted-sale program must validate before calling it and return stable errors. It must also check post-buy reserve and vault additions: a representable payment alone does not establish that `balance_in + payment` fits.
+These guards panic in the raw kernel. The checked quote interface returns defined errors. It validates the power domain, checks positive padded power and uses bounded wide division for rounded payments. It also checks the post-buy pricing reserve. The sale handler checks vault capacity and accounting separately. A representable payment alone does not establish that `balance_in + payment` fits.
 
 ## Widening multiplication and ceiling carry
 
@@ -40,7 +40,7 @@ The same defect is reachable through public exact-output pricing at the selected
 
 The computed scale-62 payment ratio is `r62 = 4799918100812182583`. The final widened product divided by `2^62` has floor `340282366920938463463374607431768211455` and remainder `2366108921125422809`. Thus the floor fits, but the ceiling does not. With the old helper, the public call returned zero in unchecked release. With checked carry, it panics. The regression `exact_output_rejects_an_unrepresentable_ceiling` records both outcomes.
 
-This establishes raw-kernel reachability, not a valid settled weighted sale trade. The future handler must reject this payment and its unrepresentable post-buy collateral balance before any custody change. No production weighted-sale handler exists to test that rejection yet.
+This establishes raw-kernel reachability, not a valid settled weighted sale trade. The checked interface rejects this payment and its unrepresentable post-buy pricing balance. Sale host tests check rejection before transfers. Seeded guest tests cover arithmetic rejection and rollback.
 
 ## Exact-input ledger
 
@@ -56,7 +56,7 @@ Let `S = 52`, `L = 62`, and `U = 2^62`. The arithmetic type is `u128` unless sta
 | Complement after padding | In `[0, U]`, from the power range and clamp. |
 | Final `balance_out * complement` | Below `2^190`; exact widened multiplication; after shifting 62 the payout is at most `balance_out`. |
 
-If base quantization reaches `ONE` or above, exact-input returns zero before calling power. The future buy handler must reject zero-result trades. It must not treat that return as permission to collect payment.
+If base quantization reaches `ONE` or above, exact-input returns zero before calling power. The checked interface rejects zero-result trades as dust. The sale handler must not collect payment for them.
 
 ### Ratio formation
 
@@ -123,3 +123,9 @@ cargo +1.94.0 test --workspace --locked --release --config 'profile.release.over
 ```
 
 The unchecked-release red/green carry results are recorded in the [qualification evidence](qualification.md). Host tests, guest execution, real proving and full platform-handler evidence are different checks.
+
+## Checked quote arithmetic
+
+The checked layer forms each 128-by-128 product with `mul_wide`. A shifted divisor never has more bits than the wide numerator. Division subtracts only when the remainder covers the shifted divisor. A quotient bit at position 128 or above is an error. The final ceiling uses `checked_add`, so a floor of `u128::MAX` with a remainder is also an error. These operations do not depend on release overflow checks.
+
+Error bounds use scale `2^96` and round in the conservative direction. The [error analysis](error-analysis.md#checked-quote-interface) defines the acceptance checks. Invalid inputs, dust, insufficient accuracy, power underflow and unrepresentable results return `QuoteError`. The raw functions and their overflow regression cases retain their previous behaviour. Seeded sale guest tests cover checked-quote integration and rollback. Full-fixture checked-quote host/guest parity and guest costs remain unverified.

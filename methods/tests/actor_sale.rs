@@ -286,12 +286,261 @@ fn fixed_pool(state: &V03State, pool: AccountId) -> lbp_core::PoolAccount {
     lbp_core::PoolAccount::decode(state.get_account_by_id(pool).data.actor_state(LBP)).unwrap()
 }
 
+fn weighted_state(buyer: AccountId) -> (V03State, AccountId) {
+    let (state, pool) = fixed_state(buyer, Some(200));
+    let mut sale = fixed_pool(&state, pool);
+    sale.mode = lbp_core::PoolMode::Weighted {
+        token_weight_start: lbp_core::WEIGHT_TOTAL / 2,
+        token_weight_end: lbp_core::WEIGHT_TOTAL / 2,
+        collateral_seed: 100,
+        pricing_collateral: 100,
+    };
+    sale.price = lbp_core::FixedPrice {
+        collateral_units: 0,
+        token_units: 0,
+    };
+    sale.recorded_collateral = 100;
+    let state = state.with_public_accounts([
+        account(Actor::new(pool, LBP), borsh::to_vec(&sale).unwrap()),
+        account(
+            holding(pool, COLLATERAL),
+            borsh::to_vec(&TokenState::Holding {
+                definition: COLLATERAL,
+                owner: pool,
+                kind: TokenKind::Fungible,
+                // Include surplus. Only the recorded 100 units enter pricing.
+                balance: 141,
+            })
+            .unwrap(),
+        ),
+    ]);
+    (state, pool)
+}
+
+#[test]
+fn weighted_clock_accepts_the_window_and_rolls_back_outside_it() {
+    let key = PrivateKey::try_new([23; 32]).unwrap();
+    let buyer = AccountId::from(&PublicKey::new_from_private_key(&key));
+    let (state, pool) = weighted_state(buyer);
+    let mut sale = fixed_pool(&state, pool);
+    if let lbp_core::PoolMode::Weighted {
+        token_weight_end, ..
+    } = &mut sale.mode
+    {
+        *token_weight_end = 90 * lbp_core::WEIGHT_TOTAL / 100;
+    }
+    let state = state.with_public_accounts([account(
+        Actor::new(pool, LBP),
+        borsh::to_vec(&sale).unwrap(),
+    )]);
+    let buy = lbp_core::Message::BuyWeightedExactInput {
+        amount_in: 50,
+        min_amount_out: 1,
+        valid_from: 100,
+        valid_until: 100 + 60,
+    };
+    for timestamp in [100_000, 130_000, 159_999] {
+        let mut valid = clock_state(state.clone(), timestamp);
+        fixed_execute(&mut valid, pool, &key, buy.clone()).unwrap();
+        // The worst pair in [100, 160) is 73.6/26.4 at second 159.
+        assert_eq!(balance(&valid, buyer, LAUNCH), 135);
+        assert_eq!(balance(&valid, buyer, COLLATERAL), 1950);
+    }
+    for timestamp in [99_999, 160_000, 200_000] {
+        let mut invalid = clock_state(state.clone(), timestamp);
+        fixed_rejected(&mut invalid, pool, &key, buy.clone(), "Clock timestamp");
+    }
+}
+
+#[test]
+fn weighted_inclusion_window_rejects_stale_clock_buys_and_preserves_state() {
+    let key = PrivateKey::try_new([23; 32]).unwrap();
+    let buyer = AccountId::from(&PublicKey::new_from_private_key(&key));
+    let (state, pool) = weighted_state(buyer);
+    for buy in [
+        lbp_core::Message::BuyWeightedExactInput {
+            amount_in: 50,
+            min_amount_out: 1,
+            valid_from: 100,
+            valid_until: 160,
+        },
+        lbp_core::Message::BuyWeightedExactOutput {
+            amount_out: 10,
+            max_amount_in: 100,
+            valid_from: 100,
+            valid_until: 160,
+        },
+    ] {
+        // The saved clock stays within the quote window for every inclusion time.
+        let transaction = fixed_transaction(&state, pool, &key, buy);
+        for timestamp in [100_000, 130_000, 159_999] {
+            let mut admitted = state.clone();
+            admitted
+                .transition_from_public_transaction(&transaction, 1, timestamp)
+                .unwrap();
+            assert!(balance(&admitted, buyer, LAUNCH) > 0);
+        }
+        for timestamp in [99_999, 160_000, 199_999, 200_000, 200_001] {
+            let mut rejected = state.clone();
+            assert!(matches!(
+                rejected.transition_from_public_transaction(&transaction, 1, timestamp),
+                Err(lee::error::LeeError::OutOfValidityWindow)
+            ));
+            assert!(
+                rejected == state,
+                "out-of-window buy changed state or nonce"
+            );
+        }
+    }
+}
+
+#[test]
+fn weighted_collection_keeps_pricing_and_same_second_buys_use_current_reserves() {
+    use lbp_core::Message::{BuyWeightedExactInput, BuyWeightedExactOutput, CollectFees};
+    let key = PrivateKey::try_new([23; 32]).unwrap();
+    let buyer = AccountId::from(&PublicKey::new_from_private_key(&key));
+    let (mut state, pool) = weighted_state(buyer);
+    fixed_execute(
+        &mut state,
+        pool,
+        &key,
+        BuyWeightedExactInput {
+            amount_in: 50,
+            min_amount_out: 333,
+            valid_from: 100,
+            valid_until: 100 + 60,
+        },
+    )
+    .unwrap();
+    let mut without_collection = state.clone();
+    fixed_execute(&mut state, pool, &key, CollectFees).unwrap();
+    assert_eq!(balance(&state, TREASURY, COLLATERAL), 2);
+    assert_eq!(fixed_pool(&state, pool).accrued_fees, 0);
+    let next_buy = BuyWeightedExactOutput {
+        amount_out: 100,
+        max_amount_in: 27,
+        valid_from: 100,
+        valid_until: 100 + 60,
+    };
+    fixed_execute(&mut state, pool, &key, next_buy.clone()).unwrap();
+    fixed_execute(&mut without_collection, pool, &key, next_buy).unwrap();
+    assert_eq!(balance(&state, buyer, COLLATERAL), 1923);
+    assert_eq!(balance(&state, buyer, LAUNCH), 433);
+    assert_eq!(
+        balance(&state, buyer, COLLATERAL),
+        balance(&without_collection, buyer, COLLATERAL)
+    );
+    let sale = fixed_pool(&state, pool);
+    assert_eq!(sale.remaining_inventory, 567);
+    assert!(matches!(
+        sale.mode,
+        lbp_core::PoolMode::Weighted {
+            pricing_collateral: 177,
+            ..
+        }
+    ));
+    assert_eq!(balance(&state, pool, COLLATERAL), 216);
+    assert_eq!(sale.recorded_collateral + sale.accrued_fees, 175);
+}
+
+#[test]
+fn weighted_accuracy_and_vault_overflow_rejections_preserve_state_and_nonce() {
+    let key = PrivateKey::try_new([23; 32]).unwrap();
+    let buyer = AccountId::from(&PublicKey::new_from_private_key(&key));
+    let (state, pool) = weighted_state(buyer);
+    let mut sale = fixed_pool(&state, pool);
+    if let lbp_core::PoolMode::Weighted {
+        token_weight_start,
+        token_weight_end,
+        ..
+    } = &mut sale.mode
+    {
+        *token_weight_start = 99 * lbp_core::WEIGHT_TOTAL / 100;
+        *token_weight_end = 99 * lbp_core::WEIGHT_TOTAL / 100;
+    }
+    let mut inaccurate = state.clone().with_public_accounts([account(
+        Actor::new(pool, LBP),
+        borsh::to_vec(&sale).unwrap(),
+    )]);
+    fixed_rejected(
+        &mut inaccurate,
+        pool,
+        &key,
+        lbp_core::Message::BuyWeightedExactOutput {
+            amount_out: 300,
+            max_amount_in: u128::MAX,
+            valid_from: 100,
+            valid_until: 160,
+        },
+        "MathAccuracy",
+    );
+
+    let mut overflow = state.with_public_accounts([account(
+        holding(pool, COLLATERAL),
+        borsh::to_vec(&TokenState::Holding {
+            definition: COLLATERAL,
+            owner: pool,
+            kind: TokenKind::Fungible,
+            balance: u128::MAX,
+        })
+        .unwrap(),
+    )]);
+    fixed_rejected(
+        &mut overflow,
+        pool,
+        &key,
+        lbp_core::Message::BuyWeightedExactInput {
+            amount_in: 50,
+            min_amount_out: 333,
+            valid_from: 100,
+            valid_until: 160,
+        },
+        "Arithmetic",
+    );
+}
+
+#[test]
+fn weighted_output_credit_failure_rolls_back_input_records_and_nonce() {
+    let key = PrivateKey::try_new([23; 32]).unwrap();
+    let buyer = AccountId::from(&PublicKey::new_from_private_key(&key));
+    let (state, pool) = weighted_state(buyer);
+    let mut state = state.with_public_accounts([account(
+        holding(buyer, LAUNCH),
+        borsh::to_vec(&TokenState::Holding {
+            definition: LAUNCH,
+            owner: buyer,
+            kind: TokenKind::Fungible,
+            balance: u128::MAX,
+        })
+        .unwrap(),
+    )]);
+    let before = fixed_pool(&state, pool);
+    fixed_rejected(
+        &mut state,
+        pool,
+        &key,
+        lbp_core::Message::BuyWeightedExactInput {
+            amount_in: 50,
+            min_amount_out: 333,
+            valid_from: 100,
+            valid_until: 160,
+        },
+        "Overflow",
+    );
+    assert_eq!(balance(&state, buyer, COLLATERAL), 2_000);
+    assert_eq!(balance(&state, buyer, LAUNCH), u128::MAX);
+    assert_eq!(balance(&state, pool, COLLATERAL), 141);
+    assert_eq!(balance(&state, pool, LAUNCH), 1_007);
+    assert_eq!(fixed_pool(&state, pool), before);
+}
+
 fn fixed_transaction(
     state: &V03State,
     pool: AccountId,
     key: &PrivateKey,
     instruction: lbp_core::Message,
 ) -> PublicTransaction {
+    let launch = fixed_pool(state, pool).token_definition_id;
     let buyer = AccountId::from(&PublicKey::new_from_private_key(key));
     let collect = matches!(instruction, lbp_core::Message::CollectFees);
     let receiver = Actor::new(if collect { pool } else { buyer }, LBP);
@@ -301,9 +550,9 @@ fn fixed_transaction(
         Actor::new(curve_core::compute_config_pda(NAMESPACE, CURVE), CURVE),
         Actor::new(buyer, TOKEN_PROGRAM_ACCOUNT_ID),
         Actor::new(pool, TOKEN_PROGRAM_ACCOUNT_ID),
-        holding(pool, LAUNCH),
+        holding(pool, launch),
         holding(pool, COLLATERAL),
-        holding(buyer, LAUNCH),
+        holding(buyer, launch),
         holding(buyer, COLLATERAL),
         holding(TREASURY, COLLATERAL),
         holding(NEXT_TREASURY, COLLATERAL),
@@ -325,7 +574,13 @@ fn fixed_transaction(
             instruction: Box::new(instruction),
         }
     };
-    let message = Message::try_new(receiver, actors, nonces, instruction).unwrap();
+    let mut message = Message::try_new(receiver, actors, nonces, instruction).unwrap();
+    message
+        .admission_evidence
+        .push(lee::PublicAccountEvidence::Pda {
+            program: TOKEN_PROGRAM_ACCOUNT_ID,
+            seed: token::holding_seed(buyer, launch),
+        });
     let keys = [key];
     let witnesses = WitnessSet::for_message(&message, if collect { &[] } else { &keys });
     PublicTransaction::new(message, witnesses)
@@ -739,4 +994,335 @@ fn exact_output_buy_executes_real_curve_and_token_guests() {
         (updated.pool.real_reserve0, updated.pool.real_reserve1),
         (2_000, 250)
     );
+}
+
+#[test]
+fn weighted_factory_executes_all_stages_and_rolls_back_failed_funding() {
+    use factory_core::{
+        CreatorAllocationRelease, LbpCreationStage, LbpLaunchState, WeightedInputs,
+    };
+    const FACTORY: AccountId = AccountId::new([17; 32]);
+    for release in [
+        CreatorAllocationRelease::AfterEnd,
+        CreatorAllocationRelease::AfterSetup,
+    ] {
+        let key = PrivateKey::try_new([23; 32]).unwrap();
+        let creator = AccountId::from(&PublicKey::new_from_private_key(&key));
+        let salt = [24; 32];
+        let factory = factory_core::compute_factory_pda(NAMESPACE, FACTORY, salt);
+        let launch = factory_core::compute_definition_pda(NAMESPACE, FACTORY, salt);
+        let mint = factory_core::compute_mint_pda(NAMESPACE, FACTORY, salt);
+        let escrow = factory_core::compute_escrow_pda(NAMESPACE, FACTORY, salt);
+        let role = factory_core::compute_creator_role_pda(NAMESPACE, FACTORY, salt);
+        let pool = lbp_core::compute_pool_pda(NAMESPACE, LBP, launch, COLLATERAL, factory);
+        let authority = factory_core::AUTHORITY_PROGRAM_ACCOUNT_ID;
+        let mut state = V03State::new()
+            .with_named_programs([
+                (
+                    FACTORY,
+                    Program::new(Cow::Borrowed(launchpad_methods::FACTORY_ELF)).unwrap(),
+                ),
+                (
+                    LBP,
+                    Program::new(Cow::Borrowed(launchpad_methods::LBP_ELF)).unwrap(),
+                ),
+                (
+                    CURVE,
+                    Program::new(Cow::Borrowed(launchpad_methods::CURVE_ELF)).unwrap(),
+                ),
+                (
+                    TOKEN_PROGRAM_ACCOUNT_ID,
+                    Program::new(Cow::Borrowed(lez_compat_methods::COMPAT_TOKEN_ELF)).unwrap(),
+                ),
+                (
+                    authority,
+                    Program::new(Cow::Borrowed(lez_compat_methods::COMPAT_AUTHORITY_ELF)).unwrap(),
+                ),
+                (clock_core::clock_account_id(), programs::clock()),
+            ])
+            .with_public_accounts([
+                account(
+                    Actor::new(COLLATERAL, TOKEN_PROGRAM_ACCOUNT_ID),
+                    borsh::to_vec(&TokenState::Definition {
+                        name: "Collateral".into(),
+                        kind: TokenKind::Fungible,
+                        supply: 10_000,
+                        metadata: None,
+                    })
+                    .unwrap(),
+                ),
+                account(
+                    holding(creator, COLLATERAL),
+                    borsh::to_vec(&TokenState::Holding {
+                        owner: creator,
+                        definition: COLLATERAL,
+                        kind: TokenKind::Fungible,
+                        balance: 99,
+                    })
+                    .unwrap(),
+                ),
+            ]);
+        state = fixed_config(clock_state(state, 100_000), 100, TREASURY, false);
+        let mut actors = vec![
+            Actor::new(factory, FACTORY),
+            Actor::new(pool, LBP),
+            Actor::new(role, authority),
+            Actor::new(creator, authority),
+            Actor::new(launch, TOKEN_PROGRAM_ACCOUNT_ID),
+            Actor::new(COLLATERAL, TOKEN_PROGRAM_ACCOUNT_ID),
+            Actor::new(curve_core::compute_config_pda(NAMESPACE, CURVE), CURVE),
+            Actor::new(
+                clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID,
+                clock_core::clock_account_id(),
+            ),
+        ];
+        for owner in [factory, mint, escrow, pool, creator, role, launch] {
+            actors.push(Actor::new(owner, FACTORY));
+            actors.push(Actor::new(owner, TOKEN_PROGRAM_ACCOUNT_ID));
+            actors.push(holding(owner, launch));
+            actors.push(holding(owner, COLLATERAL));
+        }
+        let execute_at = |state: &mut V03State,
+                          instruction: factory_core::Message,
+                          timestamp: u64| {
+            let mut message = Message::try_new(
+                Actor::new(factory, FACTORY),
+                actors.clone(),
+                BTreeMap::from([(creator, state.get_account_by_id(creator).nonce)]),
+                instruction,
+            )
+            .unwrap();
+            message.admission_evidence = vec![
+                lee::PublicAccountEvidence::Pda {
+                    program: FACTORY,
+                    seed: factory_core::compute_factory_seed(NAMESPACE, salt),
+                },
+                lee::PublicAccountEvidence::Pda {
+                    program: LBP,
+                    seed: lbp_core::compute_pool_pda_seed(NAMESPACE, launch, COLLATERAL, factory),
+                },
+            ];
+            for owner in [factory, mint, escrow, pool, creator] {
+                for definition in [launch, COLLATERAL] {
+                    message
+                        .admission_evidence
+                        .push(lee::PublicAccountEvidence::Pda {
+                            program: TOKEN_PROGRAM_ACCOUNT_ID,
+                            seed: token::holding_seed(owner, definition),
+                        });
+                }
+            }
+            let witnesses = WitnessSet::for_message(&message, &[&key]);
+            state.transition_from_public_transaction(
+                &PublicTransaction::new(message, witnesses),
+                1,
+                timestamp,
+            )
+        };
+        let execute = |state: &mut V03State, instruction| execute_at(state, instruction, 100_000);
+        let creation = factory_core::Message::CreateWeightedLbp {
+            inputs: WeightedInputs {
+                namespace: NAMESPACE,
+                launch_salt: salt,
+                name: "Weighted".into(),
+                uri: "https://example.test/weighted".into(),
+                sale_inventory: 800,
+                creator_allocation: 200,
+                collateral_seed: 100,
+                token_weight_start: 95 * lbp_core::WEIGHT_TOTAL / 100 + 1,
+                token_weight_end: lbp_core::WEIGHT_TOTAL / 2,
+                start_timestamp: 150,
+                end_timestamp: 300,
+                allocation_release: release,
+                namespace_program_id: CURVE,
+                lbp_program_id: LBP,
+                collateral_definition_id: COLLATERAL,
+                creator,
+            },
+        };
+        for timestamp in [150_001, 299_999, 300_000] {
+            let mut rejected = state.clone();
+            assert!(matches!(
+                execute_at(&mut rejected, creation.clone(), timestamp),
+                Err(lee::error::LeeError::OutOfValidityWindow)
+            ));
+            assert!(rejected == state, "late creation changed state or nonce");
+        }
+        let mut at_start = state.clone();
+        execute_at(&mut at_start, creation.clone(), 150_000).unwrap();
+        execute(&mut state, creation).unwrap();
+        assert_eq!(balance(&state, mint, launch), 1000);
+        for stage in [LbpCreationStage::Minted, LbpCreationStage::Allocated] {
+            for timestamp in [300_000, 300_001] {
+                let mut rejected = state.clone();
+                assert!(matches!(
+                    execute_at(
+                        &mut rejected,
+                        factory_core::Message::ContinueWeightedCreation {
+                            expected_stage: stage,
+                            creator
+                        },
+                        timestamp
+                    ),
+                    Err(lee::error::LeeError::OutOfValidityWindow)
+                ));
+                assert!(rejected == state, "late setup changed state or nonce");
+            }
+            let mut before_end = state.clone();
+            execute_at(
+                &mut before_end,
+                factory_core::Message::ContinueWeightedCreation {
+                    expected_stage: stage,
+                    creator,
+                },
+                299_999,
+            )
+            .unwrap();
+            execute(
+                &mut state,
+                factory_core::Message::ContinueWeightedCreation {
+                    expected_stage: stage,
+                    creator,
+                },
+            )
+            .unwrap();
+        }
+        assert_eq!(balance(&state, factory, launch), 800);
+        assert_eq!(balance(&state, escrow, launch), 200);
+        assert!(!fixed_pool(&state, pool).funded);
+        let instruction = || factory_core::Message::ContinueWeightedCreation {
+            expected_stage: LbpCreationStage::PoolPrepared,
+            creator,
+        };
+        let before = state.clone();
+        assert!(execute(&mut state, instruction()).is_err());
+        assert!(state == before, "failed setup changed runtime state");
+        // A donation cannot replace the creator's seed.
+        state = state.with_public_accounts([account(
+            holding(pool, COLLATERAL),
+            borsh::to_vec(&TokenState::Holding {
+                owner: pool,
+                definition: COLLATERAL,
+                kind: TokenKind::Fungible,
+                balance: 41,
+            })
+            .unwrap(),
+        )]);
+        let before = state.clone();
+        assert!(execute(&mut state, instruction()).is_err());
+        assert!(state == before, "failed setup changed runtime state");
+        state = state.with_public_accounts([account(
+            holding(creator, COLLATERAL),
+            borsh::to_vec(&TokenState::Holding {
+                owner: creator,
+                definition: COLLATERAL,
+                kind: TokenKind::Fungible,
+                balance: 100,
+            })
+            .unwrap(),
+        )]);
+        if release == CreatorAllocationRelease::AfterSetup {
+            let creator_tokens = |balance| {
+                account(
+                    holding(creator, launch),
+                    borsh::to_vec(&TokenState::Holding {
+                        owner: creator,
+                        definition: launch,
+                        kind: TokenKind::Fungible,
+                        balance,
+                    })
+                    .unwrap(),
+                )
+            };
+            state = state.with_public_accounts([creator_tokens(u128::MAX)]);
+            let before = state.clone();
+            assert!(execute(&mut state, instruction()).is_err());
+            assert!(
+                state == before,
+                "failed allocation credit changed funding, activation or nonce"
+            );
+            state = state.with_public_accounts([creator_tokens(0)]);
+        }
+        for timestamp in [300_000, 300_001] {
+            let mut rejected = state.clone();
+            assert!(matches!(
+                execute_at(&mut rejected, instruction(), timestamp),
+                Err(lee::error::LeeError::OutOfValidityWindow)
+            ));
+            assert!(
+                rejected == state,
+                "late activation changed transfers, state or nonce"
+            );
+        }
+        let mut before_end = state.clone();
+        execute_at(&mut before_end, instruction(), 299_999).unwrap();
+        execute(&mut state, instruction()).unwrap();
+        let launch_state =
+            LbpLaunchState::decode(state.get_account_by_id(factory).data.actor_state(FACTORY))
+                .unwrap();
+        assert_eq!(launch_state.creation_stage, LbpCreationStage::Complete);
+        assert_eq!(balance(&state, pool, launch), 800);
+        assert_eq!(balance(&state, pool, COLLATERAL), 141);
+        assert_eq!(balance(&state, creator, COLLATERAL), 0);
+        if release == CreatorAllocationRelease::AfterSetup {
+            assert_eq!(balance(&state, creator, launch), 200);
+        } else {
+            assert!(
+                state
+                    .get_account_by_id(holding(creator, launch).account_id)
+                    .data
+                    .actor_state(TOKEN_PROGRAM_ACCOUNT_ID)
+                    .is_empty()
+            );
+        }
+        assert_eq!(
+            balance(&state, escrow, launch),
+            if release == CreatorAllocationRelease::AfterEnd {
+                200
+            } else {
+                0
+            }
+        );
+        let sale = fixed_pool(&state, pool);
+        assert!(sale.funded);
+        assert!(matches!(
+            sale.mode,
+            lbp_core::PoolMode::Weighted {
+                pricing_collateral: 100,
+                ..
+            }
+        ));
+        state = clock_state(state, 150_000).with_public_accounts([account(
+            holding(creator, COLLATERAL),
+            borsh::to_vec(&TokenState::Holding {
+                owner: creator,
+                definition: COLLATERAL,
+                kind: TokenKind::Fungible,
+                balance: 1000,
+            })
+            .unwrap(),
+        )]);
+        fixed_execute_at(
+            &mut state,
+            pool,
+            &key,
+            lbp_core::Message::BuyWeightedExactOutput {
+                amount_out: 10,
+                max_amount_in: 100,
+                valid_from: 150,
+                valid_until: 151,
+            },
+            150_000,
+        )
+        .unwrap();
+        assert_eq!(balance(&state, pool, launch), 790);
+        assert_eq!(
+            balance(&state, creator, launch),
+            if release == CreatorAllocationRelease::AfterSetup {
+                210
+            } else {
+                10
+            }
+        );
+    }
 }

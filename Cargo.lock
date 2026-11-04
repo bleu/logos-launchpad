@@ -3733,6 +3733,7 @@ dependencies = [
  "lez-compat-core",
  "risc0-zkvm",
  "serde",
+ "weighted-math-core",
 ]
 
 [[package]]

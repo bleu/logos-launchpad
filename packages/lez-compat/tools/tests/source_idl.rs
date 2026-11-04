@@ -8,7 +8,7 @@ fn application_state_schema_includes_private_pending_types_and_parent_imports() 
         .args([
             "idl-source",
             "factory=crates/factory-core/src/lib.rs",
-            "fixed_price=crates/factory-core/src/fixed_price.rs",
+            "lbp_setup=crates/factory-core/src/lbp_setup.rs",
             "lbp=crates/lbp-core/src/lib.rs",
         ])
         .output()
@@ -43,10 +43,7 @@ fn application_state_schema_includes_private_pending_types_and_parent_imports() 
             {"name": "step", "type": "u8"}
         ])
     );
-    assert_eq!(
-        idl["imports"]["fixed_price"],
-        serde_json::json!(["factory"])
-    );
+    assert_eq!(idl["imports"]["lbp_setup"], serde_json::json!(["factory"]));
 }
 
 #[test]
