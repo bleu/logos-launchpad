@@ -204,6 +204,8 @@ fn weighted_buy_asserts_the_full_validity_window_on_the_canonical_clock() {
         [100, state.remaining_inventory, 1000],
     )
     .unwrap();
+    assert_eq!(response.validity.timestamps.start(), Some(1_500_000));
+    assert_eq!(response.validity.timestamps.end(), Some(1_600_000));
     let clock = &response.sync_messages[0];
     assert_eq!(
         clock.to,

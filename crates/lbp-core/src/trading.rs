@@ -266,6 +266,17 @@ impl Pending {
                     amount: amount_in,
                 },
             );
+        let response = if matches!(self.state.mode, PoolMode::Weighted { .. }) {
+            let (start, end) = weighted_window(&self.message)?;
+            curve_core::with_inclusion_bounds(
+                response,
+                Some(curve_core::timestamp_millis(start).map_err(|_| Error::Arithmetic)?),
+                Some(curve_core::timestamp_millis(end).map_err(|_| Error::Arithmetic)?),
+            )
+            .map_err(|_| Error::Closed)?
+        } else {
+            response
+        };
         Ok(payout(
             response,
             &self.state,

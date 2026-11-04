@@ -2,7 +2,7 @@
 
 Status: Accepted; host and seeded guest buy checks passed. Live clock freshness remains unverified.
 
-Date: 2026-09-29; checkpoint and interpolation review: 2026-10-02; time-window amendment: 2026-10-29
+Date: 2026-09-29; checkpoint and interpolation review: 2026-10-02; time-window amendment: 2026-10-29; inclusion-time amendment: 2026-11-04
 
 ## Context
 
@@ -14,11 +14,11 @@ The [historical clock experiment](https://github.com/bleu/logos-launchpad/blob/f
 
 This amendment supersedes the earlier rule that each buy uses weights from an exact trusted execution timestamp. It also supersedes the timestamp-keyed buy and poke checkpoint rules. Weighted buys use a buyer-selected time window and the least favourable scheduled weights for the buyer within that window.
 
-Each weighted buy supplies `valid_from` and `valid_until` in Unix seconds. The window includes `valid_from` and excludes `valid_until`. Require `sale_start <= valid_from < valid_until <= sale_end`. Reject an invalid window. Do not shorten it without the buyer's instruction. Use the canonical clock to check `valid_from * 1000 <= clock_time < valid_until * 1000`. Convert bounds with checked arithmetic. A failed check fails the whole transaction.
+Each weighted buy supplies `valid_from` and `valid_until` in Unix seconds. The window includes `valid_from` and excludes `valid_until`. Require `sale_start <= valid_from < valid_until <= sale_end`. Reject an invalid window. Do not shorten it without the buyer's instruction. Use the canonical clock to check `valid_from * 1000 <= clock_time < valid_until * 1000`. Convert bounds with checked arithmetic. Also attach the same half-open interval as a response validity window. LEZ must check it against the inclusion-block timestamp. Saved clock data alone cannot enforce the sale boundaries. Intersect added bounds with existing response bounds. A failed check fails the whole transaction.
 
 Use immutable linear weight endpoints with a fixed total of `10^18`. Each token weight must be at least `10^16` (1%) and at most `99 * 10^16` (99%). Store normalized integer weights, not whole percentages. This gives smooth schedules without whole-percentage steps. The internal math scales remain `2^52` and `2^62`, as specified in [ADR 0011](0011-weighted-precision.md). This change does not adopt Balancer's power implementation.
 
-Use an explicit scheduled start for weighted creation. Check that the canonical clock is at or before this start when creation executes. Do not provide a start-now option until the clock can return a trusted time. Setup must finish before the sale end. See [ADR 0031](0031-shared-launch-factory.md) for factory setup.
+Use an explicit scheduled start for weighted creation. Check that the canonical clock is at or before this start when creation executes. Also require creation inclusion at or before the scheduled start; convert its inclusive millisecond bound to an exclusive upper bound with checked addition. Do not provide a start-now option until the clock can return a trusted time. Every incomplete setup stage and pool activation must enter before the sale end. Enforce this with an inclusion-time upper bound, even when the saved clock is stale. See [ADR 0031](0031-shared-launch-factory.md) for factory setup.
 
 Use these endpoints for interpolation. Floor the collateral weight's interpolation and calculate the token weight as its exact complement. Evaluate the pair at `valid_from` and `valid_until - 1`, the last included Unix second. Select the smaller collateral weight and its token complement. This pair gives the least token output for exact input and the greatest collateral input for exact output. Linear schedules are monotone, so no interior timestamp gives a worse pair. Apply the same rule to rising, falling and constant schedules.
 

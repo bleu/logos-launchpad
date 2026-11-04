@@ -353,6 +353,48 @@ fn weighted_clock_accepts_the_window_and_rolls_back_outside_it() {
 }
 
 #[test]
+fn weighted_inclusion_window_rejects_stale_clock_buys_and_preserves_state() {
+    let key = PrivateKey::try_new([23; 32]).unwrap();
+    let buyer = AccountId::from(&PublicKey::new_from_private_key(&key));
+    let (state, pool) = weighted_state(buyer);
+    for buy in [
+        lbp_core::Message::BuyWeightedExactInput {
+            amount_in: 50,
+            min_amount_out: 1,
+            valid_from: 100,
+            valid_until: 160,
+        },
+        lbp_core::Message::BuyWeightedExactOutput {
+            amount_out: 10,
+            max_amount_in: 100,
+            valid_from: 100,
+            valid_until: 160,
+        },
+    ] {
+        // The saved clock stays within the quote window for every inclusion time.
+        let transaction = fixed_transaction(&state, pool, &key, buy);
+        for timestamp in [100_000, 130_000, 159_999] {
+            let mut admitted = state.clone();
+            admitted
+                .transition_from_public_transaction(&transaction, 1, timestamp)
+                .unwrap();
+            assert!(balance(&admitted, buyer, LAUNCH) > 0);
+        }
+        for timestamp in [99_999, 160_000, 199_999, 200_000, 200_001] {
+            let mut rejected = state.clone();
+            assert!(matches!(
+                rejected.transition_from_public_transaction(&transaction, 1, timestamp),
+                Err(lee::error::LeeError::OutOfValidityWindow)
+            ));
+            assert!(
+                rejected == state,
+                "out-of-window buy changed state or nonce"
+            );
+        }
+    }
+}
+
+#[test]
 fn weighted_collection_keeps_pricing_and_same_second_buys_use_current_reserves() {
     use lbp_core::Message::{BuyWeightedExactInput, BuyWeightedExactOutput, CollectFees};
     let key = PrivateKey::try_new([23; 32]).unwrap();
@@ -972,7 +1014,9 @@ fn weighted_factory_executes_all_stages_and_rolls_back_failed_funding() {
             actors.push(holding(owner, launch));
             actors.push(holding(owner, COLLATERAL));
         }
-        let execute = |state: &mut V03State, instruction: factory_core::Message| {
+        let execute_at = |state: &mut V03State,
+                          instruction: factory_core::Message,
+                          timestamp: u64| {
             let mut message = Message::try_new(
                 Actor::new(factory, FACTORY),
                 actors.clone(),
@@ -1004,35 +1048,68 @@ fn weighted_factory_executes_all_stages_and_rolls_back_failed_funding() {
             state.transition_from_public_transaction(
                 &PublicTransaction::new(message, witnesses),
                 1,
-                100_000,
+                timestamp,
             )
         };
-        execute(
-            &mut state,
-            factory_core::Message::CreateWeightedLbp {
-                inputs: WeightedInputs {
-                    namespace: NAMESPACE,
-                    launch_salt: salt,
-                    name: "Weighted".into(),
-                    uri: "https://example.test/weighted".into(),
-                    sale_inventory: 800,
-                    creator_allocation: 200,
-                    collateral_seed: 100,
-                    token_weight_start: 95 * lbp_core::WEIGHT_TOTAL / 100 + 1,
-                    token_weight_end: lbp_core::WEIGHT_TOTAL / 2,
-                    start_timestamp: 150,
-                    end_timestamp: 300,
-                    allocation_release: release,
-                    namespace_program_id: CURVE,
-                    lbp_program_id: LBP,
-                    collateral_definition_id: COLLATERAL,
-                    creator,
-                },
+        let execute = |state: &mut V03State, instruction| execute_at(state, instruction, 100_000);
+        let creation = factory_core::Message::CreateWeightedLbp {
+            inputs: WeightedInputs {
+                namespace: NAMESPACE,
+                launch_salt: salt,
+                name: "Weighted".into(),
+                uri: "https://example.test/weighted".into(),
+                sale_inventory: 800,
+                creator_allocation: 200,
+                collateral_seed: 100,
+                token_weight_start: 95 * lbp_core::WEIGHT_TOTAL / 100 + 1,
+                token_weight_end: lbp_core::WEIGHT_TOTAL / 2,
+                start_timestamp: 150,
+                end_timestamp: 300,
+                allocation_release: release,
+                namespace_program_id: CURVE,
+                lbp_program_id: LBP,
+                collateral_definition_id: COLLATERAL,
+                creator,
             },
-        )
-        .unwrap();
+        };
+        for timestamp in [150_001, 299_999, 300_000] {
+            let mut rejected = state.clone();
+            assert!(matches!(
+                execute_at(&mut rejected, creation.clone(), timestamp),
+                Err(lee::error::LeeError::OutOfValidityWindow)
+            ));
+            assert!(rejected == state, "late creation changed state or nonce");
+        }
+        let mut at_start = state.clone();
+        execute_at(&mut at_start, creation.clone(), 150_000).unwrap();
+        execute(&mut state, creation).unwrap();
         assert_eq!(balance(&state, mint, launch), 1000);
         for stage in [LbpCreationStage::Minted, LbpCreationStage::Allocated] {
+            for timestamp in [300_000, 300_001] {
+                let mut rejected = state.clone();
+                assert!(matches!(
+                    execute_at(
+                        &mut rejected,
+                        factory_core::Message::ContinueWeightedCreation {
+                            expected_stage: stage,
+                            creator
+                        },
+                        timestamp
+                    ),
+                    Err(lee::error::LeeError::OutOfValidityWindow)
+                ));
+                assert!(rejected == state, "late setup changed state or nonce");
+            }
+            let mut before_end = state.clone();
+            execute_at(
+                &mut before_end,
+                factory_core::Message::ContinueWeightedCreation {
+                    expected_stage: stage,
+                    creator,
+                },
+                299_999,
+            )
+            .unwrap();
             execute(
                 &mut state,
                 factory_core::Message::ContinueWeightedCreation {
@@ -1098,6 +1175,19 @@ fn weighted_factory_executes_all_stages_and_rolls_back_failed_funding() {
             );
             state = state.with_public_accounts([creator_tokens(0)]);
         }
+        for timestamp in [300_000, 300_001] {
+            let mut rejected = state.clone();
+            assert!(matches!(
+                execute_at(&mut rejected, instruction(), timestamp),
+                Err(lee::error::LeeError::OutOfValidityWindow)
+            ));
+            assert!(
+                rejected == state,
+                "late activation changed transfers, state or nonce"
+            );
+        }
+        let mut before_end = state.clone();
+        execute_at(&mut before_end, instruction(), 299_999).unwrap();
         execute(&mut state, instruction()).unwrap();
         let launch_state =
             LbpLaunchState::decode(state.get_account_by_id(factory).data.actor_state(FACTORY))

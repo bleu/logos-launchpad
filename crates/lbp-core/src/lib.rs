@@ -383,8 +383,22 @@ fn advance_setup_steps(
                 }
             }
             state.pending = None;
+            let response = if matches!(state.mode, PoolMode::Weighted { .. }) {
+                curve_core::with_inclusion_bounds(
+                    state.response(),
+                    None,
+                    state
+                        .end_timestamp
+                        .map(curve_core::timestamp_millis)
+                        .transpose()
+                        .map_err(|_| Error::InvalidTerms)?,
+                )
+                .map_err(|_| Error::InvalidTerms)?
+            } else {
+                state.response()
+            };
             return Ok(Some(
-                state.response().send_sync(
+                response.send_sync(
                     Actor::new(
                         clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID,
                         clock_core::clock_account_id(),

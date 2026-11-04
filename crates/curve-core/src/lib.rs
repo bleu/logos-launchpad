@@ -180,6 +180,21 @@ pub fn clock_assertion(at_least: u64, before: Option<u64>) -> Result<clock_core:
     Ok(clock_core::Message::AssertTimestamp { at_least, at_most })
 }
 
+/// Intersect inclusion-time bounds in LEZ milliseconds with the response window.
+pub fn with_inclusion_bounds(
+    mut response: Response,
+    at_least: Option<u64>,
+    before: Option<u64>,
+) -> Result<Response, Error> {
+    let window = (at_least, before).try_into().map_err(|_| Error::Closed)?;
+    response.validity.timestamps = response
+        .validity
+        .timestamps
+        .intersect(window)
+        .map_err(|_| Error::Closed)?;
+    Ok(response)
+}
+
 pub fn compute_config_pda_seed(namespace: AccountId) -> PdaSeed {
     PdaSeed::new(*namespace.value())
 }

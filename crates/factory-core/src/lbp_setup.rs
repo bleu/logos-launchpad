@@ -855,6 +855,13 @@ pub(super) fn resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
                 curve_core::timestamp_millis(timestamp).map_err(|_| Error::InvalidTerms)?,
             ),
         };
+        let response = if matches!(state.mode, LbpSetupMode::Weighted { .. }) {
+            let before = at_most.checked_add(1).ok_or(Error::InvalidTerms)?;
+            curve_core::with_inclusion_bounds(response, None, Some(before))
+                .map_err(|_| Error::InvalidTerms)?
+        } else {
+            response
+        };
         state.with_setup_deadline(response.send_sync(
             Actor::new(
                 clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID,
@@ -868,6 +875,16 @@ impl LbpLaunchState {
     fn with_setup_deadline(&self, response: Response) -> Result<Response, Error> {
         let Some(end_timestamp) = self.end_timestamp else {
             return Ok(response);
+        };
+        let response = if matches!(self.mode, LbpSetupMode::Weighted { .. }) {
+            curve_core::with_inclusion_bounds(
+                response,
+                None,
+                Some(curve_core::timestamp_millis(end_timestamp).map_err(|_| Error::InvalidTerms)?),
+            )
+            .map_err(|_| Error::InvalidTerms)?
+        } else {
+            response
         };
         Ok(response.send_sync(
             Actor::new(
