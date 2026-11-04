@@ -83,8 +83,8 @@ impl Pending {
                 amount,
             ));
         }
-        if let Message::SettleFixedPrice { creator, now } = self.message {
-            let clock = self.state.close_clock_assertion(now)?;
+        if let Message::SettleFixedPrice { creator, .. } = self.message {
+            let expiry = self.state.close_time_bound()?;
             if self.balances[1] < self.state.remaining_inventory {
                 return Err(Error::Underfunded);
             }
@@ -93,16 +93,8 @@ impl Pending {
             self.state.accrued_fees = 0;
             self.state.recorded_collateral = 0;
             self.state.proceeds_settled = true;
-            let mut response = self.state.response();
-            if let Some(clock) = clock {
-                response = response.send_sync(
-                    Actor::new(
-                        clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID,
-                        clock_core::clock_account_id(),
-                    ),
-                    &clock,
-                );
-            }
+            let response = curve_core::with_time_bounds(self.state.response(), expiry, None)
+                .map_err(|_| Error::InvalidTerms)?;
             let response = payout(
                 response,
                 &self.state,
@@ -234,25 +226,20 @@ impl Pending {
         {
             return Err(Error::Underfunded);
         }
-        let response = self
-            .state
-            .response()
-            .send_sync(
-                Actor::new(
-                    clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID,
-                    clock_core::clock_account_id(),
-                ),
-                &curve_core::clock_assertion(now, self.state.end_timestamp)
-                    .map_err(|_| Error::InvalidTerms)?,
-            )
-            .send_sync(
-                Actor::new(self.buyer, TOKEN_PROGRAM_ACCOUNT_ID),
-                &token::Message::Transfer {
-                    definition: self.state.collateral_definition_id,
-                    recipient: receiver.account_id,
-                    amount: amount_in,
-                },
-            );
+        let response = curve_core::with_time_bounds(
+            self.state.response(),
+            Some(self.state.start_timestamp),
+            self.state.end_timestamp,
+        )
+        .map_err(|_| Error::InvalidTerms)?
+        .send_sync(
+            Actor::new(self.buyer, TOKEN_PROGRAM_ACCOUNT_ID),
+            &token::Message::Transfer {
+                definition: self.state.collateral_definition_id,
+                recipient: receiver.account_id,
+                amount: amount_in,
+            },
+        );
         Ok(payout(
             response,
             &self.state,

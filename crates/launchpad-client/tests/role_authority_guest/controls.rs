@@ -426,12 +426,13 @@ fn trade(
     fixture: &mut FactoryFixture,
     message: curve_core::Message,
 ) -> Result<(), lee::error::LeeError> {
-    curve_call(
+    curve_call_at(
         &mut fixture.state,
         &fixture.actors,
         fixture.pool,
         &key(49),
         message,
+        fixture.inclusion_timestamp_ms,
     )
 }
 
@@ -1141,36 +1142,33 @@ fn factory_expiry_rejects_current_and_stale_trades_and_can_close_while_frozen() 
         },
     )
     .unwrap();
-    fixture.state = fixture.state.clone().with_public_accounts([account(
-        Actor::new(
-            clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID,
-            clock_core::clock_account_id(),
-        ),
-        clock_core::ClockAccountData {
-            block_id: 2,
-            timestamp: 2_000,
-        }
-        .to_bytes(),
-    )]);
-    for (now, reason) in [(1, "Clock timestamp 2000 is outside"), (2, "InvalidPool")] {
+    fixture.inclusion_timestamp_ms = 2_000;
+    for now in [1, 2] {
         for token_in in [COLLATERAL, fixture.definition] {
-            rejected_without_changes(
-                &mut fixture.state,
-                |state| {
-                    curve_call(
-                        state,
-                        &fixture.actors,
-                        fixture.pool,
-                        &key(49),
-                        curve_core::Message::SwapExactInput {
-                            amount_in: 10,
-                            min_amount_out: 1,
-                            token_in,
-                            now,
-                        },
-                    )
+            let before = fixture.state.clone();
+            let result = trade(
+                &mut fixture,
+                curve_core::Message::SwapExactInput {
+                    amount_in: 10,
+                    min_amount_out: 1,
+                    token_in,
+                    now,
                 },
-                reason,
+            );
+            if now == 1 {
+                assert!(
+                    matches!(result, Err(lee::error::LeeError::OutOfValidityWindow)),
+                    "{result:?}"
+                );
+            } else {
+                assert!(
+                    matches!(&result, Err(lee::error::LeeError::ProgramExecutionFailed(reason)) if reason.contains("InvalidPool")),
+                    "{result:?}"
+                );
+            }
+            assert!(
+                fixture.state == before,
+                "expired trade changed runtime state or nonce"
             );
         }
     }

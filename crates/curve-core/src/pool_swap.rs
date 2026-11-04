@@ -2,7 +2,7 @@
 use crate::{
     Error, Message, PoolAccount, TOKEN_PROGRAM_ACCOUNT_ID,
     dispatch::{Pending, Query},
-    pool_create::{assert_clock, transfer},
+    pool_create::transfer,
 };
 use lee_core::{
     account::Actor,
@@ -121,10 +121,11 @@ pub(crate) fn finish(mut pending: Pending, receiver: Actor) -> Result<Response, 
         _ => return Err(Error::InvalidMessage),
     }
     .map_err(|_| Error::InvalidPool)?;
-    let mut response = Response::set_state(borsh::to_vec(&pending.state).unwrap());
-    if let Some(end) = pending.state.pool.close_timestamp {
-        response = assert_clock(response, now, Some(end))?;
-    }
+    let mut response = crate::with_time_bounds(
+        Response::set_state(borsh::to_vec(&pending.state).unwrap()),
+        None,
+        pending.state.pool.close_timestamp,
+    )?;
     response = transfer(
         response,
         pending.authority,
