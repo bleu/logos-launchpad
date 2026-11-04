@@ -25,7 +25,8 @@ This page explains technical shorthand used in this repository. [CONTEXT.md](../
 | Exact-input / exact-output | A trade where the input is fixed and output is calculated, or where the desired output is fixed and required input is calculated. |
 | Slippage limit | A participant-selected execution bound, such as minimum output or maximum input, that rejects an unfavourable trade. |
 | Protocol fee / accrued fee | The protocol charge on a trade, and the amount recorded but not yet transferred to the treasury. |
-| Creator-borne fee | A fixed-price or weighted sale fee claim against creator proceeds. It does not reduce the buyer input used for pricing. |
+| Fee-first buy | A buy that deducts the collateral fee before pricing tokens. Fixed-price exact-output buys gross up the required net collateral; creator proceeds are net. See [ADR 0035](adr/0035-fixed-price-swap-fees.md). |
+| Creator-borne fee | A future weighted-sale fee claim against creator proceeds. It does not reduce the buyer input used for pricing. |
 | Live fee rate / current treasury | A namespace setting read at execution or collection time, rather than a value frozen when the sale was created. |
 | Treasury | The current namespace destination for collected protocol fees. |
 | Lifecycle / close / settlement | A sale's allowed state changes; ending trading; and the separate post-close transfer of allowed fees, allocations or proceeds. |

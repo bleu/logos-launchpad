@@ -32,9 +32,10 @@ Fees use collateral: token1 for curve factory sales. Namespace creation and upda
 | --- | --- | --- |
 | Curve buy | Full collateral input | Use input after the fee for pricing and the real reserve |
 | Curve sell | Collateral output before the fee | Pay the participant after the fee; remove the full output from the real reserve |
-| Fixed-price or weighted sale buy | Full collateral input | Use full input for pricing; the creator pays the fee from proceeds |
+| Fixed-price sale buy | Gross collateral input | Deduct the fee before pricing; exact output grosses up required net collateral; creator proceeds are net ([ADR 0035](../adr/0035-fixed-price-swap-fees.md)) |
+| Future weighted sale buy | Full collateral input | Use full input for pricing; the creator pays the fee from proceeds |
 
-Execution checks trade amounts, rounding, price limits, and available funds. A fee change affects later trades; amounts already recorded stay fixed.
+Execution checks trade amounts, rounding, price limits, and available funds. A fee change affects later trades; amounts already recorded stay fixed. Trader-borne fixed-price fees are an additional RFP-016 departure with external status `To be reviewed by Logos team`. Future weighted-sale fees remain creator-borne under [ADR 0016](../adr/0016-lbp-live-fees.md) and [ADR 0030](../adr/0030-lbp-pricing-collateral.md).
 
 Fees can be collected at any time. Collection pays all outstanding fees, clears that record, and increases total collected fees by the amount paid. If the curve pool is the current treasury, its fees are already in the destination collateral vault: clear outstanding fees and record collection without a transfer to itself. Reserve withdrawal leaves those collected fees in that vault. Collecting a zero balance succeeds and leaves the records unchanged. Repeated collection gives the same result until a trade adds new fees.
 

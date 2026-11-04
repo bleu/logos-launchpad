@@ -137,14 +137,19 @@ impl Pending {
         if config.protocol_fee_bps >= 10_000 {
             return Err(Error::InvalidFee);
         }
-        let (amount_in, amount_out, now) = match self.message {
+        let (amount_in, amount_out, fee, now) = match self.message {
             Message::BuyExactInput {
                 amount_in,
                 min_amount_out,
                 now,
             } => {
+                let fee = mul_div(amount_in, u128::from(config.protocol_fee_bps), 10_000, true)?;
+                let effective_input = amount_in.checked_sub(fee).ok_or(Error::Arithmetic)?;
+                if effective_input == 0 {
+                    return Err(Error::InvalidAmount);
+                }
                 let out = mul_div(
-                    amount_in,
+                    effective_input,
                     self.state.price.token_units,
                     self.state.price.collateral_units,
                     false,
@@ -152,23 +157,32 @@ impl Pending {
                 if out < min_amount_out {
                     return Err(Error::Slippage);
                 }
-                (amount_in, out, now)
+                (amount_in, out, fee, now)
             }
             Message::BuyExactOutput {
                 amount_out,
                 max_amount_in,
                 now,
             } => {
-                let input = mul_div(
+                let required_input = mul_div(
                     amount_out,
                     self.state.price.collateral_units,
                     self.state.price.token_units,
                     true,
                 )?;
+                let input = mul_div(
+                    required_input,
+                    10_000,
+                    10_000_u128
+                        .checked_sub(u128::from(config.protocol_fee_bps))
+                        .ok_or(Error::Arithmetic)?,
+                    true,
+                )?;
                 if input > max_amount_in {
                     return Err(Error::Slippage);
                 }
-                (input, amount_out, now)
+                let fee = mul_div(input, u128::from(config.protocol_fee_bps), 10_000, true)?;
+                (input, amount_out, fee, now)
             }
             _ => return Err(Error::InvalidMessage),
         };
@@ -185,8 +199,10 @@ impl Pending {
         if self.balances[1] < amount_out || self.balances[2] < amount_in {
             return Err(Error::Underfunded);
         }
-        let fee = mul_div(amount_in, u128::from(config.protocol_fee_bps), 10_000, true)?;
         let proceeds = amount_in.checked_sub(fee).ok_or(Error::Arithmetic)?;
+        if proceeds == 0 {
+            return Err(Error::InvalidAmount);
+        }
         self.state.recorded_collateral = self
             .state
             .recorded_collateral
