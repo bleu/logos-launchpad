@@ -491,7 +491,7 @@ pub(super) fn resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
             state.pending = Some(pending);
             return Ok(state.next());
         }
-        if let Message::ClaimCreatorAllocation { creator, now } = pending.command {
+        if let Message::ClaimCreatorAllocation { creator, .. } = pending.command {
             let pool = lbp_core::PoolAccount::decode(&pending.values[0])
                 .map_err(|_| Error::InvalidState)?;
             if pool.mode != lbp_core::PoolMode::FixedPrice
@@ -515,12 +515,10 @@ pub(super) fn resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
             if !pool.funded {
                 return Err(Error::CreationPending);
             }
-            let clock = pool
-                .close_clock_assertion(now)
-                .map_err(|error| match error {
-                    lbp_core::Error::NotClosed => Error::NotClosed,
-                    _ => Error::InvalidTerms,
-                })?;
+            let expiry = pool.close_time_bound().map_err(|error| match error {
+                lbp_core::Error::NotClosed => Error::NotClosed,
+                _ => Error::InvalidTerms,
+            })?;
             if state.creator_allocation != 0
                 && balance(
                     &pending.values[1],
@@ -531,16 +529,8 @@ pub(super) fn resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
                 return Err(Error::InvalidCustody);
             }
             state.creator_allocation_released = true;
-            let mut response = state.response();
-            if let Some(clock) = clock {
-                response = response.send_sync(
-                    Actor::new(
-                        clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID,
-                        clock_core::clock_account_id(),
-                    ),
-                    &clock,
-                );
-            }
+            let response = curve_core::with_time_bounds(state.response(), expiry, None)
+                .map_err(|_| Error::InvalidTerms)?;
             return Ok(transfer(
                 response,
                 state.creator_escrow_id,
@@ -860,8 +850,22 @@ pub(super) fn resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
             curve_core::with_inclusion_bounds(response, None, Some(before))
                 .map_err(|_| Error::InvalidTerms)?
         } else {
-            response
+            match start {
+                SaleStart::Now { timestamp } => {
+                    curve_core::with_time_bounds(response, Some(timestamp), None)
+                        .map_err(|_| Error::InvalidTerms)?
+                }
+                SaleStart::At { .. } => curve_core::with_inclusion_bounds(
+                    response,
+                    None,
+                    Some(at_most.checked_add(1).ok_or(Error::InvalidTerms)?),
+                )
+                .map_err(|_| Error::InvalidTerms)?,
+            }
         };
+        if matches!(state.mode, LbpSetupMode::FixedPrice) {
+            return state.with_setup_deadline(response);
+        }
         state.with_setup_deadline(response.send_sync(
             Actor::new(
                 clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID,
@@ -873,6 +877,10 @@ pub(super) fn resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
 }
 impl LbpLaunchState {
     fn with_setup_deadline(&self, response: Response) -> Result<Response, Error> {
+        if matches!(self.mode, LbpSetupMode::FixedPrice) {
+            return curve_core::with_time_bounds(response, None, self.end_timestamp)
+                .map_err(|_| Error::InvalidTerms);
+        }
         let Some(end_timestamp) = self.end_timestamp else {
             return Ok(response);
         };

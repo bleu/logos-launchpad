@@ -160,12 +160,31 @@ impl Config {
     }
 }
 
-/// Convert public Unix seconds to native clock milliseconds.
+/// Convert public Unix seconds to LEZ milliseconds.
 pub fn timestamp_millis(seconds: u64) -> Result<u64, Error> {
     seconds.checked_mul(1000).ok_or(Error::Arithmetic)
 }
 
-/// Assert a public lower bound and an optional strict deadline, both in seconds.
+/// Restrict inclusion time without replacing an existing response window.
+pub fn with_time_bounds(
+    mut response: Response,
+    at_least: Option<u64>,
+    before: Option<u64>,
+) -> Result<Response, Error> {
+    let bounds = (
+        at_least.map(timestamp_millis).transpose()?,
+        before.map(timestamp_millis).transpose()?,
+    );
+    let window = bounds.try_into().map_err(|_| Error::Closed)?;
+    response.validity.timestamps = response
+        .validity
+        .timestamps
+        .intersect(window)
+        .map_err(|_| Error::Closed)?;
+    Ok(response)
+}
+
+/// Check a saved-clock interval for weighted-sale pricing.
 pub fn clock_assertion(at_least: u64, before: Option<u64>) -> Result<clock_core::Message, Error> {
     let at_least = timestamp_millis(at_least)?;
     let at_most = match before {

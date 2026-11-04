@@ -329,6 +329,24 @@ fn settlement(
     (input, response)
 }
 #[test]
+fn settlement_and_graduation_use_expiry_only_for_a_saved_open_pool() {
+    for hook in [false, true] {
+        for (lifecycle, expected) in [
+            (pool::PoolLifecycle::Open, Some(200_000)),
+            (pool::PoolLifecycle::Closed, None),
+        ] {
+            let (input, active) = active();
+            let state = FactoryState::decode(active.post_state.as_ref().unwrap()).unwrap();
+            let mut saved = pool_state(&state, input.receiver, true);
+            saved.pool.lifecycle = lifecycle;
+            let (_, response) = settlement(&input, &active, saved, 100, 0, hook);
+            assert_eq!(response.validity.timestamps.start(), expected);
+            assert_eq!(response.validity.timestamps.end(), None);
+        }
+    }
+}
+
+#[test]
 fn expiry_starts_manual_settlement_with_canonical_collateral_custody() {
     let (input, active) = active();
     let state = FactoryState::decode(active.post_state.as_ref().unwrap()).unwrap();
@@ -342,18 +360,8 @@ fn expiry_starts_manual_settlement_with_canonical_collateral_custody() {
     );
     let state = FactoryState::decode(response.post_state.as_ref().unwrap()).unwrap();
     assert_eq!(state.settlement_stage, SettlementStage::Ready);
-    let clock = response
-        .sync_messages
-        .iter()
-        .find(|m| m.to.account_id == clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID)
-        .unwrap();
-    assert_eq!(
-        borsh::from_slice::<clock_core::Message>(&clock.message).unwrap(),
-        clock_core::Message::AssertTimestamp {
-            at_least: 200_000,
-            at_most: u64::MAX
-        }
-    );
+    assert_eq!(response.validity.timestamps.start(), Some(200_000));
+    assert_eq!(response.validity.timestamps.end(), None);
     assert_eq!(state.pool_id, compute_pool_address(&state, input.receiver));
 }
 fn compute_pool_address(state: &FactoryState, actor: Actor) -> AccountId {
@@ -492,6 +500,37 @@ fn manual_settlement_pays_only_r_then_recorded_collateral_and_rejects_replay() {
     .unwrap();
     assert!(matches!(handle(&input), Err(Error::AlreadySettled)));
 }
+#[test]
+fn allocation_uses_saved_closure_instead_of_a_future_client_time() {
+    for (lifecycle, expected) in [
+        (pool::PoolLifecycle::Open, Some(200_000)),
+        (pool::PoolLifecycle::Closed, None),
+    ] {
+        let (mut input, active) = active();
+        let state = FactoryState::decode(active.post_state.as_ref().unwrap()).unwrap();
+        let mut saved = pool_state(&state, input.receiver, true);
+        saved.pool.lifecycle = lifecycle;
+        input.pre_state = active.post_state.unwrap();
+        input.message = borsh::to_vec(&Message::ClaimCreatorAllocation {
+            creator: id(42),
+            now: 999,
+        })
+        .unwrap();
+        let response = handle(&input).unwrap();
+        input = proof(&input, &response, id(42));
+        let mut response = handle(&input).unwrap();
+        for bytes in [
+            borsh::to_vec(&saved).unwrap(),
+            holding(state.creator_escrow_id, state.token_definition_id, 100),
+        ] {
+            input = reply(&input, &response, bytes);
+            response = handle(&input).unwrap();
+        }
+        assert_eq!(response.validity.timestamps.start(), expected);
+        assert_eq!(response.validity.timestamps.end(), None);
+    }
+}
+
 #[test]
 fn creator_allocation_follows_the_role_to_its_current_holder_after_closure() {
     let (mut input, active) = active();
@@ -770,18 +809,8 @@ fn expiry_is_proved_separately_from_the_supplied_zero_lower_bound() {
         input = reply(&input, &response, bytes);
         response = handle(&input).unwrap()
     }
-    let clock = response
-        .sync_messages
-        .iter()
-        .find(|m| m.to.account_id == clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID)
-        .unwrap();
-    assert_eq!(
-        borsh::from_slice::<clock_core::Message>(&clock.message).unwrap(),
-        clock_core::Message::AssertTimestamp {
-            at_least: 200_000,
-            at_most: u64::MAX
-        }
-    );
+    assert_eq!(response.validity.timestamps.start(), Some(200_000));
+    assert_eq!(response.validity.timestamps.end(), None);
 }
 
 #[test]
@@ -869,6 +898,8 @@ fn curve_creation_reads_namespace_before_bootstrapping_its_creator_role() {
 #[test]
 fn curve_creation_bootstraps_a_transfer_only_creator_role_with_the_mint() {
     let (_, response) = minted();
+    assert_eq!(response.validity.timestamps.start(), None);
+    assert_eq!(response.validity.timestamps.end(), Some(200_000));
     let call = response
         .sync_messages
         .iter()

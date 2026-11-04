@@ -213,17 +213,12 @@ impl PoolAccount {
     pub fn decode(bytes: &[u8]) -> Result<Self, Error> {
         borsh::from_slice(bytes).map_err(|_| Error::InvalidState)
     }
-    pub fn close_clock_assertion(&self, now: u64) -> Result<Option<clock_core::Message>, Error> {
+    pub fn close_time_bound(&self) -> Result<Option<u64>, Error> {
         if self.remaining_inventory == 0 {
-            return Ok(None);
+            Ok(None)
+        } else {
+            self.end_timestamp.map(Some).ok_or(Error::NotClosed)
         }
-        let end = self.end_timestamp.ok_or(Error::NotClosed)?;
-        if now < end {
-            return Err(Error::NotClosed);
-        }
-        curve_core::clock_assertion(now, None)
-            .map(Some)
-            .map_err(|_| Error::InvalidTerms)
     }
     fn validate_address(&self, receiver: Actor) -> Result<(), Error> {
         if receiver.account_id
@@ -383,21 +378,10 @@ fn advance_setup_steps(
                 }
             }
             state.pending = None;
+            let response =
+                curve_core::with_time_bounds(state.response(), None, state.end_timestamp)
+                    .map_err(|_| Error::InvalidTerms)?;
             let response = if matches!(state.mode, PoolMode::Weighted { .. }) {
-                curve_core::with_inclusion_bounds(
-                    state.response(),
-                    None,
-                    state
-                        .end_timestamp
-                        .map(curve_core::timestamp_millis)
-                        .transpose()
-                        .map_err(|_| Error::InvalidTerms)?,
-                )
-                .map_err(|_| Error::InvalidTerms)?
-            } else {
-                state.response()
-            };
-            return Ok(Some(
                 response.send_sync(
                     Actor::new(
                         clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID,
@@ -405,8 +389,11 @@ fn advance_setup_steps(
                     ),
                     &curve_core::clock_assertion(0, state.end_timestamp)
                         .map_err(|_| Error::InvalidTerms)?,
-                ),
-            ));
+                )
+            } else {
+                response
+            };
+            return Ok(Some(response));
         }
         let step = state.pending.as_ref().unwrap().step;
         let (next_owner, next_definition) = match step {

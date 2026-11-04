@@ -135,17 +135,7 @@ fn closed_sale(
         assert_eq!(balance(&fixture.state, fixture.pool, COLLATERAL), 125);
         assert_eq!(pool_state(&fixture).pool.fees_accrued, 13);
     }
-    fixture.state = fixture.state.clone().with_public_accounts([account(
-        Actor::new(
-            clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID,
-            clock_core::clock_account_id(),
-        ),
-        clock_core::ClockAccountData {
-            block_id: 2,
-            timestamp: 2_000,
-        }
-        .to_bytes(),
-    )]);
+    fixture.inclusion_timestamp_ms = 2_000;
     fixture
 }
 
@@ -383,7 +373,11 @@ fn initialize_adapter(fixture: &mut FactoryFixture, ready: bool) {
     let witnesses = WitnessSet::for_message(&message, &[&signer]);
     fixture
         .state
-        .transition_from_public_transaction(&PublicTransaction::new(message, witnesses), 1, 1_000)
+        .transition_from_public_transaction(
+            &PublicTransaction::new(message, witnesses),
+            1,
+            fixture.inclusion_timestamp_ms,
+        )
         .unwrap();
 }
 

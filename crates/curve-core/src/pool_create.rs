@@ -117,19 +117,6 @@ pub fn begin(input: &ReceiveInput, message: Message) -> Result<Response, Error> 
     }
     Pending::new(state, message, sender.account_id, queries).advance(input.receiver)
 }
-pub(crate) fn assert_clock(
-    response: Response,
-    now: u64,
-    before: Option<u64>,
-) -> Result<Response, Error> {
-    Ok(response.send_sync(
-        Actor::new(
-            clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID,
-            clock_core::clock_account_id(),
-        ),
-        &crate::clock_assertion(now, before)?,
-    ))
-}
 pub(crate) fn transfer(
     response: Response,
     owner: AccountId,
@@ -168,18 +155,18 @@ pub(crate) fn finish(mut pending: Pending, receiver: Actor) -> Result<Response, 
             return Err(Error::Underfunded);
         }
         pending.state.funded = true;
-        if pending
-            .state
-            .pool
-            .close_timestamp
-            .is_some_and(|end| now >= end)
-        {
+        let expired = pending.state.pool.close_timestamp.filter(|end| now >= *end);
+        if expired.is_some() {
             pending.state.pool.lifecycle = pool::PoolLifecycle::Closed;
         }
-        let mut response = assert_clock(
+        let mut response = crate::with_time_bounds(
             Response::set_state(borsh::to_vec(&pending.state).unwrap()),
-            now,
-            None,
+            expired,
+            pending
+                .state
+                .pool
+                .close_timestamp
+                .filter(|_| expired.is_none()),
         )?;
         if pending.state.owner_program.is_none() {
             response = transfer(
@@ -199,10 +186,7 @@ pub(crate) fn finish(mut pending: Pending, receiver: Actor) -> Result<Response, 
         }
         return Ok(response);
     }
-    let Message::CreatePool {
-        defer_funding, now, ..
-    } = pending.message
-    else {
+    let Message::CreatePool { defer_funding, .. } = pending.message else {
         return Err(Error::InvalidMessage);
     };
     if pending.state.owner_program.is_some()
@@ -217,9 +201,9 @@ pub(crate) fn finish(mut pending: Pending, receiver: Actor) -> Result<Response, 
     } else {
         pending.state.pool.close_timestamp
     };
-    let mut response = assert_clock(
+    let mut response = crate::with_time_bounds(
         Response::set_state(borsh::to_vec(&pending.state).unwrap()),
-        now,
+        None,
         before,
     )?;
     for (definition, amount) in [

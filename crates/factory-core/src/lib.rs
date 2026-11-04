@@ -785,18 +785,17 @@ fn curve_resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
             return Ok(state.next());
         }
         match pending.command {
-            Message::ClaimCreatorAllocation { creator, now } => {
+            Message::ClaimCreatorAllocation { creator, .. } => {
                 let saved = curve_core::PoolAccount::decode(&pending.values[0])
                     .map_err(|_| Error::InvalidState)?;
                 validate_pool(&state, input.receiver, &saved)?;
                 if !saved.funded {
                     return Err(Error::CreationPending);
                 }
-                let closed_at = if saved.pool.effective_lifecycle(now) == pool::PoolLifecycle::Open
-                {
-                    saved.pool.close_timestamp.ok_or(Error::NotClosed)?.max(now)
+                let expiry = if saved.pool.lifecycle == pool::PoolLifecycle::Open {
+                    Some(saved.pool.close_timestamp.ok_or(Error::NotClosed)?)
                 } else {
-                    now
+                    None
                 };
                 if state.creator_allocation != 0
                     && balance(
@@ -809,14 +808,8 @@ fn curve_resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
                 }
                 state.creator_allocation_claimed = true;
                 Ok(transfer(
-                    state.response().send_sync(
-                        Actor::new(
-                            clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID,
-                            clock_core::clock_account_id(),
-                        ),
-                        &curve_core::clock_assertion(closed_at, None)
-                            .map_err(|_| Error::InvalidTerms)?,
-                    ),
+                    curve_core::with_time_bounds(state.response(), expiry, None)
+                        .map_err(|_| Error::InvalidTerms)?,
                     state.creator_escrow_id,
                     compute_escrow_seed(state.namespace, state.launch_salt),
                     state.token_definition_id,
@@ -837,11 +830,10 @@ fn curve_resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
                 if !saved.funded {
                     return Err(Error::CreationPending);
                 }
-                let closed_at = if saved.pool.effective_lifecycle(now) == pool::PoolLifecycle::Open
-                {
-                    saved.pool.close_timestamp.ok_or(Error::NotClosed)?.max(now)
+                let expiry = if saved.pool.lifecycle == pool::PoolLifecycle::Open {
+                    Some(saved.pool.close_timestamp.ok_or(Error::NotClosed)?)
                 } else {
-                    now
+                    None
                 };
                 balance(
                     &pending.values[1],
@@ -1067,14 +1059,8 @@ fn curve_resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
                     },
                     _ => return Err(Error::AlreadySettled),
                 };
-                let response = state.response().send_sync(
-                    Actor::new(
-                        clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID,
-                        clock_core::clock_account_id(),
-                    ),
-                    &curve_core::clock_assertion(closed_at, None)
-                        .map_err(|_| Error::InvalidTerms)?,
-                );
+                let response = curve_core::with_time_bounds(state.response(), expiry, None)
+                    .map_err(|_| Error::InvalidTerms)?;
                 Ok(if withdrawing {
                     response.send_sync(
                         Actor::new(state.pool_id, state.curve_program_id),
@@ -1238,7 +1224,7 @@ fn curve_resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
                     state.creator_allocation,
                 ))
             }
-            Message::CreateFactoryPool { now, creator, .. } => {
+            Message::CreateFactoryPool { creator, .. } => {
                 let config = curve_core::Config::decode(&pending.values[0])
                     .map_err(|_| Error::InvalidState)?;
                 if config.namespace != state.namespace {
@@ -1268,8 +1254,10 @@ fn curve_resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
                         creators: String::new(),
                     }),
                 };
-                Ok(state
-                    .response()
+                let response =
+                    curve_core::with_time_bounds(state.response(), None, state.end_timestamp)
+                        .map_err(|_| Error::InvalidTerms)?;
+                Ok(response
                     .send(
                         SyncMessage::new(
                             Actor::new(state.creator_role_id, AUTHORITY_PROGRAM_ACCOUNT_ID),
@@ -1289,14 +1277,6 @@ fn curve_resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
                             state.namespace,
                             state.launch_salt,
                         )]),
-                    )
-                    .send_sync(
-                        Actor::new(
-                            clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID,
-                            clock_core::clock_account_id(),
-                        ),
-                        &curve_core::clock_assertion(now, state.end_timestamp)
-                            .map_err(|_| Error::InvalidTerms)?,
                     ))
             }
             _ => Err(Error::InvalidMessage),

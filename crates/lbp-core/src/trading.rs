@@ -89,8 +89,8 @@ impl Pending {
                 amount,
             ));
         }
-        if let Message::SettleFixedPrice { creator, now } = self.message {
-            let clock = self.state.close_clock_assertion(now)?;
+        if let Message::SettleFixedPrice { creator, .. } = self.message {
+            let expiry = self.state.close_time_bound()?;
             if self.balances[1] < self.state.remaining_inventory {
                 return Err(Error::Underfunded);
             }
@@ -99,16 +99,8 @@ impl Pending {
             self.state.accrued_fees = 0;
             self.state.recorded_collateral = 0;
             self.state.proceeds_settled = true;
-            let mut response = self.state.response();
-            if let Some(clock) = clock {
-                response = response.send_sync(
-                    Actor::new(
-                        clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID,
-                        clock_core::clock_account_id(),
-                    ),
-                    &clock,
-                );
-            }
+            let response = curve_core::with_time_bounds(self.state.response(), expiry, None)
+                .map_err(|_| Error::InvalidTerms)?;
             let response = payout(
                 response,
                 &self.state,
@@ -152,7 +144,7 @@ impl Pending {
             return Err(Error::InvalidFee);
         }
 
-        let clock_assertion = buy_clock_assertion(&self.state, &self.message)?;
+        validate_buy_window(&self.state, &self.message)?;
         if self.state.proceeds_settled || self.state.remaining_inventory == 0 {
             return Err(Error::Closed);
         }
@@ -174,7 +166,9 @@ impl Pending {
         }
 
         let (amount_in, amount_out) = match self.state.mode {
-            PoolMode::FixedPrice => fixed_price_amounts(&self.state, &self.message)?,
+            PoolMode::FixedPrice => {
+                fixed_price_amounts(&self.state, &self.message, config.protocol_fee_bps)?
+            }
             PoolMode::Weighted {
                 token_weight_start,
                 token_weight_end,
@@ -198,6 +192,9 @@ impl Pending {
 
         let fee = mul_div(amount_in, u128::from(config.protocol_fee_bps), 10_000, true)?;
         let net_in = amount_in.checked_sub(fee).ok_or(Error::Arithmetic)?;
+        if matches!(self.state.mode, PoolMode::FixedPrice) && net_in == 0 {
+            return Err(Error::InvalidAmount);
+        }
 
         let next_pricing = match self.state.mode {
             PoolMode::Weighted {
@@ -248,35 +245,35 @@ impl Pending {
         {
             *pricing_collateral = next;
         }
-        let response = self
-            .state
-            .response()
-            .send_sync(
-                Actor::new(
-                    clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID,
-                    clock_core::clock_account_id(),
-                ),
-                &clock_assertion,
+        let response = match self.state.mode {
+            PoolMode::FixedPrice => curve_core::with_time_bounds(
+                self.state.response(),
+                Some(self.state.start_timestamp),
+                self.state.end_timestamp,
             )
-            .send_sync(
-                Actor::new(self.buyer, TOKEN_PROGRAM_ACCOUNT_ID),
-                &token::Message::Transfer {
-                    definition: self.state.collateral_definition_id,
-                    recipient: receiver.account_id,
-                    amount: amount_in,
-                },
-            );
-        let response = if matches!(self.state.mode, PoolMode::Weighted { .. }) {
-            let (start, end) = weighted_window(&self.message)?;
-            curve_core::with_inclusion_bounds(
-                response,
-                Some(curve_core::timestamp_millis(start).map_err(|_| Error::Arithmetic)?),
-                Some(curve_core::timestamp_millis(end).map_err(|_| Error::Arithmetic)?),
-            )
-            .map_err(|_| Error::Closed)?
-        } else {
-            response
-        };
+            .map_err(|_| Error::InvalidTerms)?,
+            PoolMode::Weighted { .. } => {
+                let (start, end) = weighted_window(&self.message)?;
+                curve_core::with_time_bounds(self.state.response(), Some(start), Some(end))
+                    .map_err(|_| Error::Arithmetic)?
+                    .send_sync(
+                        Actor::new(
+                            clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID,
+                            clock_core::clock_account_id(),
+                        ),
+                        &curve_core::clock_assertion(start, Some(end))
+                            .map_err(|_| Error::Arithmetic)?,
+                    )
+            }
+        }
+        .send_sync(
+            Actor::new(self.buyer, TOKEN_PROGRAM_ACCOUNT_ID),
+            &token::Message::Transfer {
+                definition: self.state.collateral_definition_id,
+                recipient: receiver.account_id,
+                amount: amount_in,
+            },
+        );
         Ok(payout(
             response,
             &self.state,
@@ -293,15 +290,24 @@ impl Pending {
 // ---------------------------------------------------------------------------
 
 /// Compute (amount_in, amount_out) for a fixed-price pool.
-fn fixed_price_amounts(state: &PoolAccount, message: &Message) -> Result<(u128, u128), Error> {
+fn fixed_price_amounts(
+    state: &PoolAccount,
+    message: &Message,
+    fee_bps: u16,
+) -> Result<(u128, u128), Error> {
     match message {
         Message::BuyExactInput {
             amount_in,
             min_amount_out,
             ..
         } => {
+            let fee = mul_div(*amount_in, u128::from(fee_bps), 10_000, true)?;
+            let net = amount_in.checked_sub(fee).ok_or(Error::Arithmetic)?;
+            if net == 0 {
+                return Err(Error::InvalidAmount);
+            }
             let out = mul_div(
-                *amount_in,
+                net,
                 state.price.token_units,
                 state.price.collateral_units,
                 false,
@@ -322,6 +328,7 @@ fn fixed_price_amounts(state: &PoolAccount, message: &Message) -> Result<(u128, 
                 state.price.token_units,
                 true,
             )?;
+            let input = mul_div(input, 10_000, 10_000 - u128::from(fee_bps), true)?;
             if input > *max_amount_in {
                 return Err(Error::Slippage);
             }
@@ -424,7 +431,7 @@ pub(super) fn begin(input: &ReceiveInput, message: Message) -> Result<Response, 
         message,
         Message::CollectFees | Message::SettleFixedPrice { .. }
     ) {
-        buy_clock_assertion(&state, &message)?;
+        validate_buy_window(&state, &message)?;
     }
     let buyer = if let Message::SettleFixedPrice { creator, .. } = message {
         if state.mode != PoolMode::FixedPrice {
@@ -559,12 +566,8 @@ fn mul_div(value: u128, multiplier: u128, divisor: u128, ceil: bool) -> Result<u
         .ok_or(Error::Arithmetic)
 }
 
-/// Validate the interval before pricing. The canonical clock checks the interval
-/// in the same transaction as the buy and transfers.
-fn buy_clock_assertion(
-    state: &PoolAccount,
-    message: &Message,
-) -> Result<clock_core::Message, Error> {
+/// Validate sale bounds before pricing. Weighted buys also check saved clock time.
+fn validate_buy_window(state: &PoolAccount, message: &Message) -> Result<(), Error> {
     match (state.mode, message) {
         (
             PoolMode::FixedPrice,
@@ -573,7 +576,13 @@ fn buy_clock_assertion(
             if *now < state.start_timestamp || state.end_timestamp.is_some_and(|end| *now >= end) {
                 return Err(Error::Closed);
             }
-            curve_core::clock_assertion(*now, state.end_timestamp).map_err(|_| Error::Arithmetic)
+            let _ = curve_core::with_time_bounds(
+                Response::keep_state(),
+                Some(state.start_timestamp),
+                state.end_timestamp,
+            )
+            .map_err(|_| Error::InvalidTerms)?;
+            Ok(())
         }
         (
             PoolMode::Weighted { .. },
@@ -588,7 +597,8 @@ fn buy_clock_assertion(
                 return Err(Error::Closed);
             }
             curve_core::clock_assertion(valid_from, Some(valid_until))
-                .map_err(|_| Error::Arithmetic)
+                .map_err(|_| Error::Arithmetic)?;
+            Ok(())
         }
         _ => Err(Error::InvalidMessage),
     }

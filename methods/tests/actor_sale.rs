@@ -592,14 +592,17 @@ fn fixed_execute(
     key: &PrivateKey,
     instruction: lbp_core::Message,
 ) -> Result<(), lee::error::LeeError> {
+    fixed_execute_at(state, pool, key, instruction, 100_000)
+}
+
+fn fixed_execute_at(
+    state: &mut V03State,
+    pool: AccountId,
+    key: &PrivateKey,
+    instruction: lbp_core::Message,
+    timestamp: u64,
+) -> Result<(), lee::error::LeeError> {
     let transaction = fixed_transaction(state, pool, key, instruction);
-    let timestamp = clock_core::ClockAccountData::from_bytes(
-        state
-            .get_account_by_id(clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID)
-            .data
-            .actor_state(clock_core::clock_account_id()),
-    )
-    .timestamp;
     state
         .transition_from_public_transaction(&transaction, 1, timestamp)
         .map(|_| ())
@@ -628,7 +631,7 @@ fn fixed_rejected(
 }
 
 #[test]
-fn fixed_price_buys_use_full_input_live_fees_and_current_treasury() {
+fn fixed_price_buys_deduct_live_fees_before_pricing_and_collect_to_current_treasury() {
     use lbp_core::Message::{BuyExactInput, BuyExactOutput, CollectFees};
     let key = PrivateKey::try_new([23; 32]).unwrap();
     let buyer = AccountId::from(&PublicKey::new_from_private_key(&key));
@@ -639,12 +642,12 @@ fn fixed_price_buys_use_full_input_live_fees_and_current_treasury() {
         &key,
         BuyExactInput {
             amount_in: 101,
-            min_amount_out: 67,
+            min_amount_out: 64,
             now: 100,
         },
     )
     .unwrap();
-    assert_eq!(balance(&state, buyer, LAUNCH), 67);
+    assert_eq!(balance(&state, buyer, LAUNCH), 64);
     assert_eq!(balance(&state, buyer, COLLATERAL), 1_899);
     let sale = fixed_pool(&state, pool);
     assert_eq!(
@@ -653,7 +656,7 @@ fn fixed_price_buys_use_full_input_live_fees_and_current_treasury() {
             sale.recorded_collateral,
             sale.accrued_fees
         ),
-        (933, 97, 4)
+        (936, 97, 4)
     );
 
     state = fixed_config(state, 1_001, NEXT_TREASURY, false);
@@ -663,13 +666,13 @@ fn fixed_price_buys_use_full_input_live_fees_and_current_treasury() {
         &key,
         BuyExactOutput {
             amount_out: 13,
-            max_amount_in: 20,
+            max_amount_in: 23,
             now: 100,
         },
     )
     .unwrap();
-    assert_eq!(balance(&state, buyer, LAUNCH), 80);
-    assert_eq!(balance(&state, buyer, COLLATERAL), 1_879);
+    assert_eq!(balance(&state, buyer, LAUNCH), 77);
+    assert_eq!(balance(&state, buyer, COLLATERAL), 1_876);
     let sale = fixed_pool(&state, pool);
     assert_eq!(
         (
@@ -677,54 +680,61 @@ fn fixed_price_buys_use_full_input_live_fees_and_current_treasury() {
             sale.recorded_collateral,
             sale.accrued_fees
         ),
-        (920, 114, 7)
+        (923, 117, 7)
     );
-    assert_eq!(balance(&state, pool, COLLATERAL), 162);
-    assert_eq!(balance(&state, pool, LAUNCH), 927);
+    assert_eq!(balance(&state, pool, COLLATERAL), 165);
+    assert_eq!(balance(&state, pool, LAUNCH), 930);
 
     state = clock_state(fixed_config(state, 1_001, NEXT_TREASURY, true), 200_001);
-    fixed_execute(&mut state, pool, &key, CollectFees).unwrap();
+    fixed_execute_at(&mut state, pool, &key, CollectFees, 200_001).unwrap();
     assert_eq!(balance(&state, TREASURY, COLLATERAL), 0);
     assert_eq!(balance(&state, NEXT_TREASURY, COLLATERAL), 7);
-    assert_eq!(balance(&state, pool, COLLATERAL), 155);
+    assert_eq!(balance(&state, pool, COLLATERAL), 158);
     let sale = fixed_pool(&state, pool);
-    assert_eq!((sale.recorded_collateral, sale.accrued_fees), (114, 0));
+    assert_eq!((sale.recorded_collateral, sale.accrued_fees), (117, 0));
     assert_eq!(
         balance(&state, pool, COLLATERAL) - sale.recorded_collateral,
         41
     );
     assert_eq!(balance(&state, pool, LAUNCH) - sale.remaining_inventory, 7);
     let before = state.clone();
-    fixed_execute(&mut state, pool, &key, CollectFees).unwrap();
+    fixed_execute_at(&mut state, pool, &key, CollectFees, 200_001).unwrap();
     assert!(state == before, "zero-fee retry changed runtime state");
 }
 
 #[test]
-fn fixed_price_without_end_checks_start_clock_and_stops_at_sellout() {
+fn fixed_price_without_end_checks_inclusion_start_and_stops_at_sellout() {
     use lbp_core::Message::{BuyExactInput, BuyExactOutput, CollectFees};
     let key = PrivateKey::try_new([23; 32]).unwrap();
     let buyer = AccountId::from(&PublicKey::new_from_private_key(&key));
-    let (state, pool) = fixed_state(buyer, None);
-    let mut state = clock_state(state, 99_999);
-    fixed_rejected(
-        &mut state,
+    let (mut state, pool) = fixed_state(buyer, None);
+    let transaction = fixed_transaction(
+        &state,
         pool,
         &key,
         BuyExactInput {
-            amount_in: 3,
+            amount_in: 4,
             min_amount_out: 2,
             now: 100,
         },
-        "Clock timestamp",
     );
-    state = clock_state(state, 100_000);
+    let before = state.clone();
+    assert!(matches!(
+        state.transition_from_public_transaction(&transaction, 1, 99_999),
+        Err(lee::error::LeeError::OutOfValidityWindow)
+    ));
+    assert!(state == before, "early buy changed runtime state");
+    assert_eq!(
+        state.get_account_by_id(buyer).nonce,
+        before.get_account_by_id(buyer).nonce
+    );
     fixed_execute(
         &mut state,
         pool,
         &key,
         BuyExactOutput {
             amount_out: 1_000,
-            max_amount_in: 1_500,
+            max_amount_in: 1_552,
             now: 100,
         },
     )
@@ -736,23 +746,69 @@ fn fixed_price_without_end_checks_start_clock_and_stops_at_sellout() {
             sale.recorded_collateral,
             sale.accrued_fees
         ),
-        (0, 1_450, 50)
+        (0, 1_500, 52)
     );
+    assert_eq!(balance(&state, buyer, LAUNCH), 1_000);
+    assert_eq!(balance(&state, buyer, COLLATERAL), 448);
+    assert_eq!(balance(&state, pool, COLLATERAL), 1_593);
     assert_eq!(balance(&state, pool, LAUNCH), 7);
     fixed_rejected(
         &mut state,
         pool,
         &key,
         BuyExactInput {
-            amount_in: 3,
+            amount_in: 4,
             min_amount_out: 2,
             now: 100,
         },
         "Closed",
     );
-    fixed_execute(&mut state, pool, &key, CollectFees).unwrap();
-    assert_eq!(balance(&state, TREASURY, COLLATERAL), 50);
-    assert_eq!(balance(&state, pool, COLLATERAL), 1_491);
+    fixed_execute_at(&mut state, pool, &key, CollectFees, 200_001).unwrap();
+    assert_eq!(balance(&state, TREASURY, COLLATERAL), 52);
+    assert_eq!(balance(&state, pool, COLLATERAL), 1_541);
+}
+
+#[test]
+fn fixed_price_fee_only_slippage_and_fee_consuming_dust_preserve_state_and_nonce() {
+    use lbp_core::Message::{BuyExactInput, BuyExactOutput};
+    let key = PrivateKey::try_new([23; 32]).unwrap();
+    let buyer = AccountId::from(&PublicKey::new_from_private_key(&key));
+    let (mut state, pool) = fixed_state(buyer, None);
+    fixed_rejected(
+        &mut state,
+        pool,
+        &key,
+        BuyExactInput {
+            amount_in: 101,
+            min_amount_out: 67,
+            now: 100,
+        },
+        "Slippage",
+    );
+    state = fixed_config(state, 1_001, TREASURY, false);
+    fixed_rejected(
+        &mut state,
+        pool,
+        &key,
+        BuyExactOutput {
+            amount_out: 13,
+            max_amount_in: 20,
+            now: 100,
+        },
+        "Slippage",
+    );
+    state = fixed_config(state, 9_999, TREASURY, false);
+    fixed_rejected(
+        &mut state,
+        pool,
+        &key,
+        BuyExactInput {
+            amount_in: 3,
+            min_amount_out: 0,
+            now: 100,
+        },
+        "InvalidAmount",
+    );
 }
 
 #[test]
@@ -789,7 +845,7 @@ fn fixed_price_deadline_slippage_and_frozen_buys_roll_back() {
         pool,
         &key,
         BuyExactInput {
-            amount_in: 3,
+            amount_in: 4,
             min_amount_out: 2,
             now: 100,
         },
@@ -797,25 +853,31 @@ fn fixed_price_deadline_slippage_and_frozen_buys_roll_back() {
     );
     state = fixed_config(state, 333, TREASURY, false);
     let instruction = BuyExactInput {
-        amount_in: 3,
+        amount_in: 4,
         min_amount_out: 2,
         now: 100,
     };
     let transaction = fixed_transaction(&state, pool, &key, instruction.clone());
-    let mut before_end = clock_state(state.clone(), 199_999);
-    before_end
-        .transition_from_public_transaction(&transaction, 1, 199_999)
-        .unwrap();
-    assert_eq!(balance(&before_end, buyer, LAUNCH), 2);
-    for timestamp in [200_000, 200_001] {
-        let mut late = clock_state(state.clone(), timestamp);
-        fixed_rejected(
-            &mut late,
-            pool,
-            &key,
-            instruction.clone(),
-            "Clock timestamp",
+    for timestamp in [100_000, 199_999] {
+        let mut admitted = state.clone();
+        admitted
+            .transition_from_public_transaction(&transaction, 1, timestamp)
+            .unwrap();
+        assert_eq!(balance(&admitted, buyer, LAUNCH), 2);
+    }
+    for timestamp in [99_999, 200_000, 200_001] {
+        let mut rejected = state.clone();
+        let before = rejected.clone();
+        let nonce = rejected.get_account_by_id(buyer).nonce;
+        assert!(matches!(
+            rejected.transition_from_public_transaction(&transaction, 1, timestamp),
+            Err(lee::error::LeeError::OutOfValidityWindow)
+        ));
+        assert!(
+            rejected == before,
+            "out-of-window buy changed runtime state"
         );
+        assert_eq!(rejected.get_account_by_id(buyer).nonce, nonce);
     }
 }
 
@@ -839,7 +901,7 @@ fn fixed_price_output_transfer_failure_rolls_back_input_and_nonce() {
         pool,
         &key,
         lbp_core::Message::BuyExactInput {
-            amount_in: 3,
+            amount_in: 4,
             min_amount_out: 2,
             now: 100,
         },
@@ -879,14 +941,20 @@ fn timed_buy_uses_native_milliseconds_and_execution_deadline() {
     assert_eq!(balance(&state, pool, COLLATERAL), 112);
 
     let transaction = buy_transaction(&state, pool, &bob_key, 200, BUILT_AT);
+    let mut before_end = state.clone();
+    before_end
+        .transition_from_public_transaction(&transaction, 1, DEADLINE * 1_000 - 1)
+        .expect("the last millisecond before expiry must remain valid");
+    assert_eq!(balance(&before_end, bob, LAUNCH), 1_000);
     for timestamp in [DEADLINE * 1_000, DEADLINE * 1_000 + 1] {
-        let mut late = clock_state(state.clone(), timestamp);
+        let mut late = state.clone();
         let before = late.clone();
         let nonce = late.get_account_by_id(bob).nonce;
         let rejected = late.transition_from_public_transaction(&transaction, 1, timestamp);
-        assert!(
-            matches!(rejected, Err(lee::error::LeeError::ProgramExecutionFailed(reason)) if reason.contains("Clock timestamp"))
-        );
+        assert!(matches!(
+            rejected,
+            Err(lee::error::LeeError::OutOfValidityWindow)
+        ));
         assert!(late == before, "late buy changed runtime state");
         assert_eq!(late.get_account_by_id(bob).nonce, nonce);
     }
@@ -1234,7 +1302,7 @@ fn weighted_factory_executes_all_stages_and_rolls_back_failed_funding() {
             })
             .unwrap(),
         )]);
-        fixed_execute(
+        fixed_execute_at(
             &mut state,
             pool,
             &key,
@@ -1244,6 +1312,7 @@ fn weighted_factory_executes_all_stages_and_rolls_back_failed_funding() {
                 valid_from: 150,
                 valid_until: 151,
             },
+            150_000,
         )
         .unwrap();
         assert_eq!(balance(&state, pool, launch), 790);

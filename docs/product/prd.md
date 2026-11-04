@@ -59,7 +59,7 @@ These rules describe the selected sale designs. The [sale overview](lbp-contract
 | Buy forms | Exact input or exact output; no partial fills or exact-input rounding refunds | Exact input or exact output with an explicit limit | Exact input or exact output; no partial fills or exact-input rounding refunds |
 | Close | Optional end or sellout, whichever occurs first; no separate close call | All `D` sold, or optional expiry, whichever occurs first | Original scheduled end, even while paused |
 | Minimum duration | No contract minimum; require `end > start` and no past scheduled start | No contract minimum for optional expiry; a frontend rule is undecided | No contract minimum; require `end > start` and no past scheduled start |
-| Protocol fee | Creator-borne collateral claim; full buyer input enters pricing | Collateral deducted from buy input or sell output | Creator-borne collateral claim; full buyer input enters pricing |
+| Protocol fee | Deducted before pricing; exact output grosses up required net collateral ([0035](../adr/0035-fixed-price-swap-fees.md)) | Collateral deducted from buy input or sell output | Creator-borne collateral claim; full buyer input enters pricing |
 | Fee collection | Permissionless, anytime, to current treasury; fixed price unchanged | Permissionless, anytime, to current treasury | Permissionless, anytime, to current treasury; pricing reserves unchanged |
 
 `R` is the curve's DEX-seed reserve. It stays untouched until close. The creator can withdraw it after close when it is not used for graduation.
@@ -71,7 +71,7 @@ These rules describe the selected sale designs. The [sale overview](lbp-contract
 - Fixed-price and weighted sale allowlist product policy is accepted: one purchase across both routes, approved-account control, one public collateral cap and a private roster. The proof method, enrollment details and compatible verifier remain open.
 - Privacy warnings are required before transaction approval. Acknowledgement frequency is deferred.
 - Integrate the LP-0021 Wallet Provider SDK once developed. Private-route support still needs verification; see [ADR 0029](../adr/0029-wallet-integration.md).
-- The per-block allocation ceiling is deferred. Live fixed-price and weighted sale fee rates, anytime collection and omission of curve contract minimum-duration validation differ from the RFPs. The relevant ADRs are marked `To be reviewed by Logos team`.
+- The per-block allocation ceiling is deferred. Live fixed-price and weighted sale fee rates, anytime collection and omission of curve contract minimum-duration validation differ from the RFPs. Trader-borne fixed-price fees are an additional RFP-016 departure under [ADR 0035](../adr/0035-fixed-price-swap-fees.md); future weighted-sale fees remain creator-borne. The relevant ADRs are marked `To be reviewed by Logos team`.
 - Direct neutral pools are internal primitives, not a separate sale product.
 - Use the existing indexer and explorer tools. Do not add a separate indexer or the excluded derived analytics view.
 - Platform compatibility, checked numerical input/error guards and private-route implementation still need evidence. The [fixed-price and weighted sale overview](lbp-contract.md) summarizes mechanics; it does not claim a complete sale program.

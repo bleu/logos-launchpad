@@ -135,7 +135,18 @@ fn curve_call(
     signer: &PrivateKey,
     instruction: curve_core::Message,
 ) -> Result<(), lee::error::LeeError> {
-    execute(
+    curve_call_at(state, actors, pool, signer, instruction, 1_000)
+}
+
+fn curve_call_at(
+    state: &mut V03State,
+    actors: &[Actor],
+    pool: AccountId,
+    signer: &PrivateKey,
+    instruction: curve_core::Message,
+    inclusion_timestamp_ms: u64,
+) -> Result<(), lee::error::LeeError> {
+    execute_at(
         state,
         Actor::new(id(signer), CURVE),
         actors.to_vec(),
@@ -144,6 +155,7 @@ fn curve_call(
             instruction: Box::new(instruction),
         },
         &[signer],
+        inclusion_timestamp_ms,
     )
 }
 
@@ -188,7 +200,26 @@ fn execute(
     instruction: impl borsh::BorshSerialize,
     keys: &[&PrivateKey],
 ) -> Result<(), lee::error::LeeError> {
-    execute_with_evidence(state, receiver, actors, instruction, keys, vec![])
+    execute_at(state, receiver, actors, instruction, keys, 1_000)
+}
+
+fn execute_at(
+    state: &mut V03State,
+    receiver: Actor,
+    actors: Vec<Actor>,
+    instruction: impl borsh::BorshSerialize,
+    keys: &[&PrivateKey],
+    inclusion_timestamp_ms: u64,
+) -> Result<(), lee::error::LeeError> {
+    execute_with_evidence(
+        state,
+        receiver,
+        actors,
+        instruction,
+        keys,
+        vec![],
+        inclusion_timestamp_ms,
+    )
 }
 
 fn execute_with_evidence(
@@ -198,6 +229,7 @@ fn execute_with_evidence(
     instruction: impl borsh::BorshSerialize,
     keys: &[&PrivateKey],
     evidence: Vec<lee::PublicAccountEvidence>,
+    inclusion_timestamp_ms: u64,
 ) -> Result<(), lee::error::LeeError> {
     let nonces = keys
         .iter()
@@ -207,12 +239,17 @@ fn execute_with_evidence(
     message.admission_evidence.extend(evidence);
     let witnesses = WitnessSet::for_message(&message, keys);
     state
-        .transition_from_public_transaction(&PublicTransaction::new(message, witnesses), 1, 1_000)
+        .transition_from_public_transaction(
+            &PublicTransaction::new(message, witnesses),
+            1,
+            inclusion_timestamp_ms,
+        )
         .map(|_| ())
 }
 
 struct FactoryFixture {
     state: V03State,
+    inclusion_timestamp_ms: u64,
     actors: Vec<Actor>,
     namespace: AccountId,
     factory: AccountId,
@@ -244,7 +281,7 @@ impl FactoryFixture {
             .transition_from_public_transaction(
                 &PublicTransaction::new(message, witnesses),
                 1,
-                1_000,
+                self.inclusion_timestamp_ms,
             )
             .map(|_| ())
     }
@@ -285,6 +322,7 @@ fn factory_fixture() -> FactoryFixture {
     ]);
     FactoryFixture {
         state: state.with_named_programs([(FACTORY, guest("LAUNCHPAD_FACTORY_ELF"))]),
+        inclusion_timestamp_ms: 1_000,
         actors,
         namespace: namespace_id,
         factory,
@@ -327,6 +365,7 @@ fn program_controlled_admin_accepts_and_updates_namespace_fee() {
             program: owner_program,
             seed,
         }],
+        1_000,
     )
     .expect("program-controlled successor accepts its role");
     rejected_without_changes(
@@ -347,6 +386,7 @@ fn program_controlled_admin_accepts_and_updates_namespace_fee() {
                 vec![lee::PublicAccountEvidence::Key(
                     PublicKey::new_from_private_key(&controller),
                 )],
+                1_000,
             )
         },
         "owner controller must sign",
@@ -542,17 +582,7 @@ fn transferred_curve_creator_funds_and_settles_without_pool_custody() {
         100
     );
     assert_eq!(balance(&fixture.state, fixture.pool, COLLATERAL), 112);
-    fixture.state = fixture.state.clone().with_public_accounts([account(
-        Actor::new(
-            clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID,
-            clock_core::clock_account_id(),
-        ),
-        clock_core::ClockAccountData {
-            block_id: 2,
-            timestamp: 2_000,
-        }
-        .to_bytes(),
-    )]);
+    fixture.inclusion_timestamp_ms = 2_000;
     let before = fixture.state.clone();
     let rejected = fixture.call(
         &creator,
