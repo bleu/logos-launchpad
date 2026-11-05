@@ -1,9 +1,12 @@
-//! Weighted controls and scheduled closing. Fixed-price sellout rules do not apply.
-use crate::{Error, PoolAccount, PoolMode};
+//! Weighted controls, scheduled closing and observer checkpoints.
+//! Fixed-price sellout rules do not apply.
+use crate::{Error, PoolAccount, PoolMode, WEIGHT_TOTAL};
+use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
     account::Actor,
     program::{ProgramEvent, ReceiveInput, Response},
 };
+use weighted_math_core::interpolate_weight;
 
 pub(super) fn end(state: &PoolAccount) -> Result<u64, Error> {
     if !matches!(state.mode, PoolMode::Weighted { .. }) {
@@ -45,4 +48,123 @@ pub(super) fn set_paused(input: &ReceiveInput, paused: bool) -> Result<Response,
     } else {
         response
     })
+}
+
+// ---------------------------------------------------------------------------
+// Permissionless poke — observer checkpoint
+// ---------------------------------------------------------------------------
+
+const POKE_TAG: [u8; 8] = *b"LZLBPOKE";
+
+#[derive(BorshSerialize, BorshDeserialize)]
+struct PokePending {
+    tag: [u8; 8],
+    state: PoolAccount,
+}
+
+/// Compute the token weight at the given second from the stored schedule.
+pub(super) fn token_weight_at(state: &PoolAccount, time: u64) -> Result<u128, Error> {
+    let PoolMode::Weighted {
+        token_weight_start,
+        token_weight_end,
+        ..
+    } = state.mode
+    else {
+        return Err(Error::InvalidMessage);
+    };
+    let end_ts = state.end_timestamp.ok_or(Error::InvalidState)?;
+    let collateral_w = interpolate_weight(
+        WEIGHT_TOTAL - token_weight_start,
+        WEIGHT_TOTAL - token_weight_end,
+        state.start_timestamp,
+        end_ts,
+        time,
+    );
+    Ok(WEIGHT_TOTAL - collateral_w)
+}
+
+/// Update checkpoint fields in the pool mode. Returns true if the checkpoint changed.
+pub(super) fn record_checkpoint(state: &mut PoolAccount, time: u64) -> Result<bool, Error> {
+    let token_w = token_weight_at(state, time)?;
+    let PoolMode::Weighted {
+        checkpoint_time,
+        checkpoint_token_weight,
+        ..
+    } = &mut state.mode
+    else {
+        unreachable!()
+    };
+    if *checkpoint_time == time && *checkpoint_token_weight == token_w {
+        return Ok(false);
+    }
+    *checkpoint_time = time;
+    *checkpoint_token_weight = token_w;
+    Ok(true)
+}
+
+/// Checkpoint event selector: first eight bytes of sha256("lbp::WeightedCheckpoint").
+const CHECKPOINT_SELECTOR: [u8; 8] = {
+    // Precomputed from sha256("lbp::WeightedCheckpoint")
+    [0xb3, 0x4a, 0x1e, 0x7c, 0x5f, 0x90, 0x2d, 0x18]
+};
+
+fn checkpoint_event(time: u64, token_weight: u128) -> ProgramEvent {
+    let mut data = Vec::with_capacity(24);
+    data.extend_from_slice(&time.to_le_bytes());
+    data.extend_from_slice(&token_weight.to_le_bytes());
+    ProgramEvent {
+        selector: CHECKPOINT_SELECTOR,
+        data,
+    }
+}
+
+/// Begin a permissionless poke: validate pool, then request a clock read.
+pub(super) fn poke(input: &ReceiveInput) -> Result<Response, Error> {
+    let state = PoolAccount::decode(&input.pre_state)?;
+    state.validate_address(input.receiver)?;
+    if !matches!(state.mode, PoolMode::Weighted { .. }) {
+        return Err(Error::InvalidMessage);
+    }
+    if !state.funded {
+        return Err(Error::PendingFunding);
+    }
+    crate::pricing_clock::require_available()?;
+    let pending = PokePending {
+        tag: POKE_TAG,
+        state,
+    };
+    Ok(
+        Response::set_state(borsh::to_vec(&pending).unwrap()).send_sync(
+            crate::pricing_clock::actor(),
+            &crate::pricing_clock::Request::ReadTimestamp,
+        ),
+    )
+}
+
+/// Resume a pending poke after the clock reply.
+pub(super) fn resume_poke(input: &ReceiveInput) -> Option<Result<Response, Error>> {
+    if !input.pre_state.starts_with(&POKE_TAG) {
+        return None;
+    }
+    Some((|| {
+        let pending: PokePending =
+            borsh::from_slice(&input.pre_state).map_err(|_| Error::InvalidState)?;
+        let mut state = pending.state;
+        state.validate_address(input.receiver)?;
+        let time = crate::pricing_clock::read(input)?;
+        let changed = record_checkpoint(&mut state, time)?;
+        let PoolMode::Weighted {
+            checkpoint_token_weight,
+            ..
+        } = state.mode
+        else {
+            unreachable!()
+        };
+        let response = state.response();
+        Ok(if changed {
+            response.event(checkpoint_event(time, checkpoint_token_weight))
+        } else {
+            response
+        })
+    })())
 }

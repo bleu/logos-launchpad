@@ -247,6 +247,18 @@ impl Pending {
         {
             *pricing_collateral = next;
         }
+        // Record an observer checkpoint when the trusted timestamp changes.
+        if let (
+            PoolMode::Weighted {
+                checkpoint_time, ..
+            },
+            Some(pt),
+        ) = (self.state.mode, self.pricing_time)
+        {
+            if pt != checkpoint_time {
+                crate::weighted_lifecycle::record_checkpoint(&mut self.state, pt)?;
+            }
+        }
         let response = match self.state.mode {
             PoolMode::FixedPrice => curve_core::with_time_bounds(
                 self.state.response(),

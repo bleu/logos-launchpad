@@ -305,6 +305,8 @@ fn weighted_state(buyer: AccountId) -> (V03State, AccountId) {
         token_weight_end: lbp_core::WEIGHT_TOTAL / 2,
         collateral_seed: 100,
         pricing_collateral: 100,
+        checkpoint_time: 0,
+        checkpoint_token_weight: 0,
     };
     sale.price = lbp_core::FixedPrice {
         collateral_units: 0,
@@ -2091,4 +2093,120 @@ fn weighted_stale_clock_at_inclusion_boundary_preserves_state() {
             "rejected buy changed state at {timestamp}"
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// Poke and checkpoint guest tests
+// ---------------------------------------------------------------------------
+
+fn poke_transaction(state: &V03State, pool: AccountId) -> PublicTransaction {
+    let sale = fixed_pool(state, pool);
+    let launch = sale.token_definition_id;
+    let actors = vec![
+        Actor::new(pool, LBP),
+        Actor::new(curve_core::compute_config_pda(NAMESPACE, CURVE), CURVE),
+        Actor::new(pool, TOKEN_PROGRAM_ACCOUNT_ID),
+        holding(pool, launch),
+        holding(pool, COLLATERAL),
+        lbp_core::pricing_clock::actor(),
+    ];
+    let message = Message::try_new(
+        Actor::new(pool, LBP),
+        actors,
+        BTreeMap::new(),
+        lbp_core::Message::PokeWeighted,
+    )
+    .unwrap();
+    let witnesses = WitnessSet::for_message(&message, &[]);
+    PublicTransaction::new(message, witnesses)
+}
+
+fn poke_execute_at(
+    state: &mut V03State,
+    pool: AccountId,
+    timestamp: u64,
+) -> Result<(), lee::error::LeeError> {
+    let transaction = poke_transaction(state, pool);
+    state
+        .transition_from_public_transaction(&transaction, 1, timestamp)
+        .map(|_| ())
+}
+
+fn checkpoint_of(state: &V03State, pool: AccountId) -> (u64, u128) {
+    let sale = fixed_pool(state, pool);
+    if let lbp_core::PoolMode::Weighted {
+        checkpoint_time,
+        checkpoint_token_weight,
+        ..
+    } = sale.mode
+    {
+        (checkpoint_time, checkpoint_token_weight)
+    } else {
+        panic!("expected weighted mode");
+    }
+}
+
+#[test]
+fn guest_poke_records_checkpoint_permissionlessly() {
+    let key = PrivateKey::try_new([23; 32]).unwrap();
+    let buyer = AccountId::from(&PublicKey::new_from_private_key(&key));
+    let (mut state, pool) = weighted_state(buyer);
+    // Checkpoint starts at zero
+    assert_eq!(checkpoint_of(&state, pool), (0, 0));
+    // Clock is at 100_000ms = 100s (set in fixed_state). Inclusion time within sale window.
+    poke_execute_at(&mut state, pool, 100_000).unwrap();
+    let (time, w) = checkpoint_of(&state, pool);
+    assert_eq!(time, 100);
+    assert!(w > 0);
+}
+
+#[test]
+fn guest_buy_updates_checkpoint_and_poke_is_idempotent() {
+    let key = PrivateKey::try_new([23; 32]).unwrap();
+    let buyer = AccountId::from(&PublicKey::new_from_private_key(&key));
+    let (mut state, pool) = weighted_state(buyer);
+    // Buy updates checkpoint
+    fixed_execute(
+        &mut state,
+        pool,
+        &key,
+        lbp_core::Message::BuyWeightedExactInput {
+            amount_in: 50,
+            min_amount_out: 1,
+        },
+    )
+    .unwrap();
+    let cp_after_buy = checkpoint_of(&state, pool);
+    assert_eq!(cp_after_buy.0, 100); // clock is at 100_000ms = 100s
+    assert!(cp_after_buy.1 > 0);
+    // Poke at same time is idempotent — checkpoint unchanged
+    poke_execute_at(&mut state, pool, 150_000).unwrap();
+    assert_eq!(checkpoint_of(&state, pool), cp_after_buy);
+}
+
+#[test]
+fn guest_poke_in_settlement_flow() {
+    let (mut state, factory, pool, launch, escrow, key, actors, salt) = weighted_factory_env();
+    let creator = AccountId::from(&PublicKey::new_from_private_key(&key));
+    // Poke before settlement
+    poke_execute_at(&mut state, pool, 150_000).unwrap();
+    let (time, _) = checkpoint_of(&state, pool);
+    assert_eq!(time, 150);
+    // Move past end and settle
+    state = clock_state(state, 300_000);
+    factory_execute_at(
+        &mut state,
+        factory,
+        &actors,
+        &key,
+        salt,
+        launch,
+        pool,
+        factory_core::Message::WithdrawWeightedProceeds { creator },
+        300_000,
+    )
+    .unwrap();
+    // Settlement should succeed with a checkpoint already recorded
+    let sale = fixed_pool(&state, pool);
+    assert!(sale.proceeds_settled);
 }

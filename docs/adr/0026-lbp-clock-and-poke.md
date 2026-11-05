@@ -2,7 +2,7 @@
 
 Status: Accepted local design; temporary fake clock. Real LEZ timestamp reads and live clock freshness remain unverified.
 
-Date: 2026-09-29; checkpoint and interpolation review: 2026-10-02; time-window amendment: 2026-10-29; inclusion-time amendment: 2026-11-04
+Date: 2026-09-29; checkpoint and interpolation review: 2026-10-02; time-window amendment: 2026-10-29; inclusion-time amendment: 2026-11-04; poke and checkpoint amendment: 2026-11-05
 
 ## Context
 
@@ -16,7 +16,9 @@ This amendment supersedes the buyer-selected pricing windows below. Weighted buy
 
 The temporary local provider returns Unix milliseconds from fixture state. Divide by 1000 to select the pricing second. Model previous-block time, not exact execution time. Require the pricing second to be at or after the scheduled start and before the scheduled end. Interpolate the collateral weight at that second and use its exact token-weight complement. Use current recorded reserves and retain the math limits, creator-borne fees and buyer price limits.
 
-Attach the immutable sale start and end as inclusion-time bounds. These bounds remain necessary when saved clock time is stale. Setup keeps its existing canonical clock assertions. Fixed-price and bonding-curve behavior is unchanged. No checkpoint is needed for pricing. Observation design remains deferred.
+Attach the immutable sale start and end as inclusion-time bounds. These bounds remain necessary when saved clock time is stale. Setup keeps its existing canonical clock assertions. Fixed-price and bonding-curve behavior is unchanged. No checkpoint is needed for pricing.
+
+A permissionless poke message reads the pricing clock and records the current token weight as an observer checkpoint. Successful buys also update the checkpoint when the trusted timestamp changes from the last recorded value. Same-timestamp buys leave the checkpoint unchanged. Failed buys and pokes commit no checkpoint or state changes. The checkpoint does not affect pricing or settlement; it is an observation record only.
 
 The pinned LEZ clock cannot return a timestamp. `LAUNCHPAD_MOCK_CLOCK=1` enables the temporary provider for local tests. Normal builds reject weighted buys with `ClockUnavailable`. The fixture has a separate actor address and no public time-setting message. Replace the provisional interface when a verified LEZ timestamp-read API is available. The future capability is a project assumption, not implemented platform behavior.
 
@@ -36,7 +38,7 @@ Use these endpoints for interpolation. Floor the collateral weight's interpolati
 
 Price each buy with this pair and the current recorded pricing reserves. Check minimum output or maximum input against that result. Keep creator-borne fees and pricing collateral under [ADR 0016](0016-lbp-live-fees.md) and [ADR 0030](0030-lbp-pricing-collateral.md). The buyer selects the window and price limits. Do not replace them during execution.
 
-A buy does not require a poke or checkpoint. A stored pair must not select a later price. Future observation records must identify the window and pricing pair, not an exact execution timestamp. Poke support and observation records remain future work.
+A buy does not require a poke or checkpoint. A stored pair must not select a later price. Poke and observer checkpoints are implemented in the clock-read amendment above.
 
 The [namespace emergency freeze](0028-token-custody-and-freeze.md) stops buys. It does not stop the schedule or extend a validity window. The original sale end still closes trading. Fixed-price and bonding-curve time rules are unchanged. For weighted-sale weights, this record supersedes the execution-time rule in [ADR 0017](0017-quotes-and-slippage.md).
 

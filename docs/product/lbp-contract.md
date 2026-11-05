@@ -20,4 +20,4 @@ The implemented scope includes creation, funding, public buys, permissionless fe
 
 ## Future work
 
-Weighted observation records and lifecycle handlers remain future work. The pricing and accounting decisions are in [ADR 0021](../adr/0021-modes-and-open-limits.md), [ADR 0026](../adr/0026-lbp-clock-and-poke.md) and [ADR 0030](../adr/0030-lbp-pricing-collateral.md). The weighted-math kernel is unaudited and does not establish pool behavior.
+Weighted virtual accounting, private fixed-price or weighted sales, allowlists and full SDK and CLI flows remain future work. Weighted observer checkpoints, controls and lifecycle handlers are implemented under [ADR 0026](../adr/0026-lbp-clock-and-poke.md). The pricing and accounting decisions are in [ADR 0021](../adr/0021-modes-and-open-limits.md), [ADR 0026](../adr/0026-lbp-clock-and-poke.md) and [ADR 0030](../adr/0030-lbp-pricing-collateral.md). The weighted-math kernel is unaudited and does not establish pool behavior.
