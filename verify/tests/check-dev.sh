@@ -57,6 +57,7 @@ unset CURVE_EMERGENCY_AUTHORITY
 run_check
 [ "$status" = 0 ] || { printf '%s\n' "$output" >&2; exit 1; }
 expected="+$ACTOR_RUST_VERSION test --locked
++$ACTOR_RUST_VERSION test --locked -p lbp-core
 +$ACTOR_RUST_VERSION test --manifest-path packages/lez-compat/Cargo.toml --workspace --locked
 +$ACTOR_RUST_VERSION test --manifest-path packages/weighted-math/Cargo.toml --workspace --locked
 +$ACTOR_RUST_VERSION test --manifest-path packages/launchpad/core/logic/Cargo.toml --locked"
