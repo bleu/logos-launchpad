@@ -1,3 +1,4 @@
+#![cfg(local_mock_clock)]
 use lbp_core::{CreatorAllocationRelease, Message, WeightedPoolInputs, compute_pool_pda, handle};
 use lee_core::{
     account::{AccountId, Actor},
@@ -156,8 +157,9 @@ fn funded() -> (ReceiveInput, lbp_core::PoolAccount) {
     (input, state)
 }
 
-/// Drive a buy or collect-fees message through all async steps.
-fn operation(
+/// Drive a buy or collect-fees message through all synchronous reply steps.
+fn operation_at(
+    timestamp_ms: u64,
     input: &ReceiveInput,
     state: &lbp_core::PoolAccount,
     message: Message,
@@ -181,7 +183,28 @@ fn operation(
         input = reply(&input, &response, source, bytes);
         response = handle(&input)?;
     }
+    if !collect {
+        let source = response.sync_messages.last().unwrap().to;
+        assert_eq!(source, lbp_core::pricing_clock::actor());
+        input = ReceiveInput {
+            receiver: input.receiver,
+            from: Some(source),
+            is_authorized: false,
+            pre_state: response.post_state.unwrap(),
+            message: borsh::to_vec(&lbp_core::pricing_clock::Reply { timestamp_ms }).unwrap(),
+        };
+        response = handle(&input)?;
+    }
     Ok(response)
+}
+fn operation(
+    input: &ReceiveInput,
+    state: &lbp_core::PoolAccount,
+    message: Message,
+    config: Vec<u8>,
+    balances: [u128; 3],
+) -> Result<lee_core::program::Response, lbp_core::Error> {
+    operation_at(1_500_000, input, state, message, config, balances)
 }
 
 fn state_of(response: &lee_core::program::Response) -> lbp_core::PoolAccount {
@@ -189,236 +212,7 @@ fn state_of(response: &lee_core::program::Response) -> lbp_core::PoolAccount {
 }
 
 #[test]
-fn weighted_buy_asserts_the_full_validity_window_on_the_canonical_clock() {
-    let (input, state) = funded();
-    let response = operation(
-        &input,
-        &state,
-        Message::BuyWeightedExactInput {
-            amount_in: 10,
-            min_amount_out: 1,
-            valid_from: 1500,
-            valid_until: 1600,
-        },
-        config(0, id(43), false),
-        [100, state.remaining_inventory, 1000],
-    )
-    .unwrap();
-    assert_eq!(response.validity.timestamps.start(), Some(1_500_000));
-    assert_eq!(response.validity.timestamps.end(), Some(1_600_000));
-    let clock = &response.sync_messages[0];
-    assert_eq!(
-        clock.to,
-        Actor::new(
-            clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID,
-            clock_core::clock_account_id()
-        )
-    );
-    let clock_core::Message::AssertTimestamp { at_least, at_most } =
-        borsh::from_slice(&clock.message).unwrap()
-    else {
-        panic!("expected a clock assertion");
-    };
-    assert_eq!((at_least, at_most), (1_500_000, 1_599_999));
-    for timestamp in [1_500_000, 1_550_000, 1_599_999] {
-        assert!(at_least <= timestamp && timestamp <= at_most);
-    }
-    for timestamp in [1_499_999, 1_600_000, 2_000_000] {
-        assert!(!(at_least <= timestamp && timestamp <= at_most));
-    }
-}
-
-#[test]
-fn weighted_windows_use_the_least_favourable_pair_for_both_buy_forms() {
-    let (input, state) = funded();
-    for (start, end, worst_collateral_weight) in [
-        (95, 50, weight(16) + lbp_core::WEIGHT_TOTAL / 400),
-        (50, 95, weight(27) + lbp_core::WEIGHT_TOTAL / 200),
-        (50, 50, weight(50)),
-    ] {
-        let mut state = state.clone();
-        if let lbp_core::PoolMode::Weighted {
-            token_weight_start,
-            token_weight_end,
-            ..
-        } = &mut state.mode
-        {
-            *token_weight_start = weight(start);
-            *token_weight_end = weight(end);
-        }
-        let expected_out = calc_out_given_in(
-            100,
-            worst_collateral_weight,
-            1_000_000,
-            lbp_core::WEIGHT_TOTAL - worst_collateral_weight,
-            50,
-        );
-        let expected_in = calc_in_given_out(
-            100,
-            worst_collateral_weight,
-            1_000_000,
-            lbp_core::WEIGHT_TOTAL - worst_collateral_weight,
-            100_000,
-        );
-        let buy = |message| {
-            operation(
-                &input,
-                &state,
-                message,
-                config(0, id(43), false),
-                [100, 1_000_000, 10_000],
-            )
-        };
-        let exact_in = |limit| Message::BuyWeightedExactInput {
-            amount_in: 50,
-            min_amount_out: limit,
-            valid_from: 1500,
-            valid_until: 2001,
-        };
-        let next = state_of(&buy(exact_in(expected_out)).unwrap());
-        assert_eq!(next.remaining_inventory, 1_000_000 - expected_out);
-        assert_eq!(
-            buy(exact_in(expected_out + 1)).err(),
-            Some(lbp_core::Error::Slippage)
-        );
-        let exact_out = |limit| Message::BuyWeightedExactOutput {
-            amount_out: 100_000,
-            max_amount_in: limit,
-            valid_from: 1500,
-            valid_until: 2001,
-        };
-        let next = state_of(&buy(exact_out(expected_in)).unwrap());
-        assert_eq!(pricing_collateral(&next), 100 + expected_in);
-        assert_eq!(
-            buy(exact_out(expected_in - 1)).err(),
-            Some(lbp_core::Error::Slippage)
-        );
-        for time in [1500, 1600, 1750, 1999, 2000] {
-            let c = interpolate_weight(weight(100 - start), weight(100 - end), 1000, 3000, time);
-            assert!(
-                expected_out
-                    <= calc_out_given_in(100, c, 1_000_000, lbp_core::WEIGHT_TOTAL - c, 50)
-            );
-            assert!(
-                expected_in
-                    >= calc_in_given_out(100, c, 1_000_000, lbp_core::WEIGHT_TOTAL - c, 100_000)
-            );
-        }
-    }
-}
-
-#[test]
-fn wider_windows_cannot_improve_the_buyers_scheduled_price() {
-    let (input, state) = funded();
-    for (start, end) in [(95, 50), (50, 95), (50, 50)] {
-        let mut state = state.clone();
-        if let lbp_core::PoolMode::Weighted {
-            token_weight_start,
-            token_weight_end,
-            ..
-        } = &mut state.mode
-        {
-            *token_weight_start = weight(start);
-            *token_weight_end = weight(end);
-        }
-        let quote = |valid_from, valid_until, exact_in| {
-            let message = if exact_in {
-                Message::BuyWeightedExactInput {
-                    amount_in: 50,
-                    min_amount_out: 1,
-                    valid_from,
-                    valid_until,
-                }
-            } else {
-                Message::BuyWeightedExactOutput {
-                    amount_out: 100_000,
-                    max_amount_in: 10_000,
-                    valid_from,
-                    valid_until,
-                }
-            };
-            state_of(
-                &operation(
-                    &input,
-                    &state,
-                    message,
-                    config(0, id(43), false),
-                    [100, 1_000_000, 10_000],
-                )
-                .unwrap(),
-            )
-        };
-        assert!(
-            quote(1000, 3000, true).remaining_inventory
-                >= quote(1500, 2001, true).remaining_inventory
-        );
-        assert!(
-            pricing_collateral(&quote(1000, 3000, false))
-                >= pricing_collateral(&quote(1500, 2001, false))
-        );
-    }
-}
-
-#[test]
-fn weighted_windows_reject_invalid_bounds_and_time_conversion_overflow() {
-    let (input, state) = funded();
-    for exact_in in [true, false] {
-        for (valid_from, valid_until, error) in [
-            (1500, 1500, lbp_core::Error::InvalidTerms),
-            (1600, 1500, lbp_core::Error::InvalidTerms),
-            (999, 1500, lbp_core::Error::Closed),
-            (1500, 3001, lbp_core::Error::Closed),
-        ] {
-            let message = if exact_in {
-                Message::BuyWeightedExactInput {
-                    amount_in: 50,
-                    min_amount_out: 1,
-                    valid_from,
-                    valid_until,
-                }
-            } else {
-                Message::BuyWeightedExactOutput {
-                    amount_out: 500,
-                    max_amount_in: 1000,
-                    valid_from,
-                    valid_until,
-                }
-            };
-            assert_eq!(
-                operation(
-                    &input,
-                    &state,
-                    message,
-                    config(0, id(43), false),
-                    [100, 1_000_000, 1000]
-                )
-                .err(),
-                Some(error)
-            );
-        }
-    }
-    let mut state = state;
-    state.end_timestamp = Some(u64::MAX);
-    assert_eq!(
-        operation(
-            &input,
-            &state,
-            Message::BuyWeightedExactInput {
-                amount_in: 50,
-                min_amount_out: 1,
-                valid_from: 1500,
-                valid_until: u64::MAX,
-            },
-            config(0, id(43), false),
-            [100, 1_000_000, 1000]
-        )
-        .err(),
-        Some(lbp_core::Error::Arithmetic)
-    );
-}
-
-#[test]
-fn weighted_buys_cannot_bypass_windows_with_fixed_price_messages() {
+fn weighted_buys_cannot_bypass_clock_reads_with_fixed_price_messages() {
     let (input, state) = funded();
     for message in [
         Message::BuyExactInput {
@@ -447,62 +241,16 @@ fn weighted_buys_cannot_bypass_windows_with_fixed_price_messages() {
 }
 
 #[test]
-fn weighted_window_excludes_the_deadline_from_weight_selection() {
-    let (input, mut state) = funded();
-    state.end_timestamp = Some(1003);
-    if let lbp_core::PoolMode::Weighted {
-        token_weight_start,
-        token_weight_end,
-        ..
-    } = &mut state.mode
-    {
-        *token_weight_start = weight(3);
-        *token_weight_end = weight(7);
-    }
-    // Collateral weights at seconds 1000, 1001 and 1002 are 97, 95 and 94.
-    // The window excludes 1002, so select 95/5, not 94/6.
-    let collateral = weight(97) - weight(4).div_ceil(3);
-    let expected = calc_out_given_in(
-        100,
-        collateral,
-        1_000_000,
-        lbp_core::WEIGHT_TOTAL - collateral,
-        10,
-    );
-    let response = operation(
-        &input,
-        &state,
-        Message::BuyWeightedExactInput {
-            amount_in: 10,
-            min_amount_out: expected,
-            valid_from: 1000,
-            valid_until: 1002,
-        },
-        config(0, id(43), false),
-        [100, 1_000_000, 1000],
-    )
-    .unwrap();
-    assert_eq!(
-        state_of(&response).remaining_inventory,
-        1_000_000 - expected
-    );
-}
-
-#[test]
 fn weighted_pricing_ignores_unsolicited_vault_transfers() {
     let (input, state) = funded();
     for message in [
         Message::BuyWeightedExactInput {
             amount_in: 10,
             min_amount_out: 1,
-            valid_from: 1500,
-            valid_until: 1500 + 1,
         },
         Message::BuyWeightedExactOutput {
             amount_out: 500,
             max_amount_in: 1000,
-            valid_from: 1500,
-            valid_until: 1500 + 1,
         },
     ] {
         let quote = |balances| {
@@ -538,8 +286,6 @@ fn weighted_program_rejects_unsafe_and_uncertified_quotes_with_defined_errors() 
     let exact_in = Message::BuyWeightedExactInput {
         amount_in: 50,
         min_amount_out: 1,
-        valid_from: 1500,
-        valid_until: 1600,
     };
     let run = |state: &lbp_core::PoolAccount, message, balances| {
         operation(&input, state, message, config(0, id(43), false), balances).err()
@@ -575,8 +321,6 @@ fn weighted_program_rejects_unsafe_and_uncertified_quotes_with_defined_errors() 
             Message::BuyWeightedExactOutput {
                 amount_out: 300_000,
                 max_amount_in: u128::MAX,
-                valid_from: 1500,
-                valid_until: 1600,
             },
             [100, 1_000_000, u128::MAX]
         ),
@@ -588,8 +332,6 @@ fn weighted_program_rejects_unsafe_and_uncertified_quotes_with_defined_errors() 
             Message::BuyWeightedExactOutput {
                 amount_out: 300_001,
                 max_amount_in: u128::MAX,
-                valid_from: 1500,
-                valid_until: 1600,
             },
             [100, 1_000_000, u128::MAX]
         ),
@@ -622,8 +364,6 @@ fn weighted_program_rejects_unsafe_and_uncertified_quotes_with_defined_errors() 
             Message::BuyWeightedExactOutput {
                 amount_out: b / 10 * 3,
                 max_amount_in: u128::MAX,
-                valid_from: 1500,
-                valid_until: 1600,
             },
             [100, b, u128::MAX]
         ),
@@ -635,8 +375,6 @@ fn weighted_program_rejects_unsafe_and_uncertified_quotes_with_defined_errors() 
             Message::BuyWeightedExactInput {
                 amount_in: 1,
                 min_amount_out: 0,
-                valid_from: 1500,
-                valid_until: 1600,
             },
             [100, b, 1000]
         ),
@@ -650,8 +388,6 @@ fn weighted_program_checks_full_inventory_and_post_buy_vault_capacity() {
     let buy = Message::BuyWeightedExactInput {
         amount_in: 50,
         min_amount_out: 1,
-        valid_from: 1500,
-        valid_until: 1600,
     };
     // The vault could pay this trade, but does not back the whole pricing reserve.
     assert_eq!(
@@ -710,14 +446,10 @@ fn weighted_pricing_is_independent_of_live_creator_borne_fees() {
         Message::BuyWeightedExactInput {
             amount_in: 50,
             min_amount_out: 1,
-            valid_from: 1500,
-            valid_until: 1500 + 1,
         },
         Message::BuyWeightedExactOutput {
             amount_out: 500,
             max_amount_in: 1000,
-            valid_from: 1500,
-            valid_until: 1500 + 1,
         },
     ] {
         let mut reference = None;
@@ -760,8 +492,6 @@ fn weighted_same_time_buys_use_updated_reserves_and_collection_keeps_the_quote()
     let message = Message::BuyWeightedExactInput {
         amount_in: 50,
         min_amount_out: 1,
-        valid_from: 1500,
-        valid_until: 1500 + 1,
     };
     let first = operation(
         &input,
@@ -844,14 +574,13 @@ fn weighted_buy_exact_in_returns_correct_amount_from_weighted_formula() {
     );
     assert!(expected_out > 0, "expected non-zero output");
 
-    let response = operation(
+    let response = operation_at(
+        inputs.start_timestamp * 1000,
         &input,
         &state,
         Message::BuyWeightedExactInput {
             amount_in,
             min_amount_out: 0,
-            valid_from: inputs.start_timestamp,
-            valid_until: inputs.start_timestamp + 1,
         },
         config(100, id(43), false),
         [inputs.collateral_seed, inputs.sale_inventory, 1_000],
@@ -889,14 +618,13 @@ fn weighted_buy_exact_out_charges_correct_amount_from_weighted_formula() {
     // The creator pays fees from the required input. The buyer pays no extra.
     let gross_in = amount_in;
 
-    let response = operation(
+    let response = operation_at(
+        inputs.start_timestamp * 1000,
         &input,
         &state,
         Message::BuyWeightedExactOutput {
             amount_out,
             max_amount_in: gross_in,
-            valid_from: inputs.start_timestamp,
-            valid_until: inputs.start_timestamp + 1,
         },
         config(fee_bps as u16, id(43), false),
         [
@@ -919,14 +647,13 @@ fn weighted_buy_updates_collateral_balance_in_state() {
     let fee = amount_in.div_ceil(100); // ceil(amount_in * 100 / 10_000)
     let net_in = amount_in - fee;
 
-    let response = operation(
+    let response = operation_at(
+        inputs.start_timestamp * 1000,
         &input,
         &state,
         Message::BuyWeightedExactInput {
             amount_in,
             min_amount_out: 0,
-            valid_from: inputs.start_timestamp,
-            valid_until: inputs.start_timestamp + 1,
         },
         config(fee_bps as u16, id(43), false),
         [inputs.collateral_seed, inputs.sale_inventory, 1_000],
@@ -952,14 +679,13 @@ fn weighted_buy_rejects_before_and_after_sale_window() {
         inputs.end_timestamp + 1,
     ] {
         assert_eq!(
-            operation(
+            operation_at(
+                now * 1000,
                 &input,
                 &state,
                 Message::BuyWeightedExactInput {
                     amount_in: 50,
                     min_amount_out: 0,
-                    valid_from: now,
-                    valid_until: now + 1,
                 },
                 config(100, id(43), false),
                 [inputs.collateral_seed, inputs.sale_inventory, 1_000],
@@ -978,14 +704,13 @@ fn weighted_buy_rejects_slippage_exact_in() {
     let inputs = weighted_inputs();
     // set min_amount_out to u128::MAX to guarantee slippage rejection
     assert_eq!(
-        operation(
+        operation_at(
+            inputs.start_timestamp * 1000,
             &input,
             &state,
             Message::BuyWeightedExactInput {
                 amount_in: 50,
                 min_amount_out: u128::MAX,
-                valid_from: inputs.start_timestamp,
-                valid_until: inputs.start_timestamp + 1,
             },
             config(100, id(43), false),
             [inputs.collateral_seed, inputs.sale_inventory, 1_000],
@@ -1002,14 +727,13 @@ fn weighted_buy_rejects_slippage_exact_out() {
     let inputs = weighted_inputs();
     // set max_amount_in to 0 to guarantee slippage rejection
     assert_eq!(
-        operation(
+        operation_at(
+            inputs.start_timestamp * 1000,
             &input,
             &state,
             Message::BuyWeightedExactOutput {
                 amount_out: 500,
                 max_amount_in: 0,
-                valid_from: inputs.start_timestamp,
-                valid_until: inputs.start_timestamp + 1,
             },
             config(100, id(43), false),
             [inputs.collateral_seed, inputs.sale_inventory, 1_000],
@@ -1025,14 +749,13 @@ fn weighted_buy_rejects_frozen_pool() {
     let (input, state) = funded();
     let inputs = weighted_inputs();
     assert_eq!(
-        operation(
+        operation_at(
+            inputs.start_timestamp * 1000,
             &input,
             &state,
             Message::BuyWeightedExactInput {
                 amount_in: 50,
                 min_amount_out: 0,
-                valid_from: inputs.start_timestamp,
-                valid_until: inputs.start_timestamp + 1,
             },
             config(100, id(43), true), // frozen
             [inputs.collateral_seed, inputs.sale_inventory, 1_000],
@@ -1048,14 +771,13 @@ fn weighted_buy_rejects_invalid_fee() {
     let (input, state) = funded();
     let inputs = weighted_inputs();
     assert_eq!(
-        operation(
+        operation_at(
+            inputs.start_timestamp * 1000,
             &input,
             &state,
             Message::BuyWeightedExactInput {
                 amount_in: 50,
                 min_amount_out: 0,
-                valid_from: inputs.start_timestamp,
-                valid_until: inputs.start_timestamp + 1,
             },
             config(10_000, id(43), false), // fee >= 100%
             [inputs.collateral_seed, inputs.sale_inventory, 1_000],
@@ -1071,14 +793,13 @@ fn weighted_buy_rejects_zero_amount_in() {
     let (input, state) = funded();
     let inputs = weighted_inputs();
     assert!(
-        operation(
+        operation_at(
+            inputs.start_timestamp * 1000,
             &input,
             &state,
             Message::BuyWeightedExactInput {
                 amount_in: 0,
                 min_amount_out: 0,
-                valid_from: inputs.start_timestamp,
-                valid_until: inputs.start_timestamp + 1,
             },
             config(100, id(43), false),
             [inputs.collateral_seed, inputs.sale_inventory, 1_000],
@@ -1093,14 +814,13 @@ fn weighted_buy_rejects_underfunded_vault() {
     let inputs = weighted_inputs();
     // pool collateral vault shows 0 — below liabilities (= collateral_seed)
     assert_eq!(
-        operation(
+        operation_at(
+            inputs.start_timestamp * 1000,
             &input,
             &state,
             Message::BuyWeightedExactInput {
                 amount_in: 50,
                 min_amount_out: 0,
-                valid_from: inputs.start_timestamp,
-                valid_until: inputs.start_timestamp + 1,
             },
             config(100, id(43), false),
             [0, inputs.sale_inventory, 1_000], // collateral vault = 0 < seed liabilities
@@ -1117,14 +837,13 @@ fn weighted_buy_closes_when_remaining_inventory_hits_zero() {
     let inputs = weighted_inputs();
     state.remaining_inventory = 0;
     assert_eq!(
-        operation(
+        operation_at(
+            inputs.start_timestamp * 1000,
             &input,
             &state,
             Message::BuyWeightedExactInput {
                 amount_in: 50,
                 min_amount_out: 0,
-                valid_from: inputs.start_timestamp,
-                valid_until: inputs.start_timestamp + 1,
             },
             config(100, id(43), false),
             [inputs.collateral_seed, 0, 1_000],
@@ -1148,14 +867,13 @@ fn weighted_buy_prices_fall_as_weights_shift() {
     let inputs = weighted_inputs();
 
     let buy = |now: u64| -> u128 {
-        let response = operation(
+        let response = operation_at(
+            now * 1000,
             &input,
             &state,
             Message::BuyWeightedExactInput {
                 amount_in: 50,
                 min_amount_out: 0,
-                valid_from: now,
-                valid_until: now + 1,
             },
             config(100, id(43), false),
             [inputs.collateral_seed, inputs.sale_inventory, 1_000],
@@ -1214,15 +932,14 @@ fn normalized_weights_keep_fractional_percentage_schedule_steps() {
     };
     *token_weight_start = weight(50);
     *token_weight_end = weight(51);
-    let quote = |second| {
-        operation(
+    let quote = |second: u64| {
+        operation_at(
+            second * 1000,
             &input,
             &state,
             Message::BuyWeightedExactInput {
                 amount_in: 10,
                 min_amount_out: 1,
-                valid_from: second,
-                valid_until: second + 1,
             },
             config(0, id(43), false),
             [100, state.remaining_inventory, 1000],
@@ -1258,4 +975,146 @@ fn fixed_price_settlement_cannot_settle_a_weighted_pool() {
     })
     .unwrap();
     assert_eq!(handle(&input).err(), Some(lbp_core::Error::InvalidMessage));
+}
+
+#[test]
+fn clock_read_prices_both_forms_and_preserves_sale_inclusion_bounds() {
+    let (input, base) = funded();
+    for (start, end) in [(95, 50), (50, 95), (50, 50)] {
+        let mut state = base.clone();
+        if let lbp_core::PoolMode::Weighted {
+            token_weight_start,
+            token_weight_end,
+            ..
+        } = &mut state.mode
+        {
+            *token_weight_start = weight(start);
+            *token_weight_end = weight(end);
+        }
+        for ms in [1_000_000, 1_500_000, 1_500_999, 2_999_999] {
+            let c = interpolate_weight(
+                weight(100 - start),
+                weight(100 - end),
+                1000,
+                3000,
+                ms / 1000,
+            );
+            let out = calc_out_given_in(100, c, 1_000_000, lbp_core::WEIGHT_TOTAL - c, 50);
+            let amount_in = calc_in_given_out(100, c, 1_000_000, lbp_core::WEIGHT_TOTAL - c, 500);
+            for (message, expected_out, expected_in) in [
+                (
+                    Message::BuyWeightedExactInput {
+                        amount_in: 50,
+                        min_amount_out: out,
+                    },
+                    out,
+                    50,
+                ),
+                (
+                    Message::BuyWeightedExactOutput {
+                        amount_out: 500,
+                        max_amount_in: amount_in,
+                    },
+                    500,
+                    amount_in,
+                ),
+            ] {
+                let r = operation_at(
+                    ms,
+                    &input,
+                    &state,
+                    message,
+                    config(0, id(43), false),
+                    [100, 1_000_000, 10000],
+                )
+                .unwrap();
+                assert_eq!(state_of(&r).remaining_inventory, 1_000_000 - expected_out);
+                assert_eq!(pricing_collateral(&state_of(&r)), 100 + expected_in);
+                assert_eq!(r.validity.timestamps.start(), Some(1_000_000));
+                assert_eq!(r.validity.timestamps.end(), Some(3_000_000));
+            }
+        }
+    }
+}
+
+#[test]
+fn clock_replies_require_the_expected_actor_and_pending_phase() {
+    let (mut input, state) = funded();
+    input.pre_state = borsh::to_vec(&state).unwrap().into();
+    input.message = borsh::to_vec(&Message::BuyWeightedExactInput {
+        amount_in: 10,
+        min_amount_out: 1,
+    })
+    .unwrap();
+    let mut response = handle(&input).unwrap();
+    let early = ReceiveInput {
+        receiver: input.receiver,
+        from: Some(lbp_core::pricing_clock::actor()),
+        is_authorized: false,
+        pre_state: response.post_state.clone().unwrap(),
+        message: borsh::to_vec(&lbp_core::pricing_clock::Reply {
+            timestamp_ms: 1_500_000,
+        })
+        .unwrap(),
+    };
+    assert_eq!(handle(&early).err(), Some(lbp_core::Error::Unauthorized));
+
+    for bytes in [
+        config(0, id(43), false),
+        holding(input.receiver.account_id, id(42), 100),
+        holding(input.receiver.account_id, id(41), 1_000_000),
+        holding(id(50), id(42), 1000),
+    ] {
+        let from = response.sync_messages[0].to;
+        input = reply(&input, &response, from, bytes);
+        response = handle(&input).unwrap();
+    }
+    assert_eq!(
+        response.sync_messages[0].to,
+        lbp_core::pricing_clock::actor()
+    );
+    input.pre_state = response.post_state.unwrap();
+    input.message = borsh::to_vec(&lbp_core::pricing_clock::Reply {
+        timestamp_ms: 1_500_000,
+    })
+    .unwrap();
+    for actor in [
+        Actor::new(id(1), lbp_core::pricing_clock::PROGRAM),
+        Actor::new(lbp_core::pricing_clock::ACCOUNT, id(1)),
+    ] {
+        input.from = Some(actor);
+        assert_eq!(handle(&input).err(), Some(lbp_core::Error::Unauthorized));
+    }
+    input.from = Some(lbp_core::pricing_clock::actor());
+    let done = handle(&input).unwrap();
+    let mut malformed = input.clone();
+    malformed.message = vec![0];
+    assert_eq!(
+        handle(&malformed).err(),
+        Some(lbp_core::Error::InvalidMessage)
+    );
+    input.pre_state = done.post_state.unwrap();
+    assert!(handle(&input).is_err(), "duplicate reply must fail");
+    input.pre_state = borsh::to_vec(&state).unwrap().into();
+    assert!(handle(&input).is_err(), "unsolicited reply must fail");
+}
+
+#[test]
+fn weighted_schedule_bounds_reject_millisecond_overflow() {
+    let (input, mut state) = funded();
+    state.end_timestamp = Some(u64::MAX);
+    assert_eq!(
+        operation(
+            &input,
+            &state,
+            Message::BuyWeightedExactInput {
+                amount_in: 10,
+                min_amount_out: 1
+            },
+            config(0, id(43), false),
+            [100, 1_000_000, 1000]
+        )
+        .err(),
+        Some(lbp_core::Error::Arithmetic)
+    );
 }

@@ -917,18 +917,14 @@ fn fixed_price_optional_end_is_part_of_factory_and_pool_schemas() {
 }
 
 #[test]
-fn weighted_buys_keep_amount_limits_and_validity_windows_on_wire() {
+fn weighted_buys_keep_only_amount_limits_on_wire() {
     let exact_in = lbp_core::Message::BuyWeightedExactInput {
         amount_in: 25,
         min_amount_out: 100,
-        valid_from: 9,
-        valid_until: 69,
     };
     let exact_out = lbp_core::Message::BuyWeightedExactOutput {
         amount_out: 25,
         max_amount_in: 100,
-        valid_from: 9,
-        valid_until: 69,
     };
     for (message, name, tag, amount, limit) in [
         (
@@ -950,9 +946,7 @@ fn weighted_buys_keep_amount_limits_and_validity_windows_on_wire() {
         expected.extend(
             hex::decode(concat!(
                 "19000000000000000000000000000000",
-                "64000000000000000000000000000000",
-                "0900000000000000",
-                "4500000000000000"
+                "64000000000000000000000000000000"
             ))
             .unwrap(),
         );
@@ -965,11 +959,14 @@ fn weighted_buys_keep_amount_limits_and_validity_windows_on_wire() {
             variant("lbp", "Message", name),
             json!({
                 "tag":expected[0], "name":name, "fields":[
-                    {"name":amount,"type":"u128"}, {"name":limit,"type":"u128"},
-                    {"name":"valid_from","type":"u64"}, {"name":"valid_until","type":"u64"}
+                    {"name":amount,"type":"u128"}, {"name":limit,"type":"u128"}
                 ]
             })
         );
+        let mut old_wire = expected.clone();
+        old_wire.extend(9u64.to_le_bytes());
+        old_wire.extend(69u64.to_le_bytes());
+        assert!(borsh::from_slice::<lbp_core::Message>(&old_wire).is_err());
         let envelope = lbp_core::Message::Execute {
             pool: AccountId::new([3; 32]),
             instruction: Box::new(message),

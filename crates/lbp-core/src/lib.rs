@@ -1,4 +1,6 @@
 //! Fixed-price and weighted sale setup, buys and fees; fixed-price settlement.
+
+pub mod pricing_clock;
 mod trading;
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
@@ -120,19 +122,15 @@ pub enum Message {
         inputs: WeightedPoolInputs,
     },
     ActivateWeighted,
-    /// Buy with the least favourable weights in `[valid_from, valid_until)`.
+    /// Buy using the timestamp returned by the configured pricing clock.
     BuyWeightedExactInput {
         amount_in: u128,
         min_amount_out: u128,
-        valid_from: u64,
-        valid_until: u64,
     },
-    /// Buy with the least favourable weights in `[valid_from, valid_until)`.
+    /// Buy using the timestamp returned by the configured pricing clock.
     BuyWeightedExactOutput {
         amount_out: u128,
         max_amount_in: u128,
-        valid_from: u64,
-        valid_until: u64,
     },
 }
 pub type Instruction = Message;
@@ -181,6 +179,7 @@ struct Pending {
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Error {
+    ClockUnavailable,
     InvalidMessage,
     InvalidState,
     Unauthorized,

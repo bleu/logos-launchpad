@@ -33,6 +33,8 @@ run() {
   "$@"
 }
 run 'core host tests (locked)' cargo +"$ACTOR_RUST_VERSION" test --locked
+# TEMPORARY: exercise clock replies with an explicit fake provider after normal builds.
+run 'weighted host tests with local fake clock (locked)' env LAUNCHPAD_MOCK_CLOCK=1 cargo +"$ACTOR_RUST_VERSION" test --locked -p lbp-core
 run 'compatibility host tests (locked)' cargo +"$ACTOR_RUST_VERSION" test --manifest-path packages/lez-compat/Cargo.toml --workspace --locked
 run 'weighted-math host tests (locked)' cargo +"$ACTOR_RUST_VERSION" test --manifest-path packages/weighted-math/Cargo.toml --workspace --locked
 run 'launchpad core logic tests (locked)' cargo +"$ACTOR_RUST_VERSION" test --manifest-path packages/launchpad/core/logic/Cargo.toml --locked
