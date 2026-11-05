@@ -189,6 +189,16 @@ pub enum Message {
         expected_stage: LbpCreationStage,
         creator: AccountId,
     },
+    SetWeightedPaused {
+        creator: AccountId,
+        paused: bool,
+    },
+    WithdrawWeightedProceeds {
+        creator: AccountId,
+    },
+    ClaimWeightedAllocation {
+        creator: AccountId,
+    },
 }
 pub type Instruction = Message;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1328,6 +1338,9 @@ pub fn handle(input: &ReceiveInput) -> Result<Response, Error> {
             now,
         } => lbp_setup::begin(input, expected_stage, creator, now, false),
         Message::CreateFixedPriceLbp { inputs } => lbp_setup::create_fixed(input, inputs),
+        command @ (Message::SetWeightedPaused { .. }
+        | Message::WithdrawWeightedProceeds { .. }
+        | Message::ClaimWeightedAllocation { .. }) => lbp_setup::begin_payout(input, command),
         Message::CreateWeightedLbp { inputs } => lbp_setup::create_weighted(input, inputs),
         Message::ContinueWeightedCreation {
             expected_stage,
