@@ -1365,7 +1365,7 @@ fn weighted_factory_env() -> (
     AccountId, // escrow
     PrivateKey,
     Vec<Actor>, // actors for factory transactions
-    [u8; 32],  // salt
+    [u8; 32],   // salt
 ) {
     use factory_core::{CreatorAllocationRelease, LbpCreationStage, WeightedInputs};
     const FACTORY: AccountId = AccountId::new([17; 32]);
@@ -1474,42 +1474,41 @@ fn weighted_factory_env() -> (
         actors.push(holding(owner, launch));
         actors.push(holding(owner, COLLATERAL));
     }
-    let execute_at =
-        |state: &mut V03State, instruction: factory_core::Message, timestamp: u64| {
-            let mut message = Message::try_new(
-                Actor::new(factory, FACTORY),
-                actors.clone(),
-                BTreeMap::from([(creator, state.get_account_by_id(creator).nonce)]),
-                instruction,
-            )
-            .unwrap();
-            message.admission_evidence = vec![
-                lee::PublicAccountEvidence::Pda {
-                    program: FACTORY,
-                    seed: factory_core::compute_factory_seed(NAMESPACE, salt),
-                },
-                lee::PublicAccountEvidence::Pda {
-                    program: LBP,
-                    seed: lbp_core::compute_pool_pda_seed(NAMESPACE, launch, COLLATERAL, factory),
-                },
-            ];
-            for owner in [factory, mint, escrow, pool, creator] {
-                for definition in [launch, COLLATERAL] {
-                    message
-                        .admission_evidence
-                        .push(lee::PublicAccountEvidence::Pda {
-                            program: TOKEN_PROGRAM_ACCOUNT_ID,
-                            seed: token::holding_seed(owner, definition),
-                        });
-                }
+    let execute_at = |state: &mut V03State, instruction: factory_core::Message, timestamp: u64| {
+        let mut message = Message::try_new(
+            Actor::new(factory, FACTORY),
+            actors.clone(),
+            BTreeMap::from([(creator, state.get_account_by_id(creator).nonce)]),
+            instruction,
+        )
+        .unwrap();
+        message.admission_evidence = vec![
+            lee::PublicAccountEvidence::Pda {
+                program: FACTORY,
+                seed: factory_core::compute_factory_seed(NAMESPACE, salt),
+            },
+            lee::PublicAccountEvidence::Pda {
+                program: LBP,
+                seed: lbp_core::compute_pool_pda_seed(NAMESPACE, launch, COLLATERAL, factory),
+            },
+        ];
+        for owner in [factory, mint, escrow, pool, creator] {
+            for definition in [launch, COLLATERAL] {
+                message
+                    .admission_evidence
+                    .push(lee::PublicAccountEvidence::Pda {
+                        program: TOKEN_PROGRAM_ACCOUNT_ID,
+                        seed: token::holding_seed(owner, definition),
+                    });
             }
-            let witnesses = WitnessSet::for_message(&message, &[&key]);
-            state.transition_from_public_transaction(
-                &PublicTransaction::new(message, witnesses),
-                1,
-                timestamp,
-            )
-        };
+        }
+        let witnesses = WitnessSet::for_message(&message, &[&key]);
+        state.transition_from_public_transaction(
+            &PublicTransaction::new(message, witnesses),
+            1,
+            timestamp,
+        )
+    };
     let execute = |state: &mut V03State, instruction| execute_at(state, instruction, 100_000);
     // Create the weighted LBP
     execute(
@@ -1616,7 +1615,15 @@ fn factory_execute_at(
     ];
     let mint = factory_core::compute_mint_pda(NAMESPACE, FACTORY_PROGRAM, salt);
     let escrow = factory_core::compute_escrow_pda(NAMESPACE, FACTORY_PROGRAM, salt);
-    for owner in [factory, mint, escrow, pool, creator, TREASURY, NEXT_TREASURY] {
+    for owner in [
+        factory,
+        mint,
+        escrow,
+        pool,
+        creator,
+        TREASURY,
+        NEXT_TREASURY,
+    ] {
         for definition in [launch, COLLATERAL] {
             message
                 .admission_evidence
@@ -1769,7 +1776,10 @@ fn weighted_factory_controls_and_settlement_full_flow() {
 
     // Creator received proceeds
     let creator_collateral_after = balance(&state, creator, COLLATERAL);
-    assert_eq!(creator_collateral_after, creator_collateral_before + recorded);
+    assert_eq!(
+        creator_collateral_after,
+        creator_collateral_before + recorded
+    );
 
     // Treasury received remaining fees
     let treasury_after = balance(&state, TREASURY, COLLATERAL);
@@ -1814,7 +1824,10 @@ fn weighted_factory_controls_and_settlement_full_flow() {
         300_000,
     )
     .unwrap();
-    assert_eq!(balance(&state, creator, launch), balance(&before_retry, creator, launch) + 200);
+    assert_eq!(
+        balance(&state, creator, launch),
+        balance(&before_retry, creator, launch) + 200
+    );
     assert_eq!(balance(&state, escrow, launch), 0);
 
     // Repeated allocation claim is idempotent
@@ -1899,7 +1912,10 @@ fn weighted_unauthorized_factory_controls_rejected() {
     // check should fail because wrong_caller doesn't hold the creator role.
     // We try the correct creator ID but with the wrong signer.
     let mut actors_with_wrong = actors.clone();
-    actors_with_wrong.push(Actor::new(wrong_caller, factory_core::AUTHORITY_PROGRAM_ACCOUNT_ID));
+    actors_with_wrong.push(Actor::new(
+        wrong_caller,
+        factory_core::AUTHORITY_PROGRAM_ACCOUNT_ID,
+    ));
     actors_with_wrong.push(Actor::new(wrong_caller, TOKEN_PROGRAM_ACCOUNT_ID));
     actors_with_wrong.push(holding(wrong_caller, launch));
     actors_with_wrong.push(holding(wrong_caller, COLLATERAL));
@@ -2005,7 +2021,10 @@ fn weighted_allocation_before_settlement_then_settlement() {
         300_000,
     )
     .unwrap();
-    assert_eq!(balance(&state, creator, launch), creator_tokens_before + 200);
+    assert_eq!(
+        balance(&state, creator, launch),
+        creator_tokens_before + 200
+    );
     assert_eq!(balance(&state, escrow, launch), 0);
 
     // Then settle proceeds
@@ -2052,7 +2071,10 @@ fn weighted_stale_clock_at_inclusion_boundary_preserves_state() {
             rejected.transition_from_public_transaction(&transaction, 1, timestamp),
             Err(lee::error::LeeError::OutOfValidityWindow)
         ));
-        assert!(rejected == before, "rejected buy changed state at {timestamp}");
+        assert!(
+            rejected == before,
+            "rejected buy changed state at {timestamp}"
+        );
         assert_eq!(rejected.get_account_by_id(creator).nonce, nonce);
     }
 
@@ -2064,6 +2086,9 @@ fn weighted_stale_clock_at_inclusion_boundary_preserves_state() {
             rejected.transition_from_public_transaction(&transaction, 1, timestamp),
             Err(lee::error::LeeError::OutOfValidityWindow)
         ));
-        assert!(rejected == before, "rejected buy changed state at {timestamp}");
+        assert!(
+            rejected == before,
+            "rejected buy changed state at {timestamp}"
+        );
     }
 }
