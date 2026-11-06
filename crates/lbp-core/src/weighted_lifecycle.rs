@@ -1,6 +1,6 @@
 //! Weighted controls, scheduled closing and observer checkpoints.
 //! Fixed-price sellout rules do not apply.
-use crate::{Error, PoolAccount, PoolMode, WEIGHT_TOTAL};
+use crate::{Error, PoolAccount, PoolMode, WEIGHT_TOTAL, valid_weight_endpoints};
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
     account::Actor,
@@ -62,8 +62,8 @@ struct PokePending {
     state: PoolAccount,
 }
 
-/// Compute the token weight at the given second from the stored schedule.
-pub(super) fn token_weight_at(state: &PoolAccount, time: u64) -> Result<u128, Error> {
+/// Compute collateral and token weights with one interpolation.
+pub(super) fn weights_at(state: &PoolAccount, time: u64) -> Result<(u128, u128), Error> {
     let PoolMode::Weighted {
         token_weight_start,
         token_weight_end,
@@ -72,6 +72,9 @@ pub(super) fn token_weight_at(state: &PoolAccount, time: u64) -> Result<u128, Er
     else {
         return Err(Error::InvalidMessage);
     };
+    if !valid_weight_endpoints(token_weight_start, token_weight_end) {
+        return Err(Error::InvalidTerms);
+    }
     let end_ts = state.end_timestamp.ok_or(Error::InvalidState)?;
     let collateral_w = interpolate_weight(
         WEIGHT_TOTAL - token_weight_start,
@@ -80,12 +83,15 @@ pub(super) fn token_weight_at(state: &PoolAccount, time: u64) -> Result<u128, Er
         end_ts,
         time,
     );
-    Ok(WEIGHT_TOTAL - collateral_w)
+    Ok((collateral_w, WEIGHT_TOTAL - collateral_w))
 }
 
-/// Update checkpoint fields in the pool mode. Returns true if the checkpoint changed.
-pub(super) fn record_checkpoint(state: &mut PoolAccount, time: u64) -> Result<bool, Error> {
-    let token_w = token_weight_at(state, time)?;
+/// Record an observed weight and return an event only when the checkpoint changes.
+pub(super) fn record_checkpoint(
+    state: &mut PoolAccount,
+    time: u64,
+    token_w: u128,
+) -> Option<ProgramEvent> {
     let PoolMode::Weighted {
         checkpoint_time,
         checkpoint_token_weight,
@@ -95,11 +101,11 @@ pub(super) fn record_checkpoint(state: &mut PoolAccount, time: u64) -> Result<bo
         unreachable!()
     };
     if *checkpoint_time == time && *checkpoint_token_weight == token_w {
-        return Ok(false);
+        return None;
     }
     *checkpoint_time = time;
     *checkpoint_token_weight = token_w;
-    Ok(true)
+    Some(checkpoint_event(time, token_w))
 }
 
 /// Checkpoint event selector: first eight bytes of sha256("lbp::WeightedCheckpoint").
@@ -149,17 +155,11 @@ pub(super) fn resume_poke(input: &ReceiveInput) -> Option<Result<Response, Error
         let mut state = pending.state;
         state.validate_address(input.receiver)?;
         let time = crate::pricing_clock::read(input)?;
-        let changed = record_checkpoint(&mut state, time)?;
-        let PoolMode::Weighted {
-            checkpoint_token_weight,
-            ..
-        } = state.mode
-        else {
-            unreachable!()
-        };
+        let (_, token_weight) = weights_at(&state, time)?;
+        let event = record_checkpoint(&mut state, time, token_weight);
         let response = state.response();
-        Ok(if changed {
-            response.event(checkpoint_event(time, checkpoint_token_weight))
+        Ok(if let Some(event) = event {
+            response.event(event)
         } else {
             response
         })

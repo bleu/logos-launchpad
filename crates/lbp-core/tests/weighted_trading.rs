@@ -1222,7 +1222,7 @@ fn weighted_repeated_pause_succeeds_without_event() {
 
 #[test]
 fn weighted_pause_blocks_both_buy_forms() {
-    let (input, mut state) = funded();
+    let (mut input, mut state) = funded();
     if let lbp_core::PoolMode::Weighted { paused, .. } = &mut state.mode {
         *paused = true;
     }
@@ -1236,17 +1236,10 @@ fn weighted_pause_blocks_both_buy_forms() {
             max_amount_in: 1000,
         },
     ] {
-        assert_eq!(
-            operation(
-                &input,
-                &state,
-                message,
-                config(0, id(43), false),
-                [100, 1_000_000, 1000]
-            )
-            .err(),
-            Some(lbp_core::Error::Paused)
-        );
+        input.pre_state = borsh::to_vec(&state).unwrap().into();
+        input.message = borsh::to_vec(&message).unwrap();
+        // Reject at entry, before any namespace, holding or clock request.
+        assert_eq!(handle(&input).err(), Some(lbp_core::Error::Paused));
     }
 }
 
@@ -1631,6 +1624,16 @@ fn checkpoint(state: &lbp_core::PoolAccount) -> (u64, u128) {
     (checkpoint_time, checkpoint_token_weight)
 }
 
+fn assert_checkpoint_events_match(
+    actual: &lee_core::program::Response,
+    expected: &lee_core::program::Response,
+) {
+    assert_eq!(actual.events.len(), 1);
+    assert_eq!(expected.events.len(), 1);
+    assert_eq!(actual.events[0].selector, expected.events[0].selector);
+    assert_eq!(actual.events[0].data, expected.events[0].data);
+}
+
 #[test]
 fn poke_is_permissionless_and_records_checkpoint() {
     let (input, state) = funded();
@@ -1722,6 +1725,10 @@ fn buy_updates_checkpoint_on_new_timestamp() {
     let (time, w) = checkpoint(&after);
     assert_eq!(time, 1500);
     assert!(w > 0);
+    let poked = poke_at(1_500_000, &input, &state).unwrap();
+    assert_checkpoint_events_match(&response, &poked);
+    let repeated = poke_at(1_500_000, &input, &after).unwrap();
+    assert!(repeated.events.is_empty());
 }
 
 #[test]
@@ -1758,6 +1765,7 @@ fn buy_at_same_timestamp_does_not_change_checkpoint() {
     .unwrap();
     let cp2 = checkpoint(&state_of(&second));
     assert_eq!(cp1, cp2);
+    assert!(second.events.is_empty());
 }
 
 #[test]
@@ -1794,6 +1802,63 @@ fn buy_at_different_timestamp_updates_checkpoint() {
     let cp2 = checkpoint(&state_of(&second));
     assert_eq!(cp2.0, 2000);
     assert_ne!(cp1, cp2);
+    let poked = poke_at(2_000_000, &input, &after_first).unwrap();
+    assert_checkpoint_events_match(&second, &poked);
+}
+
+#[test]
+fn exact_output_checkpoint_event_matches_poke_with_fractional_weights() {
+    let (input, mut state) = funded();
+    for (start, end) in [
+        (weight(95) + 1, weight(50) + 7),
+        (weight(50) + 7, weight(95) + 1),
+    ] {
+        if let lbp_core::PoolMode::Weighted {
+            token_weight_start,
+            token_weight_end,
+            ..
+        } = &mut state.mode
+        {
+            *token_weight_start = start;
+            *token_weight_end = end;
+        }
+        let time_ms = 1_501_000;
+        let response = operation_at(
+            time_ms,
+            &input,
+            &state,
+            Message::BuyWeightedExactOutput {
+                amount_out: 500,
+                max_amount_in: 1000,
+            },
+            config(0, id(43), false),
+            [100, 1_000_000, 1000],
+        )
+        .unwrap();
+        let poked = poke_at(time_ms, &input, &state).unwrap();
+        assert_eq!(
+            checkpoint(&state_of(&response)),
+            checkpoint(&state_of(&poked))
+        );
+        assert_checkpoint_events_match(&response, &poked);
+        let coll_w = interpolate_weight(
+            lbp_core::WEIGHT_TOTAL - start,
+            lbp_core::WEIGHT_TOTAL - end,
+            1000,
+            3000,
+            1501,
+        );
+        assert_eq!(
+            checkpoint(&state_of(&response)).1,
+            lbp_core::WEIGHT_TOTAL - coll_w
+        );
+        let expected_in =
+            calc_in_given_out(100, coll_w, 1_000_000, lbp_core::WEIGHT_TOTAL - coll_w, 500);
+        assert_eq!(
+            state_of(&response).recorded_collateral,
+            state.recorded_collateral + expected_in
+        );
+    }
 }
 
 #[test]

@@ -2358,21 +2358,47 @@ fn guest_buy_updates_checkpoint_and_poke_is_idempotent() {
     let buyer = AccountId::from(&PublicKey::new_from_private_key(&key));
     let (mut state, pool) = weighted_state(buyer);
     // Buy updates checkpoint
-    fixed_execute(
-        &mut state,
+    let transaction = fixed_transaction(
+        &state,
         pool,
         &key,
         lbp_core::Message::BuyWeightedExactInput {
             amount_in: 50,
             min_amount_out: 1,
         },
-    )
-    .unwrap();
+    );
+    let events = state
+        .transition_from_public_transaction(&transaction, 1, 100_000)
+        .unwrap();
     let cp_after_buy = checkpoint_of(&state, pool);
     assert_eq!(cp_after_buy.0, 100); // clock is at 100_000ms = 100s
     assert!(cp_after_buy.1 > 0);
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].account_id, LBP);
+    use risc0_zkvm::sha::{Impl, Sha256 as _};
+    let hash = Impl::hash_bytes(b"lbp::WeightedCheckpoint");
+    assert_eq!(events[0].event.selector, hash.as_bytes()[..8]);
+    assert_eq!(events[0].event.data, borsh::to_vec(&cp_after_buy).unwrap());
+    // Another buy at the same pricing second does not emit a duplicate event.
+    let transaction = fixed_transaction(
+        &state,
+        pool,
+        &key,
+        lbp_core::Message::BuyWeightedExactOutput {
+            amount_out: 1,
+            max_amount_in: 100,
+        },
+    );
+    let events = state
+        .transition_from_public_transaction(&transaction, 1, 150_000)
+        .unwrap();
+    assert!(events.is_empty());
     // Poke at same time is idempotent — checkpoint unchanged
-    poke_execute_at(&mut state, pool, 150_000).unwrap();
+    let transaction = poke_transaction(&state, pool);
+    let events = state
+        .transition_from_public_transaction(&transaction, 1, 150_000)
+        .unwrap();
+    assert!(events.is_empty());
     assert_eq!(checkpoint_of(&state, pool), cp_after_buy);
 }
 
