@@ -1645,6 +1645,12 @@ fn poke_is_permissionless_and_records_checkpoint() {
     assert_eq!(token_w, expected);
     // Should emit a checkpoint event
     assert_eq!(response.events.len(), 1);
+    use risc0_zkvm::sha::{Impl, Sha256 as _};
+    let hash = Impl::hash_bytes(b"lbp::WeightedCheckpoint");
+    assert_eq!(response.events[0].selector, hash.as_bytes()[..8]);
+    let mut payload = 1500u64.to_le_bytes().to_vec();
+    payload.extend_from_slice(&expected.to_le_bytes());
+    assert_eq!(response.events[0].data, payload);
 }
 
 #[test]

@@ -1750,7 +1750,6 @@ fn weighted_factory_controls_and_settlement_full_flow() {
 
     // Record balances before settlement
     let creator_collateral_before = balance(&state, creator, COLLATERAL);
-    let pool_collateral_before = balance(&state, pool, COLLATERAL);
     let pool_token_before = balance(&state, pool, launch);
     let sale_before = fixed_pool(&state, pool);
     let recorded = sale_before.recorded_collateral;
@@ -2053,6 +2052,199 @@ fn weighted_allocation_before_settlement_then_settlement() {
 }
 
 #[test]
+fn weighted_settlement_failures_roll_back_all_effects_and_retry_once() {
+    let (state, factory, pool, launch, escrow, key, actors, salt) = weighted_factory_env();
+    let creator = AccountId::from(&PublicKey::new_from_private_key(&key));
+    let state = clock_state(state, 300_000);
+    let sale = fixed_pool(&state, pool);
+    assert!(sale.accrued_fees > 0);
+    assert!(sale.remaining_inventory > 0);
+    let definition_actor = Actor::new(launch, TOKEN_PROGRAM_ACCOUNT_ID);
+    let definition_bytes = state
+        .get_account_by_id(launch)
+        .data
+        .actor_state(TOKEN_PROGRAM_ACCOUNT_ID)
+        .to_vec();
+    let definition = TokenState::decode(&definition_bytes).unwrap();
+    let TokenState::Definition { supply, .. } = definition.clone() else {
+        panic!("expected definition")
+    };
+
+    // Fail the first transfer, the burn after fee payment, or the final credit
+    // after fee payment and burn. Each failure must restore the entire runtime.
+    for fault in ["fee", "burn", "proceeds"] {
+        let (actor, original, broken, reason) = if fault == "burn" {
+            let mut broken = definition.clone();
+            let TokenState::Definition { supply, .. } = &mut broken else {
+                unreachable!()
+            };
+            *supply = 0;
+            (
+                definition_actor,
+                definition_bytes.clone(),
+                borsh::to_vec(&broken).unwrap(),
+                "InsufficientBalance",
+            )
+        } else {
+            let owner = if fault == "fee" { TREASURY } else { creator };
+            let actor = holding(owner, COLLATERAL);
+            let original = state
+                .get_account_by_id(actor.account_id)
+                .data
+                .actor_state(TOKEN_PROGRAM_ACCOUNT_ID)
+                .to_vec();
+            let broken = borsh::to_vec(&TokenState::Holding {
+                owner,
+                definition: COLLATERAL,
+                kind: TokenKind::Fungible,
+                balance: u128::MAX,
+            })
+            .unwrap();
+            (actor, original, broken, "Overflow")
+        };
+        let mut rejected = state.clone().with_public_accounts([account(actor, broken)]);
+        let before = rejected.clone();
+        let nonce = rejected.get_account_by_id(creator).nonce;
+        let result = factory_execute_at(
+            &mut rejected,
+            factory,
+            &actors,
+            &key,
+            salt,
+            launch,
+            pool,
+            factory_core::Message::WithdrawWeightedProceeds { creator },
+            300_000,
+        );
+        assert!(
+            matches!(&result, Err(lee::error::LeeError::ProgramExecutionFailed(error)) if error.contains(reason)),
+            "{fault}: expected {reason}, got {result:?}"
+        );
+        assert!(
+            rejected == before,
+            "{fault}: failed settlement changed runtime state"
+        );
+        assert_eq!(rejected.get_account_by_id(creator).nonce, nonce);
+
+        let mut repaired = rejected.with_public_accounts([account(actor, original)]);
+        let creator_before = balance(&repaired, creator, COLLATERAL);
+        let treasury_before = balance(&repaired, TREASURY, COLLATERAL);
+        let tokens_before = balance(&repaired, pool, launch);
+        for _ in 0..2 {
+            factory_execute_at(
+                &mut repaired,
+                factory,
+                &actors,
+                &key,
+                salt,
+                launch,
+                pool,
+                factory_core::Message::WithdrawWeightedProceeds { creator },
+                300_000,
+            )
+            .unwrap();
+            assert!(fixed_pool(&repaired, pool).proceeds_settled);
+            assert_eq!(
+                balance(&repaired, creator, COLLATERAL),
+                creator_before + sale.recorded_collateral
+            );
+            assert_eq!(
+                balance(&repaired, TREASURY, COLLATERAL),
+                treasury_before + sale.accrued_fees
+            );
+            assert_eq!(
+                balance(&repaired, pool, launch),
+                tokens_before - sale.remaining_inventory
+            );
+            let current = TokenState::decode(
+                repaired
+                    .get_account_by_id(launch)
+                    .data
+                    .actor_state(TOKEN_PROGRAM_ACCOUNT_ID),
+            )
+            .unwrap();
+            let TokenState::Definition {
+                supply: current_supply,
+                ..
+            } = current
+            else {
+                panic!("expected definition")
+            };
+            assert_eq!(current_supply, supply - sale.remaining_inventory);
+            assert_eq!(balance(&repaired, escrow, launch), sale.creator_allocation);
+        }
+    }
+}
+
+#[test]
+fn weighted_allocation_credit_failure_rolls_back_and_retry_pays_once() {
+    let (state, factory, pool, launch, escrow, key, actors, salt) = weighted_factory_env();
+    let creator = AccountId::from(&PublicKey::new_from_private_key(&key));
+    let state = clock_state(state, 300_000);
+    let recipient = holding(creator, launch);
+    let original = state
+        .get_account_by_id(recipient.account_id)
+        .data
+        .actor_state(TOKEN_PROGRAM_ACCOUNT_ID)
+        .to_vec();
+    let mut rejected = state.with_public_accounts([account(
+        recipient,
+        borsh::to_vec(&TokenState::Holding {
+            owner: creator,
+            definition: launch,
+            kind: TokenKind::Fungible,
+            balance: u128::MAX,
+        })
+        .unwrap(),
+    )]);
+    let before = rejected.clone();
+    let nonce = rejected.get_account_by_id(creator).nonce;
+    let result = factory_execute_at(
+        &mut rejected,
+        factory,
+        &actors,
+        &key,
+        salt,
+        launch,
+        pool,
+        factory_core::Message::ClaimWeightedAllocation { creator },
+        300_000,
+    );
+    assert!(
+        matches!(&result, Err(lee::error::LeeError::ProgramExecutionFailed(error)) if error.contains("Overflow")),
+        "expected allocation credit overflow, got {result:?}"
+    );
+    assert!(
+        rejected == before,
+        "failed allocation changed runtime state"
+    );
+    assert_eq!(rejected.get_account_by_id(creator).nonce, nonce);
+    let mut repaired = rejected.with_public_accounts([account(recipient, original)]);
+    let balance_before = balance(&repaired, creator, launch);
+    let allocation = balance(&repaired, escrow, launch);
+    assert!(allocation > 0);
+    for _ in 0..2 {
+        factory_execute_at(
+            &mut repaired,
+            factory,
+            &actors,
+            &key,
+            salt,
+            launch,
+            pool,
+            factory_core::Message::ClaimWeightedAllocation { creator },
+            300_000,
+        )
+        .unwrap();
+        assert_eq!(
+            balance(&repaired, creator, launch),
+            balance_before + allocation
+        );
+        assert_eq!(balance(&repaired, escrow, launch), 0);
+    }
+}
+
+#[test]
 fn weighted_stale_clock_at_inclusion_boundary_preserves_state() {
     let (state, _factory, pool, _launch, _escrow, key, _actors, _salt) = weighted_factory_env();
     let creator = AccountId::from(&PublicKey::new_from_private_key(&key));
@@ -2186,7 +2378,7 @@ fn guest_buy_updates_checkpoint_and_poke_is_idempotent() {
 
 #[test]
 fn guest_poke_in_settlement_flow() {
-    let (mut state, factory, pool, launch, escrow, key, actors, salt) = weighted_factory_env();
+    let (mut state, factory, pool, launch, _escrow, key, actors, salt) = weighted_factory_env();
     let creator = AccountId::from(&PublicKey::new_from_private_key(&key));
     // Poke before settlement
     poke_execute_at(&mut state, pool, 150_000).unwrap();

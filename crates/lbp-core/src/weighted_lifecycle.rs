@@ -103,10 +103,7 @@ pub(super) fn record_checkpoint(state: &mut PoolAccount, time: u64) -> Result<bo
 }
 
 /// Checkpoint event selector: first eight bytes of sha256("lbp::WeightedCheckpoint").
-const CHECKPOINT_SELECTOR: [u8; 8] = {
-    // Precomputed from sha256("lbp::WeightedCheckpoint")
-    [0xb3, 0x4a, 0x1e, 0x7c, 0x5f, 0x90, 0x2d, 0x18]
-};
+const CHECKPOINT_SELECTOR: [u8; 8] = [0xae, 0x2f, 0x6d, 0x45, 0x7f, 0xb3, 0x79, 0xcf];
 
 fn checkpoint_event(time: u64, token_weight: u128) -> ProgramEvent {
     let mut data = Vec::with_capacity(24);

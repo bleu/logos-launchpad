@@ -10,7 +10,7 @@ RFP-016 F.2 and F.10 require the namespace fee rate to be snapshotted at creatio
 
 ## Decision
 
-The original fixed-price and weighted-sale design kept fees creator-borne and denominated in collateral. Full collateral input participated in buyer pricing; fees accrued separately against creator proceeds with the proposal's conservative rounding. ADR 0035 replaces only that fixed-price fee burden and pricing rule. The future weighted-sale design remains creator-borne with full input in pricing.
+The original fixed-price and weighted-sale design kept fees creator-borne and denominated in collateral. Full collateral input participated in buyer pricing; fees accrued separately against creator proceeds with the proposal's conservative rounding. ADR 0035 replaces only that fixed-price fee burden and pricing rule. The weighted-sale design remains creator-borne with full input in pricing.
 
 Use the namespace rate at swap execution, not a creation snapshot. Allow permissionless, full, idempotent collection to the current namespace treasury at any time. The caller cannot choose or redirect the treasury. Terminal settlement collects the remainder.
 
@@ -18,7 +18,7 @@ The RFP baseline does not allow collection before the scheduled end and gates cr
 
 ## Consequences
 
-Do not report these RFP departures as externally approved commitments. Their external status is `To be reviewed by Logos team`. The program must prove vault coverage of fees and remaining obligations, including when fees are collected during a sale. Fixed-price buys now use fee-first pricing under ADR 0035; that rule must not replace the future weighted-sale creator-borne model. Weighted-sale fee execution remains future work. Production input, rounding and solvency evidence remain required.
+Do not report these RFP departures as externally approved commitments. Their external status is `To be reviewed by Logos team`. The program must prove vault coverage of fees and remaining obligations, including when fees are collected during a sale. Fixed-price buys now use fee-first pricing under ADR 0035; that rule must not replace the weighted-sale creator-borne model. Weighted-sale buys, fee collection and settlement have local guest checks. See [execution evidence](../architecture/workspace-guide.md#execution-and-evidence-limits). Production input, rounding and solvency evidence remain required.
 
 ## Sources
 
