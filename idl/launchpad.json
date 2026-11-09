@@ -711,6 +711,40 @@
             ],
             "name": "ContinueWeightedCreation",
             "tag": 9
+          },
+          {
+            "fields": [
+              {
+                "name": "creator",
+                "type": "AccountId"
+              },
+              {
+                "name": "paused",
+                "type": "bool"
+              }
+            ],
+            "name": "SetWeightedPaused",
+            "tag": 10
+          },
+          {
+            "fields": [
+              {
+                "name": "creator",
+                "type": "AccountId"
+              }
+            ],
+            "name": "WithdrawWeightedProceeds",
+            "tag": 11
+          },
+          {
+            "fields": [
+              {
+                "name": "creator",
+                "type": "AccountId"
+              }
+            ],
+            "name": "ClaimWeightedAllocation",
+            "tag": 12
           }
         ]
       },
@@ -1153,6 +1187,26 @@
             ],
             "name": "BuyWeightedExactOutput",
             "tag": 11
+          },
+          {
+            "fields": [
+              {
+                "name": "paused",
+                "type": "bool"
+              }
+            ],
+            "name": "SetWeightedPaused",
+            "tag": 12
+          },
+          {
+            "fields": [
+              {
+                "name": "creator",
+                "type": "AccountId"
+              }
+            ],
+            "name": "SettleWeighted",
+            "tag": 13
           }
         ]
       },
@@ -1261,6 +1315,10 @@
           },
           {
             "fields": [
+              {
+                "name": "paused",
+                "type": "bool"
+              },
               {
                 "name": "token_weight_start",
                 "type": "u128"
