@@ -12,7 +12,7 @@ A sale closes at its optional end or sellout without a final trade or separate c
 
 ## Weighted setup and buys
 
-The factory creates weighted sales in the same four setup stages. Typed weighted inputs set a positive collateral seed, normalized weight endpoints, and an explicit start and end. Final setup transfers the full seed from the creator. A vault donation stays surplus. Weighted public buys use a buyer-selected time window and the least favourable scheduled pair in that window. Fees do not reduce pricing input. See [ADR 0026](../adr/0026-lbp-clock-and-poke.md), [ADR 0030](../adr/0030-lbp-pricing-collateral.md) and [ADR 0031](../adr/0031-shared-launch-factory.md).
+The factory creates weighted sales in the same four setup stages. Typed weighted inputs set a positive collateral seed, normalized weight endpoints, and an explicit start and end. Final setup transfers the full seed from the creator. A vault donation stays surplus. Weighted public buys read one pricing timestamp through a temporary interface. Local tests supply a fake clock. The pinned LEZ clock does not support timestamp replies, so normal builds reject weighted buys. Sale inclusion bounds still enforce the scheduled start and end. Fees do not reduce pricing input. See [ADR 0026](../adr/0026-lbp-clock-and-poke.md), [ADR 0030](../adr/0030-lbp-pricing-collateral.md) and [ADR 0031](../adr/0031-shared-launch-factory.md).
 
 ## Scope
 

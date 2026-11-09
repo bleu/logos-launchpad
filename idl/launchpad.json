@@ -1135,14 +1135,6 @@
               {
                 "name": "min_amount_out",
                 "type": "u128"
-              },
-              {
-                "name": "valid_from",
-                "type": "u64"
-              },
-              {
-                "name": "valid_until",
-                "type": "u64"
               }
             ],
             "name": "BuyWeightedExactInput",
@@ -1157,14 +1149,6 @@
               {
                 "name": "max_amount_in",
                 "type": "u128"
-              },
-              {
-                "name": "valid_from",
-                "type": "u64"
-              },
-              {
-                "name": "valid_until",
-                "type": "u64"
               }
             ],
             "name": "BuyWeightedExactOutput",

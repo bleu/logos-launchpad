@@ -20,6 +20,8 @@ struct Pending {
     message: Message,
     buyer: AccountId,
     step: u8,
+    // One reply per buy, in Unix seconds. Never persisted in the final pool state.
+    pricing_time: Option<u64>,
     config: Option<Config>,
     balances: [u128; 3],
 }
@@ -32,6 +34,9 @@ impl Pending {
         }
     }
     fn expected(&self, receiver: Actor) -> Actor {
+        if self.step == 4 {
+            return crate::pricing_clock::actor();
+        }
         if self.step == 0 {
             return Actor::new(
                 curve_core::compute_config_pda(
@@ -48,6 +53,21 @@ impl Pending {
         )
     }
     fn advance(self, receiver: Actor) -> Result<Response, Error> {
+        if self.step == 4
+            && self.pricing_time.is_none()
+            && matches!(
+                self.message,
+                Message::BuyWeightedExactInput { .. } | Message::BuyWeightedExactOutput { .. }
+            )
+        {
+            crate::pricing_clock::require_available()?;
+            return Ok(
+                Response::set_state(borsh::to_vec(&self).unwrap()).send_sync(
+                    crate::pricing_clock::actor(),
+                    &crate::pricing_clock::Request::ReadTimestamp,
+                ),
+            );
+        }
         if self.step == 4
             || (self.step == 2 && matches!(self.message, Message::CollectFees))
             || (self.step == 3 && matches!(self.message, Message::SettleFixedPrice { .. }))
@@ -180,6 +200,7 @@ impl Pending {
                 token_weight_start,
                 token_weight_end,
                 pricing_collateral,
+                self.pricing_time.ok_or(Error::InvalidState)?,
             )?,
         };
 
@@ -252,19 +273,12 @@ impl Pending {
                 self.state.end_timestamp,
             )
             .map_err(|_| Error::InvalidTerms)?,
-            PoolMode::Weighted { .. } => {
-                let (start, end) = weighted_window(&self.message)?;
-                curve_core::with_time_bounds(self.state.response(), Some(start), Some(end))
-                    .map_err(|_| Error::Arithmetic)?
-                    .send_sync(
-                        Actor::new(
-                            clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID,
-                            clock_core::clock_account_id(),
-                        ),
-                        &curve_core::clock_assertion(start, Some(end))
-                            .map_err(|_| Error::Arithmetic)?,
-                    )
-            }
+            PoolMode::Weighted { .. } => curve_core::with_time_bounds(
+                self.state.response(),
+                Some(self.state.start_timestamp),
+                self.state.end_timestamp,
+            )
+            .map_err(|_| Error::Arithmetic)?,
         }
         .send_sync(
             Actor::new(self.buyer, TOKEN_PROGRAM_ACCOUNT_ID),
@@ -346,14 +360,15 @@ fn weighted_amounts(
     token_weight_start: u128,
     token_weight_end: u128,
     pricing_collateral: u128,
+    pricing_time: u64,
 ) -> Result<(u128, u128), Error> {
-    let (valid_from, valid_until) = weighted_window(message)?;
     let end_ts = state.end_timestamp.ok_or(Error::InvalidState)?;
     if !valid_weight_endpoints(token_weight_start, token_weight_end) {
         return Err(Error::InvalidTerms);
     }
-    // The smallest collateral weight gives the least output and greatest input.
-    // Linear schedules are monotone, so only the window endpoints are needed.
+    if pricing_time < state.start_timestamp || pricing_time >= end_ts {
+        return Err(Error::Closed);
+    }
     let collateral_at = |time| {
         interpolate_weight(
             WEIGHT_TOTAL - token_weight_start,
@@ -363,7 +378,7 @@ fn weighted_amounts(
             time,
         )
     };
-    let coll_w = collateral_at(valid_from).min(collateral_at(valid_until - 1));
+    let coll_w = collateral_at(pricing_time);
     let token_w = WEIGHT_TOTAL - coll_w;
 
     let coll_bal = pricing_collateral;
@@ -463,6 +478,7 @@ pub(super) fn begin(input: &ReceiveInput, message: Message) -> Result<Response, 
         message,
         buyer,
         step: 0,
+        pricing_time: None,
         config: None,
         balances: [0; 3],
     }
@@ -476,6 +492,10 @@ pub(super) fn resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
         let mut pending: Pending =
             borsh::from_slice(&input.pre_state).map_err(|_| Error::InvalidState)?;
         pending.state.validate_address(input.receiver)?;
+        if pending.step == 4 {
+            pending.pricing_time = Some(crate::pricing_clock::read(input)?);
+            return pending.finish(input.receiver);
+        }
         if pending.step > 3 {
             return Err(Error::InvalidState);
         }
@@ -566,7 +586,7 @@ fn mul_div(value: u128, multiplier: u128, divisor: u128, ceil: bool) -> Result<u
         .ok_or(Error::Arithmetic)
 }
 
-/// Validate sale bounds before pricing. Weighted buys also check saved clock time.
+/// Validate admission bounds. Weighted pricing time arrives later in a clock reply.
 fn validate_buy_window(state: &PoolAccount, message: &Message) -> Result<(), Error> {
     match (state.mode, message) {
         (
@@ -588,34 +608,15 @@ fn validate_buy_window(state: &PoolAccount, message: &Message) -> Result<(), Err
             PoolMode::Weighted { .. },
             Message::BuyWeightedExactInput { .. } | Message::BuyWeightedExactOutput { .. },
         ) => {
-            let (valid_from, valid_until) = weighted_window(message)?;
-            if valid_from >= valid_until {
-                return Err(Error::InvalidTerms);
-            }
-            let end = state.end_timestamp.ok_or(Error::InvalidState)?;
-            if valid_from < state.start_timestamp || valid_until > end {
-                return Err(Error::Closed);
-            }
-            curve_core::clock_assertion(valid_from, Some(valid_until))
-                .map_err(|_| Error::Arithmetic)?;
+            crate::pricing_clock::require_available()?;
+            let _ = curve_core::with_time_bounds(
+                Response::keep_state(),
+                Some(state.start_timestamp),
+                state.end_timestamp,
+            )
+            .map_err(|_| Error::Arithmetic)?;
             Ok(())
         }
-        _ => Err(Error::InvalidMessage),
-    }
-}
-
-fn weighted_window(message: &Message) -> Result<(u64, u64), Error> {
-    match message {
-        Message::BuyWeightedExactInput {
-            valid_from,
-            valid_until,
-            ..
-        }
-        | Message::BuyWeightedExactOutput {
-            valid_from,
-            valid_until,
-            ..
-        } => Ok((*valid_from, *valid_until)),
         _ => Err(Error::InvalidMessage),
     }
 }

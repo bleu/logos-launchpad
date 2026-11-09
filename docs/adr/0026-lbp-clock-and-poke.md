@@ -1,6 +1,6 @@
-# ADR 0026: Weighted-sale time windows and pricing
+# ADR 0026: Weighted-sale clock reads and pricing
 
-Status: Accepted; host and seeded guest buy checks passed. Live clock freshness remains unverified.
+Status: Accepted local design; temporary fake clock. Real LEZ timestamp reads and live clock freshness remain unverified.
 
 Date: 2026-09-29; checkpoint and interpolation review: 2026-10-02; time-window amendment: 2026-10-29; inclusion-time amendment: 2026-11-04
 
@@ -10,7 +10,19 @@ Weighted-sale prices depend on a time-based weight schedule. The selected LEZ ac
 
 The [historical clock experiment](https://github.com/bleu/logos-launchpad/blob/f1198315569cfc8ada9f6c39964cb77314e2520c/crates/launchpad-client/tests/clock_probe.rs) used an older interface. It does not establish actor clock reads. The current clock stores Unix milliseconds. It is updated at the end of a block. Checks use the last recorded block time.
 
-## Decision
+## Clock-read amendment: 2026-11-05
+
+This amendment supersedes the buyer-selected pricing windows below. Weighted buys now supply amounts and price limits only. Each buy requests one timestamp through a separate read-and-reply interface. The reply is accepted only from the configured clock actor during the pending clock-read phase. The buyer cannot select that actor or supply its time.
+
+The temporary local provider returns Unix milliseconds from fixture state. Divide by 1000 to select the pricing second. Model previous-block time, not exact execution time. Require the pricing second to be at or after the scheduled start and before the scheduled end. Interpolate the collateral weight at that second and use its exact token-weight complement. Use current recorded reserves and retain the math limits, creator-borne fees and buyer price limits.
+
+Attach the immutable sale start and end as inclusion-time bounds. These bounds remain necessary when saved clock time is stale. Setup keeps its existing canonical clock assertions. Fixed-price and bonding-curve behavior is unchanged. No checkpoint is needed for pricing. Observation design remains deferred.
+
+The pinned LEZ clock cannot return a timestamp. `LAUNCHPAD_MOCK_CLOCK=1` enables the temporary provider for local tests. Normal builds reject weighted buys with `ClockUnavailable`. The fixture has a separate actor address and no public time-setting message. Replace the provisional interface when a verified LEZ timestamp-read API is available. The future capability is a project assumption, not implemented platform behavior.
+
+This design removes the buyer's choice of pricing time. It also makes weighted buys depend on an API that is not yet available on the selected platform. Local host and guest tests use a fake clock. They do not establish real clock support, freshness, private execution or deployment readiness. See the [workspace guide](../architecture/workspace-guide.md#temporary-weighted-pricing-clock).
+
+## Earlier window decision (superseded for weighted buy pricing)
 
 This amendment supersedes the earlier rule that each buy uses weights from an exact trusted execution timestamp. It also supersedes the timestamp-keyed buy and poke checkpoint rules. Weighted buys use a buyer-selected time window and the least favourable scheduled weights for the buyer within that window.
 

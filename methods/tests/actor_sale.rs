@@ -175,17 +175,23 @@ fn balance(state: &V03State, owner: AccountId, definition: AccountId) -> u128 {
 }
 
 fn clock_state(state: V03State, timestamp: u64) -> V03State {
-    state.with_public_accounts([account(
-        Actor::new(
-            clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID,
-            clock_core::clock_account_id(),
+    state.with_public_accounts([
+        account(
+            lbp_core::pricing_clock::actor(),
+            borsh::to_vec(&timestamp).unwrap(),
         ),
-        clock_core::ClockAccountData {
-            block_id: 1,
-            timestamp,
-        }
-        .to_bytes(),
-    )])
+        account(
+            Actor::new(
+                clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID,
+                clock_core::clock_account_id(),
+            ),
+            clock_core::ClockAccountData {
+                block_id: 1,
+                timestamp,
+            }
+            .to_bytes(),
+        ),
+    ])
 }
 
 fn fixed_config(state: V03State, fee_bps: u16, treasury: AccountId, frozen: bool) -> V03State {
@@ -274,6 +280,10 @@ fn fixed_state(buyer: AccountId, end: Option<u64>) -> (V03State, AccountId) {
                 Program::new(Cow::Borrowed(lez_compat_methods::COMPAT_TOKEN_ELF)).unwrap(),
             ),
             (clock_core::clock_account_id(), programs::clock()),
+            (
+                lbp_core::pricing_clock::PROGRAM,
+                Program::new(Cow::Borrowed(launchpad_methods::MOCK_CLOCK_ELF)).unwrap(),
+            ),
         ])
         .with_public_accounts(accounts);
     (
@@ -318,7 +328,7 @@ fn weighted_state(buyer: AccountId) -> (V03State, AccountId) {
 }
 
 #[test]
-fn weighted_clock_accepts_the_window_and_rolls_back_outside_it() {
+fn weighted_clock_prices_at_saved_time_and_rejects_outside_sale() {
     let key = PrivateKey::try_new([23; 32]).unwrap();
     let buyer = AccountId::from(&PublicKey::new_from_private_key(&key));
     let (state, pool) = weighted_state(buyer);
@@ -336,19 +346,22 @@ fn weighted_clock_accepts_the_window_and_rolls_back_outside_it() {
     let buy = lbp_core::Message::BuyWeightedExactInput {
         amount_in: 50,
         min_amount_out: 1,
-        valid_from: 100,
-        valid_until: 100 + 60,
     };
-    for timestamp in [100_000, 130_000, 159_999] {
+    for timestamp in [100_000, 130_000, 199_999] {
         let mut valid = clock_state(state.clone(), timestamp);
         fixed_execute(&mut valid, pool, &key, buy.clone()).unwrap();
-        // The worst pair in [100, 160) is 73.6/26.4 at second 159.
-        assert_eq!(balance(&valid, buyer, LAUNCH), 135);
+        assert!(balance(&valid, buyer, LAUNCH) > 0);
+        if timestamp == 100_000 {
+            assert_eq!(balance(&valid, buyer, LAUNCH), 333);
+        }
+        if timestamp == 199_999 {
+            assert!(balance(&valid, buyer, LAUNCH) < 100);
+        }
         assert_eq!(balance(&valid, buyer, COLLATERAL), 1950);
     }
-    for timestamp in [99_999, 160_000, 200_000] {
+    for timestamp in [99_999, 200_000] {
         let mut invalid = clock_state(state.clone(), timestamp);
-        fixed_rejected(&mut invalid, pool, &key, buy.clone(), "Clock timestamp");
+        fixed_rejected(&mut invalid, pool, &key, buy.clone(), "Closed");
     }
 }
 
@@ -361,26 +374,22 @@ fn weighted_inclusion_window_rejects_stale_clock_buys_and_preserves_state() {
         lbp_core::Message::BuyWeightedExactInput {
             amount_in: 50,
             min_amount_out: 1,
-            valid_from: 100,
-            valid_until: 160,
         },
         lbp_core::Message::BuyWeightedExactOutput {
             amount_out: 10,
             max_amount_in: 100,
-            valid_from: 100,
-            valid_until: 160,
         },
     ] {
-        // The saved clock stays within the quote window for every inclusion time.
+        // Saved pricing time stays fixed while inclusion time crosses the sale bounds.
         let transaction = fixed_transaction(&state, pool, &key, buy);
-        for timestamp in [100_000, 130_000, 159_999] {
+        for timestamp in [100_000, 130_000, 199_999] {
             let mut admitted = state.clone();
             admitted
                 .transition_from_public_transaction(&transaction, 1, timestamp)
                 .unwrap();
             assert!(balance(&admitted, buyer, LAUNCH) > 0);
         }
-        for timestamp in [99_999, 160_000, 199_999, 200_000, 200_001] {
+        for timestamp in [99_999, 200_000, 200_001] {
             let mut rejected = state.clone();
             assert!(matches!(
                 rejected.transition_from_public_transaction(&transaction, 1, timestamp),
@@ -407,8 +416,6 @@ fn weighted_collection_keeps_pricing_and_same_second_buys_use_current_reserves()
         BuyWeightedExactInput {
             amount_in: 50,
             min_amount_out: 333,
-            valid_from: 100,
-            valid_until: 100 + 60,
         },
     )
     .unwrap();
@@ -419,8 +426,6 @@ fn weighted_collection_keeps_pricing_and_same_second_buys_use_current_reserves()
     let next_buy = BuyWeightedExactOutput {
         amount_out: 100,
         max_amount_in: 27,
-        valid_from: 100,
-        valid_until: 100 + 60,
     };
     fixed_execute(&mut state, pool, &key, next_buy.clone()).unwrap();
     fixed_execute(&mut without_collection, pool, &key, next_buy).unwrap();
@@ -469,8 +474,6 @@ fn weighted_accuracy_and_vault_overflow_rejections_preserve_state_and_nonce() {
         lbp_core::Message::BuyWeightedExactOutput {
             amount_out: 300,
             max_amount_in: u128::MAX,
-            valid_from: 100,
-            valid_until: 160,
         },
         "MathAccuracy",
     );
@@ -492,8 +495,6 @@ fn weighted_accuracy_and_vault_overflow_rejections_preserve_state_and_nonce() {
         lbp_core::Message::BuyWeightedExactInput {
             amount_in: 50,
             min_amount_out: 333,
-            valid_from: 100,
-            valid_until: 160,
         },
         "Arithmetic",
     );
@@ -522,8 +523,6 @@ fn weighted_output_credit_failure_rolls_back_input_records_and_nonce() {
         lbp_core::Message::BuyWeightedExactInput {
             amount_in: 50,
             min_amount_out: 333,
-            valid_from: 100,
-            valid_until: 160,
         },
         "Overflow",
     );
@@ -556,6 +555,7 @@ fn fixed_transaction(
         holding(buyer, COLLATERAL),
         holding(TREASURY, COLLATERAL),
         holding(NEXT_TREASURY, COLLATERAL),
+        lbp_core::pricing_clock::actor(),
         Actor::new(
             clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID,
             clock_core::clock_account_id(),
@@ -1039,6 +1039,10 @@ fn weighted_factory_executes_all_stages_and_rolls_back_failed_funding() {
                     Program::new(Cow::Borrowed(lez_compat_methods::COMPAT_AUTHORITY_ELF)).unwrap(),
                 ),
                 (clock_core::clock_account_id(), programs::clock()),
+                (
+                    lbp_core::pricing_clock::PROGRAM,
+                    Program::new(Cow::Borrowed(launchpad_methods::MOCK_CLOCK_ELF)).unwrap(),
+                ),
             ])
             .with_public_accounts([
                 account(
@@ -1309,8 +1313,6 @@ fn weighted_factory_executes_all_stages_and_rolls_back_failed_funding() {
             lbp_core::Message::BuyWeightedExactOutput {
                 amount_out: 10,
                 max_amount_in: 100,
-                valid_from: 150,
-                valid_until: 151,
             },
             150_000,
         )
@@ -1325,4 +1327,25 @@ fn weighted_factory_executes_all_stages_and_rolls_back_failed_funding() {
             }
         );
     }
+}
+
+#[test]
+fn weighted_clock_failure_and_freeze_preserve_state() {
+    let key = PrivateKey::try_new([23; 32]).unwrap();
+    let buyer = AccountId::from(&PublicKey::new_from_private_key(&key));
+    let (state, pool) = weighted_state(buyer);
+    let buy = lbp_core::Message::BuyWeightedExactInput {
+        amount_in: 50,
+        min_amount_out: 1,
+    };
+    // Missing or malformed fixture time must fail before any trade commits.
+    for bytes in [vec![], vec![1, 2, 3]] {
+        let mut invalid = state
+            .clone()
+            .with_public_accounts([account(lbp_core::pricing_clock::actor(), bytes)]);
+        fixed_rejected(&mut invalid, pool, &key, buy.clone(), "InvalidState");
+    }
+    let mut frozen = fixed_config(state, 333, TREASURY, true);
+    fixed_rejected(&mut frozen, pool, &key, buy, "Frozen");
+    fixed_execute(&mut frozen, pool, &key, lbp_core::Message::CollectFees).unwrap();
 }

@@ -41,7 +41,7 @@ Read [CONTEXT.md](../../CONTEXT.md) for terms and [repository layout](../archite
 | [0021](0021-modes-and-open-limits.md) | Sale types, trade modes, deferred ceiling and allowlist rules | Accepted internally; ceiling deferral: To be reviewed by Logos team; proof design open |
 | [0022](0022-verification-boundaries.md) | Verification and M1/M2 scope | Accepted |
 | [0025](0025-sale-closing.md) | Mechanism-specific sale closing | Accepted internally; fixed-price settlement has host-handler coverage only; weighted-sale settlement handlers remain future work; expiry-validation departure: To be reviewed by Logos team |
-| [0026](0026-lbp-clock-and-poke.md) | Buyer-selected weighted-sale windows and least favourable pricing weights | Accepted; host and seeded guest checks; live clock freshness unverified |
+| [0026](0026-lbp-clock-and-poke.md) | Weighted-sale clock reads and single-timestamp pricing | Accepted local design; temporary fake clock; real clock support pending |
 | [0027](0027-events-and-history.md) | Platform events and existing history tooling | Accepted internally; failed-event retention: To be reviewed by Logos team; actor event emission and ingestion unverified |
 | [0028](0028-token-custody-and-freeze.md) | Token custody and namespace emergency controls | Accepted; actor bonding-curve controls have host checks; fixed-price buy freeze has seeded guest checks; broader runtime and weighted-sale checks pending |
 | [0029](0029-wallet-integration.md) | Integrate the LEZ Wallet Provider SDK | Accepted; awaits LP-0021 development |
