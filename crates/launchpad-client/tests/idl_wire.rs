@@ -983,6 +983,124 @@ fn weighted_buys_keep_only_amount_limits_on_wire() {
 }
 
 #[test]
+fn weighted_controls_settlement_and_poke_have_independent_wire_contracts() {
+    let creator = AccountId::new([5; 32]);
+    for (message, name, tag, fields) in [
+        (
+            lbp_core::Message::SetWeightedPaused { paused: true },
+            "SetWeightedPaused",
+            12,
+            json!([{"name":"paused","type":"bool"}]),
+        ),
+        (
+            lbp_core::Message::SettleWeighted { creator },
+            "SettleWeighted",
+            13,
+            json!([{"name":"creator","type":"AccountId"}]),
+        ),
+        (
+            lbp_core::Message::PokeWeighted,
+            "PokeWeighted",
+            14,
+            json!([]),
+        ),
+    ] {
+        let mut expected = vec![tag];
+        match tag {
+            12 => expected.push(1),
+            13 => expected.extend([5; 32]),
+            14 => (),
+            _ => unreachable!(),
+        }
+        assert_eq!(borsh::to_vec(&message).unwrap(), expected);
+        assert_eq!(
+            borsh::from_slice::<lbp_core::Message>(&expected).unwrap(),
+            message
+        );
+        assert_eq!(
+            variant("lbp", "Message", name),
+            json!({"tag":tag,"name":name,"fields":fields})
+        );
+    }
+    for (message, name, tag, fields) in [
+        (
+            factory_core::Message::SetWeightedPaused {
+                creator,
+                paused: false,
+            },
+            "SetWeightedPaused",
+            10,
+            json!([{"name":"creator","type":"AccountId"},{"name":"paused","type":"bool"}]),
+        ),
+        (
+            factory_core::Message::WithdrawWeightedProceeds { creator },
+            "WithdrawWeightedProceeds",
+            11,
+            json!([{"name":"creator","type":"AccountId"}]),
+        ),
+        (
+            factory_core::Message::ClaimWeightedAllocation { creator },
+            "ClaimWeightedAllocation",
+            12,
+            json!([{"name":"creator","type":"AccountId"}]),
+        ),
+    ] {
+        let mut expected = vec![tag];
+        expected.extend([5; 32]);
+        if tag == 10 {
+            expected.push(0);
+        }
+        assert_eq!(borsh::to_vec(&message).unwrap(), expected);
+        assert_eq!(
+            borsh::from_slice::<factory_core::Message>(&expected).unwrap(),
+            message
+        );
+        assert_eq!(
+            variant("factory", "Message", name),
+            json!({"tag":tag,"name":name,"fields":fields})
+        );
+    }
+}
+
+#[test]
+fn weighted_pool_mode_keeps_pause_and_observer_fields_on_wire() {
+    let mode = lbp_core::PoolMode::Weighted {
+        paused: true,
+        token_weight_start: 95,
+        token_weight_end: 50,
+        collateral_seed: 100,
+        pricing_collateral: 150,
+        checkpoint_time: 1500,
+        checkpoint_token_weight: 75,
+    };
+    let mut expected = vec![1, 1]; // Weighted, paused
+    for value in [95u128, 50, 100, 150] {
+        expected.extend(value.to_le_bytes());
+    }
+    expected.extend(1500u64.to_le_bytes());
+    expected.extend(75u128.to_le_bytes());
+    assert_eq!(borsh::to_vec(&mode).unwrap(), expected);
+    assert_eq!(
+        borsh::from_slice::<lbp_core::PoolMode>(&expected).unwrap(),
+        mode
+    );
+    assert_eq!(
+        variant("lbp", "PoolMode", "Weighted"),
+        json!({
+            "tag":1,"name":"Weighted","fields":[
+                {"name":"paused","type":"bool"},
+                {"name":"token_weight_start","type":"u128"},
+                {"name":"token_weight_end","type":"u128"},
+                {"name":"collateral_seed","type":"u128"},
+                {"name":"pricing_collateral","type":"u128"},
+                {"name":"checkpoint_time","type":"u64"},
+                {"name":"checkpoint_token_weight","type":"u128"}
+            ]
+        })
+    );
+}
+
+#[test]
 fn namespace_initialization_has_independent_borsh_bytes_and_schema() {
     let message = curve_core::Message::InitializeNamespace {
         namespace: AccountId::new([1; 32]),

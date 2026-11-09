@@ -1222,7 +1222,7 @@ fn weighted_repeated_pause_succeeds_without_event() {
 
 #[test]
 fn weighted_pause_blocks_both_buy_forms() {
-    let (input, mut state) = funded();
+    let (mut input, mut state) = funded();
     if let lbp_core::PoolMode::Weighted { paused, .. } = &mut state.mode {
         *paused = true;
     }
@@ -1236,17 +1236,10 @@ fn weighted_pause_blocks_both_buy_forms() {
             max_amount_in: 1000,
         },
     ] {
-        assert_eq!(
-            operation(
-                &input,
-                &state,
-                message,
-                config(0, id(43), false),
-                [100, 1_000_000, 1000]
-            )
-            .err(),
-            Some(lbp_core::Error::Paused)
-        );
+        input.pre_state = borsh::to_vec(&state).unwrap().into();
+        input.message = borsh::to_vec(&message).unwrap();
+        // Reject at entry, before any namespace, holding or clock request.
+        assert_eq!(handle(&input).err(), Some(lbp_core::Error::Paused));
     }
 }
 
@@ -1589,4 +1582,316 @@ fn weighted_depleted_inventory_before_end_does_not_allow_early_settlement() {
     .unwrap();
     // Must still enforce the end timestamp as lower bound
     assert_eq!(response.validity.timestamps.start(), Some(3_000_000));
+}
+
+// ---------------------------------------------------------------------------
+// Poke and observer checkpoints
+// ---------------------------------------------------------------------------
+
+fn poke_at(
+    timestamp_ms: u64,
+    input: &ReceiveInput,
+    state: &lbp_core::PoolAccount,
+) -> Result<lee_core::program::Response, lbp_core::Error> {
+    let mut input = input.clone();
+    input.pre_state = borsh::to_vec(state).unwrap().into();
+    input.message = borsh::to_vec(&Message::PokeWeighted).unwrap();
+    // Anyone can send poke — use a random sender
+    input.from = Some(Actor::new(id(99), id(8)));
+    let response = handle(&input)?;
+    // The response should request a clock read
+    let source = response.sync_messages.last().unwrap().to;
+    assert_eq!(source, lbp_core::pricing_clock::actor());
+    let input = ReceiveInput {
+        receiver: input.receiver,
+        from: Some(source),
+        is_authorized: false,
+        pre_state: response.post_state.unwrap(),
+        message: borsh::to_vec(&lbp_core::pricing_clock::Reply { timestamp_ms }).unwrap(),
+    };
+    handle(&input)
+}
+
+fn checkpoint(state: &lbp_core::PoolAccount) -> (u64, u128) {
+    let lbp_core::PoolMode::Weighted {
+        checkpoint_time,
+        checkpoint_token_weight,
+        ..
+    } = state.mode
+    else {
+        panic!("expected weighted state");
+    };
+    (checkpoint_time, checkpoint_token_weight)
+}
+
+fn assert_checkpoint_events_match(
+    actual: &lee_core::program::Response,
+    expected: &lee_core::program::Response,
+) {
+    assert_eq!(actual.events.len(), 1);
+    assert_eq!(expected.events.len(), 1);
+    assert_eq!(actual.events[0].selector, expected.events[0].selector);
+    assert_eq!(actual.events[0].data, expected.events[0].data);
+}
+
+#[test]
+fn poke_is_permissionless_and_records_checkpoint() {
+    let (input, state) = funded();
+    // Checkpoint starts at zero
+    assert_eq!(checkpoint(&state), (0, 0));
+    let response = poke_at(1_500_000, &input, &state).unwrap();
+    let after = state_of(&response);
+    let (time, token_w) = checkpoint(&after);
+    assert_eq!(time, 1500);
+    // At midpoint of 1000..3000, token weight interpolates between 95% and 50%
+    let expected = interpolate_weight(weight(95), weight(50), 1000, 3000, 1500);
+    assert_eq!(token_w, expected);
+    // Should emit a checkpoint event
+    assert_eq!(response.events.len(), 1);
+    use risc0_zkvm::sha::{Impl, Sha256 as _};
+    let hash = Impl::hash_bytes(b"lbp::WeightedCheckpoint");
+    assert_eq!(response.events[0].selector, hash.as_bytes()[..8]);
+    let mut payload = 1500u64.to_le_bytes().to_vec();
+    payload.extend_from_slice(&expected.to_le_bytes());
+    assert_eq!(response.events[0].data, payload);
+}
+
+#[test]
+fn poke_at_start_records_start_weight() {
+    let (input, state) = funded();
+    let response = poke_at(1_000_000, &input, &state).unwrap();
+    let (time, w) = checkpoint(&state_of(&response));
+    assert_eq!(time, 1000);
+    assert_eq!(w, weight(95));
+}
+
+#[test]
+fn poke_at_end_records_end_weight() {
+    let (input, state) = funded();
+    // At end_timestamp or beyond, interpolate_weight clamps to end
+    let response = poke_at(3_000_000, &input, &state).unwrap();
+    let (time, w) = checkpoint(&state_of(&response));
+    assert_eq!(time, 3000);
+    assert_eq!(w, weight(50));
+}
+
+#[test]
+fn repeated_poke_at_same_time_is_idempotent_no_event() {
+    let (input, state) = funded();
+    let first = poke_at(1_500_000, &input, &state).unwrap();
+    assert_eq!(first.events.len(), 1);
+    let after_first = state_of(&first);
+    let second = poke_at(1_500_000, &input, &after_first).unwrap();
+    // Same checkpoint — no event
+    assert_eq!(second.events.len(), 0);
+    assert_eq!(checkpoint(&state_of(&second)), checkpoint(&after_first));
+}
+
+#[test]
+fn poke_rejects_unfunded_pool() {
+    let (_, prepared) = prepared();
+    let state = lbp_core::PoolAccount::decode(prepared.post_state.as_ref().unwrap()).unwrap();
+    let factory = AccountId::for_public_pda(&id(7), &PdaSeed::new([3; 32]));
+    let input = ReceiveInput {
+        receiver: Actor::new(
+            compute_pool_pda(id(40), id(8), id(41), id(42), factory),
+            id(8),
+        ),
+        from: Some(Actor::new(id(99), id(8))),
+        is_authorized: false,
+        pre_state: borsh::to_vec(&state).unwrap().into(),
+        message: borsh::to_vec(&Message::PokeWeighted).unwrap(),
+    };
+    assert_eq!(handle(&input).err(), Some(lbp_core::Error::PendingFunding));
+}
+
+#[test]
+fn buy_updates_checkpoint_on_new_timestamp() {
+    let (input, state) = funded();
+    assert_eq!(checkpoint(&state), (0, 0));
+    let response = operation_at(
+        1_500_000,
+        &input,
+        &state,
+        Message::BuyWeightedExactInput {
+            amount_in: 10,
+            min_amount_out: 1,
+        },
+        config(0, id(43), false),
+        [100, 1_000_000, 1000],
+    )
+    .unwrap();
+    let after = state_of(&response);
+    let (time, w) = checkpoint(&after);
+    assert_eq!(time, 1500);
+    assert!(w > 0);
+    let poked = poke_at(1_500_000, &input, &state).unwrap();
+    assert_checkpoint_events_match(&response, &poked);
+    let repeated = poke_at(1_500_000, &input, &after).unwrap();
+    assert!(repeated.events.is_empty());
+}
+
+#[test]
+fn buy_at_same_timestamp_does_not_change_checkpoint() {
+    let (input, state) = funded();
+    // First buy at t=1500
+    let first = operation_at(
+        1_500_000,
+        &input,
+        &state,
+        Message::BuyWeightedExactInput {
+            amount_in: 10,
+            min_amount_out: 1,
+        },
+        config(0, id(43), false),
+        [100, 1_000_000, 1000],
+    )
+    .unwrap();
+    let after_first = state_of(&first);
+    let cp1 = checkpoint(&after_first);
+    assert_eq!(cp1.0, 1500);
+    // Second buy also at t=1500 — checkpoint should not change
+    let second = operation_at(
+        1_500_000,
+        &input,
+        &after_first,
+        Message::BuyWeightedExactInput {
+            amount_in: 10,
+            min_amount_out: 1,
+        },
+        config(0, id(43), false),
+        [110, after_first.remaining_inventory, 1000],
+    )
+    .unwrap();
+    let cp2 = checkpoint(&state_of(&second));
+    assert_eq!(cp1, cp2);
+    assert!(second.events.is_empty());
+}
+
+#[test]
+fn buy_at_different_timestamp_updates_checkpoint() {
+    let (input, state) = funded();
+    // Buy at t=1500
+    let first = operation_at(
+        1_500_000,
+        &input,
+        &state,
+        Message::BuyWeightedExactInput {
+            amount_in: 10,
+            min_amount_out: 1,
+        },
+        config(0, id(43), false),
+        [100, 1_000_000, 1000],
+    )
+    .unwrap();
+    let after_first = state_of(&first);
+    let cp1 = checkpoint(&after_first);
+    // Buy at t=2000 — checkpoint should update
+    let second = operation_at(
+        2_000_000,
+        &input,
+        &after_first,
+        Message::BuyWeightedExactInput {
+            amount_in: 10,
+            min_amount_out: 1,
+        },
+        config(0, id(43), false),
+        [110, after_first.remaining_inventory, 1000],
+    )
+    .unwrap();
+    let cp2 = checkpoint(&state_of(&second));
+    assert_eq!(cp2.0, 2000);
+    assert_ne!(cp1, cp2);
+    let poked = poke_at(2_000_000, &input, &after_first).unwrap();
+    assert_checkpoint_events_match(&second, &poked);
+}
+
+#[test]
+fn exact_output_checkpoint_event_matches_poke_with_fractional_weights() {
+    let (input, mut state) = funded();
+    for (start, end) in [
+        (weight(95) + 1, weight(50) + 7),
+        (weight(50) + 7, weight(95) + 1),
+    ] {
+        if let lbp_core::PoolMode::Weighted {
+            token_weight_start,
+            token_weight_end,
+            ..
+        } = &mut state.mode
+        {
+            *token_weight_start = start;
+            *token_weight_end = end;
+        }
+        let time_ms = 1_501_000;
+        let response = operation_at(
+            time_ms,
+            &input,
+            &state,
+            Message::BuyWeightedExactOutput {
+                amount_out: 500,
+                max_amount_in: 1000,
+            },
+            config(0, id(43), false),
+            [100, 1_000_000, 1000],
+        )
+        .unwrap();
+        let poked = poke_at(time_ms, &input, &state).unwrap();
+        assert_eq!(
+            checkpoint(&state_of(&response)),
+            checkpoint(&state_of(&poked))
+        );
+        assert_checkpoint_events_match(&response, &poked);
+        let coll_w = interpolate_weight(
+            lbp_core::WEIGHT_TOTAL - start,
+            lbp_core::WEIGHT_TOTAL - end,
+            1000,
+            3000,
+            1501,
+        );
+        assert_eq!(
+            checkpoint(&state_of(&response)).1,
+            lbp_core::WEIGHT_TOTAL - coll_w
+        );
+        let expected_in =
+            calc_in_given_out(100, coll_w, 1_000_000, lbp_core::WEIGHT_TOTAL - coll_w, 500);
+        assert_eq!(
+            state_of(&response).recorded_collateral,
+            state.recorded_collateral + expected_in
+        );
+    }
+}
+
+#[test]
+fn failed_buy_does_not_change_checkpoint() {
+    let (input, state) = funded();
+    // Poke to set a checkpoint first
+    let poked = poke_at(1_500_000, &input, &state).unwrap();
+    let after_poke = state_of(&poked);
+    let cp = checkpoint(&after_poke);
+    // Attempt a buy that fails due to slippage
+    let result = operation_at(
+        2_000_000,
+        &input,
+        &after_poke,
+        Message::BuyWeightedExactInput {
+            amount_in: 10,
+            min_amount_out: u128::MAX, // impossible slippage
+        },
+        config(0, id(43), false),
+        [100, 1_000_000, 1000],
+    );
+    assert!(result.is_err());
+    // Original state is unchanged (the pre_state would be restored by the VM)
+    assert_eq!(checkpoint(&after_poke), cp);
+}
+
+#[test]
+fn poke_on_settled_pool_still_works() {
+    let (input, mut state) = funded();
+    state.proceeds_settled = true;
+    state.recorded_collateral = 0;
+    // Poke on a settled pool should still record checkpoint
+    let response = poke_at(1_500_000, &input, &state).unwrap();
+    let (time, _) = checkpoint(&state_of(&response));
+    assert_eq!(time, 1500);
 }
