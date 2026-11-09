@@ -1,6 +1,6 @@
 # ADR 0030: Fee-neutral weighted-sale pricing collateral
 
-Status: Accepted internally; host and seeded buy/fee-collection guest checks passed. Weighted setup and rollback guest checks passed. Payout verification remains pending.
+Status: Accepted internally; host and seeded buy/fee-collection guest checks passed. Weighted setup and rollback guest checks passed. Local settlement and allocation guest checks passed. Payout-failure rollback, live services and real proofs remain unverified.
 
 Date: 2026-10-02
 

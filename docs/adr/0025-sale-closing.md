@@ -18,7 +18,9 @@ Fixed-price sales close at their configured end, if present, or when all sale in
 
 The separate `AfterEnd` creator allocation can be claimed at expiry or sellout, independently of proceeds settlement. Burning unsold inventory does not count as sellout: the pool preserves the unsold count and records completed proceeds settlement separately. Expiry-based payouts require an inclusion-time lower bound. Fixed-price host-handler tests check state and requested operations; actual fixed-price settlement transfer, burn and transaction rollback execution remain unverified.
 
-Weighted sales close at their scheduled end, which is also the weight-interpolation endpoint. Their settlement handlers remain future work. See [bonding-curve settlement](0020-settlement-and-graduation.md) and [fixed-price and weighted-sale fees and withdrawals](0016-lbp-live-fees.md).
+Weighted sales close at their scheduled end, which is also the weight-interpolation endpoint. Sellout does not permit early settlement. Only the current creator-role holder can authorize settlement. Settlement pays all recorded creator proceeds to that creator, collects remaining fees to the current namespace treasury and burns unsold sale inventory. Surplus remains in custody. Pause and namespace freeze do not block settlement. The separate `AfterEnd` allocation claim can run before or after proceeds settlement. Both require inclusion at or after the scheduled end. Successful retries cannot pay or burn twice. See [fee rules](0016-lbp-live-fees.md) and [pricing collateral](0030-lbp-pricing-collateral.md).
+
+Weighted settlement and allocation claims are implemented. Local [guest tests](../../methods/tests/actor_sale.rs) cover authority checks, end bounds with stale saved time, payouts while frozen, both claim orders and retries. Settlement-specific failed-transfer rollback remains unverified. These checks use development execution. Live services, full private routes, real proofs and deployment readiness remain unverified. See the [workspace evidence](../architecture/workspace-guide.md#execution-and-evidence-limits).
 
 ## Sources
 
