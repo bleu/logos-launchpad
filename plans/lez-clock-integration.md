@@ -1,12 +1,12 @@
 # Integrate LEZ timestamp reads
 
-Status: Implemented on updated main. The full local gate passed. Poke and checkpoints remain in the separate unmerged feature PR.
+Status: Implemented on the branch with current main merged. PR #35 is part of main. Its poke and checkpoint paths use the upstream adapter. The combined full local gate passed.
 
 Date: 2026-11-09
 
 ## Goal and source
 
-Replace the temporary weighted-sale clock from [PR #33](https://github.com/bleu/logos-launchpad/pull/33) with the upstream clock. Include weighted buys and existing setup. Updated main does not include the separate poke and checkpoint feature. Do not import that unmerged feature as part of this change. PR #33 is merged. The [earlier plan](weighted-clock-read.md) records the mock implementation.
+Replace the temporary weighted-sale clock from [PR #33](https://github.com/bleu/logos-launchpad/pull/33) with the upstream clock. Include weighted buys and existing setup. Main now includes the poke and checkpoint feature from PR #35. Retain it and adapt its clock calls. PR #33 is merged. The [earlier plan](weighted-clock-read.md) records the mock implementation.
 
 Use LEZ revision `f94ca8a7550fa0012222b9fb5990dfe44c54a3dc`. This is the checked head of `schouhy/single-clock-actor`. [Upstream PR #988](https://github.com/logos-blockchain/logos-execution-zone/pull/988) is open. Pin the commit, not the branch name. Check the official release later under [ADR 0034](../docs/adr/0034-lez-v04-migration.md).
 
@@ -15,13 +15,13 @@ The current [clock API](https://github.com/logos-blockchain/logos-execution-zone
 ## Implemented behavior
 
 - Request `ReadTimestamp { granularity: 1 }`. Keep full millisecond precision at the platform boundary. Convert to seconds only for weighted pricing and checkpoints.
-- Read once per weighted buy. A later poke integration must also read once per call. Accept only a timestamp reply from `clock_core::clock_actor()` during the expected pending phase.
+- Read once per weighted buy. Poke also reads once per call. Accept only a timestamp reply from `clock_core::clock_actor()` during the expected pending phase.
 - Retain participant price limits, recorded reserves, creator-borne fees, math limits, freeze checks and checkpoint rules.
 - Retain the sale's start-inclusive, end-exclusive inclusion bounds. Saved clock time cannot replace them.
 - Retain the current setup checks against saved time. Replace assertions with authenticated reads and local comparisons. Keep their inclusive or exclusive bounds exactly as implemented.
 - Keep weighted math independent of the clock API. Use normal builds for real-clock execution.
 
-These choices apply to this implementation; later poke integration must use the same adapter. They do not change the accepted previous-block pricing policy in [ADR 0026](../docs/adr/0026-lbp-clock-and-poke.md).
+These choices apply to this implementation; poke uses the same adapter. They do not change the accepted previous-block pricing policy in [ADR 0026](../docs/adr/0026-lbp-clock-and-poke.md).
 
 ## 1. Update the platform pin
 
@@ -46,7 +46,7 @@ Keep `crates/lbp-core/src/pricing_clock.rs` as a narrow adapter to the upstream 
 
 Decode upstream replies with fallible Borsh decoding. Check both sender addresses first. Reject malformed bytes and `Reply::BlockId`. Convert the accepted timestamp to seconds with integer division. Do not use the host clock, client time or cached pool time.
 
-Update `trading.rs` to send the upstream request. The separate poke feature must later update its `weighted_lifecycle.rs` calls. Retain their pending-phase checks. Remove `require_available()` and `ClockUnavailable`. Remove the error variant from maintained schemas if the generator exposes it. No old wire decoder is required for this undeployed application.
+Update `trading.rs` to send the upstream request. The merged poke feature uses that adapter in `weighted_lifecycle.rs`. Retain their pending-phase checks. Remove `require_available()` and `ClockUnavailable`. Remove the error variant from maintained schemas if the generator exposes it. No old wire decoder is required for this undeployed application.
 
 Keep the raw actor entry point. Upstream clock replies must reach the pending handler before the sale's own command decoder. Verify this for buys and poke.
 
@@ -123,4 +123,4 @@ The integration is complete when normal builds execute weighted buys with the pi
 
 ## Local result
 
-The full local gate passed with unchanged lockfiles on 9 November 2026. The host development gate, IDL and wire checks, shell regressions, strict host lints and formatting also passed. See the [workspace evidence](../docs/architecture/workspace-guide.md#weighted-pricing-clock). Poke was not imported from its separate open PR.
+The full local gate passed with unchanged lockfiles on 9 November 2026. The host development gate, IDL and wire checks, shell regressions, strict host lints and formatting also passed. See the [workspace evidence](../docs/architecture/workspace-guide.md#weighted-pricing-clock). The initial run preceded the merge of PR #35. The combined gate then passed all 28 sale guest tests and 31 curve, role-authority and settlement guest tests with unchanged lockfiles. See the workspace evidence for scope and limits.

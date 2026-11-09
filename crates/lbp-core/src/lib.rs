@@ -140,6 +140,9 @@ pub enum Message {
     SettleWeighted {
         creator: AccountId,
     },
+    /// Permissionless observer checkpoint. Reads the pricing clock and records
+    /// the current token weight without changing the price schedule.
+    PokeWeighted,
 }
 pub type Instruction = Message;
 
@@ -155,6 +158,10 @@ pub enum PoolMode {
         collateral_seed: u128,
         /// Seed plus full successful buyer inputs. Fees and custody are separate.
         pricing_collateral: u128,
+        /// Last observed pricing second. Zero means no checkpoint recorded.
+        checkpoint_time: u64,
+        /// Token weight at checkpoint_time. Zero when no checkpoint recorded.
+        checkpoint_token_weight: u128,
     },
 }
 
@@ -481,6 +488,9 @@ pub fn handle(input: &ReceiveInput) -> Result<Response, Error> {
         });
     }
 
+    if let Some(result) = weighted_lifecycle::resume_poke(input) {
+        return result;
+    }
     if let Some(result) = trading::resume(input) {
         return result;
     }
@@ -640,6 +650,8 @@ pub fn handle(input: &ReceiveInput) -> Result<Response, Error> {
                     token_weight_end: inputs.token_weight_end,
                     collateral_seed: inputs.collateral_seed,
                     pricing_collateral: 0,
+                    checkpoint_time: 0,
+                    checkpoint_token_weight: 0,
                 },
                 funded: false,
                 namespace: inputs.namespace,
@@ -739,6 +751,7 @@ pub fn handle(input: &ReceiveInput) -> Result<Response, Error> {
         | Message::CollectFees => trading::begin(input, message),
         Message::SetWeightedPaused { paused } => weighted_lifecycle::set_paused(input, paused),
         Message::SettleWeighted { .. } => trading::begin(input, message),
+        Message::PokeWeighted => weighted_lifecycle::poke(input),
         Message::ReadState => {
             PoolAccount::decode(&input.pre_state)?.validate_address(input.receiver)?;
             Ok(Response::keep_state().send_sync(

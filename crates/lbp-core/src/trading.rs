@@ -1,7 +1,4 @@
-use crate::{
-    Error, Message, PoolAccount, PoolMode, WEIGHT_TOTAL, compute_pool_pda_seed,
-    valid_weight_endpoints,
-};
+use crate::{Error, Message, PoolAccount, PoolMode, compute_pool_pda_seed};
 use borsh::{BorshDeserialize, BorshSerialize};
 use curve_core::{Config, TOKEN_PROGRAM_ACCOUNT_ID};
 use lee_core::{
@@ -9,9 +6,7 @@ use lee_core::{
     program::{ReceiveInput, Response, StateReply, SyncMessage},
 };
 use lez_compat_core::token::{self, TokenKind, TokenState};
-use weighted_math_core::{
-    QuoteError, interpolate_weight, try_calc_in_given_out, try_calc_out_given_in,
-};
+use weighted_math_core::{QuoteError, try_calc_in_given_out, try_calc_out_given_in};
 
 #[derive(BorshSerialize, BorshDeserialize)]
 struct Pending {
@@ -137,9 +132,6 @@ impl Pending {
         if config.emergency.is_frozen {
             return Err(Error::Frozen);
         }
-        if matches!(self.state.mode, PoolMode::Weighted { paused: true, .. }) {
-            return Err(Error::Paused);
-        }
         if config.protocol_fee_bps >= 10_000 {
             return Err(Error::InvalidFee);
         }
@@ -165,22 +157,22 @@ impl Pending {
             }
         }
 
+        let weights = self
+            .pricing_time
+            .map(|time| crate::weighted_lifecycle::weights_at(&self.state, time))
+            .transpose()?;
         let (amount_in, amount_out) = match self.state.mode {
             PoolMode::FixedPrice => {
                 fixed_price_amounts(&self.state, &self.message, config.protocol_fee_bps)?
             }
             PoolMode::Weighted {
-                token_weight_start,
-                token_weight_end,
-                pricing_collateral,
-                ..
+                pricing_collateral, ..
             } => weighted_amounts(
                 &self.state,
                 &self.message,
-                token_weight_start,
-                token_weight_end,
                 pricing_collateral,
                 self.pricing_time.ok_or(Error::InvalidState)?,
+                weights.ok_or(Error::InvalidState)?,
             )?,
         };
 
@@ -246,6 +238,26 @@ impl Pending {
         {
             *pricing_collateral = next;
         }
+        // Record an observer checkpoint when the trusted timestamp changes.
+        let checkpoint_event = if let (
+            PoolMode::Weighted {
+                checkpoint_time, ..
+            },
+            Some(pt),
+        ) = (self.state.mode, self.pricing_time)
+        {
+            if pt != checkpoint_time {
+                crate::weighted_lifecycle::record_checkpoint(
+                    &mut self.state,
+                    pt,
+                    weights.ok_or(Error::InvalidState)?.1,
+                )
+            } else {
+                None
+            }
+        } else {
+            None
+        };
         let response = match self.state.mode {
             PoolMode::FixedPrice => curve_core::with_time_bounds(
                 self.state.response(),
@@ -259,8 +271,13 @@ impl Pending {
                 self.state.end_timestamp,
             )
             .map_err(|_| Error::Arithmetic)?,
-        }
-        .send_sync(
+        };
+        let response = if let Some(event) = checkpoint_event {
+            response.event(event)
+        } else {
+            response
+        };
+        let response = response.send_sync(
             Actor::new(self.buyer, TOKEN_PROGRAM_ACCOUNT_ID),
             &token::Message::Transfer {
                 definition: self.state.collateral_definition_id,
@@ -337,29 +354,14 @@ fn fixed_price_amounts(
 fn weighted_amounts(
     state: &PoolAccount,
     message: &Message,
-    token_weight_start: u128,
-    token_weight_end: u128,
     pricing_collateral: u128,
     pricing_time: u64,
+    (coll_w, token_w): (u128, u128),
 ) -> Result<(u128, u128), Error> {
     let end_ts = state.end_timestamp.ok_or(Error::InvalidState)?;
-    if !valid_weight_endpoints(token_weight_start, token_weight_end) {
-        return Err(Error::InvalidTerms);
-    }
     if pricing_time < state.start_timestamp || pricing_time >= end_ts {
         return Err(Error::Closed);
     }
-    let collateral_at = |time| {
-        interpolate_weight(
-            WEIGHT_TOTAL - token_weight_start,
-            WEIGHT_TOTAL - token_weight_end,
-            state.start_timestamp,
-            end_ts,
-            time,
-        )
-    };
-    let coll_w = collateral_at(pricing_time);
-    let token_w = WEIGHT_TOTAL - coll_w;
 
     let coll_bal = pricing_collateral;
     let token_bal = state.remaining_inventory;
@@ -421,6 +423,13 @@ pub(super) fn begin(input: &ReceiveInput, message: Message) -> Result<Response, 
     state.validate_address(input.receiver)?;
     if !state.funded {
         return Err(Error::PendingFunding);
+    }
+    if matches!(
+        message,
+        Message::BuyWeightedExactInput { .. } | Message::BuyWeightedExactOutput { .. }
+    ) && matches!(state.mode, PoolMode::Weighted { paused: true, .. })
+    {
+        return Err(Error::Paused);
     }
     if !matches!(
         message,

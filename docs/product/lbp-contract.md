@@ -8,7 +8,7 @@ The shared launch factory can create a new launch token, set positive sale inven
 
 ## Fixed-price settlement
 
-A sale closes at its optional end or sellout without a final trade or separate close call. Only the current creator-role holder can authorize payouts, and that creator is the recipient. Proceeds settlement pays all recorded net proceeds, collects remaining fees to the current namespace treasury and burns unsold sale inventory. Donations remain surplus. The separate `AfterEnd` allocation claim can run before or after proceeds settlement. Successful retries do not pay or burn twice. See [ADR 0025](../adr/0025-sale-closing.md).
+A fixed-price sale closes at its optional end or sellout without a final trade or separate close call. Only the current creator-role holder can authorize payouts, and that creator is the recipient. Proceeds settlement pays all recorded net proceeds, collects remaining fees to the current namespace treasury and burns unsold sale inventory. Donations remain surplus. The separate `AfterEnd` allocation claim can run before or after proceeds settlement. Successful retries do not pay or burn twice. See [ADR 0025](../adr/0025-sale-closing.md).
 
 ## Weighted setup and buys
 
@@ -16,7 +16,9 @@ The factory creates weighted sales in the same four setup stages. Typed weighted
 
 ## Weighted controls and settlement
 
-Creator pause controls, proceeds settlement and the separate `AfterEnd` allocation claim are implemented. Settlement and the allocation claim require inclusion at or after the scheduled end. Pause and namespace freeze do not block payouts. Local guest checks cover authority, end bounds, both claim orders and retries. Settlement-specific failed-transfer rollback remains unverified. See [ADR 0025](../adr/0025-sale-closing.md) for rules and the [workspace guide](../architecture/workspace-guide.md#execution-and-evidence-limits) for evidence limits.
+Creator pause controls, proceeds settlement and the separate `AfterEnd` allocation claim are implemented. Settlement and the allocation claim require inclusion at or after the scheduled end. Pause and namespace freeze do not block payouts. Local guest checks cover authority, end bounds, both claim orders, retries and forced payout rollback. See [ADR 0025](../adr/0025-sale-closing.md) for rules and the [workspace guide](../architecture/workspace-guide.md#execution-and-evidence-limits) for evidence limits.
+
+Permissionless poke and successful buys record observer checkpoints. Checkpoints do not select a later price. See [ADR 0026](../adr/0026-lbp-clock-and-poke.md).
 
 ## Scope
 
@@ -24,4 +26,4 @@ The implemented scope includes creation, funding, public buys, permissionless fe
 
 ## Future work
 
-Weighted observation records remain future work. Live services, full private routes and real proofs remain unverified. The pricing and accounting decisions are in [ADR 0021](../adr/0021-modes-and-open-limits.md), [ADR 0026](../adr/0026-lbp-clock-and-poke.md) and [ADR 0030](../adr/0030-lbp-pricing-collateral.md). The weighted-math kernel is unaudited and does not establish pool behavior.
+Live services, full private routes and real proofs remain unverified. The pricing and accounting decisions are in [ADR 0021](../adr/0021-modes-and-open-limits.md), [ADR 0026](../adr/0026-lbp-clock-and-poke.md) and [ADR 0030](../adr/0030-lbp-pricing-collateral.md). The weighted-math kernel is unaudited and does not establish pool behavior.

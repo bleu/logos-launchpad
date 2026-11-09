@@ -2,7 +2,7 @@
 
 Status: Accepted internally; expiry-validation departure: To be reviewed by Logos team
 
-Date: 2026-09-29
+Date: 2026-09-29; weighted controls and settlement evidence: 2026-11-06
 
 ## Decision
 
@@ -18,9 +18,11 @@ Fixed-price sales close at their configured end, if present, or when all sale in
 
 The separate `AfterEnd` creator allocation can be claimed at expiry or sellout, independently of proceeds settlement. Burning unsold inventory does not count as sellout: the pool preserves the unsold count and records completed proceeds settlement separately. Expiry-based payouts require an inclusion-time lower bound. Fixed-price host-handler tests check state and requested operations; actual fixed-price settlement transfer, burn and transaction rollback execution remain unverified.
 
-Weighted sales close at their scheduled end, which is also the weight-interpolation endpoint. Sellout does not permit early settlement. Only the current creator-role holder can authorize settlement. Settlement pays all recorded creator proceeds to that creator, collects remaining fees to the current namespace treasury and burns unsold sale inventory. Surplus remains in custody. Pause and namespace freeze do not block settlement. The separate `AfterEnd` allocation claim can run before or after proceeds settlement. Both require inclusion at or after the scheduled end. Successful retries cannot pay or burn twice. See [fee rules](0016-lbp-live-fees.md) and [pricing collateral](0030-lbp-pricing-collateral.md).
+Weighted sales close at their scheduled end, which is also the weight-interpolation endpoint. Depleted inventory does not permit early settlement. Only the current creator-role holder can pause or resume a funded weighted sale before that end. Repeated authorized calls succeed without another change event. Pause and namespace freeze block buys. They do not stop the schedule or move the end. Resume cannot clear namespace freeze.
 
-Weighted settlement and allocation claims are implemented. Local [guest tests](../../methods/tests/actor_sale.rs) cover authority checks, end bounds with stale saved time, payouts while frozen, both claim orders and retries. Settlement-specific failed-transfer rollback remains unverified. These checks use development execution. Live services, full private routes, real proofs and deployment readiness remain unverified. See the [workspace evidence](../architecture/workspace-guide.md#execution-and-evidence-limits).
+Only the current creator-role holder can authorize weighted proceeds settlement. Pay that creator the full recorded collateral: the initial seed plus net buyer proceeds. Collect remaining fees to the current namespace treasury. Burn exactly the unsold sale inventory. Exclude surplus deposits and pricing-only collateral. Partial withdrawals are not supported. The separate `AfterEnd` allocation becomes available at the scheduled end. Its claim can run before or after proceeds settlement. Keep `AfterSetup` allocation behavior unchanged. Fee collection, settlement and allocation claims remain available while frozen. Successful retries cannot pay or burn twice. Weighted settlement and allocation retries retain the scheduled-end inclusion lower bound.
+
+Local [guest tests](../../methods/tests/actor_sale.rs) cover controls, scheduled close, both payout orders, frozen payouts and retries. Forced fee-credit, burn, proceeds-credit and allocation-credit failures preserve full state and signer nonce. Repaired retries pay and burn once. The earlier checks used the temporary pricing clock for setup trades. Results on the upstream clock revision are recorded in the workspace guide. Local guest checks do not prove live sequencer behavior, private execution or production readiness. See the [workspace evidence](../architecture/workspace-guide.md#execution-and-evidence-limits) and [fee policy](0016-lbp-live-fees.md).
 
 ## Sources
 

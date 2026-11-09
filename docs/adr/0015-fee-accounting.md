@@ -14,7 +14,7 @@ Namespace fee rates must be integers from 0 through 9,999 basis points at creati
 
 Curve swaps use the live namespace rate. Deduct fees from buy input or sell output in token1, the factory's collateral token. Fixed-price buys use fee-first pricing under [ADR 0035](0035-fixed-price-swap-fees.md). Weighted-sale fees remain creator-borne under [ADR 0016](0016-lbp-live-fees.md). Both fixed-price and weighted-sale RFP departures remain `To be reviewed by Logos team`.
 
-Fee-rate and treasury updates must be separate operations under [ADR 0006](0006-namespaces-and-authority.md). The curve PoC enforces the rate limit but still uses one combined configuration update. Fixed-price public buys and fee collection follow ADR 0035; weighted-sale public buys and fee collection are implemented under ADR 0016. See the [shared contract](../product/namespace-fee-contract.md) for custody checks.
+Fee-rate and treasury updates must be separate operations under [ADR 0006](0006-namespaces-and-authority.md). The curve PoC enforces the rate limit but still uses one combined configuration update. Fixed-price public buys and fee collection follow ADR 0035; weighted-sale fees and collection use the creator-borne rules in ADR 0016. See the [shared contract](../product/namespace-fee-contract.md) for custody checks.
 
 ## Sources
 

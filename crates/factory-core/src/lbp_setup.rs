@@ -69,6 +69,8 @@ impl LbpSetupMode {
                 token_weight_start,
                 token_weight_end,
                 pricing_collateral: 0,
+                checkpoint_time: 0,
+                checkpoint_token_weight: 0,
             },
         }
     }

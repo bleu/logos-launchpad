@@ -18,7 +18,7 @@ The RFP baseline does not allow collection before the scheduled end and gates cr
 
 ## Consequences
 
-Do not report these RFP departures as externally approved commitments. Their external status is `To be reviewed by Logos team`. The program must prove vault coverage of fees and remaining obligations, including when fees are collected during a sale. Fixed-price buys now use fee-first pricing under ADR 0035; that rule must not replace the weighted-sale creator-borne model. Weighted-sale public buys, fee collection and settlement have local guest checks. See the [workspace evidence](../architecture/workspace-guide.md#execution-and-evidence-limits). Production input, rounding and solvency evidence remain required.
+Do not report these RFP departures as externally approved commitments. Their external status is `To be reviewed by Logos team`. The program must prove vault coverage of fees and remaining obligations, including when fees are collected during a sale. Fixed-price buys now use fee-first pricing under ADR 0035; that rule must not replace the weighted-sale creator-borne model. Weighted-sale buys, fee collection and settlement have local guest checks. See [execution evidence](../architecture/workspace-guide.md#execution-and-evidence-limits). Production input, rounding and solvency evidence remain required.
 
 ## Sources
 

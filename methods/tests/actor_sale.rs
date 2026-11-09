@@ -292,6 +292,8 @@ fn weighted_state(buyer: AccountId) -> (V03State, AccountId) {
         token_weight_end: lbp_core::WEIGHT_TOTAL / 2,
         collateral_seed: 100,
         pricing_collateral: 100,
+        checkpoint_time: 0,
+        checkpoint_token_weight: 0,
     };
     sale.price = lbp_core::FixedPrice {
         collateral_units: 0,
@@ -1751,7 +1753,6 @@ fn weighted_factory_controls_and_settlement_full_flow() {
 
     // Record balances before settlement
     let creator_collateral_before = balance(&state, creator, COLLATERAL);
-    let pool_collateral_before = balance(&state, pool, COLLATERAL);
     let pool_token_before = balance(&state, pool, launch);
     let sale_before = fixed_pool(&state, pool);
     let recorded = sale_before.recorded_collateral;
@@ -2054,6 +2055,199 @@ fn weighted_allocation_before_settlement_then_settlement() {
 }
 
 #[test]
+fn weighted_settlement_failures_roll_back_all_effects_and_retry_once() {
+    let (state, factory, pool, launch, escrow, key, actors, salt) = weighted_factory_env();
+    let creator = AccountId::from(&PublicKey::new_from_private_key(&key));
+    let state = clock_state(state, 300_000);
+    let sale = fixed_pool(&state, pool);
+    assert!(sale.accrued_fees > 0);
+    assert!(sale.remaining_inventory > 0);
+    let definition_actor = Actor::new(launch, TOKEN_PROGRAM_ACCOUNT_ID);
+    let definition_bytes = state
+        .get_account_by_id(launch)
+        .data
+        .actor_state(TOKEN_PROGRAM_ACCOUNT_ID)
+        .to_vec();
+    let definition = TokenState::decode(&definition_bytes).unwrap();
+    let TokenState::Definition { supply, .. } = definition.clone() else {
+        panic!("expected definition")
+    };
+
+    // Fail the first transfer, the burn after fee payment, or the final credit
+    // after fee payment and burn. Each failure must restore the entire runtime.
+    for fault in ["fee", "burn", "proceeds"] {
+        let (actor, original, broken, reason) = if fault == "burn" {
+            let mut broken = definition.clone();
+            let TokenState::Definition { supply, .. } = &mut broken else {
+                unreachable!()
+            };
+            *supply = 0;
+            (
+                definition_actor,
+                definition_bytes.clone(),
+                borsh::to_vec(&broken).unwrap(),
+                "InsufficientBalance",
+            )
+        } else {
+            let owner = if fault == "fee" { TREASURY } else { creator };
+            let actor = holding(owner, COLLATERAL);
+            let original = state
+                .get_account_by_id(actor.account_id)
+                .data
+                .actor_state(TOKEN_PROGRAM_ACCOUNT_ID)
+                .to_vec();
+            let broken = borsh::to_vec(&TokenState::Holding {
+                owner,
+                definition: COLLATERAL,
+                kind: TokenKind::Fungible,
+                balance: u128::MAX,
+            })
+            .unwrap();
+            (actor, original, broken, "Overflow")
+        };
+        let mut rejected = state.clone().with_public_accounts([account(actor, broken)]);
+        let before = rejected.clone();
+        let nonce = rejected.get_account_by_id(creator).nonce;
+        let result = factory_execute_at(
+            &mut rejected,
+            factory,
+            &actors,
+            &key,
+            salt,
+            launch,
+            pool,
+            factory_core::Message::WithdrawWeightedProceeds { creator },
+            300_000,
+        );
+        assert!(
+            matches!(&result, Err(lee::error::LeeError::ProgramExecutionFailed(error)) if error.contains(reason)),
+            "{fault}: expected {reason}, got {result:?}"
+        );
+        assert!(
+            rejected == before,
+            "{fault}: failed settlement changed runtime state"
+        );
+        assert_eq!(rejected.get_account_by_id(creator).nonce, nonce);
+
+        let mut repaired = rejected.with_public_accounts([account(actor, original)]);
+        let creator_before = balance(&repaired, creator, COLLATERAL);
+        let treasury_before = balance(&repaired, TREASURY, COLLATERAL);
+        let tokens_before = balance(&repaired, pool, launch);
+        for _ in 0..2 {
+            factory_execute_at(
+                &mut repaired,
+                factory,
+                &actors,
+                &key,
+                salt,
+                launch,
+                pool,
+                factory_core::Message::WithdrawWeightedProceeds { creator },
+                300_000,
+            )
+            .unwrap();
+            assert!(fixed_pool(&repaired, pool).proceeds_settled);
+            assert_eq!(
+                balance(&repaired, creator, COLLATERAL),
+                creator_before + sale.recorded_collateral
+            );
+            assert_eq!(
+                balance(&repaired, TREASURY, COLLATERAL),
+                treasury_before + sale.accrued_fees
+            );
+            assert_eq!(
+                balance(&repaired, pool, launch),
+                tokens_before - sale.remaining_inventory
+            );
+            let current = TokenState::decode(
+                repaired
+                    .get_account_by_id(launch)
+                    .data
+                    .actor_state(TOKEN_PROGRAM_ACCOUNT_ID),
+            )
+            .unwrap();
+            let TokenState::Definition {
+                supply: current_supply,
+                ..
+            } = current
+            else {
+                panic!("expected definition")
+            };
+            assert_eq!(current_supply, supply - sale.remaining_inventory);
+            assert_eq!(balance(&repaired, escrow, launch), sale.creator_allocation);
+        }
+    }
+}
+
+#[test]
+fn weighted_allocation_credit_failure_rolls_back_and_retry_pays_once() {
+    let (state, factory, pool, launch, escrow, key, actors, salt) = weighted_factory_env();
+    let creator = AccountId::from(&PublicKey::new_from_private_key(&key));
+    let state = clock_state(state, 300_000);
+    let recipient = holding(creator, launch);
+    let original = state
+        .get_account_by_id(recipient.account_id)
+        .data
+        .actor_state(TOKEN_PROGRAM_ACCOUNT_ID)
+        .to_vec();
+    let mut rejected = state.with_public_accounts([account(
+        recipient,
+        borsh::to_vec(&TokenState::Holding {
+            owner: creator,
+            definition: launch,
+            kind: TokenKind::Fungible,
+            balance: u128::MAX,
+        })
+        .unwrap(),
+    )]);
+    let before = rejected.clone();
+    let nonce = rejected.get_account_by_id(creator).nonce;
+    let result = factory_execute_at(
+        &mut rejected,
+        factory,
+        &actors,
+        &key,
+        salt,
+        launch,
+        pool,
+        factory_core::Message::ClaimWeightedAllocation { creator },
+        300_000,
+    );
+    assert!(
+        matches!(&result, Err(lee::error::LeeError::ProgramExecutionFailed(error)) if error.contains("Overflow")),
+        "expected allocation credit overflow, got {result:?}"
+    );
+    assert!(
+        rejected == before,
+        "failed allocation changed runtime state"
+    );
+    assert_eq!(rejected.get_account_by_id(creator).nonce, nonce);
+    let mut repaired = rejected.with_public_accounts([account(recipient, original)]);
+    let balance_before = balance(&repaired, creator, launch);
+    let allocation = balance(&repaired, escrow, launch);
+    assert!(allocation > 0);
+    for _ in 0..2 {
+        factory_execute_at(
+            &mut repaired,
+            factory,
+            &actors,
+            &key,
+            salt,
+            launch,
+            pool,
+            factory_core::Message::ClaimWeightedAllocation { creator },
+            300_000,
+        )
+        .unwrap();
+        assert_eq!(
+            balance(&repaired, creator, launch),
+            balance_before + allocation
+        );
+        assert_eq!(balance(&repaired, escrow, launch), 0);
+    }
+}
+
+#[test]
 fn weighted_stale_clock_at_inclusion_boundary_preserves_state() {
     let (state, _factory, pool, _launch, _escrow, key, _actors, _salt) = weighted_factory_env();
     let creator = AccountId::from(&PublicKey::new_from_private_key(&key));
@@ -2175,4 +2369,181 @@ fn upstream_clock_tick_changes_weighted_price_and_preserves_inclusion_deadline()
     // Advancing the real clock to the end also rejects pricing itself.
     tick_clock(&mut state, 200_000);
     fixed_rejected(&mut state, pool, &key, buy, "Closed");
+}
+
+// ---------------------------------------------------------------------------
+// Poke and checkpoint guest tests
+// ---------------------------------------------------------------------------
+
+fn poke_transaction(state: &V03State, pool: AccountId) -> PublicTransaction {
+    let sale = fixed_pool(state, pool);
+    let launch = sale.token_definition_id;
+    let actors = vec![
+        Actor::new(pool, LBP),
+        Actor::new(curve_core::compute_config_pda(NAMESPACE, CURVE), CURVE),
+        Actor::new(pool, TOKEN_PROGRAM_ACCOUNT_ID),
+        holding(pool, launch),
+        holding(pool, COLLATERAL),
+        lbp_core::pricing_clock::actor(),
+    ];
+    let message = Message::try_new(
+        Actor::new(pool, LBP),
+        actors,
+        BTreeMap::new(),
+        lbp_core::Message::PokeWeighted,
+    )
+    .unwrap();
+    let witnesses = WitnessSet::for_message(&message, &[]);
+    PublicTransaction::new(message, witnesses)
+}
+
+fn poke_execute_at(
+    state: &mut V03State,
+    pool: AccountId,
+    timestamp: u64,
+) -> Result<(), lee::error::LeeError> {
+    let transaction = poke_transaction(state, pool);
+    state
+        .transition_from_public_transaction(&transaction, 1, timestamp)
+        .map(|_| ())
+}
+
+fn checkpoint_of(state: &V03State, pool: AccountId) -> (u64, u128) {
+    let sale = fixed_pool(state, pool);
+    if let lbp_core::PoolMode::Weighted {
+        checkpoint_time,
+        checkpoint_token_weight,
+        ..
+    } = sale.mode
+    {
+        (checkpoint_time, checkpoint_token_weight)
+    } else {
+        panic!("expected weighted mode");
+    }
+}
+
+#[test]
+fn guest_poke_records_checkpoint_permissionlessly() {
+    let key = PrivateKey::try_new([23; 32]).unwrap();
+    let buyer = AccountId::from(&PublicKey::new_from_private_key(&key));
+    let (mut state, pool) = weighted_state(buyer);
+    // Checkpoint starts at zero
+    assert_eq!(checkpoint_of(&state, pool), (0, 0));
+    // Clock is at 100_000ms = 100s (set in fixed_state). Inclusion time within sale window.
+    poke_execute_at(&mut state, pool, 100_000).unwrap();
+    let (time, w) = checkpoint_of(&state, pool);
+    assert_eq!(time, 100);
+    assert!(w > 0);
+}
+
+#[test]
+fn upstream_clock_ticks_advance_poke_checkpoints_once_per_second() {
+    let key = PrivateKey::try_new([23; 32]).unwrap();
+    let buyer = AccountId::from(&PublicKey::new_from_private_key(&key));
+    let (mut state, pool) = weighted_state(buyer);
+    for (timestamp, block, expected_events) in [
+        (100_000, 1, 1),
+        (100_999, 2, 0),
+        (101_000, 3, 1),
+        (200_000, 4, 1),
+    ] {
+        if block > 1 {
+            tick_clock(&mut state, timestamp);
+        }
+        let tx = poke_transaction(&state, pool);
+        let events = state
+            .transition_from_public_transaction(&tx, block, timestamp)
+            .unwrap();
+        let checkpoint = checkpoint_of(&state, pool);
+        assert_eq!(checkpoint.0, timestamp / 1000);
+        assert_eq!(events.len(), expected_events);
+        if expected_events == 1 {
+            assert_eq!(events[0].event.data, borsh::to_vec(&checkpoint).unwrap());
+        }
+    }
+}
+
+#[test]
+fn guest_buy_updates_checkpoint_and_poke_is_idempotent() {
+    let key = PrivateKey::try_new([23; 32]).unwrap();
+    let buyer = AccountId::from(&PublicKey::new_from_private_key(&key));
+    let (mut state, pool) = weighted_state(buyer);
+    // Buy updates checkpoint
+    let transaction = fixed_transaction(
+        &state,
+        pool,
+        &key,
+        lbp_core::Message::BuyWeightedExactInput {
+            amount_in: 50,
+            min_amount_out: 1,
+        },
+    );
+    let events = state
+        .transition_from_public_transaction(&transaction, 1, 100_000)
+        .unwrap();
+    let cp_after_buy = checkpoint_of(&state, pool);
+    assert_eq!(cp_after_buy.0, 100); // clock is at 100_000ms = 100s
+    assert!(cp_after_buy.1 > 0);
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].account_id, LBP);
+    use risc0_zkvm::sha::{Impl, Sha256 as _};
+    let hash = Impl::hash_bytes(b"lbp::WeightedCheckpoint");
+    assert_eq!(events[0].event.selector, hash.as_bytes()[..8]);
+    assert_eq!(events[0].event.data, borsh::to_vec(&cp_after_buy).unwrap());
+    // Another buy at the same pricing second does not emit a duplicate event.
+    let transaction = fixed_transaction(
+        &state,
+        pool,
+        &key,
+        lbp_core::Message::BuyWeightedExactOutput {
+            amount_out: 1,
+            max_amount_in: 100,
+        },
+    );
+    let events = state
+        .transition_from_public_transaction(&transaction, 1, 150_000)
+        .unwrap();
+    assert!(events.is_empty());
+    // Poke at same time is idempotent — checkpoint unchanged
+    let transaction = poke_transaction(&state, pool);
+    let events = state
+        .transition_from_public_transaction(&transaction, 1, 150_000)
+        .unwrap();
+    assert!(events.is_empty());
+    assert_eq!(checkpoint_of(&state, pool), cp_after_buy);
+}
+
+#[test]
+fn guest_poke_in_settlement_flow() {
+    let (mut state, factory, pool, launch, _escrow, key, actors, salt) = weighted_factory_env();
+    let creator = AccountId::from(&PublicKey::new_from_private_key(&key));
+    // Poke before settlement
+    poke_execute_at(&mut state, pool, 150_000).unwrap();
+    let (time, _) = checkpoint_of(&state, pool);
+    assert_eq!(time, 150);
+    // Move past end and settle
+    state = clock_state(state, 300_000);
+    factory_execute_at(
+        &mut state,
+        factory,
+        &actors,
+        &key,
+        salt,
+        launch,
+        pool,
+        factory_core::Message::WithdrawWeightedProceeds { creator },
+        300_000,
+    )
+    .unwrap();
+    // Settlement should succeed with a checkpoint already recorded
+    let sale = fixed_pool(&state, pool);
+    assert!(sale.proceeds_settled);
+    // Observations remain available after settlement and use the real clock.
+    tick_clock(&mut state, 301_000);
+    let tx = poke_transaction(&state, pool);
+    let events = state
+        .transition_from_public_transaction(&tx, 3, 301_000)
+        .unwrap();
+    assert_eq!(checkpoint_of(&state, pool).0, 301);
+    assert_eq!(events.len(), 1);
 }
