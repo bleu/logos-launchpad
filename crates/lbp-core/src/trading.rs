@@ -70,7 +70,11 @@ impl Pending {
         }
         if self.step == 4
             || (self.step == 2 && matches!(self.message, Message::CollectFees))
-            || (self.step == 3 && matches!(self.message, Message::SettleFixedPrice { .. }))
+            || (self.step == 3
+                && matches!(
+                    self.message,
+                    Message::SettleFixedPrice { .. } | Message::SettleWeighted { .. }
+                ))
         {
             return self.finish(receiver);
         }
@@ -111,54 +115,31 @@ impl Pending {
         }
         if let Message::SettleFixedPrice { creator, .. } = self.message {
             let expiry = self.state.close_time_bound()?;
-            if self.balances[1] < self.state.remaining_inventory {
-                return Err(Error::Underfunded);
-            }
-            let fees = self.state.accrued_fees;
-            let proceeds = self.state.recorded_collateral;
-            self.state.accrued_fees = 0;
-            self.state.recorded_collateral = 0;
-            self.state.proceeds_settled = true;
-            let response = curve_core::with_time_bounds(self.state.response(), expiry, None)
-                .map_err(|_| Error::InvalidTerms)?;
-            let response = payout(
-                response,
-                &self.state,
+            return settlement_payout(
+                self.state,
                 receiver,
-                self.state.collateral_definition_id,
-                config.treasury,
-                fees,
-            );
-            let response = if self.state.remaining_inventory == 0 {
-                response
-            } else {
-                response.send(
-                    SyncMessage::new(
-                        Actor::new(receiver.account_id, TOKEN_PROGRAM_ACCOUNT_ID),
-                        &token::Message::Burn {
-                            definition: self.state.token_definition_id,
-                            amount: self.state.remaining_inventory,
-                        },
-                    )
-                    .with_pda_seeds([compute_pool_pda_seed(
-                        self.state.namespace,
-                        self.state.token_definition_id,
-                        self.state.collateral_definition_id,
-                        self.state.factory_owner,
-                    )]),
-                )
-            };
-            return Ok(payout(
-                response,
-                &self.state,
-                receiver,
-                self.state.collateral_definition_id,
                 creator,
-                proceeds,
-            ));
+                config.treasury,
+                self.balances,
+                expiry,
+            );
+        }
+        if let Message::SettleWeighted { creator } = self.message {
+            let end = crate::weighted_lifecycle::end(&self.state)?;
+            return settlement_payout(
+                self.state,
+                receiver,
+                creator,
+                config.treasury,
+                self.balances,
+                Some(end),
+            );
         }
         if config.emergency.is_frozen {
             return Err(Error::Frozen);
+        }
+        if matches!(self.state.mode, PoolMode::Weighted { paused: true, .. }) {
+            return Err(Error::Paused);
         }
         if config.protocol_fee_bps >= 10_000 {
             return Err(Error::InvalidFee);
@@ -444,7 +425,7 @@ pub(super) fn begin(input: &ReceiveInput, message: Message) -> Result<Response, 
     }
     if !matches!(
         message,
-        Message::CollectFees | Message::SettleFixedPrice { .. }
+        Message::CollectFees | Message::SettleFixedPrice { .. } | Message::SettleWeighted { .. }
     ) {
         validate_buy_window(&state, &message)?;
     }
@@ -459,6 +440,20 @@ pub(super) fn begin(input: &ReceiveInput, message: Message) -> Result<Response, 
         }
         if state.proceeds_settled {
             return Ok(state.response());
+        }
+        creator
+    } else if let Message::SettleWeighted { creator } = message {
+        crate::weighted_lifecycle::authorize(&state, input)?;
+        if creator == AccountId::default() {
+            return Err(Error::Unauthorized);
+        }
+        if state.proceeds_settled {
+            return curve_core::with_time_bounds(
+                state.response(),
+                Some(crate::weighted_lifecycle::end(&state)?),
+                None,
+            )
+            .map_err(|_| Error::InvalidTerms);
         }
         creator
     } else if matches!(message, Message::CollectFees) {
@@ -619,4 +614,60 @@ fn validate_buy_window(state: &PoolAccount, message: &Message) -> Result<(), Err
         }
         _ => Err(Error::InvalidMessage),
     }
+}
+
+/// Shared token effects only. Each mechanism supplies its own closing bound.
+fn settlement_payout(
+    mut state: PoolAccount,
+    receiver: Actor,
+    creator: AccountId,
+    treasury: AccountId,
+    balances: [u128; 3],
+    expiry: Option<u64>,
+) -> Result<Response, Error> {
+    if balances[1] < state.remaining_inventory {
+        return Err(Error::Underfunded);
+    }
+    let fees = state.accrued_fees;
+    let proceeds = state.recorded_collateral;
+    state.accrued_fees = 0;
+    state.recorded_collateral = 0;
+    state.proceeds_settled = true;
+    let response = curve_core::with_time_bounds(state.response(), expiry, None)
+        .map_err(|_| Error::InvalidTerms)?;
+    let response = payout(
+        response,
+        &state,
+        receiver,
+        state.collateral_definition_id,
+        treasury,
+        fees,
+    );
+    let response = if state.remaining_inventory == 0 {
+        response
+    } else {
+        response.send(
+            SyncMessage::new(
+                Actor::new(receiver.account_id, TOKEN_PROGRAM_ACCOUNT_ID),
+                &token::Message::Burn {
+                    definition: state.token_definition_id,
+                    amount: state.remaining_inventory,
+                },
+            )
+            .with_pda_seeds([compute_pool_pda_seed(
+                state.namespace,
+                state.token_definition_id,
+                state.collateral_definition_id,
+                state.factory_owner,
+            )]),
+        )
+    };
+    Ok(payout(
+        response,
+        &state,
+        receiver,
+        state.collateral_definition_id,
+        creator,
+        proceeds,
+    ))
 }

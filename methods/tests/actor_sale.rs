@@ -300,6 +300,7 @@ fn weighted_state(buyer: AccountId) -> (V03State, AccountId) {
     let (state, pool) = fixed_state(buyer, Some(200));
     let mut sale = fixed_pool(&state, pool);
     sale.mode = lbp_core::PoolMode::Weighted {
+        paused: false,
         token_weight_start: lbp_core::WEIGHT_TOTAL / 2,
         token_weight_end: lbp_core::WEIGHT_TOTAL / 2,
         collateral_seed: 100,
@@ -1348,4 +1349,746 @@ fn weighted_clock_failure_and_freeze_preserve_state() {
     let mut frozen = fixed_config(state, 333, TREASURY, true);
     fixed_rejected(&mut frozen, pool, &key, buy, "Frozen");
     fixed_execute(&mut frozen, pool, &key, lbp_core::Message::CollectFees).unwrap();
+}
+
+// ---------------------------------------------------------------------------
+// Factory-level weighted controls and settlement guest tests
+// ---------------------------------------------------------------------------
+
+/// Build a complete weighted factory environment, run setup to completion, execute
+/// a buy, then return the state ready for controls and settlement testing.
+fn weighted_factory_env() -> (
+    V03State,
+    AccountId, // factory
+    AccountId, // pool
+    AccountId, // launch (token definition)
+    AccountId, // escrow
+    PrivateKey,
+    Vec<Actor>, // actors for factory transactions
+    [u8; 32],   // salt
+) {
+    use factory_core::{CreatorAllocationRelease, LbpCreationStage, WeightedInputs};
+    const FACTORY: AccountId = AccountId::new([17; 32]);
+    let key = PrivateKey::try_new([23; 32]).unwrap();
+    let creator = AccountId::from(&PublicKey::new_from_private_key(&key));
+    let salt = [24; 32];
+    let factory = factory_core::compute_factory_pda(NAMESPACE, FACTORY, salt);
+    let launch = factory_core::compute_definition_pda(NAMESPACE, FACTORY, salt);
+    let mint = factory_core::compute_mint_pda(NAMESPACE, FACTORY, salt);
+    let escrow = factory_core::compute_escrow_pda(NAMESPACE, FACTORY, salt);
+    let role = factory_core::compute_creator_role_pda(NAMESPACE, FACTORY, salt);
+    let pool = lbp_core::compute_pool_pda(NAMESPACE, LBP, launch, COLLATERAL, factory);
+    let authority = factory_core::AUTHORITY_PROGRAM_ACCOUNT_ID;
+    let mut state = V03State::new()
+        .with_named_programs([
+            (
+                FACTORY,
+                Program::new(Cow::Borrowed(launchpad_methods::FACTORY_ELF)).unwrap(),
+            ),
+            (
+                LBP,
+                Program::new(Cow::Borrowed(launchpad_methods::LBP_ELF)).unwrap(),
+            ),
+            (
+                CURVE,
+                Program::new(Cow::Borrowed(launchpad_methods::CURVE_ELF)).unwrap(),
+            ),
+            (
+                TOKEN_PROGRAM_ACCOUNT_ID,
+                Program::new(Cow::Borrowed(lez_compat_methods::COMPAT_TOKEN_ELF)).unwrap(),
+            ),
+            (
+                authority,
+                Program::new(Cow::Borrowed(lez_compat_methods::COMPAT_AUTHORITY_ELF)).unwrap(),
+            ),
+            (clock_core::clock_account_id(), programs::clock()),
+            (
+                lbp_core::pricing_clock::PROGRAM,
+                Program::new(Cow::Borrowed(launchpad_methods::MOCK_CLOCK_ELF)).unwrap(),
+            ),
+        ])
+        .with_public_accounts([
+            account(
+                Actor::new(COLLATERAL, TOKEN_PROGRAM_ACCOUNT_ID),
+                borsh::to_vec(&TokenState::Definition {
+                    name: "Collateral".into(),
+                    kind: TokenKind::Fungible,
+                    supply: 10_000,
+                    metadata: None,
+                })
+                .unwrap(),
+            ),
+            account(
+                holding(creator, COLLATERAL),
+                borsh::to_vec(&TokenState::Holding {
+                    owner: creator,
+                    definition: COLLATERAL,
+                    kind: TokenKind::Fungible,
+                    balance: 1000,
+                })
+                .unwrap(),
+            ),
+            account(
+                holding(TREASURY, COLLATERAL),
+                borsh::to_vec(&TokenState::Holding {
+                    owner: TREASURY,
+                    definition: COLLATERAL,
+                    kind: TokenKind::Fungible,
+                    balance: 0,
+                })
+                .unwrap(),
+            ),
+            account(
+                holding(NEXT_TREASURY, COLLATERAL),
+                borsh::to_vec(&TokenState::Holding {
+                    owner: NEXT_TREASURY,
+                    definition: COLLATERAL,
+                    kind: TokenKind::Fungible,
+                    balance: 0,
+                })
+                .unwrap(),
+            ),
+        ]);
+    state = fixed_config(clock_state(state, 100_000), 100, TREASURY, false);
+    let mut actors = vec![
+        Actor::new(factory, FACTORY),
+        Actor::new(pool, LBP),
+        Actor::new(role, authority),
+        Actor::new(creator, authority),
+        Actor::new(launch, TOKEN_PROGRAM_ACCOUNT_ID),
+        Actor::new(COLLATERAL, TOKEN_PROGRAM_ACCOUNT_ID),
+        Actor::new(curve_core::compute_config_pda(NAMESPACE, CURVE), CURVE),
+        Actor::new(
+            clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID,
+            clock_core::clock_account_id(),
+        ),
+        lbp_core::pricing_clock::actor(),
+        holding(TREASURY, launch),
+        holding(NEXT_TREASURY, launch),
+        holding(TREASURY, COLLATERAL),
+        holding(NEXT_TREASURY, COLLATERAL),
+    ];
+    for owner in [factory, mint, escrow, pool, creator, role, launch] {
+        actors.push(Actor::new(owner, FACTORY));
+        actors.push(Actor::new(owner, TOKEN_PROGRAM_ACCOUNT_ID));
+        actors.push(holding(owner, launch));
+        actors.push(holding(owner, COLLATERAL));
+    }
+    let execute_at = |state: &mut V03State, instruction: factory_core::Message, timestamp: u64| {
+        let mut message = Message::try_new(
+            Actor::new(factory, FACTORY),
+            actors.clone(),
+            BTreeMap::from([(creator, state.get_account_by_id(creator).nonce)]),
+            instruction,
+        )
+        .unwrap();
+        message.admission_evidence = vec![
+            lee::PublicAccountEvidence::Pda {
+                program: FACTORY,
+                seed: factory_core::compute_factory_seed(NAMESPACE, salt),
+            },
+            lee::PublicAccountEvidence::Pda {
+                program: LBP,
+                seed: lbp_core::compute_pool_pda_seed(NAMESPACE, launch, COLLATERAL, factory),
+            },
+        ];
+        for owner in [factory, mint, escrow, pool, creator] {
+            for definition in [launch, COLLATERAL] {
+                message
+                    .admission_evidence
+                    .push(lee::PublicAccountEvidence::Pda {
+                        program: TOKEN_PROGRAM_ACCOUNT_ID,
+                        seed: token::holding_seed(owner, definition),
+                    });
+            }
+        }
+        let witnesses = WitnessSet::for_message(&message, &[&key]);
+        state.transition_from_public_transaction(
+            &PublicTransaction::new(message, witnesses),
+            1,
+            timestamp,
+        )
+    };
+    let execute = |state: &mut V03State, instruction| execute_at(state, instruction, 100_000);
+    // Create the weighted LBP
+    execute(
+        &mut state,
+        factory_core::Message::CreateWeightedLbp {
+            inputs: WeightedInputs {
+                namespace: NAMESPACE,
+                launch_salt: salt,
+                name: "Weighted".into(),
+                uri: "https://example.test/weighted".into(),
+                sale_inventory: 800,
+                creator_allocation: 200,
+                collateral_seed: 100,
+                token_weight_start: lbp_core::WEIGHT_TOTAL / 2,
+                token_weight_end: lbp_core::WEIGHT_TOTAL / 2,
+                start_timestamp: 150,
+                end_timestamp: 300,
+                allocation_release: CreatorAllocationRelease::AfterEnd,
+                namespace_program_id: CURVE,
+                lbp_program_id: LBP,
+                collateral_definition_id: COLLATERAL,
+                creator,
+            },
+        },
+    )
+    .unwrap();
+    // Run through all creation stages
+    for stage in [LbpCreationStage::Minted, LbpCreationStage::Allocated] {
+        execute(
+            &mut state,
+            factory_core::Message::ContinueWeightedCreation {
+                expected_stage: stage,
+                creator,
+            },
+        )
+        .unwrap();
+    }
+    // Fund the creator with enough collateral for the seed
+    state = state.with_public_accounts([account(
+        holding(creator, COLLATERAL),
+        borsh::to_vec(&TokenState::Holding {
+            owner: creator,
+            definition: COLLATERAL,
+            kind: TokenKind::Fungible,
+            balance: 1000,
+        })
+        .unwrap(),
+    )]);
+    // Complete pool setup (transfers seed, activates)
+    execute(
+        &mut state,
+        factory_core::Message::ContinueWeightedCreation {
+            expected_stage: LbpCreationStage::PoolPrepared,
+            creator,
+        },
+    )
+    .unwrap();
+    assert!(fixed_pool(&state, pool).funded);
+    // Set clock for buy window and execute a buy
+    state = clock_state(state, 150_000);
+    fixed_execute_at(
+        &mut state,
+        pool,
+        &key,
+        lbp_core::Message::BuyWeightedExactInput {
+            amount_in: 50,
+            min_amount_out: 1,
+        },
+        150_000,
+    )
+    .unwrap();
+    (state, factory, pool, launch, escrow, key, actors, salt)
+}
+
+fn factory_execute_at(
+    state: &mut V03State,
+    factory: AccountId,
+    actors: &[Actor],
+    key: &PrivateKey,
+    salt: [u8; 32],
+    launch: AccountId,
+    pool: AccountId,
+    instruction: factory_core::Message,
+    timestamp: u64,
+) -> Result<(), lee::error::LeeError> {
+    const FACTORY_PROGRAM: AccountId = AccountId::new([17; 32]);
+    let creator = AccountId::from(&PublicKey::new_from_private_key(key));
+    let mut message = Message::try_new(
+        Actor::new(factory, FACTORY_PROGRAM),
+        actors.to_vec(),
+        BTreeMap::from([(creator, state.get_account_by_id(creator).nonce)]),
+        instruction,
+    )
+    .unwrap();
+    message.admission_evidence = vec![
+        lee::PublicAccountEvidence::Pda {
+            program: FACTORY_PROGRAM,
+            seed: factory_core::compute_factory_seed(NAMESPACE, salt),
+        },
+        lee::PublicAccountEvidence::Pda {
+            program: LBP,
+            seed: lbp_core::compute_pool_pda_seed(NAMESPACE, launch, COLLATERAL, factory),
+        },
+    ];
+    let mint = factory_core::compute_mint_pda(NAMESPACE, FACTORY_PROGRAM, salt);
+    let escrow = factory_core::compute_escrow_pda(NAMESPACE, FACTORY_PROGRAM, salt);
+    for owner in [
+        factory,
+        mint,
+        escrow,
+        pool,
+        creator,
+        TREASURY,
+        NEXT_TREASURY,
+    ] {
+        for definition in [launch, COLLATERAL] {
+            message
+                .admission_evidence
+                .push(lee::PublicAccountEvidence::Pda {
+                    program: TOKEN_PROGRAM_ACCOUNT_ID,
+                    seed: token::holding_seed(owner, definition),
+                });
+        }
+    }
+    let witnesses = WitnessSet::for_message(&message, &[key]);
+    state
+        .transition_from_public_transaction(
+            &PublicTransaction::new(message, witnesses),
+            1,
+            timestamp,
+        )
+        .map(|_| ())
+}
+
+#[test]
+fn weighted_factory_controls_and_settlement_full_flow() {
+    let (mut state, factory, pool, launch, escrow, key, actors, salt) = weighted_factory_env();
+    let creator = AccountId::from(&PublicKey::new_from_private_key(&key));
+
+    let sale = fixed_pool(&state, pool);
+    assert!(sale.funded);
+    assert!(sale.accrued_fees > 0 || sale.recorded_collateral > 100);
+
+    // --- Pause ---
+    // Pause before end must succeed
+    factory_execute_at(
+        &mut state,
+        factory,
+        &actors,
+        &key,
+        salt,
+        launch,
+        pool,
+        factory_core::Message::SetWeightedPaused {
+            creator,
+            paused: true,
+        },
+        150_000,
+    )
+    .unwrap();
+
+    // Buys must fail while paused
+    let buy_result = fixed_execute_at(
+        &mut state,
+        pool,
+        &key,
+        lbp_core::Message::BuyWeightedExactInput {
+            amount_in: 10,
+            min_amount_out: 1,
+        },
+        150_000,
+    );
+    assert!(buy_result.is_err());
+
+    // Repeated pause is a no-op (succeeds)
+    factory_execute_at(
+        &mut state,
+        factory,
+        &actors,
+        &key,
+        salt,
+        launch,
+        pool,
+        factory_core::Message::SetWeightedPaused {
+            creator,
+            paused: true,
+        },
+        150_000,
+    )
+    .unwrap();
+
+    // --- Resume ---
+    factory_execute_at(
+        &mut state,
+        factory,
+        &actors,
+        &key,
+        salt,
+        launch,
+        pool,
+        factory_core::Message::SetWeightedPaused {
+            creator,
+            paused: false,
+        },
+        150_000,
+    )
+    .unwrap();
+
+    // Buys work after resume
+    fixed_execute_at(
+        &mut state,
+        pool,
+        &key,
+        lbp_core::Message::BuyWeightedExactInput {
+            amount_in: 10,
+            min_amount_out: 1,
+        },
+        150_000,
+    )
+    .unwrap();
+
+    // --- Collect fees (permissionless) ---
+    fixed_execute_at(
+        &mut state,
+        pool,
+        &key,
+        lbp_core::Message::CollectFees,
+        150_000,
+    )
+    .unwrap();
+    let fee_collected = balance(&state, TREASURY, COLLATERAL);
+    assert!(fee_collected > 0, "fees should have been collected");
+
+    // --- Settlement (after end) ---
+    // Move clock past end (300 seconds → 300_000 ms)
+    state = clock_state(state, 300_000);
+
+    // Record balances before settlement
+    let creator_collateral_before = balance(&state, creator, COLLATERAL);
+    let pool_collateral_before = balance(&state, pool, COLLATERAL);
+    let pool_token_before = balance(&state, pool, launch);
+    let sale_before = fixed_pool(&state, pool);
+    let recorded = sale_before.recorded_collateral;
+    let fees = sale_before.accrued_fees;
+    let unsold = sale_before.remaining_inventory;
+
+    // Settle weighted proceeds
+    factory_execute_at(
+        &mut state,
+        factory,
+        &actors,
+        &key,
+        salt,
+        launch,
+        pool,
+        factory_core::Message::WithdrawWeightedProceeds { creator },
+        300_000,
+    )
+    .unwrap();
+
+    let sale_after = fixed_pool(&state, pool);
+    assert!(sale_after.proceeds_settled);
+    assert_eq!(sale_after.recorded_collateral, 0);
+    assert_eq!(sale_after.accrued_fees, 0);
+
+    // Creator received proceeds
+    let creator_collateral_after = balance(&state, creator, COLLATERAL);
+    assert_eq!(
+        creator_collateral_after,
+        creator_collateral_before + recorded
+    );
+
+    // Treasury received remaining fees
+    let treasury_after = balance(&state, TREASURY, COLLATERAL);
+    assert_eq!(treasury_after, fee_collected + fees);
+
+    // Unsold inventory was burned (pool token balance decreased by unsold)
+    let pool_token_after = balance(&state, pool, launch);
+    assert_eq!(pool_token_after, pool_token_before - unsold);
+
+    // --- Repeated settlement is idempotent ---
+    let before_retry = state.clone();
+    factory_execute_at(
+        &mut state,
+        factory,
+        &actors,
+        &key,
+        salt,
+        launch,
+        pool,
+        factory_core::Message::WithdrawWeightedProceeds { creator },
+        300_000,
+    )
+    .unwrap();
+    // Balances unchanged after retry
+    assert_eq!(
+        balance(&state, creator, COLLATERAL),
+        creator_collateral_after
+    );
+
+    // --- Allocation claim (AfterEnd) ---
+    let escrow_tokens = balance(&state, escrow, launch);
+    assert_eq!(escrow_tokens, 200);
+    factory_execute_at(
+        &mut state,
+        factory,
+        &actors,
+        &key,
+        salt,
+        launch,
+        pool,
+        factory_core::Message::ClaimWeightedAllocation { creator },
+        300_000,
+    )
+    .unwrap();
+    assert_eq!(
+        balance(&state, creator, launch),
+        balance(&before_retry, creator, launch) + 200
+    );
+    assert_eq!(balance(&state, escrow, launch), 0);
+
+    // Repeated allocation claim is idempotent
+    factory_execute_at(
+        &mut state,
+        factory,
+        &actors,
+        &key,
+        salt,
+        launch,
+        pool,
+        factory_core::Message::ClaimWeightedAllocation { creator },
+        300_000,
+    )
+    .unwrap();
+}
+
+#[test]
+fn weighted_settlement_before_end_rejected_by_inclusion_window() {
+    let (mut state, factory, pool, launch, _escrow, key, actors, salt) = weighted_factory_env();
+    let creator = AccountId::from(&PublicKey::new_from_private_key(&key));
+
+    // Settlement at 299_999 ms (before the 300s end = 300_000 ms) must be rejected
+    state = clock_state(state, 299_999);
+    let before = state.clone();
+    let result = factory_execute_at(
+        &mut state,
+        factory,
+        &actors,
+        &key,
+        salt,
+        launch,
+        pool,
+        factory_core::Message::WithdrawWeightedProceeds { creator },
+        299_999,
+    );
+    assert!(
+        matches!(result, Err(lee::error::LeeError::OutOfValidityWindow)),
+        "early settlement should be rejected: {result:?}"
+    );
+    assert!(state == before, "rejected settlement changed state");
+}
+
+#[test]
+fn weighted_controls_after_end_rejected_by_inclusion_window() {
+    let (mut state, factory, pool, launch, _escrow, key, actors, salt) = weighted_factory_env();
+    let creator = AccountId::from(&PublicKey::new_from_private_key(&key));
+
+    // Pause after end must be rejected (pool enforces time bound before end)
+    state = clock_state(state, 300_000);
+    let before = state.clone();
+    let result = factory_execute_at(
+        &mut state,
+        factory,
+        &actors,
+        &key,
+        salt,
+        launch,
+        pool,
+        factory_core::Message::SetWeightedPaused {
+            creator,
+            paused: true,
+        },
+        300_000,
+    );
+    assert!(
+        matches!(result, Err(lee::error::LeeError::OutOfValidityWindow)),
+        "late pause should be rejected: {result:?}"
+    );
+    assert!(state == before, "rejected pause changed state");
+}
+
+#[test]
+fn weighted_unauthorized_factory_controls_rejected() {
+    let (mut state, factory, pool, launch, _escrow, _key, actors, salt) = weighted_factory_env();
+
+    // Use a different key that doesn't have creator authority
+    let wrong_key = PrivateKey::try_new([99; 32]).unwrap();
+    let wrong_caller = AccountId::from(&PublicKey::new_from_private_key(&wrong_key));
+
+    // The factory message references a creator that signed, but the authority
+    // check should fail because wrong_caller doesn't hold the creator role.
+    // We try the correct creator ID but with the wrong signer.
+    let mut actors_with_wrong = actors.clone();
+    actors_with_wrong.push(Actor::new(
+        wrong_caller,
+        factory_core::AUTHORITY_PROGRAM_ACCOUNT_ID,
+    ));
+    actors_with_wrong.push(Actor::new(wrong_caller, TOKEN_PROGRAM_ACCOUNT_ID));
+    actors_with_wrong.push(holding(wrong_caller, launch));
+    actors_with_wrong.push(holding(wrong_caller, COLLATERAL));
+
+    let result = factory_execute_at(
+        &mut state,
+        factory,
+        &actors_with_wrong,
+        &wrong_key,
+        salt,
+        launch,
+        pool,
+        factory_core::Message::SetWeightedPaused {
+            creator: wrong_caller,
+            paused: true,
+        },
+        150_000,
+    );
+    assert!(result.is_err(), "unauthorized pause should fail");
+}
+
+#[test]
+fn weighted_frozen_buys_blocked_but_settlement_allowed() {
+    let (mut state, factory, pool, launch, _escrow, key, actors, salt) = weighted_factory_env();
+    let creator = AccountId::from(&PublicKey::new_from_private_key(&key));
+
+    // Freeze the namespace
+    state = fixed_config(state, 100, TREASURY, true);
+
+    // Buys must fail when frozen
+    let buy_result = fixed_execute_at(
+        &mut state,
+        pool,
+        &key,
+        lbp_core::Message::BuyWeightedExactInput {
+            amount_in: 10,
+            min_amount_out: 1,
+        },
+        150_000,
+    );
+    assert!(buy_result.is_err());
+
+    // Fee collection must still work when frozen
+    fixed_execute_at(
+        &mut state,
+        pool,
+        &key,
+        lbp_core::Message::CollectFees,
+        150_000,
+    )
+    .unwrap();
+
+    // Settlement must work when frozen (after end)
+    state = clock_state(fixed_config(state, 100, TREASURY, true), 300_000);
+    factory_execute_at(
+        &mut state,
+        factory,
+        &actors,
+        &key,
+        salt,
+        launch,
+        pool,
+        factory_core::Message::WithdrawWeightedProceeds { creator },
+        300_000,
+    )
+    .unwrap();
+    assert!(fixed_pool(&state, pool).proceeds_settled);
+
+    // Allocation claim must work when frozen
+    factory_execute_at(
+        &mut state,
+        factory,
+        &actors,
+        &key,
+        salt,
+        launch,
+        pool,
+        factory_core::Message::ClaimWeightedAllocation { creator },
+        300_000,
+    )
+    .unwrap();
+}
+
+#[test]
+fn weighted_allocation_before_settlement_then_settlement() {
+    let (mut state, factory, pool, launch, escrow, key, actors, salt) = weighted_factory_env();
+    let creator = AccountId::from(&PublicKey::new_from_private_key(&key));
+
+    // Move past end
+    state = clock_state(state, 300_000);
+
+    // Claim allocation FIRST (before settlement)
+    let creator_tokens_before = balance(&state, creator, launch);
+    factory_execute_at(
+        &mut state,
+        factory,
+        &actors,
+        &key,
+        salt,
+        launch,
+        pool,
+        factory_core::Message::ClaimWeightedAllocation { creator },
+        300_000,
+    )
+    .unwrap();
+    assert_eq!(
+        balance(&state, creator, launch),
+        creator_tokens_before + 200
+    );
+    assert_eq!(balance(&state, escrow, launch), 0);
+
+    // Then settle proceeds
+    let creator_collateral_before = balance(&state, creator, COLLATERAL);
+    let sale = fixed_pool(&state, pool);
+    let recorded = sale.recorded_collateral;
+    factory_execute_at(
+        &mut state,
+        factory,
+        &actors,
+        &key,
+        salt,
+        launch,
+        pool,
+        factory_core::Message::WithdrawWeightedProceeds { creator },
+        300_000,
+    )
+    .unwrap();
+    assert!(fixed_pool(&state, pool).proceeds_settled);
+    assert_eq!(
+        balance(&state, creator, COLLATERAL),
+        creator_collateral_before + recorded
+    );
+}
+
+#[test]
+fn weighted_stale_clock_at_inclusion_boundary_preserves_state() {
+    let (state, _factory, pool, _launch, _escrow, key, _actors, _salt) = weighted_factory_env();
+    let creator = AccountId::from(&PublicKey::new_from_private_key(&key));
+
+    // Build a transaction with pricing time inside window but test inclusion time outside
+    let buy = lbp_core::Message::BuyWeightedExactInput {
+        amount_in: 10,
+        min_amount_out: 1,
+    };
+    let transaction = fixed_transaction(&state, pool, &key, buy);
+
+    // Inclusion time before start must be rejected
+    for timestamp in [149_999u64] {
+        let mut rejected = state.clone();
+        let before = rejected.clone();
+        let nonce = rejected.get_account_by_id(creator).nonce;
+        assert!(matches!(
+            rejected.transition_from_public_transaction(&transaction, 1, timestamp),
+            Err(lee::error::LeeError::OutOfValidityWindow)
+        ));
+        assert!(
+            rejected == before,
+            "rejected buy changed state at {timestamp}"
+        );
+        assert_eq!(rejected.get_account_by_id(creator).nonce, nonce);
+    }
+
+    // Inclusion time after end must be rejected
+    for timestamp in [300_000u64, 300_001] {
+        let mut rejected = state.clone();
+        let before = rejected.clone();
+        assert!(matches!(
+            rejected.transition_from_public_transaction(&transaction, 1, timestamp),
+            Err(lee::error::LeeError::OutOfValidityWindow)
+        ));
+        assert!(
+            rejected == before,
+            "rejected buy changed state at {timestamp}"
+        );
+    }
 }

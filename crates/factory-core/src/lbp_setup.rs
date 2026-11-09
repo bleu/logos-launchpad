@@ -64,6 +64,7 @@ impl LbpSetupMode {
                 token_weight_start,
                 token_weight_end,
             } => lbp_core::PoolMode::Weighted {
+                paused: false,
                 collateral_seed,
                 token_weight_start,
                 token_weight_end,
@@ -380,7 +381,13 @@ pub(super) fn begin_payout(input: &ReceiveInput, command: Message) -> Result<Res
     {
         return Err(Error::WrongAccount);
     }
-    if state.mode != LbpSetupMode::FixedPrice {
+    let weighted = matches!(
+        command,
+        Message::SetWeightedPaused { .. }
+            | Message::WithdrawWeightedProceeds { .. }
+            | Message::ClaimWeightedAllocation { .. }
+    );
+    if matches!(state.mode, LbpSetupMode::Weighted { .. }) != weighted {
         return Err(Error::InvalidState);
     }
     if state.creation_stage != LbpCreationStage::Complete {
@@ -388,11 +395,17 @@ pub(super) fn begin_payout(input: &ReceiveInput, command: Message) -> Result<Res
     }
     let creator = match command {
         Message::WithdrawFactoryProceeds { creator, .. }
-        | Message::ClaimCreatorAllocation { creator, .. } => creator,
+        | Message::ClaimCreatorAllocation { creator, .. }
+        | Message::SetWeightedPaused { creator, .. }
+        | Message::WithdrawWeightedProceeds { creator }
+        | Message::ClaimWeightedAllocation { creator } => creator,
         _ => return Err(Error::InvalidMessage),
     };
     let mut reads = vec![];
-    if matches!(command, Message::ClaimCreatorAllocation { .. }) {
+    if matches!(
+        command,
+        Message::ClaimCreatorAllocation { .. } | Message::ClaimWeightedAllocation { .. }
+    ) {
         reads.push(Read::new(
             Actor::new(state.pool_id, state.lbp_program_id),
             &lbp_core::Message::ReadState,
@@ -437,7 +450,10 @@ pub(super) fn resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
                 Message::ContinueFixedPriceCreation { creator, .. }
                 | Message::ContinueWeightedCreation { creator, .. }
                 | Message::ClaimCreatorAllocation { creator, .. }
-                | Message::WithdrawFactoryProceeds { creator, .. } => creator,
+                | Message::WithdrawFactoryProceeds { creator, .. }
+                | Message::SetWeightedPaused { creator, .. }
+                | Message::WithdrawWeightedProceeds { creator }
+                | Message::ClaimWeightedAllocation { creator } => creator,
                 _ => return Err(Error::InvalidState),
             };
             authority::verify(
@@ -445,15 +461,39 @@ pub(super) fn resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
                 Actor::new(state.creator_role_id, AUTHORITY_PROGRAM_ACCOUNT_ID),
                 creator,
             )?;
+            if let Message::SetWeightedPaused { paused, .. } = pending.command {
+                return Ok(state.response().send_sync(
+                    Actor::new(state.pool_id, state.lbp_program_id),
+                    &lbp_core::Message::SetWeightedPaused { paused },
+                ));
+            }
+            if let Message::WithdrawWeightedProceeds { creator } = pending.command {
+                return Ok(state.response().send_sync(
+                    Actor::new(state.pool_id, state.lbp_program_id),
+                    &lbp_core::Message::SettleWeighted { creator },
+                ));
+            }
             if let Message::WithdrawFactoryProceeds { creator, now } = pending.command {
                 return Ok(state.response().send_sync(
                     Actor::new(state.pool_id, state.lbp_program_id),
                     &lbp_core::Message::SettleFixedPrice { creator, now },
                 ));
             }
-            if matches!(pending.command, Message::ClaimCreatorAllocation { .. }) {
+            if matches!(
+                pending.command,
+                Message::ClaimCreatorAllocation { .. } | Message::ClaimWeightedAllocation { .. }
+            ) {
                 if state.creator_allocation_released {
-                    return Ok(state.response());
+                    return if matches!(state.mode, LbpSetupMode::Weighted { .. }) {
+                        curve_core::with_time_bounds(
+                            state.response(),
+                            Some(state.end_timestamp.ok_or(Error::InvalidState)?),
+                            None,
+                        )
+                        .map_err(|_| Error::InvalidTerms)
+                    } else {
+                        Ok(state.response())
+                    };
                 }
                 pending.proof = false;
                 state.pending = Some(pending);
@@ -491,10 +531,12 @@ pub(super) fn resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
             state.pending = Some(pending);
             return Ok(state.next());
         }
-        if let Message::ClaimCreatorAllocation { creator, .. } = pending.command {
+        if let Message::ClaimCreatorAllocation { creator, .. }
+        | Message::ClaimWeightedAllocation { creator } = pending.command
+        {
             let pool = lbp_core::PoolAccount::decode(&pending.values[0])
                 .map_err(|_| Error::InvalidState)?;
-            if pool.mode != lbp_core::PoolMode::FixedPrice
+            if !payout_mode_matches(state.mode, pool.mode)
                 || pool.namespace != state.namespace
                 || pool.namespace_program_id != state.namespace_program_id
                 || pool.factory_owner != input.receiver.account_id
@@ -515,7 +557,14 @@ pub(super) fn resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
             if !pool.funded {
                 return Err(Error::CreationPending);
             }
-            let expiry = pool.close_time_bound().map_err(|error| match error {
+            let expiry = (match state.mode {
+                LbpSetupMode::FixedPrice => pool.close_time_bound(),
+                LbpSetupMode::Weighted { .. } => pool
+                    .end_timestamp
+                    .map(Some)
+                    .ok_or(lbp_core::Error::InvalidState),
+            })
+            .map_err(|error| match error {
                 lbp_core::Error::NotClosed => Error::NotClosed,
                 _ => Error::InvalidTerms,
             })?;
@@ -924,5 +973,26 @@ impl LbpLaunchState {
             return Err(Error::InvalidState);
         }
         Ok(state)
+    }
+}
+
+// Dynamic pricing collateral and pause state do not change the saved allocation terms.
+fn payout_mode_matches(saved: LbpSetupMode, pool: lbp_core::PoolMode) -> bool {
+    match (saved, pool) {
+        (LbpSetupMode::FixedPrice, lbp_core::PoolMode::FixedPrice) => true,
+        (
+            LbpSetupMode::Weighted {
+                collateral_seed: a,
+                token_weight_start: b,
+                token_weight_end: c,
+            },
+            lbp_core::PoolMode::Weighted {
+                collateral_seed: x,
+                token_weight_start: y,
+                token_weight_end: z,
+                ..
+            },
+        ) => (a, b, c) == (x, y, z),
+        _ => false,
     }
 }

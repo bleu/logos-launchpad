@@ -1,7 +1,8 @@
-//! Fixed-price and weighted sale setup, buys and fees; fixed-price settlement.
+//! Fixed-price and weighted sale setup, buys and fees and mechanism-specific settlement.
 
 pub mod pricing_clock;
 mod trading;
+mod weighted_lifecycle;
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
     account::{AccountId, Actor},
@@ -132,6 +133,13 @@ pub enum Message {
         amount_out: u128,
         max_amount_in: u128,
     },
+    /// Factory-authorized weighted controls. No caller-supplied time.
+    SetWeightedPaused {
+        paused: bool,
+    },
+    SettleWeighted {
+        creator: AccountId,
+    },
 }
 pub type Instruction = Message;
 
@@ -140,6 +148,7 @@ pub enum PoolMode {
     FixedPrice,
     /// Collateral weight is the exact complement within `WEIGHT_TOTAL`.
     Weighted {
+        paused: bool,
         token_weight_start: u128,
         token_weight_end: u128,
         /// Immutable creator seed. Surplus does not change this value.
@@ -192,6 +201,7 @@ pub enum Error {
     RecordedCollateral,
     PendingFunding,
     Frozen,
+    Paused,
     Closed,
     NotClosed,
     InvalidFee,
@@ -613,6 +623,7 @@ pub fn handle(input: &ReceiveInput) -> Result<Response, Error> {
             }
             let state = PoolAccount {
                 mode: PoolMode::Weighted {
+                    paused: false,
                     token_weight_start: inputs.token_weight_start,
                     token_weight_end: inputs.token_weight_end,
                     collateral_seed: inputs.collateral_seed,
@@ -714,6 +725,8 @@ pub fn handle(input: &ReceiveInput) -> Result<Response, Error> {
         | Message::BuyWeightedExactOutput { .. }
         | Message::SettleFixedPrice { .. }
         | Message::CollectFees => trading::begin(input, message),
+        Message::SetWeightedPaused { paused } => weighted_lifecycle::set_paused(input, paused),
+        Message::SettleWeighted { .. } => trading::begin(input, message),
         Message::ReadState => {
             PoolAccount::decode(&input.pre_state)?.validate_address(input.receiver)?;
             Ok(Response::keep_state().send_sync(
