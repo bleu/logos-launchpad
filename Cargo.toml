@@ -33,13 +33,13 @@ edition = "2024"
 rust-version = "1.94"
 
 [workspace.dependencies]
-lee = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", rev = "578ce58a71b79c49d48e97e51c520bf71f0252d9" }
+lee = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", rev = "f94ca8a7550fa0012222b9fb5990dfe44c54a3dc" }
 # Guests must not inherit the host feature.
-lee_core = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", rev = "578ce58a71b79c49d48e97e51c520bf71f0252d9" }
-wallet = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", rev = "578ce58a71b79c49d48e97e51c520bf71f0252d9" }
-common = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", rev = "578ce58a71b79c49d48e97e51c520bf71f0252d9" }
-sequencer_service_rpc = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", rev = "578ce58a71b79c49d48e97e51c520bf71f0252d9", default-features = false, features = ["client"] }
-clock_core = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", rev = "578ce58a71b79c49d48e97e51c520bf71f0252d9" }
+lee_core = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", rev = "f94ca8a7550fa0012222b9fb5990dfe44c54a3dc" }
+wallet = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", rev = "f94ca8a7550fa0012222b9fb5990dfe44c54a3dc" }
+common = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", rev = "f94ca8a7550fa0012222b9fb5990dfe44c54a3dc" }
+sequencer_service_rpc = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", rev = "f94ca8a7550fa0012222b9fb5990dfe44c54a3dc", default-features = false, features = ["client"] }
+clock_core = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", rev = "f94ca8a7550fa0012222b9fb5990dfe44c54a3dc" }
 lez-compat-core = { path = "packages/lez-compat/core" }
 
 curve-math = { path = "crates/curve-math" }

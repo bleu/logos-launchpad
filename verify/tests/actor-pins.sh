@@ -4,7 +4,7 @@ root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$root"
 output="$(bash verify/check-pins.sh --actor)"
 case "$output" in
-  *'actor LEZ pinned at 578ce58a71b79c49d48e97e51c520bf71f0252d9'*) ;;
+  *'actor LEZ pinned at f94ca8a7550fa0012222b9fb5990dfe44c54a3dc'*) ;;
   *) printf 'actor-pins: wrong target\n%s\n' "$output" >&2; exit 1 ;;
 esac
 fixture="$(mktemp -d)"
@@ -17,7 +17,7 @@ python3 - "$fixture/methods/Cargo.toml" <<'PY'
 from pathlib import Path
 import sys
 path = Path(sys.argv[1])
-path.write_text(path.read_text().replace('578ce58a71b79c49d48e97e51c520bf71f0252d9', '0' * 40))
+path.write_text(path.read_text().replace('f94ca8a7550fa0012222b9fb5990dfe44c54a3dc', '0' * 40))
 PY
 if bash "$fixture/verify/check-pins.sh" > "$fixture/output" 2>&1; then
   printf 'actor-pins: accepted a different execution manifest revision\n' >&2; exit 1
@@ -28,7 +28,7 @@ python3 - "$fixture/methods/Cargo.lock" <<'PY'
 from pathlib import Path
 import sys
 path = Path(sys.argv[1])
-path.write_text(path.read_text().replace('578ce58a71b79c49d48e97e51c520bf71f0252d9', '0' * 40))
+path.write_text(path.read_text().replace('f94ca8a7550fa0012222b9fb5990dfe44c54a3dc', '0' * 40))
 PY
 if bash "$fixture/verify/check-pins.sh" > "$fixture/output" 2>&1; then
   echo 'actor-pins: accepted a different execution LEZ revision' >&2; exit 1
@@ -40,7 +40,7 @@ python3 - "$manifest" <<'PY'
 from pathlib import Path
 import sys
 path = Path(sys.argv[1])
-path.write_text(path.read_text().replace("578ce58a71b79c49d48e97e51c520bf71f0252d9", "0" * 40))
+path.write_text(path.read_text().replace("f94ca8a7550fa0012222b9fb5990dfe44c54a3dc", "0" * 40))
 PY
 if bash "$fixture/verify/check-pins.sh" --actor > "$fixture/output" 2>&1; then
   echo 'actor-pins: accepted a different guest revision' >&2; exit 1
@@ -52,7 +52,7 @@ python3 - "$lock" <<'PY'
 from pathlib import Path
 import sys
 path = Path(sys.argv[1])
-path.write_text(path.read_text().replace("578ce58a71b79c49d48e97e51c520bf71f0252d9", "0" * 40))
+path.write_text(path.read_text().replace("f94ca8a7550fa0012222b9fb5990dfe44c54a3dc", "0" * 40))
 PY
 if bash "$fixture/verify/check-pins.sh" --actor > "$fixture/output" 2>&1; then
   echo 'actor-pins: accepted a different locked revision' >&2; exit 1

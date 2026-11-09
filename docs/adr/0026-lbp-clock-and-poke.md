@@ -1,16 +1,16 @@
 # ADR 0026: Weighted-sale clock reads and pricing
 
-Status: Accepted local design; temporary fake clock. Real LEZ timestamp reads and live clock freshness remain unverified.
+Status: Accepted; pinned upstream timestamp reads. Sequencer timing, full private routes and real proofs retain evidence limits.
 
 Date: 2026-09-29; checkpoint and interpolation review: 2026-10-02; time-window amendment: 2026-10-29; inclusion-time amendment: 2026-11-04
 
 ## Context
 
-Weighted-sale prices depend on a time-based weight schedule. The selected LEZ actor clock can check a time interval. It cannot return its time to the sale program. An exact-second check gives too little time to prepare and submit a buy, including private-route work.
+Weighted-sale prices depend on a time-based weight schedule. The earlier selected LEZ actor clock could check a time interval but could not return its time to the sale program. An exact-second check gives too little time to prepare and submit a buy, including private-route work.
 
 The [historical clock experiment](https://github.com/bleu/logos-launchpad/blob/f1198315569cfc8ada9f6c39964cb77314e2520c/crates/launchpad-client/tests/clock_probe.rs) used an older interface. It does not establish actor clock reads. The current clock stores Unix milliseconds. It is updated at the end of a block. Checks use the last recorded block time.
 
-## Clock-read amendment: 2026-11-05
+## Clock-read amendment: 2026-11-05 (historical provider)
 
 This amendment supersedes the buyer-selected pricing windows below. Weighted buys now supply amounts and price limits only. Each buy requests one timestamp through a separate read-and-reply interface. The reply is accepted only from the configured clock actor during the pending clock-read phase. The buyer cannot select that actor or supply its time.
 
@@ -18,9 +18,21 @@ The temporary local provider returns Unix milliseconds from fixture state. Divid
 
 Attach the immutable sale start and end as inclusion-time bounds. These bounds remain necessary when saved clock time is stale. Setup keeps its existing canonical clock assertions. Fixed-price and bonding-curve behavior is unchanged. No checkpoint is needed for pricing. Observation design remains deferred.
 
-The pinned LEZ clock cannot return a timestamp. `LAUNCHPAD_MOCK_CLOCK=1` enables the temporary provider for local tests. Normal builds reject weighted buys with `ClockUnavailable`. The fixture has a separate actor address and no public time-setting message. Replace the provisional interface when a verified LEZ timestamp-read API is available. The future capability is a project assumption, not implemented platform behavior.
+At this earlier pin, the LEZ clock could not return a timestamp. `LAUNCHPAD_MOCK_CLOCK=1` enables the temporary provider for local tests. Normal builds then rejected weighted buys with `ClockUnavailable`. The fixture has a separate actor address and no public time-setting message. Replace the provisional interface when a verified LEZ timestamp-read API is available. The future capability is a project assumption, not implemented platform behavior.
 
-This design removes the buyer's choice of pricing time. It also makes weighted buys depend on an API that is not yet available on the selected platform. Local host and guest tests use a fake clock. They do not establish real clock support, freshness, private execution or deployment readiness. See the [workspace guide](../architecture/workspace-guide.md#temporary-weighted-pricing-clock).
+This design removes the buyer's choice of pricing time. It also makes weighted buys depend on an API that is not yet available on the selected platform. Local host and guest tests use a fake clock. They do not establish real clock support, freshness, private execution or deployment readiness. See the [workspace guide](../architecture/workspace-guide.md#weighted-pricing-clock).
+
+## Upstream clock amendment: 2026-11-09
+
+This amendment replaces the temporary provider in the 5 November implementation. Use LEZ revision `f94ca8a7550fa0012222b9fb5990dfe44c54a3dc` from `schouhy/single-clock-actor`. It is a development pin. The upstream clock PR remains open.
+
+Send `ReadTimestamp { granularity: 1 }` to `clock_core::clock_actor()`. Verify both sender addresses. Accept only `Reply::Timestamp` during the pending read. Decode fallibly and reject a block-ID reply. Values are Unix milliseconds. Divide by 1000 only for weighted pricing. Each buy reads once. Keep participant limits and sale inclusion bounds.
+
+The clock ticks at the end of each block. Programs read the previous block's saved time. Local guest ticks can check state updates. They do not prove sequencer ordering or timestamp trust. Factory setup and pool activation replace removed `AssertTimestamp` calls with authenticated replies and the same inclusive millisecond comparisons. Keep their inclusion bounds.
+
+A prepared private proof can require an exact return message. The local native-token probe found that a changed public clock reply alone can pass when the private return stays fixed. A return that changes from 100 to 99 fails with `CrossMessageMismatch` even when the minimum is 98. A fresh proof succeeds. Slippage does not change that proof requirement. This probe uses development receipts and does not complete the launchpad private route.
+
+The temporary guest, mock build flag and normal-build availability error are removed. Poke and observer checkpoints remain a separate feature on the updated main base. Their future clock reads must use the same upstream adapter and the accepted schedule policy.
 
 ## Earlier window decision (superseded for weighted buy pricing)
 
@@ -48,7 +60,7 @@ Host tests cover window bounds, time conversion, both buy forms, both schedule d
 
 ## Sources
 
-- [Selected LEZ clock interface](https://github.com/logos-blockchain/logos-execution-zone/blob/578ce58a71b79c49d48e97e51c520bf71f0252d9/lez/programs/clock/core/src/lib.rs)
-- [Selected LEZ clock handler](https://github.com/logos-blockchain/logos-execution-zone/blob/578ce58a71b79c49d48e97e51c520bf71f0252d9/lez/programs/clock/src/main.rs)
-- [Upstream clock proposal](https://github.com/logos-blockchain/logos-execution-zone/pull/988): proposes configurable assertion granularity; it is not the selected dependency.
+- [Selected LEZ clock interface](https://github.com/logos-blockchain/logos-execution-zone/blob/f94ca8a7550fa0012222b9fb5990dfe44c54a3dc/lez/programs/clock/core/src/lib.rs)
+- [Selected LEZ clock handler](https://github.com/logos-blockchain/logos-execution-zone/blob/f94ca8a7550fa0012222b9fb5990dfe44c54a3dc/lez/programs/clock/src/main.rs)
+- [Upstream clock proposal](https://github.com/logos-blockchain/logos-execution-zone/pull/988): supplies timestamp reads on the selected development revision; it is not merged into `dev`.
 - [RFP-016 fixed-price and weighted sales](https://github.com/logos-co/rfp/blob/master/RFPs/RFP-016-lbp-launchpad.md)

@@ -184,21 +184,6 @@ pub fn with_time_bounds(
     Ok(response)
 }
 
-/// Check a saved-clock interval for weighted-sale pricing.
-pub fn clock_assertion(at_least: u64, before: Option<u64>) -> Result<clock_core::Message, Error> {
-    let at_least = timestamp_millis(at_least)?;
-    let at_most = match before {
-        Some(end) => timestamp_millis(end)?
-            .checked_sub(1)
-            .ok_or(Error::Arithmetic)?,
-        None => u64::MAX,
-    };
-    if at_least > at_most {
-        return Err(Error::Closed);
-    }
-    Ok(clock_core::Message::AssertTimestamp { at_least, at_most })
-}
-
 /// Intersect inclusion-time bounds in LEZ milliseconds with the response window.
 pub fn with_inclusion_bounds(
     mut response: Response,

@@ -60,7 +60,7 @@ fn base_state(namespace: &PrivateKey, holders: &[AccountId]) -> (V03State, Vec<A
             AUTHORITY,
         ),
         Actor::new(
-            clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID,
+            clock_core::CLOCK_PROGRAM_ACCOUNT_ID,
             clock_core::clock_account_id(),
         ),
     ];

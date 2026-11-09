@@ -122,7 +122,7 @@ fn timed_purchase_declares_the_clock_actor_used_by_the_curve() {
         0,
     );
     assert!(call.actors.contains(&Actor::new(
-        clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID,
+        clock_core::CLOCK_PROGRAM_ACCOUNT_ID,
         clock_core::clock_account_id()
     )));
 }

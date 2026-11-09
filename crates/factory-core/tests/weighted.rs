@@ -96,6 +96,28 @@ fn reply(input: &ReceiveInput, response: &Response, value: Vec<u8>) -> ReceiveIn
         .unwrap(),
     }
 }
+fn finish_clock(input: &ReceiveInput, mut response: Response) -> Result<Response, Error> {
+    while response
+        .post_state
+        .as_ref()
+        .is_some_and(|state| state.starts_with(b"LZCLK001"))
+    {
+        assert_eq!(response.sync_messages.len(), 1);
+        assert_eq!(response.sync_messages[0].to, clock_core::clock_actor());
+        assert_eq!(
+            borsh::from_slice::<clock_core::Message>(&response.sync_messages[0].message).unwrap(),
+            clock_core::Message::ReadTimestamp { granularity: 1 }
+        );
+        response = handle(&ReceiveInput {
+            receiver: input.receiver,
+            from: Some(clock_core::clock_actor()),
+            is_authorized: false,
+            pre_state: response.post_state.unwrap(),
+            message: borsh::to_vec(&clock_core::Reply::Timestamp(100_000)).unwrap(),
+        })?;
+    }
+    Ok(response)
+}
 fn minted(release: CreatorAllocationRelease) -> (ReceiveInput, Response) {
     let mut value = inputs();
     value.allocation_release = release;
@@ -105,6 +127,7 @@ fn minted(release: CreatorAllocationRelease) -> (ReceiveInput, Response) {
         input = reply(&input, &response, bytes);
         response = handle(&input).unwrap();
     }
+    let response = finish_clock(&input, response).unwrap();
     (input, response)
 }
 fn advance(
@@ -162,7 +185,7 @@ fn advance(
         input = reply(&input, &response, value);
         response = handle(&input)?;
     }
-    Ok(response)
+    finish_clock(&input, response)
 }
 fn prepared(release: CreatorAllocationRelease) -> (ReceiveInput, Response, Vec<u8>) {
     let (input, response) = minted(release);
@@ -193,6 +216,14 @@ fn prepared(release: CreatorAllocationRelease) -> (ReceiveInput, Response, Vec<u
         pool_input = reply(&pool_input, &pool, value);
         pool = lbp_core::handle(&pool_input).unwrap();
     }
+    pool_input = ReceiveInput {
+        receiver: pool_input.receiver,
+        from: Some(clock_core::clock_actor()),
+        is_authorized: false,
+        pre_state: pool.post_state.unwrap(),
+        message: borsh::to_vec(&clock_core::Reply::Timestamp(100_000)).unwrap(),
+    };
+    let pool = lbp_core::handle(&pool_input).unwrap();
     (input, prepared, pool.post_state.unwrap().to_vec())
 }
 
@@ -233,18 +264,6 @@ fn weighted_creation_validates_terms_and_keeps_a_separate_mode() {
         }
     ));
     assert_eq!(state.total_supply, 1000);
-    let clock = response
-        .sync_messages
-        .iter()
-        .find(|m| m.to.account_id == clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID)
-        .unwrap();
-    assert_eq!(
-        borsh::from_slice::<clock_core::Message>(&clock.message).unwrap(),
-        clock_core::Message::AssertTimestamp {
-            at_least: 0,
-            at_most: 150_000
-        }
-    );
     let mut request = input.clone();
     request.pre_state = response.post_state.unwrap();
     request.message = borsh::to_vec(&Message::ContinueFixedPriceCreation {

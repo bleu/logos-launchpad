@@ -1341,7 +1341,7 @@ fn print_lifecycle(
 }
 
 async fn submit_role<I: launchpad_client::PrivateInstruction>(
-    wallet: &mut WalletCore,
+    wallet: &mut launchpad_client::LaunchpadWallet,
     program: &ProgramHandle,
     _dependencies: Vec<ProgramHandle>,
     holder: AccountLocation,

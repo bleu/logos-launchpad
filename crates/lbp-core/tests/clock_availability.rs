@@ -1,7 +1,8 @@
 #[test]
-fn clock_provider_requires_explicit_local_build() {
+fn normal_build_requests_the_canonical_clock_at_full_precision() {
+    assert_eq!(lbp_core::pricing_clock::actor(), clock_core::clock_actor());
     assert_eq!(
-        lbp_core::pricing_clock::require_available().is_ok(),
-        cfg!(local_mock_clock)
+        lbp_core::pricing_clock::request(),
+        clock_core::Message::ReadTimestamp { granularity: 1 }
     );
 }

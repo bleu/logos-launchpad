@@ -9,7 +9,8 @@ rust-version = "1.98"
 license = "MIT"
 
 [workspace.dependencies]
-lee_core = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", rev = "578ce58a71b79c49d48e97e51c520bf71f0252d9" }
+clock_core = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", rev = "f94ca8a7550fa0012222b9fb5990dfe44c54a3dc" }
+lee_core = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", rev = "f94ca8a7550fa0012222b9fb5990dfe44c54a3dc" }
 borsh = { version = "1.6", features = ["derive"] }
 lez-compat-core = { path = "core" }
 risc0-zkvm = { version = "=3.0.5", default-features = false, features = ["std"] }

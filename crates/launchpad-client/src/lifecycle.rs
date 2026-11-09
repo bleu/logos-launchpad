@@ -10,7 +10,7 @@ pub struct LifecycleReceipt {
 
 /// A factory workflow bound to one namespace and creator role holder.
 pub struct FactorySession<'a> {
-    wallet: &'a mut WalletCore,
+    wallet: &'a mut LaunchpadWallet,
     factory: &'a ProgramHandle,
     curve: &'a ProgramHandle,
     namespace: AccountId,
@@ -19,7 +19,7 @@ pub struct FactorySession<'a> {
 
 impl<'a> FactorySession<'a> {
     pub fn new(
-        wallet: &'a mut WalletCore,
+        wallet: &'a mut LaunchpadWallet,
         factory: &'a ProgramHandle,
         curve: &'a ProgramHandle,
         _router: Option<&'a ProgramHandle>,

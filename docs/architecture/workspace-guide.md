@@ -10,7 +10,7 @@ Plain `cargo test --locked` selects only the root core crates. Client and CLI te
 
 ## Build contexts
 
-Full checks use LEZ `578ce58a71b79c49d48e97e51c520bf71f0252d9`, host Rust 1.98.1, guest Rust 1.94.1, RISC0 3.0.5 and zkOS wrapper 2.2.2. The [development base guide](../../packages/lez-compat/README.md) gives installation requirements. Check local tools with `bash verify/check-builds.sh --preflight`. Scaffold and SPEL CLI are not required.
+Full checks use LEZ `f94ca8a7550fa0012222b9fb5990dfe44c54a3dc`, host Rust 1.98.1, guest Rust 1.94.1, RISC0 3.0.5 and zkOS wrapper 2.2.2. The [development base guide](../../packages/lez-compat/README.md) gives installation requirements. Check local tools with `bash verify/check-builds.sh --preflight`. Scaffold and SPEL CLI are not required.
 
 Curve host and guest builds require `CURVE_EMERGENCY_AUTHORITY`, a nonzero 64-character hex account ID. For local tests, run this from the repository root:
 
@@ -90,12 +90,16 @@ For stable release image IDs, the build script requires `/tmp/logos-launchpad-re
 
 The curve packages use the root [MIT license](../../LICENSE). Weighted math retains its own MIT license and the Balancer comparator notices in `packages/weighted-math/crates/harness/balancer-ref/`. Third-party dependencies keep their own licenses.
 
-## Temporary weighted pricing clock
+## Weighted pricing clock
 
-Weighted buy messages no longer contain pricing windows. The sale requests one timestamp through a temporary read-and-reply interface. Normal builds reject weighted buys with `ClockUnavailable`. Build with `LAUNCHPAD_MOCK_CLOCK=1` only for local tests. The fake clock uses fixture state at a separate actor address. It does not replace the canonical clock used for setup. Changes to this variable rebuild the sale guests.
+Normal builds use the pinned upstream clock. Weighted buys send `ReadTimestamp { granularity: 1 }` to the canonical actor. The reply contains Unix milliseconds. Pricing divides by 1000. There is no mock guest or build flag. See [ADR 0026](../adr/0026-lbp-clock-and-poke.md#upstream-clock-amendment-2026-11-09).
 
-Run `bash verify/check-weighted-clock.sh` for host and guest checks with the fake clock. To include these buys in the full execution gate, run `LAUNCHPAD_MOCK_CLOCK=1 bash verify/check-builds.sh --execution` with the normal emergency-authority setup. Keep that variable unset for normal builds. The earlier window-based evidence above describes the previous implementation; current pricing follows [ADR 0026](../adr/0026-lbp-clock-and-poke.md#clock-read-amendment-2026-11-05).
+Run `bash verify/check-weighted-clock.sh` for focused host and sale guest checks. Run `bash verify/check-builds.sh --execution` with the emergency-authority fixture set for the full local gate. Commands use locked dependencies. The focused tests execute the pinned clock artifact. They retain explicit stale-state fixtures as separate cases.
 
-The local fixture models previous-block milliseconds. It can hold that value while inclusion time advances. These checks do not prove real clock reads, live clock updates, private execution or production readiness. A future LEZ clock API must replace the temporary provider and pass these checks again.
+The clock is updated at the end of a block. A node-free `Tick` test checks the real guest's state update and a later weighted price. It also holds saved time before expiry while inclusion reaches expiry. The transaction is rejected without state or nonce changes. This does not prove sequencer ordering, timestamp trust, network operation or proof generation time.
 
-On 5 November 2026, the host development gate, 24 weighted host tests, 30 client wire tests and IDL checks passed. All 13 existing sale guest tests passed with the fake clock. Two focused clock guest tests then passed, including the new malformed-clock and freeze test. The normal-build provider check also passed with the mock disabled. Lockfiles did not change.
+The earlier fake-clock evidence above is historical. It does not establish behavior on this revision. The current results are recorded below.
+
+A separate local native-token probe checked private funding, a public clock read and atomic private returns. A changed clock reply passed when the return stayed fixed. A changed return failed with `CrossMessageMismatch` despite an acceptable minimum output. A fresh proof passed. Failed attempts preserved all state. The five-test probe used development receipts and a small payout guest. It did not run launchpad token programs or complete a launchpad private route.
+
+On 9 November 2026, `bash verify/check-builds.sh --execution` passed on the pinned clock revision with unchanged lockfiles. It includes 22 sale guest tests and 31 curve, role-authority and settlement guest tests. The sale tests cover real clock reads and a real `Tick`, saved-clock and inclusion bounds, both weighted buy forms, full weighted setup and rollback. Setup rejects saved time past its bound even when inclusion would pass. The host development gate, IDL and wire checks, all shell regressions, strict host lints and formatting also passed locally. Linux CI has not run for this change. Service integration, full private routes and real proofs remain separate checks.

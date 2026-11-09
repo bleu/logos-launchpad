@@ -110,7 +110,7 @@ fn prepared() -> (ReceiveInput, lee_core::program::Response) {
     let inputs = weighted_inputs();
     let factory = prepare().from.unwrap().account_id;
     let mut input = prepare();
-    let mut response = handle(&input).unwrap();
+    let mut response = handle_completed(&input);
     for bytes in [
         namespace_state(),
         definition(),
@@ -121,7 +121,7 @@ fn prepared() -> (ReceiveInput, lee_core::program::Response) {
     ] {
         let source = response.sync_messages.last().unwrap().to;
         input = reply(&input, &response, source, bytes);
-        response = handle(&input).unwrap();
+        response = handle_completed(&input);
     }
     (input, response)
 }
@@ -195,7 +195,7 @@ fn weighted_preparation_rejects_invalid_terms() {
 #[test]
 fn weighted_preparation_checks_namespace_through_its_actor() {
     let input = prepare();
-    let response = handle(&input).unwrap();
+    let response = handle_completed(&input);
     assert_eq!(
         response.sync_messages[0].to,
         Actor::new(curve_core::compute_config_pda(id(40), id(6)), id(6))
@@ -241,7 +241,7 @@ fn activation(
     input.pre_state = prepared.post_state.unwrap();
     input.from = prepare().from;
     input.message = borsh::to_vec(&Message::ActivateWeighted).unwrap();
-    let mut response = handle(&input).unwrap();
+    let mut response = handle_completed(&input);
     let inputs = weighted_inputs();
     for bytes in [
         namespace_state(),
@@ -253,7 +253,7 @@ fn activation(
     ] {
         let source = response.sync_messages.last().unwrap().to;
         input = reply(&input, &response, source, bytes);
-        response = handle(&input).unwrap();
+        response = handle_completed(&input);
     }
     let _ = inputs;
     (input, response)
@@ -304,7 +304,7 @@ fn weighted_activation_rejects_wrong_token_vault_balance() {
         input.pre_state = prepared.post_state.unwrap();
         input.from = prepare().from;
         input.message = borsh::to_vec(&Message::ActivateWeighted).unwrap();
-        let mut response = handle(&input).unwrap();
+        let mut response = handle_completed(&input);
         for (index, bytes) in [
             namespace_state(),
             definition(),
@@ -328,4 +328,24 @@ fn weighted_activation_rejects_wrong_token_vault_balance() {
             response = result.unwrap();
         }
     }
+}
+
+fn handle_completed(input: &ReceiveInput) -> lee_core::program::Response {
+    let mut response = handle(input).unwrap();
+    while response
+        .post_state
+        .as_ref()
+        .is_some_and(|state| state.starts_with(b"LZCLK001"))
+    {
+        assert_eq!(response.sync_messages[0].to, clock_core::clock_actor());
+        response = handle(&ReceiveInput {
+            receiver: input.receiver,
+            from: Some(clock_core::clock_actor()),
+            is_authorized: false,
+            pre_state: response.post_state.unwrap(),
+            message: borsh::to_vec(&clock_core::Reply::Timestamp(100_000)).unwrap(),
+        })
+        .unwrap();
+    }
+    response
 }

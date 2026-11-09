@@ -60,11 +60,10 @@ impl Pending {
                 Message::BuyWeightedExactInput { .. } | Message::BuyWeightedExactOutput { .. }
             )
         {
-            crate::pricing_clock::require_available()?;
             return Ok(
                 Response::set_state(borsh::to_vec(&self).unwrap()).send_sync(
                     crate::pricing_clock::actor(),
-                    &crate::pricing_clock::Request::ReadTimestamp,
+                    &crate::pricing_clock::request(),
                 ),
             );
         }
@@ -603,7 +602,6 @@ fn validate_buy_window(state: &PoolAccount, message: &Message) -> Result<(), Err
             PoolMode::Weighted { .. },
             Message::BuyWeightedExactInput { .. } | Message::BuyWeightedExactOutput { .. },
         ) => {
-            crate::pricing_clock::require_available()?;
             let _ = curve_core::with_time_bounds(
                 Response::keep_state(),
                 Some(state.start_timestamp),

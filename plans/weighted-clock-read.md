@@ -1,6 +1,6 @@
 # Weighted buys with a temporary clock read
 
-Status: Implemented locally. The temporary provider still needs replacement by a verified LEZ timestamp-read API.
+Status: Historical mock implementation. Replaced by the [upstream clock integration](lez-clock-integration.md). The design and evidence below describe the earlier implementation.
 
 ## Goal
 

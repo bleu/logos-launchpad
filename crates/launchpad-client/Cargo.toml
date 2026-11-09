@@ -25,6 +25,7 @@ lee.workspace = true
 lee_core.workspace = true
 pool.workspace = true
 wallet.workspace = true
+sequencer_service_rpc.workspace = true
 hex.workspace = true
 tokio = { workspace = true, features = ["time"] }
 

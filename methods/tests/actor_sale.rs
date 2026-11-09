@@ -125,7 +125,7 @@ fn buy_transaction(
         holding(buyer, LAUNCH),
         holding(buyer, COLLATERAL),
         Actor::new(
-            clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID,
+            clock_core::CLOCK_PROGRAM_ACCOUNT_ID,
             clock_core::clock_account_id(),
         ),
     ];
@@ -175,23 +175,14 @@ fn balance(state: &V03State, owner: AccountId, definition: AccountId) -> u128 {
 }
 
 fn clock_state(state: V03State, timestamp: u64) -> V03State {
-    state.with_public_accounts([
-        account(
-            lbp_core::pricing_clock::actor(),
-            borsh::to_vec(&timestamp).unwrap(),
-        ),
-        account(
-            Actor::new(
-                clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID,
-                clock_core::clock_account_id(),
-            ),
-            clock_core::ClockAccountData {
-                block_id: 1,
-                timestamp,
-            }
-            .to_bytes(),
-        ),
-    ])
+    state.with_public_accounts([account(
+        clock_core::clock_actor(),
+        clock_core::ClockAccountData {
+            block_id: 1,
+            timestamp,
+        }
+        .to_bytes(),
+    )])
 }
 
 fn fixed_config(state: V03State, fee_bps: u16, treasury: AccountId, frozen: bool) -> V03State {
@@ -280,10 +271,6 @@ fn fixed_state(buyer: AccountId, end: Option<u64>) -> (V03State, AccountId) {
                 Program::new(Cow::Borrowed(lez_compat_methods::COMPAT_TOKEN_ELF)).unwrap(),
             ),
             (clock_core::clock_account_id(), programs::clock()),
-            (
-                lbp_core::pricing_clock::PROGRAM,
-                Program::new(Cow::Borrowed(launchpad_methods::MOCK_CLOCK_ELF)).unwrap(),
-            ),
         ])
         .with_public_accounts(accounts);
     (
@@ -556,9 +543,8 @@ fn fixed_transaction(
         holding(buyer, COLLATERAL),
         holding(TREASURY, COLLATERAL),
         holding(NEXT_TREASURY, COLLATERAL),
-        lbp_core::pricing_clock::actor(),
         Actor::new(
-            clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID,
+            clock_core::CLOCK_PROGRAM_ACCOUNT_ID,
             clock_core::clock_account_id(),
         ),
     ];
@@ -1040,10 +1026,6 @@ fn weighted_factory_executes_all_stages_and_rolls_back_failed_funding() {
                     Program::new(Cow::Borrowed(lez_compat_methods::COMPAT_AUTHORITY_ELF)).unwrap(),
                 ),
                 (clock_core::clock_account_id(), programs::clock()),
-                (
-                    lbp_core::pricing_clock::PROGRAM,
-                    Program::new(Cow::Borrowed(launchpad_methods::MOCK_CLOCK_ELF)).unwrap(),
-                ),
             ])
             .with_public_accounts([
                 account(
@@ -1077,7 +1059,7 @@ fn weighted_factory_executes_all_stages_and_rolls_back_failed_funding() {
             Actor::new(COLLATERAL, TOKEN_PROGRAM_ACCOUNT_ID),
             Actor::new(curve_core::compute_config_pda(NAMESPACE, CURVE), CURVE),
             Actor::new(
-                clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID,
+                clock_core::CLOCK_PROGRAM_ACCOUNT_ID,
                 clock_core::clock_account_id(),
             ),
         ];
@@ -1153,7 +1135,18 @@ fn weighted_factory_executes_all_stages_and_rolls_back_failed_funding() {
             ));
             assert!(rejected == state, "late creation changed state or nonce");
         }
-        let mut at_start = state.clone();
+        // The saved-clock check also runs when inclusion alone would permit setup.
+        let mut future_clock = clock_state(state.clone(), 150_001);
+        let unchanged = future_clock.clone();
+        assert!(
+            matches!(execute_at(&mut future_clock, creation.clone(), 150_000),
+            Err(lee::error::LeeError::ProgramExecutionFailed(message)) if message.contains("InvalidTerms"))
+        );
+        assert!(
+            future_clock == unchanged,
+            "rejected clock changed creation effects or nonce"
+        );
+        let mut at_start = clock_state(state.clone(), 150_000);
         execute_at(&mut at_start, creation.clone(), 150_000).unwrap();
         execute(&mut state, creation).unwrap();
         assert_eq!(balance(&state, mint, launch), 1000);
@@ -1173,6 +1166,15 @@ fn weighted_factory_executes_all_stages_and_rolls_back_failed_funding() {
                 ));
                 assert!(rejected == state, "late setup changed state or nonce");
             }
+            let mut ended_clock = clock_state(state.clone(), 300_000);
+            let unchanged = ended_clock.clone();
+            assert!(matches!(execute_at(&mut ended_clock,
+                factory_core::Message::ContinueWeightedCreation { expected_stage: stage, creator }, 299_999),
+                Err(lee::error::LeeError::ProgramExecutionFailed(message)) if message.contains("InvalidTerms")));
+            assert!(
+                ended_clock == unchanged,
+                "rejected saved deadline changed setup effects or nonce"
+            );
             let mut before_end = state.clone();
             execute_at(
                 &mut before_end,
@@ -1343,8 +1345,14 @@ fn weighted_clock_failure_and_freeze_preserve_state() {
     for bytes in [vec![], vec![1, 2, 3]] {
         let mut invalid = state
             .clone()
-            .with_public_accounts([account(lbp_core::pricing_clock::actor(), bytes)]);
-        fixed_rejected(&mut invalid, pool, &key, buy.clone(), "InvalidState");
+            .with_public_accounts([account(clock_core::clock_actor(), bytes)]);
+        fixed_rejected(
+            &mut invalid,
+            pool,
+            &key,
+            buy.clone(),
+            "ClockAccountData deserialization should not fail",
+        );
     }
     let mut frozen = fixed_config(state, 333, TREASURY, true);
     fixed_rejected(&mut frozen, pool, &key, buy, "Frozen");
@@ -1402,10 +1410,6 @@ fn weighted_factory_env() -> (
                 Program::new(Cow::Borrowed(lez_compat_methods::COMPAT_AUTHORITY_ELF)).unwrap(),
             ),
             (clock_core::clock_account_id(), programs::clock()),
-            (
-                lbp_core::pricing_clock::PROGRAM,
-                Program::new(Cow::Borrowed(launchpad_methods::MOCK_CLOCK_ELF)).unwrap(),
-            ),
         ])
         .with_public_accounts([
             account(
@@ -1459,10 +1463,9 @@ fn weighted_factory_env() -> (
         Actor::new(COLLATERAL, TOKEN_PROGRAM_ACCOUNT_ID),
         Actor::new(curve_core::compute_config_pda(NAMESPACE, CURVE), CURVE),
         Actor::new(
-            clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID,
+            clock_core::CLOCK_PROGRAM_ACCOUNT_ID,
             clock_core::clock_account_id(),
         ),
-        lbp_core::pricing_clock::actor(),
         holding(TREASURY, launch),
         holding(NEXT_TREASURY, launch),
         holding(TREASURY, COLLATERAL),
@@ -2091,4 +2094,85 @@ fn weighted_stale_clock_at_inclusion_boundary_preserves_state() {
             "rejected buy changed state at {timestamp}"
         );
     }
+}
+
+/// Runs the real clock guest in the node-free state fixture. Sequencer guards and
+/// end-of-block ordering are outside this fixture.
+fn tick_clock(state: &mut V03State, timestamp: u64) {
+    let clock = clock_core::clock_actor();
+    let old = clock_core::ClockAccountData::from_bytes(
+        state
+            .get_account_by_id(clock.account_id)
+            .data
+            .actor_state(clock.program_account_id),
+    );
+    let message = Message::try_new(
+        clock,
+        vec![clock],
+        BTreeMap::new(),
+        clock_core::Message::Tick {
+            timestamp,
+            block_id: old.block_id + 1,
+        },
+    )
+    .unwrap();
+    let tx = PublicTransaction::new(message.clone(), WitnessSet::for_message(&message, &[]));
+    state
+        .transition_from_public_transaction(&tx, old.block_id + 1, timestamp)
+        .unwrap();
+    let updated = clock_core::ClockAccountData::from_bytes(
+        state
+            .get_account_by_id(clock.account_id)
+            .data
+            .actor_state(clock.program_account_id),
+    );
+    assert_eq!(
+        (updated.block_id, updated.timestamp),
+        (old.block_id + 1, timestamp)
+    );
+}
+
+#[test]
+fn upstream_clock_tick_changes_weighted_price_and_preserves_inclusion_deadline() {
+    let key = PrivateKey::try_new([23; 32]).unwrap();
+    let buyer = AccountId::from(&PublicKey::new_from_private_key(&key));
+    let (mut state, pool) = weighted_state(buyer);
+    let mut sale = fixed_pool(&state, pool);
+    if let lbp_core::PoolMode::Weighted {
+        token_weight_end, ..
+    } = &mut sale.mode
+    {
+        *token_weight_end = 90 * lbp_core::WEIGHT_TOTAL / 100;
+    }
+    state = state.with_public_accounts([account(
+        Actor::new(pool, LBP),
+        borsh::to_vec(&sale).unwrap(),
+    )]);
+    let buy = lbp_core::Message::BuyWeightedExactInput {
+        amount_in: 50,
+        min_amount_out: 1,
+    };
+    let tx = fixed_transaction(&state, pool, &key, buy.clone());
+    let mut early = state.clone();
+    early
+        .transition_from_public_transaction(&tx, 2, 100_000)
+        .unwrap();
+    let early_output = balance(&early, buyer, LAUNCH);
+    tick_clock(&mut state, 199_999);
+    let mut later = state.clone();
+    later
+        .transition_from_public_transaction(&tx, 3, 199_999)
+        .unwrap();
+    let later_output = balance(&later, buyer, LAUNCH);
+    assert!(later_output < early_output);
+    // This is still the same signed buy, with saved time held before the end.
+    let before = state.clone();
+    assert!(matches!(
+        state.transition_from_public_transaction(&tx, 3, 200_000),
+        Err(lee::error::LeeError::OutOfValidityWindow)
+    ));
+    assert!(state == before);
+    // Advancing the real clock to the end also rejects pricing itself.
+    tick_clock(&mut state, 200_000);
+    fixed_rejected(&mut state, pool, &key, buy, "Closed");
 }

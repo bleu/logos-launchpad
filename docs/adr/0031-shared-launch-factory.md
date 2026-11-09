@@ -31,3 +31,7 @@ A common factory can create and prepare sales without making sale state intercha
 - [Mechanism boundaries](0005-mechanism-boundaries.md)
 - [Typed sale inputs](0007-typed-sale-inputs.md)
 - [Fixed-price and weighted sale proposal](https://github.com/logos-co/rfp/issues/119)
+
+## Clock adapter amendment: 2026-11-09
+
+On the selected actor revision, setup reads the canonical clock instead of sending removed assertion messages. A narrow adapter stores the pending response and its inclusive millisecond bounds. Only an authenticated timestamp reply can release that response. It contains the final state and the deferred setup effects. Keep four setup stages, saved-time comparisons and inclusion-time bounds. See [clock integration](0026-lbp-clock-and-poke.md#upstream-clock-amendment-2026-11-09).
