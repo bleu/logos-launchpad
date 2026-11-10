@@ -22,11 +22,11 @@ These are local signed public executions, not native privacy proofs or deploymen
 
 [ADR 0021](../docs/adr/0021-modes-and-open-limits.md) sets the product rules and the public Merkle-path candidate. The [design guide](../docs/architecture/allowlist-proof.md) explains the account model. Participants enroll public trading-address batches before sale creation; the creator locks the final context/root in the initial terms. No enrollment changes are allowed during staged setup. Membership permits repeat buys without a cap, counter or allowance. Private accounts remain funding and return endpoints.
 
-The [isolated experiment](../packages/eligibility-proof-lite/README.md) passed the unchanged 10,000,000-cycle charged public-action gate at three and 100,000 addresses. The larger fixture used 260,365 cycles, with a 580-byte path and about 0.14 ms path preparation. This establishes signed self-execution only. It does not establish production pool caller control, a complete buy's cost or private-route support.
+The earlier [isolated experiment](../docs/architecture/allowlist-proof.md#earlier-measurements) passed the unchanged 10,000,000-cycle charged public-action gate at three and 100,000 addresses. The larger fixture used 260,365 cycles, with a 580-byte path and about 0.14 ms path preparation. This establishes signed self-execution only. It does not establish production pool caller control, a complete buy's cost or private-route support. Research sources are preserved separately from this program change.
 
 Implement the public admission boundary first. Keep complete private purchases blocked until the private holdings, wallet and atomic-return work is verified. Do not turn an interim public-only implementation into a claim that private participation is complete.
 
-The maintained module is `crates/eligibility-policy`. Production guests use its typed admission interface; the experiment delegates to the same verifier. The sale-policy ID is the canonical pool account ID. Pool addresses do not depend on the root, so the creator can compute this ID before tree construction. Factory creation, pool preparation and canonical address checks validate the namespace and pool binding.
+The maintained module is `crates/eligibility-policy`. Production guests use its typed admission interface. The saved experiment used an adapter to the same verifier. The sale-policy ID is the canonical pool account ID. Pool addresses do not depend on the root, so the creator can compute this ID before tree construction. Factory creation, pool preparation and canonical address checks validate the namespace and pool binding.
 
 ## 1. Establish control of the actual trader
 

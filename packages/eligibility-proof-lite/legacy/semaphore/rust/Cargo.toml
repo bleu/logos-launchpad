@@ -1,4 +1,0 @@
-[workspace]
-members = ["verifier"]
-exclude = ["methods", "methods/guest", "execution"]
-resolver = "2"

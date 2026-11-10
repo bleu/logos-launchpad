@@ -27,9 +27,31 @@ The wallet must verify that Alex controls the accounts and can use them on the t
 
 The method uses a SHA-256 Merkle tree: hashes combine approved addresses into one saved root. Each address has its own random salt and a randomly selected position. The creator delivers the salt, position and 17 sibling hashes needed to check that address against the root. The wallet can prepare this path at enrollment and reuse it; no new eligibility zero-knowledge proof is needed per buy.
 
-The fixed tree holds up to 131,072 addresses. Its context includes a version, the actual namespace and a sale-policy ID equal to the canonical pool `AccountId` bytes. The pool address does not depend on the root, so it can be computed before the tree is built. The pool must use its stored context/root and the actual public trader, rather than trust identity or policy values claimed in the proof. Native authorization must still bind each purchase. See the [experiment format and checks](../../packages/eligibility-proof-lite/README.md#format) for byte-level rules.
+The fixed tree holds up to 131,072 addresses. Its context includes a version, the actual namespace and a sale-policy ID equal to the canonical pool `AccountId` bytes. The pool address does not depend on the root, so it can be computed before the tree is built. The pool must use its stored context/root and the actual public trader, rather than trust identity or policy values claimed in the proof. Native authorization must still bind each purchase.
 
-In the original experiment with 100,000 synthetic addresses, list construction took about 0.65 seconds and one path took about 0.14 ms to prepare. Signed local verification took about 41 ms and 260,365 cycles, below the unchanged 10,000,000-cycle gate. A later signed run using the maintained verifier adapter used 271,709 cycles; the original timings were not rerun. These were self-execution tests, not pool buys or native private proofs. See [all measurements and limits](../../packages/eligibility-proof-lite/README.md#measured-results).
+## Membership format
+
+Accounts, salts and hashes are raw 32-byte values. Reject duplicate accounts during enrollment. Choose each salt with a cryptographically secure random source and select positions randomly across the full tree.
+
+| Value | Encoding |
+| --- | --- |
+| Context | Version `1:u8`, namespace `[u8; 32]`, canonical pool ID `[u8; 32]`; 65 bytes |
+| Allowlist policy payload | Context followed by root `[u8; 32]`; 97 bytes |
+| Membership path | Index `u32` little-endian, salt `[u8; 32]`, exactly 17 sibling hashes; 580 bytes |
+
+Hash concatenated raw bytes with SHA-256. Each domain tag below ends with one zero byte.
+
+```text
+leaf = SHA256("LP/allowlist/leaf/v1\0" || context || account || salt)
+padding = SHA256("LP/allowlist/pad/v1\0" || context || index:u32 little-endian)
+node = SHA256("LP/allowlist/node/v1\0" || context || left || right)
+```
+
+Start at the leaf. At each level, the low bit of the current index selects whether the current hash is the left child (`0`) or right child (`1`), then shift the index right. Reject unsupported versions, indices at or above 131,072 and malformed encodings. Production messages use fixed-size fields; Borsh enum and optional-path tags add message bytes. The [maintained verifier](../../crates/eligibility-policy/src/lib.rs) and [independent vector](../../crates/eligibility-policy/tests/fixtures/merkle-vector.json) define and check these rules.
+
+## Earlier measurements
+
+In the original experiment with 100,000 synthetic addresses, list construction took about 0.65 seconds and one path took about 0.14 ms to prepare. Signed local verification took about 41 ms and 260,365 cycles, below the unchanged 10,000,000-cycle gate. A later signed run using the maintained verifier adapter used 271,709 cycles; the original timings were not rerun. These were single self-execution measurements with cached local tools, not pool buys, native private proofs or latency guarantees. Guest time excluded compilation. The [research snapshot](https://github.com/bleu/logos-launchpad/blob/b17de27db81bf2f0acbae891580c8d230c9f56db/packages/eligibility-proof-lite/README.md#measured-results) preserves the full report; the experiment is not part of this program change.
 
 ## Buying with private funds
 
@@ -73,4 +95,4 @@ The private route still needs a native privacy proof. We do not claim that publi
 
 The current compatibility token layer supports public holdings only. Private token holdings, complete private returns, late-failure behavior and full transaction cost remain blockers to a working private route. This enrollment decision does not solve them.
 
-See [private participation and recovery](private-participation.md) for the full transaction contract and [ADR 0031](../adr/0031-shared-launch-factory.md) for reusable pool policies. The [earlier technical proposal](allowlist-proof-protocol.md) is retained only as superseded history; its separate checking-account protocol is not the current design.
+See [private participation and recovery](private-participation.md) for the full transaction contract and [ADR 0031](../adr/0031-shared-launch-factory.md) for reusable pool policies.
