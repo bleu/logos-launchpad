@@ -4,17 +4,17 @@ Status: Public program slice complete with local development evidence, 2026-11-1
 
 ## Public execution evidence
 
-The locked signed actor suite passes all 27 tests. It covers fresh factory setup for all three engines, both buy forms, actual-trader control, missing and copied membership, changed signed messages, admission-only Key/PDA attempts, native replay, repeat buys and full state rollback on late output failure. Authority relies on the current narrow forwarding rule: only authorized `Execute` forwards buys to another pool. Preserve this rule when adding messages.
+After merging current main, the locked signed actor suite passes all 32 tests. It covers fresh factory setup for all three engines, both buy forms, actual-trader control, missing and copied membership, changed signed messages, admission-only Key/PDA attempts, native replay, repeat buys and full state rollback on late output failure. Authority relies on the current narrow forwarding rule: only authorized `Execute` forwards buys to another pool. Preserve this rule when adding messages.
 
 Complete allowlisted buys passed the unchanged 10,000,000-cycle budget:
 
 | Engine | Exact input | Exact output | Buy after fresh setup |
 | --- | ---: | ---: | ---: |
 | Bonding curve | 658,565 | 658,680 | 665,182 |
-| Fixed price | 758,645 | 758,690 | 758,659 |
-| Weighted, fake clock | 835,393 | 837,588 | 867,735-871,505 |
+| Fixed price | 758,814 | 758,859 | 758,828 |
+| Weighted, fake clock | 838,557 | 840,447 | 870,899-874,364 |
 
-Verification passed offline with locked dependencies: `verify/check-dev.sh`, IDL generation and drift checks, 102 client tests, CLI compilation, `verify/check-weighted-clock.sh`, the signed actor suite, release overflow checks, scoped strict Rust lint and formatting. The 31 ELF-dependent client guest tests remain ignored; signed execution evidence comes from the separate actor suite. Local document links and whitespace checks pass. No native private proof or deployment was run.
+Verification passed offline with locked dependencies: `verify/check-dev.sh`, IDL generation and drift checks, 104 client tests, CLI compilation, `verify/check-weighted-clock.sh`, the signed actor suite, release overflow checks, scoped strict Rust lint and formatting. The 31 ELF-dependent client guest tests remain ignored; signed execution evidence comes from the separate actor suite. Local document links and whitespace checks pass. No native private proof or deployment was run.
 
 These are local signed public executions, not native privacy proofs or deployment evidence. Weighted setup covers both allocation-release choices; normal weighted builds still lack a supported clock provider. The locked host regression script passes with unchanged lockfiles. Public rollback does not establish the separate private-return contract.
 

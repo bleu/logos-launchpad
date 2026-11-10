@@ -1323,6 +1323,11 @@
             ],
             "name": "SettleWeighted",
             "tag": 13
+          },
+          {
+            "fields": [],
+            "name": "PokeWeighted",
+            "tag": 14
           }
         ]
       },
@@ -1453,6 +1458,14 @@
               },
               {
                 "name": "pricing_collateral",
+                "type": "u128"
+              },
+              {
+                "name": "checkpoint_time",
+                "type": "u64"
+              },
+              {
+                "name": "checkpoint_token_weight",
                 "type": "u128"
               }
             ],

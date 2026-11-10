@@ -8,11 +8,13 @@ The shared launch factory can create a new launch token, set positive sale inven
 
 ## Settlement
 
-A sale closes at its optional end or sellout without a final trade or separate close call. Only the current creator-role holder can authorize payouts, and that creator is the recipient. Proceeds settlement pays all recorded net proceeds, collects remaining fees to the current namespace treasury and burns unsold sale inventory. Donations remain surplus. The separate `AfterEnd` allocation claim can run before or after proceeds settlement. Successful retries do not pay or burn twice. See [ADR 0025](../adr/0025-sale-closing.md).
+A fixed-price sale closes at its optional end or sellout without a final trade or separate close call. Only the current creator-role holder can authorize payouts, and that creator is the recipient. Proceeds settlement pays all recorded net proceeds, collects remaining fees to the current namespace treasury and burns unsold sale inventory. Donations remain surplus. The separate `AfterEnd` allocation claim can run before or after proceeds settlement. Successful retries do not pay or burn twice. See [ADR 0025](../adr/0025-sale-closing.md).
 
 ## Weighted setup and buys
 
 The factory creates weighted sales in the same four setup stages. Typed weighted inputs set a positive collateral seed, normalized weight endpoints, and an explicit start and end. Final setup transfers the full seed from the creator. A vault donation stays surplus. Weighted public buys read one pricing timestamp through a temporary interface. Local tests supply a fake clock. The pinned LEZ clock does not support timestamp replies, so normal builds reject weighted buys. Sale inclusion bounds still enforce the scheduled start and end. Fees do not reduce pricing input. See [ADR 0026](../adr/0026-lbp-clock-and-poke.md), [ADR 0030](../adr/0030-lbp-pricing-collateral.md) and [ADR 0031](../adr/0031-shared-launch-factory.md).
+
+Weighted controls and settlement are implemented. Their scheduled-end rules and payout checks are in [ADR 0025](../adr/0025-sale-closing.md). Local guest evidence is in the [workspace guide](../architecture/workspace-guide.md#execution-and-evidence-limits).
 
 ## Scope
 
@@ -20,4 +22,4 @@ The implemented scope includes creation, funding, public buys, permissionless fe
 
 ## Future work
 
-Weighted observation records and lifecycle handlers remain future work. The pricing and accounting decisions are in [ADR 0021](../adr/0021-modes-and-open-limits.md), [ADR 0026](../adr/0026-lbp-clock-and-poke.md) and [ADR 0030](../adr/0030-lbp-pricing-collateral.md). The weighted-math kernel is unaudited and does not establish pool behavior.
+Weighted virtual accounting, private fixed-price or weighted sales, allowlists and full SDK and CLI flows remain future work. Weighted observer checkpoints are implemented under [ADR 0026](../adr/0026-lbp-clock-and-poke.md). Controls and settlement follow [ADR 0025](../adr/0025-sale-closing.md). The pricing and accounting decisions are in [ADR 0021](../adr/0021-modes-and-open-limits.md), [ADR 0026](../adr/0026-lbp-clock-and-poke.md) and [ADR 0030](../adr/0030-lbp-pricing-collateral.md). The weighted-math kernel is unaudited and does not establish pool behavior.

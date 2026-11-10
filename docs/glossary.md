@@ -19,7 +19,7 @@ This page explains technical shorthand used in this repository. [CONTEXT.md](../
 | `D` / `R` | `D` is the purchasable curve allocation. `R` is the curve allocation reserved for possible DEX seeding after close. |
 | Allocation / supply | Tokens assigned to a purpose in a sale, or the total tokens available for that purpose. |
 | Fixed-price sale | A sale with a strictly positive exact price in collateral and launch-token smallest units; token decimals are for display. Locked local verification of its four-stage setup passed using development receipts; trading, real proofs and deployment readiness remain pending. See [ADR 0032](adr/0032-fixed-price-lbp-setup.md). |
-| Weighted sale | A sale whose pricing uses token balances and weights that change on a set schedule. Trading, custody, lifecycle and fees remain future work. |
+| Weighted sale | A sale whose pricing uses token balances and weights that change on a set schedule. Setup, buys, controls, settlement and observer checkpoints are implemented with a temporary pricing clock. |
 | Weight / weight schedule | A pricing input that changes over time for a weighted sale. The schedule defines its start, end and progress. |
 | Quote | A price calculation from current state. It does not reserve that price for later execution. |
 | Exact-input / exact-output | A trade where the input is fixed and output is calculated, or where the desired output is fixed and required input is calculated. |
@@ -33,7 +33,7 @@ This page explains technical shorthand used in this repository. [CONTEXT.md](../
 | Graduation / DEX | Moving liquidity to a decentralized exchange. |
 | Graduation hook | A call to another program after a sale closes. Its rules are in [ADR 0020](adr/0020-settlement-and-graduation.md). |
 | Expiry / end timestamp | A configured time that can end a bonding-curve sale or the scheduled end of a fixed-price or weighted sale. |
-| `poke` | A future permissionless weighted-sale call that records a time checkpoint without changing the price schedule. |
+| `poke` | A permissionless weighted-sale call that reads the pricing clock and records the current token weight as an observer checkpoint without changing the price schedule. |
 | Pause / freeze | Controls that stop specified actions. Their platform integration and policy remain separate from namespace administration. |
 | Allowlist / proof / nullifier | A fixed private list of approved public trading accounts, evidence that the actual trader is a member and controls the purchase, and a value that prevents spent private state from being used again. Participants can precompute batches of public addresses; approval is not consumed by a buy. Private accounts can still fund trades and receive returns. All three engines implement public buy admission under [ADR 0021](adr/0021-modes-and-open-limits.md), with signed development authority and replay checks; wallet support and complete private execution remain open. |
 | Dust / oversized trade / input envelope | Very small trades, trades that are too large, and the tested range of values that an implementation accepts safely. |
