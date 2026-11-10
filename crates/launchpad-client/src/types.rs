@@ -109,6 +109,17 @@ pub struct FactorySale {
     pub collateral_definition: AccountId,
 }
 
+/// Stable identifiers for one factory-created fixed-price or weighted sale.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LbpSale {
+    pub namespace: AccountId,
+    pub namespace_program_id: AccountId,
+    pub factory_program_id: AccountId,
+    pub lbp_program_id: AccountId,
+    pub launch_salt: [u8; 32],
+    pub collateral_definition: AccountId,
+}
+
 /// Exact-output trade limits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ExactOutputTradeTerms {

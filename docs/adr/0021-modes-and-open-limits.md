@@ -1,12 +1,12 @@
 # ADR 0021: Sale types, trade modes, allowlists and open limits
 
-Status: Product rules accepted internally; per-block limit deferral: `To be reviewed by Logos team`; allowlist proof design and verification open.
+Status: Product rules and public-account batch enrollment accepted internally; public buy admission implemented for all three engines with signed development-execution evidence; wallet and private-route verification open; per-block limit deferral: `To be reviewed by Logos team`.
 
-Date: 2026-09-29; sale mechanics review: 2026-10-02
+Date: 2026-09-29; sale mechanics review: 2026-10-02; allowlist amendments: 2026-11-09 and 2026-11-10
 
 ## Context
 
-Keep the three sale types and the bonding-curve trade modes. The 2026-10-01 review settled the fixed-price and weighted-sale allowlist product rules. It did not choose a proof method or establish that it works on LEZ.
+Keep the three pricing engines and the bonding-curve trade modes. On 2026-11-09, the user extended optional allowlists to all three engines and removed the common collateral cap and one-purchase allowance accepted on 2026-10-01. On 2026-11-10, the user chose pre-approved batches of public trading accounts. This replaces the requirement to enroll private approved accounts and the proposed separate private checking account. Private funding and complete private returns remain required. The same day's proof interview accepted public Merkle paths and locking the list at initial sale creation. Public admission now uses the maintained `crates/eligibility-policy` module in all three engines. Signed development tests cover actual-trader authority through native `Execute`, transaction replay rejection and complete public buys; they do not establish private-route or deployment readiness. [ADR 0031](0031-shared-launch-factory.md) records the target separation of pricing from shared pool policies.
 
 ## Sale modes
 
@@ -24,23 +24,33 @@ Only the current creator authority holder can pause/resume before the original e
 
 Defer the optional limit on tokens allocated in one block. This differs from the RFP-016 requirement and is `To be reviewed by Logos team`. It is not implemented or removed from scope.
 
-## Fixed-price and weighted-sale allowlist rules
+## Allowlist rules for all pricing engines
 
-When an allowlist is enabled:
+An optional allowlist must be available to bonding-curve, fixed-price and weighted pools. When enabled:
 
-- Each approved participant gets one successful purchase per sale. Public and private routes share it. Another credential for the same approved identity does not grant another purchase.
-- Failed transactions do not use the allowance. The successful purchase and allowance use must finish together.
-- The participant must prove membership and control of the approved account for this purchase. Sharing membership information alone must not grant access.
-- One public collateral limit applies to everyone. It limits buyer input under the agreed fixed-price and weighted-sale fee and pricing rules.
-- The participant list stays private. Public checks must not expose it or require a persistent private participant ID.
+- The sale has a fixed private list of approved regular public LEZ trading accounts. Before the list is locked, participants can create batches of public accounts locally and send only their addresses to the creator. No keys or private funding/return account IDs go to the creator. After initial protected membership-data delivery, buying must not depend on the creator's service.
+- Each buy must prove membership and control of the actual approved public trader, bound to the sale and purchase. There is no separate approval-only or private checking account. Membership data alone must not grant authority, and another address from the same wallet is not automatically approved.
+- The wallet prefers an unused approved address per attempt. This is a privacy preference, not an on-chain one-buy rule. Approved accounts can make repeated purchases, including independent concurrent purchases across public and private funding routes when native state permits. There is no allowlist spending cap, purchase counter or consumed allowance. Normal balance, inventory, reserve, price-limit, fee, direction, pause and ending rules still apply.
+- The full roster is not published, but an approved trading address and its trade effects are public when used. The creator can link addresses submitted together; public address reuse also links purchases. Fresh addresses do not guarantee unlinkability from timing, amounts or other data. Private funding and return account IDs must stay private. No persistent cross-sale participant ID is required.
+- Invalid or mismatched authorization must fail. Reusing membership data for a new authorized buy is allowed; copying authorization to a different purchase or replaying a transaction must not create another trade.
 
-On-chain programs must enforce these rules on both routes. Proofs must be tied to the sale and actual purchase, with protection against reuse. Account control does not prove that each account belongs to a different person or prevent sharing full account keys.
+All batch addresses must be included before sale creation. Save the final context and root with the initial immutable terms; no staged setup action can replace them. There is no list update or replenishment in this version. Capacity counts approved addresses, not people. If the batch has no unused addresses left, the wallet must report that limit rather than silently reuse an address or choose an unapproved one. A participant can deliberately reuse an approved address after a privacy warning; on-chain rules do not consume its approval.
+
+On-chain programs must enforce eligibility on both routes. Removing the allowance does not remove signatures, nonces, native private-state nullifiers or submission recovery. Private funding, trade and returns must commit together under [ADR 0018](0018-private-participation.md). Existing permitted bonding-curve sells keep their rules; this amendment gates buys and does not add sells to other engines. Account control does not establish human uniqueness or prevent full-key sharing. An approved account may buy all available sale inventory.
+
+## Membership method and evidence
+
+Use a public SHA-256 Merkle path with fixed depth 17, independent random 32-byte salts, randomized leaf positions and separate leaf, padding and branch domains. Capacity is 131,072 addresses. Context contains a version, the actual namespace and a sale-policy ID equal to the canonical pool `AccountId` bytes. That address does not depend on the root and can be computed before tree construction. The stored context/root and actual trader are trusted verifier inputs; they are not accepted from the witness as claims. See the [membership format](../architecture/allowlist-proof.md#membership-format).
+
+Public paths expose the used leaf's salt, index and sibling hashes. Hash comparisons, structure and metadata leakage are accepted; roster-size secrecy is not guaranteed. Protect unused salts and the full roster. Native transaction authorization and replay checks remain necessary. Membership does not grant spending authority or get consumed by a purchase.
+
+On 2026-11-10, the original isolated signed verifier passed at both three and 100,000 addresses under the unchanged 10,000,000-cycle charged gate. The larger fixture used 260,365 cycles; path preparation took about 0.14 ms. After switching the guest adapter to the maintained verifier, the signed gate passed again at 271,708 and 271,709 cycles respectively. The original timings remain historical measurements. These isolated runs are public signed self-execution, not full buys or native private proving. The [design guide](../architecture/allowlist-proof.md#earlier-measurements) records the measurement limits and research source; the [program integration plan](../../plans/allowlist-program-integration.md#public-execution-evidence) records separate complete-public-buy evidence and its limits. Weighted execution uses a mock clock; normal weighted buys remain unsupported without a trusted timestamp provider. The earlier Semaphore experiment exceeded that gate, including its prepared-key variant.
 
 ## Open work
 
-The proof method, verifier, identity format, enrollment, duplicate-identity checks and account-change rules still need design and tests. DistributionX is a research reference, not an approved design. No proof inputs or cost claims are settled. See the [full participation specification](../architecture/private-participation.md).
+The [plain-English allowlist design](../architecture/allowlist-proof.md) explains public-account batch enrollment and the one-transaction private route. The earlier separate checking account and mandatory private eligibility guest are not current requirements. Public policy storage, admission and native authorization are implemented, and staged creation preserves the exact policy. Wallet support, private holdings, complete atomic private returns, security review, real proofs and deployment readiness remain open. See the [program integration plan](../../plans/allowlist-program-integration.md). Native privacy proving for private funding and returns is still required; no speedup for that proof is established. DistributionX remains a research reference. See the [full participation specification](../architecture/private-participation.md).
 
-Accepted product rules do not mean the proof or either route works. Deferred requirements still need Logos-team review.
+Signed public-buy development evidence does not establish a complete private route or production readiness. Deferred requirements still need Logos-team review.
 
 ## Sources
 

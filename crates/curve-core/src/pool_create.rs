@@ -20,6 +20,7 @@ pub(crate) fn side(side: Option<u8>) -> Result<Option<TokenSide>, Error> {
 }
 pub fn begin(input: &ReceiveInput, message: Message) -> Result<Response, Error> {
     let Message::CreatePool {
+        buy_policy,
         namespace,
         token0_definition_id,
         token1_definition_id,
@@ -49,6 +50,19 @@ pub fn begin(input: &ReceiveInput, message: Message) -> Result<Response, Error> 
     if owner == AccountId::default() || token0_definition_id == token1_definition_id {
         return Err(Error::InvalidPool);
     }
+    buy_policy
+        .validate_binding(
+            namespace.value(),
+            crate::compute_pool_pda(
+                namespace,
+                curve_program_id,
+                token0_definition_id,
+                token1_definition_id,
+                owner,
+            )
+            .value(),
+        )
+        .map_err(|_| Error::InvalidPool)?;
     if !defer_funding && close_timestamp.is_some_and(|end| now >= end) {
         return Err(Error::Closed);
     }
@@ -93,6 +107,7 @@ pub fn begin(input: &ReceiveInput, message: Message) -> Result<Response, Error> 
         None => return Err(Error::Unauthorized),
     }
     let state = PoolAccount {
+        buy_policy,
         allowed_input_token: side(allowed_input_token)?,
         funded: !defer_funding,
         namespace,

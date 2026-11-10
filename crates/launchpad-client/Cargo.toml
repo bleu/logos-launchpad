@@ -21,6 +21,7 @@ common.workspace = true
 clock_core.workspace = true
 curve-core.workspace = true
 factory-core.workspace = true
+lbp-core.workspace = true
 lee.workspace = true
 lee_core.workspace = true
 pool.workspace = true
@@ -32,6 +33,5 @@ tokio = { workspace = true, features = ["time"] }
 workspace = true
 
 [dev-dependencies]
-lbp-core.workspace = true
 serde_json.workspace = true
 weighted-math-core = { path = "../../packages/weighted-math/crates/weighted-math-core" }

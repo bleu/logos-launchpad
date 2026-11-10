@@ -180,7 +180,8 @@ pub fn next_creation_invocation(
 ) -> Result<Option<PublicInvocation<FactoryInstruction>>> {
     if let Some(state) = state {
         validate_factory_state(sale, state)?;
-        if !(state.trade_mode == request.trade_mode
+        if !(state.buy_policy == request.buy_policy
+            && state.trade_mode == request.trade_mode
             && state.graduation_hook == request.graduation_hook
             && state.sale_reserve == request.sale_reserve
             && state.dex_seed_reserve == request.dex_seed_reserve

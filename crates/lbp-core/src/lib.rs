@@ -1,5 +1,7 @@
 //! Fixed-price and weighted sale setup, buys and fees and mechanism-specific settlement.
 
+pub use curve_core::{AllowlistPolicy, BuyPolicy, MembershipPath};
+
 pub mod pricing_clock;
 mod trading;
 mod weighted_lifecycle;
@@ -40,6 +42,7 @@ pub enum CreatorAllocationRelease {
 }
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize, Serialize, Deserialize)]
 pub struct FixedPricePoolInputs {
+    pub buy_policy: BuyPolicy,
     pub namespace: AccountId,
     pub namespace_program_id: AccountId,
     pub factory_program_id: AccountId,
@@ -64,6 +67,7 @@ pub struct FixedPricePoolInputs {
 /// Each endpoint pair sums to `WEIGHT_TOTAL`. Each weight is at least 1%.
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize, Serialize, Deserialize)]
 pub struct WeightedPoolInputs {
+    pub buy_policy: BuyPolicy,
     pub namespace: AccountId,
     pub namespace_program_id: AccountId,
     pub factory_program_id: AccountId,
@@ -100,11 +104,13 @@ pub enum Message {
     ActivateFixedPrice,
     ReadState,
     BuyExactInput {
+        membership: Option<MembershipPath>,
         amount_in: u128,
         min_amount_out: u128,
         now: u64,
     },
     BuyExactOutput {
+        membership: Option<MembershipPath>,
         amount_out: u128,
         max_amount_in: u128,
         now: u64,
@@ -125,11 +131,13 @@ pub enum Message {
     ActivateWeighted,
     /// Buy using the timestamp returned by the configured pricing clock.
     BuyWeightedExactInput {
+        membership: Option<MembershipPath>,
         amount_in: u128,
         min_amount_out: u128,
     },
     /// Buy using the timestamp returned by the configured pricing clock.
     BuyWeightedExactOutput {
+        membership: Option<MembershipPath>,
         amount_out: u128,
         max_amount_in: u128,
     },
@@ -167,6 +175,7 @@ pub enum PoolMode {
 
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PoolAccount {
+    pub buy_policy: BuyPolicy,
     pub mode: PoolMode,
     pub funded: bool,
     pub namespace: AccountId,
@@ -237,6 +246,9 @@ impl PoolAccount {
         }
     }
     fn validate_address(&self, receiver: Actor) -> Result<(), Error> {
+        self.buy_policy
+            .validate_binding(self.namespace.value(), receiver.account_id.value())
+            .map_err(|_| Error::InvalidTerms)?;
         if receiver.account_id
             != compute_pool_pda(
                 self.namespace,
@@ -526,7 +538,12 @@ pub fn handle(input: &ReceiveInput) -> Result<Response, Error> {
             if input.from != Some(Actor::new(factory, inputs.factory_program_id)) {
                 return Err(Error::Unauthorized);
             }
+            inputs
+                .buy_policy
+                .validate_binding(inputs.namespace.value(), input.receiver.account_id.value())
+                .map_err(|_| Error::InvalidTerms)?;
             let state = PoolAccount {
+                buy_policy: inputs.buy_policy,
                 mode: PoolMode::FixedPrice,
                 funded: false,
                 namespace: inputs.namespace,
@@ -631,7 +648,12 @@ pub fn handle(input: &ReceiveInput) -> Result<Response, Error> {
             if input.from != Some(Actor::new(factory, inputs.factory_program_id)) {
                 return Err(Error::Unauthorized);
             }
+            inputs
+                .buy_policy
+                .validate_binding(inputs.namespace.value(), input.receiver.account_id.value())
+                .map_err(|_| Error::InvalidTerms)?;
             let state = PoolAccount {
+                buy_policy: inputs.buy_policy,
                 mode: PoolMode::Weighted {
                     paused: false,
                     token_weight_start: inputs.token_weight_start,

@@ -30,6 +30,7 @@ fn sale() -> FactorySale {
 
 fn creation() -> CreateSaleRequest {
     CreateSaleRequest {
+        buy_policy: curve_core::BuyPolicy::Open,
         trade_mode: factory_core::TradeMode::BuyAndSell,
         graduation_hook: None,
         name: "E2E token".into(),
@@ -46,6 +47,7 @@ fn creation() -> CreateSaleRequest {
 
 fn pool_snapshot() -> (curve_core::PoolAccount, curve_core::Config) {
     let pool = curve_core::PoolAccount {
+        buy_policy: curve_core::BuyPolicy::Open,
         allowed_input_token: None,
         funded: true,
         namespace: AccountId::new([0xAD; 32]),
@@ -87,6 +89,7 @@ fn valid_factory_state(sale: FactorySale) -> FactoryState {
             borsh::BorshSerialize::serialize(&$value, &mut bytes).unwrap()
         };
     }
+    field!(curve_core::BuyPolicy::Open);
     field!(factory_core::TradeMode::BuyAndSell);
     field!(None::<factory_core::GraduationHook>);
     field!(CreationStage::Active);
@@ -127,6 +130,363 @@ fn private_buy_request() -> PrivateBuyRequest {
     }
 }
 
+fn lbp_sale() -> super::LbpSale {
+    super::LbpSale {
+        namespace: sale().namespace,
+        namespace_program_id: sale().curve_program_id,
+        factory_program_id: sale().factory_program_id,
+        lbp_program_id: AccountId::new([12; 32]),
+        launch_salt: sale().launch_salt,
+        collateral_definition: sale().collateral_definition,
+    }
+}
+
+#[test]
+fn fixed_price_exact_input_builder_keeps_membership_and_trader_authority() {
+    let selected = lbp_sale();
+    let trader = AccountId::new([9; 32]);
+    let membership = curve_core::MembershipPath {
+        index: 3,
+        salt: [7; 32],
+        siblings: [[8; 32]; 17],
+    };
+    let call = super::build_fixed_price_buy_with_collateral_invocation(
+        selected,
+        trader,
+        ExactInputTradeTerms {
+            amount_in: 25,
+            min_amount_out: 10,
+        },
+        Some(membership.clone()),
+        9,
+    );
+    let factory = factory_core::compute_factory_pda(
+        selected.namespace,
+        selected.factory_program_id,
+        selected.launch_salt,
+    );
+    let definition = factory_core::compute_definition_pda(
+        selected.namespace,
+        selected.factory_program_id,
+        selected.launch_salt,
+    );
+    let pool = lbp_core::compute_pool_pda(
+        selected.namespace,
+        selected.lbp_program_id,
+        definition,
+        selected.collateral_definition,
+        factory,
+    );
+    assert_eq!(
+        call.destination,
+        Actor::new(trader, selected.lbp_program_id)
+    );
+    assert_eq!(call.signer_accounts, [trader]);
+    assert_eq!(
+        call.instruction,
+        lbp_core::Message::Execute {
+            pool,
+            instruction: Box::new(lbp_core::Message::BuyExactInput {
+                amount_in: 25,
+                min_amount_out: 10,
+                membership: Some(membership),
+                now: 9,
+            })
+        }
+    );
+    assert!(call.actors.contains(&Actor::new(
+        curve_core::compute_config_pda(selected.namespace, selected.namespace_program_id),
+        selected.namespace_program_id
+    )));
+    let output = super::associated_token_account(trader, definition);
+    assert!(
+        call.account_mentions()
+            .iter()
+            .any(|mention| mention.actor().account_id == output
+                && !mention.authorizes
+                && matches!(mention.identity, wallet::AccountIdentity::PublicPda { .. }))
+    );
+}
+
+#[test]
+fn fixed_price_exact_output_builder_keeps_membership_and_cap() {
+    let membership = curve_core::MembershipPath {
+        index: 4,
+        salt: [5; 32],
+        siblings: [[6; 32]; 17],
+    };
+    let call = super::build_fixed_price_buy_invocation(
+        lbp_sale(),
+        AccountId::new([9; 32]),
+        ExactOutputTradeTerms {
+            amount_out: 10,
+            max_amount_in: 25,
+        },
+        Some(membership.clone()),
+        9,
+    );
+    let lbp_core::Message::Execute { instruction, .. } = call.instruction else {
+        panic!("signed purchase");
+    };
+    assert_eq!(
+        *instruction,
+        lbp_core::Message::BuyExactOutput {
+            membership: Some(membership),
+            amount_out: 10,
+            max_amount_in: 25,
+            now: 9
+        }
+    );
+}
+
+fn fixed_creation() -> factory_core::FixedPriceInputs {
+    let sale = lbp_sale();
+    let factory = factory_core::compute_factory_pda(
+        sale.namespace,
+        sale.factory_program_id,
+        sale.launch_salt,
+    );
+    let definition = factory_core::compute_definition_pda(
+        sale.namespace,
+        sale.factory_program_id,
+        sale.launch_salt,
+    );
+    let pool = lbp_core::compute_pool_pda(
+        sale.namespace,
+        sale.lbp_program_id,
+        definition,
+        sale.collateral_definition,
+        factory,
+    );
+    factory_core::FixedPriceInputs {
+        buy_policy: curve_core::BuyPolicy::Allowlist(curve_core::AllowlistPolicy {
+            version: 1,
+            namespace: *sale.namespace.value(),
+            sale_policy_id: *pool.value(),
+            root: [42; 32],
+        }),
+        namespace: sale.namespace,
+        launch_salt: sale.launch_salt,
+        name: "Sale".into(),
+        uri: "ipfs://sale".into(),
+        sale_inventory: 800,
+        creator_allocation: 200,
+        price: lbp_core::FixedPrice {
+            collateral_units: 25,
+            token_units: 10,
+        },
+        start: factory_core::SaleStart::Now { timestamp: 9 },
+        end_timestamp: Some(100),
+        allocation_release: factory_core::CreatorAllocationRelease::AfterSetup,
+        namespace_program_id: sale.namespace_program_id,
+        lbp_program_id: sale.lbp_program_id,
+        collateral_definition_id: sale.collateral_definition,
+        creator: AccountId::new([9; 32]),
+        now: 9,
+    }
+}
+
+#[test]
+fn fixed_price_creation_builder_preserves_policy_and_admits_setup_accounts() {
+    let selected = lbp_sale();
+    let inputs = fixed_creation();
+    let call =
+        super::build_create_fixed_price_invocation(selected.factory_program_id, inputs.clone());
+    assert_eq!(
+        call.instruction,
+        factory_core::Message::CreateFixedPriceLbp {
+            inputs: inputs.clone()
+        }
+    );
+    assert_eq!(call.signer_accounts, [inputs.creator]);
+    assert_eq!(
+        call.destination,
+        Actor::new(
+            factory_core::compute_factory_pda(
+                selected.namespace,
+                selected.factory_program_id,
+                selected.launch_salt
+            ),
+            selected.factory_program_id
+        )
+    );
+    let role = factory_core::compute_creator_role_pda(
+        selected.namespace,
+        selected.factory_program_id,
+        selected.launch_salt,
+    );
+    let mentions = call.account_mentions();
+    assert!(mentions.iter().any(|mention| mention.actor()
+        == Actor::new(role, curve_core::AUTHORITY_PROGRAM_ACCOUNT_ID)
+        && !mention.authorizes
+        && matches!(mention.identity, wallet::AccountIdentity::PublicPda { .. })));
+    assert!(call.actors.contains(&Actor::new(
+        inputs.creator,
+        curve_core::AUTHORITY_PROGRAM_ACCOUNT_ID
+    )));
+}
+
+#[test]
+fn fixed_price_continuation_builder_keeps_stage_and_has_no_replacement_policy() {
+    for stage in [
+        factory_core::LbpCreationStage::Minted,
+        factory_core::LbpCreationStage::Allocated,
+        factory_core::LbpCreationStage::PoolPrepared,
+    ] {
+        let call = super::build_continue_fixed_price_invocation(
+            lbp_sale(),
+            AccountId::new([9; 32]),
+            stage,
+            9,
+        );
+        assert_eq!(
+            call.instruction,
+            factory_core::Message::ContinueFixedPriceCreation {
+                expected_stage: stage,
+                creator: AccountId::new([9; 32]),
+                now: 9
+            }
+        );
+        let first = super::build_create_fixed_price_invocation(
+            lbp_sale().factory_program_id,
+            fixed_creation(),
+        );
+        assert_eq!(call.actors, first.actors);
+        assert_eq!(call.pda_accounts, first.pda_accounts);
+    }
+}
+
+#[test]
+fn weighted_exact_input_builder_keeps_membership_limits_and_pricing_clock() {
+    let trader = AccountId::new([9; 32]);
+    let membership = curve_core::MembershipPath {
+        index: 4,
+        salt: [5; 32],
+        siblings: [[6; 32]; 17],
+    };
+    let call = super::build_weighted_buy_with_collateral_invocation(
+        lbp_sale(),
+        trader,
+        ExactInputTradeTerms {
+            amount_in: 25,
+            min_amount_out: 10,
+        },
+        Some(membership.clone()),
+    );
+    assert_eq!(
+        call.destination,
+        Actor::new(trader, lbp_sale().lbp_program_id)
+    );
+    assert_eq!(call.signer_accounts, [trader]);
+    assert!(call.actors.contains(&lbp_core::pricing_clock::actor()));
+    let lbp_core::Message::Execute { instruction, .. } = call.instruction else {
+        panic!("signed purchase");
+    };
+    assert_eq!(
+        *instruction,
+        lbp_core::Message::BuyWeightedExactInput {
+            membership: Some(membership),
+            amount_in: 25,
+            min_amount_out: 10
+        }
+    );
+}
+
+#[test]
+fn weighted_exact_output_builder_keeps_membership_cap_and_pricing_clock() {
+    let membership = curve_core::MembershipPath {
+        index: 4,
+        salt: [5; 32],
+        siblings: [[6; 32]; 17],
+    };
+    let call = super::build_weighted_buy_invocation(
+        lbp_sale(),
+        AccountId::new([9; 32]),
+        ExactOutputTradeTerms {
+            amount_out: 10,
+            max_amount_in: 25,
+        },
+        Some(membership.clone()),
+    );
+    assert!(call.actors.contains(&lbp_core::pricing_clock::actor()));
+    let lbp_core::Message::Execute { instruction, .. } = call.instruction else {
+        panic!("signed purchase");
+    };
+    assert_eq!(
+        *instruction,
+        lbp_core::Message::BuyWeightedExactOutput {
+            membership: Some(membership),
+            amount_out: 10,
+            max_amount_in: 25
+        }
+    );
+}
+
+fn weighted_creation() -> factory_core::WeightedInputs {
+    let fixed = fixed_creation();
+    factory_core::WeightedInputs {
+        buy_policy: fixed.buy_policy,
+        namespace: fixed.namespace,
+        launch_salt: fixed.launch_salt,
+        name: fixed.name,
+        uri: fixed.uri,
+        sale_inventory: fixed.sale_inventory,
+        creator_allocation: fixed.creator_allocation,
+        collateral_seed: 100,
+        token_weight_start: lbp_core::WEIGHT_TOTAL / 2 + 1,
+        token_weight_end: lbp_core::WEIGHT_TOTAL / 2 - 1,
+        start_timestamp: 9,
+        end_timestamp: 100,
+        allocation_release: fixed.allocation_release,
+        namespace_program_id: fixed.namespace_program_id,
+        lbp_program_id: fixed.lbp_program_id,
+        collateral_definition_id: fixed.collateral_definition_id,
+        creator: fixed.creator,
+    }
+}
+
+#[test]
+fn weighted_creation_builder_preserves_policy_weights_and_setup_admission() {
+    let inputs = weighted_creation();
+    let call =
+        super::build_create_weighted_invocation(lbp_sale().factory_program_id, inputs.clone());
+    assert_eq!(
+        call.instruction,
+        factory_core::Message::CreateWeightedLbp { inputs }
+    );
+    let fixed =
+        super::build_create_fixed_price_invocation(lbp_sale().factory_program_id, fixed_creation());
+    assert_eq!(call.destination, fixed.destination);
+    assert_eq!(call.signer_accounts, fixed.signer_accounts);
+    assert_eq!(call.actors, fixed.actors);
+    assert_eq!(call.pda_accounts, fixed.pda_accounts);
+}
+
+#[test]
+fn weighted_continuation_builder_keeps_stage_without_time_or_replacement_policy() {
+    for stage in [
+        factory_core::LbpCreationStage::Minted,
+        factory_core::LbpCreationStage::Allocated,
+        factory_core::LbpCreationStage::PoolPrepared,
+    ] {
+        let call =
+            super::build_continue_weighted_invocation(lbp_sale(), AccountId::new([9; 32]), stage);
+        assert_eq!(
+            call.instruction,
+            factory_core::Message::ContinueWeightedCreation {
+                expected_stage: stage,
+                creator: AccountId::new([9; 32])
+            }
+        );
+        let first = super::build_create_weighted_invocation(
+            lbp_sale().factory_program_id,
+            weighted_creation(),
+        );
+        assert_eq!(call.actors, first.actors);
+        assert_eq!(call.pda_accounts, first.pda_accounts);
+    }
+}
+
 #[test]
 fn account_locations_parse_only_the_location_boundary() {
     let account_id = AccountId::new([11; 32]);
@@ -156,6 +516,23 @@ fn account_locations_parse_only_the_location_boundary() {
             .account_id(),
         account_id
     );
+}
+
+#[test]
+fn creation_preserves_the_allowlist_policy_on_the_factory_message() {
+    let policy = curve_core::BuyPolicy::Allowlist(curve_core::AllowlistPolicy {
+        version: 1,
+        namespace: *sale().namespace.value(),
+        sale_policy_id: *super::factory_pool_addresses(sale()).pool.value(),
+        root: [42; 32],
+    });
+    let mut request = creation();
+    request.buy_policy = policy.clone();
+    let call = build_create_sale_invocation(sale(), AccountId::new([9; 32]), request).unwrap();
+    let factory_core::Message::CreateFactoryPool { buy_policy, .. } = call.instruction else {
+        panic!("initial creation message");
+    };
+    assert_eq!(buy_policy, policy);
 }
 
 #[test]
@@ -198,6 +575,54 @@ fn resumed_creation_cannot_change_trade_mode_at_any_stage() {
             super::next_creation_invocation(sale(), AccountId::new([9; 32]), request, Some(&state)),
             Err(ClientError::LaunchParametersMismatch)
         ));
+    }
+}
+
+#[test]
+fn resumed_creation_rejects_allowlist_changes_or_downgrade_at_every_stage() {
+    let policy = curve_core::AllowlistPolicy {
+        version: 1,
+        namespace: *sale().namespace.value(),
+        sale_policy_id: *super::factory_pool_addresses(sale()).pool.value(),
+        root: [42; 32],
+    };
+    for stage in [
+        CreationStage::Minted,
+        CreationStage::Allocated,
+        CreationStage::PoolPrepared,
+        CreationStage::Active,
+    ] {
+        let mut state = valid_factory_state(sale());
+        state.buy_policy = curve_core::BuyPolicy::Allowlist(policy.clone());
+        state.creation_stage = stage;
+        let mut request = creation();
+        request.buy_policy = state.buy_policy.clone();
+        assert!(
+            super::next_creation_invocation(
+                sale(),
+                AccountId::new([9; 32]),
+                request.clone(),
+                Some(&state)
+            )
+            .is_ok()
+        );
+        let mut changed_root = policy.clone();
+        changed_root.root = [43; 32];
+        for replacement in [
+            curve_core::BuyPolicy::Open,
+            curve_core::BuyPolicy::Allowlist(changed_root),
+        ] {
+            request.buy_policy = replacement;
+            assert!(matches!(
+                super::next_creation_invocation(
+                    sale(),
+                    AccountId::new([9; 32]),
+                    request.clone(),
+                    Some(&state)
+                ),
+                Err(ClientError::LaunchParametersMismatch)
+            ));
+        }
     }
 }
 
@@ -375,8 +800,8 @@ fn namespace_selection_changes_factory_pool_and_swap_config_together() {
         amount_out: 10,
         max_amount_in: 100,
     };
-    let first = build_buy_invocation(sale(), AccountId::new([3; 32]), terms, 0);
-    let second = build_buy_invocation(other, AccountId::new([3; 32]), terms, 0);
+    let first = build_buy_invocation(sale(), AccountId::new([3; 32]), terms, None, 0);
+    let second = build_buy_invocation(other, AccountId::new([3; 32]), terms, None, 0);
     assert_ne!(first.instruction, second.instruction);
     assert!(first.actors.contains(&Actor::new(
         curve_core::compute_config_pda(sale().namespace, CURVE_PROGRAM_ID),
@@ -398,6 +823,7 @@ fn creation_and_trade_builders_use_one_factory_sale_context() {
             amount_out: 25,
             max_amount_in: 100,
         },
+        None,
         0,
     );
     let exact_input = build_buy_with_collateral_invocation(
@@ -407,6 +833,7 @@ fn creation_and_trade_builders_use_one_factory_sale_context() {
             amount_in: 25,
             min_amount_out: 10,
         },
+        None,
         0,
     );
     let sell = build_sell_invocation(
@@ -574,6 +1001,42 @@ fn settlement_builders_use_factory_actor_and_creator_signature() {
 }
 
 #[test]
+fn exact_output_purchase_preparation_keeps_membership_and_price_limits() {
+    let (pool, config) = pool_snapshot();
+    let membership = curve_core::MembershipPath {
+        index: 3,
+        salt: [7; 32],
+        siblings: [[8; 32]; 17],
+    };
+    let call = super::prepare_buy_invocation(
+        sale(),
+        AccountId::new([9; 32]),
+        &pool,
+        &config,
+        ExactOutputTradeTerms {
+            amount_out: 200,
+            max_amount_in: 25,
+        },
+        Some(membership.clone()),
+        1,
+    )
+    .unwrap();
+    let curve_core::Message::Execute { instruction, .. } = call.instruction else {
+        panic!("signed purchase");
+    };
+    assert_eq!(
+        *instruction,
+        curve_core::Message::SwapExactOutput {
+            amount_out: 200,
+            max_amount_in: 25,
+            token_in: sale().collateral_definition,
+            membership: Some(membership),
+            now: 1,
+        }
+    );
+}
+
+#[test]
 fn exact_output_buy_uses_collateral_input_and_typed_participant_limits() {
     let participant = AccountId::new([9; 32]);
     let call = build_buy_invocation(
@@ -583,6 +1046,7 @@ fn exact_output_buy_uses_collateral_input_and_typed_participant_limits() {
             amount_out: 25,
             max_amount_in: 100,
         },
+        None,
         0,
     );
     assert_eq!(call.destination, Actor::new(participant, CURVE_PROGRAM_ID));
@@ -592,7 +1056,7 @@ fn exact_output_buy_uses_collateral_input_and_typed_participant_limits() {
     };
     assert_eq!(pool, super::factory_pool_addresses(sale()).pool);
     assert!(
-        matches!(*instruction, curve_core::Message::SwapExactOutput { amount_out: 25, max_amount_in: 100, token_in, now: 0 } if token_in == sale().collateral_definition)
+        matches!(*instruction, curve_core::Message::SwapExactOutput { amount_out: 25, max_amount_in: 100, token_in, membership: None, now: 0 } if token_in == sale().collateral_definition)
     );
 }
 
@@ -606,6 +1070,7 @@ fn collateral_buy_uses_collateral_input_and_typed_participant_limits() {
             amount_in: 25,
             min_amount_out: 100,
         },
+        None,
         0,
     );
     assert_eq!(call.destination, Actor::new(participant, CURVE_PROGRAM_ID));
@@ -615,7 +1080,7 @@ fn collateral_buy_uses_collateral_input_and_typed_participant_limits() {
     };
     assert_eq!(pool, super::factory_pool_addresses(sale()).pool);
     assert!(
-        matches!(*instruction, curve_core::Message::SwapExactInput { amount_in: 25, min_amount_out: 100, token_in, now: 0 } if token_in == sale().collateral_definition)
+        matches!(*instruction, curve_core::Message::SwapExactInput { amount_in: 25, min_amount_out: 100, token_in, membership: None, now: 0 } if token_in == sale().collateral_definition)
     );
 }
 
@@ -638,7 +1103,43 @@ fn sell_uses_launch_token_input_and_typed_participant_limits() {
     };
     assert_eq!(pool, super::factory_pool_addresses(sale()).pool);
     assert!(
-        matches!(*instruction, curve_core::Message::SwapExactInput { amount_in: 25, min_amount_out: 10, token_in, now: 0 } if token_in == super::factory_pool_addresses(sale()).token_definition)
+        matches!(*instruction, curve_core::Message::SwapExactInput { amount_in: 25, min_amount_out: 10, token_in, membership: None, now: 0 } if token_in == super::factory_pool_addresses(sale()).token_definition)
+    );
+}
+
+#[test]
+fn collateral_purchase_preparation_keeps_membership_and_price_limits() {
+    let (pool, config) = pool_snapshot();
+    let membership = curve_core::MembershipPath {
+        index: 0x01020304,
+        salt: [7; 32],
+        siblings: [[8; 32]; 17],
+    };
+    let call = super::prepare_buy_with_collateral_invocation(
+        sale(),
+        AccountId::new([9; 32]),
+        &pool,
+        &config,
+        ExactInputTradeTerms {
+            amount_in: 25,
+            min_amount_out: 200,
+        },
+        Some(membership.clone()),
+        1,
+    )
+    .unwrap();
+    let curve_core::Message::Execute { instruction, .. } = call.instruction else {
+        panic!("signed purchase");
+    };
+    assert_eq!(
+        *instruction,
+        curve_core::Message::SwapExactInput {
+            amount_in: 25,
+            min_amount_out: 200,
+            token_in: sale().collateral_definition,
+            membership: Some(membership),
+            now: 1,
+        }
     );
 }
 
@@ -655,6 +1156,7 @@ fn collateral_purchase_preparation_rejects_output_below_participant_floor() {
                 amount_in: 25,
                 min_amount_out: 201
             },
+            None,
             1
         ),
         Err(ClientError::QuoteBuyWithCollateral(

@@ -16,6 +16,51 @@ fn variant(module: &str, message: &str, name: &str) -> Value {
 }
 
 #[test]
+fn allowlist_policy_and_membership_have_fixed_independent_wire_bytes() {
+    let policy = curve_core::BuyPolicy::Allowlist(curve_core::AllowlistPolicy {
+        version: 1,
+        namespace: [2; 32],
+        sale_policy_id: [3; 32],
+        root: [4; 32],
+    });
+    let mut expected = vec![1, 1];
+    expected.extend([2; 32]);
+    expected.extend([3; 32]);
+    expected.extend([4; 32]);
+    assert_eq!(borsh::to_vec(&policy).unwrap(), expected);
+    assert_eq!(
+        borsh::from_slice::<curve_core::BuyPolicy>(&expected).unwrap(),
+        policy
+    );
+    assert_eq!(borsh::to_vec(&curve_core::BuyPolicy::Open).unwrap(), [0]);
+    assert_eq!(
+        variant("eligibility_policy", "BuyPolicy", "Allowlist"),
+        json!({
+            "tag":1,"name":"Allowlist","fields":[{"name":"0","type":"AllowlistPolicy"}]
+        })
+    );
+    let membership = Some(curve_core::MembershipPath {
+        index: 0x01020304,
+        salt: [7; 32],
+        siblings: [[8; 32]; 17],
+    });
+    let mut expected = vec![1, 4, 3, 2, 1];
+    expected.extend([7; 32]);
+    expected.extend([8; 544]);
+    assert_eq!(borsh::to_vec(&membership).unwrap(), expected);
+    assert_eq!(
+        borsh::from_slice::<Option<curve_core::MembershipPath>>(&expected).unwrap(),
+        membership
+    );
+    assert_eq!(
+        schema()["modules"]["eligibility_policy"]["MembershipPath"]["fields"],
+        json!([
+            {"name":"index","type":"u32"},{"name":"salt","type":"[u8;32]"},{"name":"siblings","type":"[[u8;32];17]"}
+        ])
+    );
+}
+
+#[test]
 fn namespace_treasury_update_keeps_the_destination_on_wire() {
     assert_wire(
         curve_core::Message::UpdateTreasury {
@@ -268,6 +313,7 @@ fn curve_exact_input_keeps_token_direction_and_minimum_output_on_wire() {
             amount_in: 100,
             min_amount_out: 25,
             token_in: AccountId::new([4; 32]),
+            membership: None,
             now: 9,
         },
         concat!(
@@ -275,6 +321,7 @@ fn curve_exact_input_keeps_token_direction_and_minimum_output_on_wire() {
             "64000000000000000000000000000000",
             "19000000000000000000000000000000",
             "0404040404040404040404040404040404040404040404040404040404040404",
+            "00",
             "0900000000000000"
         ),
     );
@@ -283,7 +330,7 @@ fn curve_exact_input_keeps_token_direction_and_minimum_output_on_wire() {
         json!({
             "tag":5,"name":"SwapExactInput","fields":[
                 {"name":"amount_in","type":"u128"},{"name":"min_amount_out","type":"u128"},
-                {"name":"token_in","type":"AccountId"},{"name":"now","type":"u64"}
+                {"name":"token_in","type":"AccountId"},{"name":"membership","type":"Option<MembershipPath>"},{"name":"now","type":"u64"}
             ]
         })
     );
@@ -428,6 +475,7 @@ fn fixed_price_settlement_keeps_creator_and_clock_on_wire() {
 fn direct_pool_creation_keeps_namespace_owner_and_funding_terms_on_wire() {
     assert_wire(
         curve_core::Message::CreatePool {
+            buy_policy: curve_core::BuyPolicy::Open,
             namespace: AccountId::new([1; 32]),
             token0_definition_id: AccountId::new([2; 32]),
             token1_definition_id: AccountId::new([3; 32]),
@@ -446,7 +494,7 @@ fn direct_pool_creation_keeps_namespace_owner_and_funding_terms_on_wire() {
             now: 13,
         },
         concat!(
-            "08",
+            "0800",
             "0101010101010101010101010101010101010101010101010101010101010101",
             "0202020202020202020202020202020202020202020202020202020202020202",
             "0303030303030303030303030303030303030303030303030303030303030303",
@@ -470,6 +518,7 @@ fn direct_pool_creation_keeps_namespace_owner_and_funding_terms_on_wire() {
         variant("curve", "Message", "CreatePool"),
         json!({
             "tag":8,"name":"CreatePool","fields":[
+                {"name":"buy_policy","type":"BuyPolicy"},
                 {"name":"namespace","type":"AccountId"},
                 {"name":"token0_definition_id","type":"AccountId"},
                 {"name":"token1_definition_id","type":"AccountId"},
@@ -490,6 +539,7 @@ fn direct_pool_creation_keeps_namespace_owner_and_funding_terms_on_wire() {
 fn factory_creation_keeps_creator_namespace_and_saved_hook_terms_on_wire() {
     assert_wire(
         factory_core::Message::CreateFactoryPool {
+            buy_policy: curve_core::BuyPolicy::Open,
             trade_mode: 1,
             graduation_hook_program_id: Some(AccountId::new([1; 32])),
             graduation_hook_configuration: vec![2, 3],
@@ -509,7 +559,7 @@ fn factory_creation_keeps_creator_namespace_and_saved_hook_terms_on_wire() {
             now: 15,
         },
         concat!(
-            "000101",
+            "00000101",
             "0101010101010101010101010101010101010101010101010101010101010101",
             "020000000203",
             "0404040404040404040404040404040404040404040404040404040404040404",
@@ -532,6 +582,7 @@ fn factory_creation_keeps_creator_namespace_and_saved_hook_terms_on_wire() {
         variant("factory", "Message", "CreateFactoryPool"),
         json!({
             "tag":0,"name":"CreateFactoryPool","fields":[
+                {"name":"buy_policy","type":"BuyPolicy"},
                 {"name":"trade_mode","type":"u8"},
                 {"name":"graduation_hook_program_id","type":"Option<AccountId>"},
                 {"name":"graduation_hook_configuration","type":"Vec<u8>"},
@@ -633,6 +684,7 @@ fn participant_purchase_envelope_keeps_deployment_pool_and_explicit_limits_on_wi
             amount_out: 25,
             max_amount_in: 100,
             token_in: AccountId::new([4; 32]),
+            membership: None,
             now: 9,
         }),
     };
@@ -643,6 +695,7 @@ fn participant_purchase_envelope_keeps_deployment_pool_and_explicit_limits_on_wi
         "19000000000000000000000000000000",
         "64000000000000000000000000000000",
         "0404040404040404040404040404040404040404040404040404040404040404",
+        "00",
         "0900000000000000"
     ))
     .unwrap();
@@ -657,7 +710,7 @@ fn participant_purchase_envelope_keeps_deployment_pool_and_explicit_limits_on_wi
         variant("curve", "Message", "SwapExactOutput")["fields"],
         json!([
             {"name":"amount_out","type":"u128"}, {"name":"max_amount_in","type":"u128"},
-            {"name":"token_in","type":"AccountId"}, {"name":"now","type":"u64"}
+            {"name":"token_in","type":"AccountId"}, {"name":"membership","type":"Option<MembershipPath>"}, {"name":"now","type":"u64"}
         ])
     );
 }
@@ -800,11 +853,13 @@ fn fixed_price_lbp_price_and_activation_have_independent_wire_bytes() {
 #[test]
 fn fixed_price_buys_and_collection_keep_explicit_limits_on_wire() {
     let exact_input = lbp_core::Message::BuyExactInput {
+        membership: None,
         amount_in: 100,
         min_amount_out: 25,
         now: 9,
     };
     let exact_output = lbp_core::Message::BuyExactOutput {
+        membership: None,
         amount_out: 25,
         max_amount_in: 100,
         now: 9,
@@ -813,7 +868,7 @@ fn fixed_price_buys_and_collection_keep_explicit_limits_on_wire() {
         (
             exact_input,
             concat!(
-                "03",
+                "0300",
                 "64000000000000000000000000000000",
                 "19000000000000000000000000000000",
                 "0900000000000000"
@@ -822,7 +877,7 @@ fn fixed_price_buys_and_collection_keep_explicit_limits_on_wire() {
         (
             exact_output,
             concat!(
-                "04",
+                "0400",
                 "19000000000000000000000000000000",
                 "64000000000000000000000000000000",
                 "0900000000000000"
@@ -840,6 +895,7 @@ fn fixed_price_buys_and_collection_keep_explicit_limits_on_wire() {
     assert_eq!(
         variant("lbp", "Message", "BuyExactInput"),
         json!({"tag":3,"name":"BuyExactInput","fields":[
+            {"name":"membership","type":"Option<MembershipPath>"},
             {"name":"amount_in","type":"u128"},
             {"name":"min_amount_out","type":"u128"},
             {"name":"now","type":"u64"}
@@ -848,6 +904,7 @@ fn fixed_price_buys_and_collection_keep_explicit_limits_on_wire() {
     assert_eq!(
         variant("lbp", "Message", "BuyExactOutput"),
         json!({"tag":4,"name":"BuyExactOutput","fields":[
+            {"name":"membership","type":"Option<MembershipPath>"},
             {"name":"amount_out","type":"u128"},
             {"name":"max_amount_in","type":"u128"},
             {"name":"now","type":"u64"}
@@ -864,6 +921,7 @@ fn fixed_price_forwarding_keeps_pool_and_purchase_on_wire() {
     let message = lbp_core::Message::Execute {
         pool: AccountId::new([3; 32]),
         instruction: Box::new(lbp_core::Message::BuyExactInput {
+            membership: None,
             amount_in: 100,
             min_amount_out: 25,
             now: 9,
@@ -872,7 +930,7 @@ fn fixed_price_forwarding_keeps_pool_and_purchase_on_wire() {
     let expected = hex::decode(concat!(
         "06",
         "0303030303030303030303030303030303030303030303030303030303030303",
-        "03",
+        "0300",
         "64000000000000000000000000000000",
         "19000000000000000000000000000000",
         "0900000000000000"
@@ -919,10 +977,12 @@ fn fixed_price_optional_end_is_part_of_factory_and_pool_schemas() {
 #[test]
 fn weighted_buys_keep_only_amount_limits_on_wire() {
     let exact_in = lbp_core::Message::BuyWeightedExactInput {
+        membership: None,
         amount_in: 25,
         min_amount_out: 100,
     };
     let exact_out = lbp_core::Message::BuyWeightedExactOutput {
+        membership: None,
         amount_out: 25,
         max_amount_in: 100,
     };
@@ -943,6 +1003,7 @@ fn weighted_buys_keep_only_amount_limits_on_wire() {
         ),
     ] {
         let mut expected = hex::decode(tag).unwrap();
+        expected.push(0);
         expected.extend(
             hex::decode(concat!(
                 "19000000000000000000000000000000",
@@ -959,6 +1020,7 @@ fn weighted_buys_keep_only_amount_limits_on_wire() {
             variant("lbp", "Message", name),
             json!({
                 "tag":expected[0], "name":name, "fields":[
+                    {"name":"membership","type":"Option<MembershipPath>"},
                     {"name":amount,"type":"u128"}, {"name":limit,"type":"u128"}
                 ]
             })
@@ -1155,6 +1217,7 @@ fn weighted_factory_messages_keep_distinct_tags_and_normalized_weights() {
         9
     );
     let inputs = factory_core::WeightedInputs {
+        buy_policy: curve_core::BuyPolicy::Open,
         namespace: creator,
         launch_salt: [6; 32],
         name: "W".into(),
@@ -1175,7 +1238,7 @@ fn weighted_factory_messages_keep_distinct_tags_and_normalized_weights() {
     let message = factory_core::Message::CreateWeightedLbp {
         inputs: inputs.clone(),
     };
-    let mut expected = vec![8];
+    let mut expected = vec![8, 0];
     expected.extend_from_slice(creator.value());
     expected.extend_from_slice(&[6; 32]);
     expected.extend_from_slice(&[1, 0, 0, 0, b'W', 1, 0, 0, 0, b'u']);

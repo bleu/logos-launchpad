@@ -36,6 +36,7 @@ fn pools_without_expiry_keep_time_independent_trading_and_cannot_withdraw_while_
                 amount_in: 28,
                 min_amount_out: 0,
                 token_in: TOKEN1,
+                membership: None,
                 now: 1,
             },
         )
@@ -129,6 +130,7 @@ fn namespace() -> ActorState {
 }
 fn create_message(defer_funding: bool) -> Message {
     Message::CreatePool {
+        buy_policy: crate::BuyPolicy::Open,
         namespace: NS,
         token0_definition_id: TOKEN0,
         token1_definition_id: TOKEN1,
@@ -160,6 +162,247 @@ fn reply_to(
         message,
     })
 }
+#[test]
+fn allowlist_creation_rejects_a_different_sale_policy_id() {
+    let mut message = create_message(false);
+    if let Message::CreatePool { buy_policy, .. } = &mut message {
+        *buy_policy = crate::BuyPolicy::Allowlist(crate::AllowlistPolicy {
+            version: 1,
+            namespace: *NS.value(),
+            sale_policy_id: [99; 32],
+            root: [8; 32],
+        });
+    }
+    assert!(matches!(
+        handle(&call(
+            pool_id(),
+            ActorState::empty(),
+            Some(Actor::new(OWNER, PROGRAM)),
+            message
+        )),
+        Err(crate::Error::InvalidPool)
+    ));
+}
+
+#[test]
+fn allowlist_buy_without_membership_fails_before_namespace_or_token_calls() {
+    let mut state = pool_state();
+    state.buy_policy = crate::BuyPolicy::Allowlist(crate::AllowlistPolicy {
+        version: 1,
+        namespace: *NS.value(),
+        sale_policy_id: *pool_id().value(),
+        root: [8; 32],
+    });
+    assert!(matches!(
+        start(
+            &state,
+            Message::SwapExactInput {
+                amount_in: 28,
+                min_amount_out: 0,
+                token_in: TOKEN1,
+                membership: None,
+                now: 1,
+            }
+        ),
+        Err(crate::Error::Unauthorized)
+    ));
+}
+
+fn allowlist_for(trader: AccountId) -> (crate::BuyPolicy, crate::MembershipPath) {
+    use risc0_zkvm::sha::{Impl, Sha256 as _};
+    let path = crate::MembershipPath {
+        index: 0,
+        salt: [5; 32],
+        siblings: [[17; 32]; 17],
+    };
+    let context = [&[1][..], &NS.value()[..], &pool_id().value()[..]].concat();
+    let hash = |parts: &[&[u8]]| -> [u8; 32] {
+        Impl::hash_bytes(&parts.concat())
+            .as_bytes()
+            .try_into()
+            .unwrap()
+    };
+    let mut root = hash(&[
+        b"LP/allowlist/leaf/v1\0",
+        &context,
+        trader.value(),
+        &path.salt,
+    ]);
+    for sibling in &path.siblings {
+        root = hash(&[b"LP/allowlist/node/v1\0", &context, &root, sibling]);
+    }
+    (
+        crate::BuyPolicy::Allowlist(crate::AllowlistPolicy {
+            version: 1,
+            namespace: *NS.value(),
+            sale_policy_id: *pool_id().value(),
+            root,
+        }),
+        path,
+    )
+}
+
+#[test]
+fn allowlist_rejects_the_pool_as_its_own_trader() {
+    let mut state = pool_state();
+    let (policy, path) = allowlist_for(pool_id());
+    state.buy_policy = policy;
+    assert!(matches!(
+        handle(&call(
+            pool_id(),
+            borsh::to_vec(&state).unwrap().into(),
+            Some(Actor::new(pool_id(), PROGRAM)),
+            Message::SwapExactInput {
+                amount_in: 28,
+                min_amount_out: 0,
+                token_in: TOKEN1,
+                membership: Some(path),
+                now: 1,
+            },
+        )),
+        Err(crate::Error::Unauthorized)
+    ));
+}
+
+#[test]
+fn allowlist_exact_input_and_output_buys_can_reuse_membership() {
+    let mut state = pool_state();
+    let (policy, path) = allowlist_for(HOLDER);
+    state.buy_policy = policy.clone();
+    for message in [
+        Message::SwapExactInput {
+            amount_in: 28,
+            min_amount_out: 1,
+            token_in: TOKEN1,
+            membership: Some(path.clone()),
+            now: 1,
+        },
+        Message::SwapExactOutput {
+            amount_out: 10,
+            max_amount_in: 100,
+            token_in: TOKEN1,
+            membership: Some(path.clone()),
+            now: 1,
+        },
+    ] {
+        let before = state.pool.real_reserve0;
+        let response = answer_reads(
+            start(&state, message).unwrap(),
+            &state,
+            namespace(),
+            [
+                state.pool.real_reserve0,
+                state.pool.real_reserve1 + state.pool.fees_accrued,
+            ],
+        )
+        .unwrap();
+        state = PoolAccount::decode(response.post_state.as_ref().unwrap()).unwrap();
+        assert_eq!(state.buy_policy, policy);
+        assert!(state.pool.real_reserve0 < before);
+        assert!(response.sync_messages.iter().any(|call| matches!(
+            borsh::from_slice::<lez_compat_core::token::Message>(&call.message),
+            Ok(lez_compat_core::token::Message::Transfer {
+                definition: TOKEN0,
+                recipient: HOLDER,
+                ..
+            })
+        )));
+    }
+}
+
+#[test]
+fn allowlist_copied_membership_cannot_buy_for_another_trader() {
+    let mut state = pool_state();
+    let (policy, path) = allowlist_for(OWNER);
+    state.buy_policy = policy;
+    for membership in [None, Some(path)] {
+        for message in [
+            Message::SwapExactInput {
+                amount_in: 28,
+                min_amount_out: 0,
+                token_in: TOKEN1,
+                membership: membership.clone(),
+                now: 1,
+            },
+            Message::SwapExactOutput {
+                amount_out: 10,
+                max_amount_in: 100,
+                token_in: TOKEN1,
+                membership: membership.clone(),
+                now: 1,
+            },
+        ] {
+            assert!(matches!(
+                start(&state, message),
+                Err(crate::Error::Unauthorized)
+            ));
+        }
+    }
+}
+
+#[test]
+fn allowlist_does_not_gate_permitted_sells() {
+    let mut state = pool_state();
+    state.buy_policy = allowlist_for(OWNER).0;
+    let message = Message::SwapExactInput {
+        amount_in: 250,
+        min_amount_out: 1,
+        token_in: TOKEN0,
+        membership: None,
+        now: 1,
+    };
+    let response = answer_reads(
+        start(&state, message.clone()).unwrap(),
+        &state,
+        namespace(),
+        [800, 100],
+    )
+    .unwrap();
+    let sold = PoolAccount::decode(&response.post_state.unwrap()).unwrap();
+    assert!(sold.pool.real_reserve0 > 800);
+    assert_eq!(sold.buy_policy, state.buy_policy);
+    state.allowed_input_token = Some(pool::TokenSide::Token1);
+    assert!(matches!(
+        answer_reads(
+            start(&state, message).unwrap(),
+            &state,
+            namespace(),
+            [800, 100]
+        ),
+        Err(crate::Error::Restricted)
+    ));
+}
+
+#[test]
+fn allowlist_creation_and_activation_keep_the_same_policy() {
+    let (policy, _) = allowlist_for(HOLDER);
+    let mut message = create_message(true);
+    if let Message::CreatePool { buy_policy, .. } = &mut message {
+        *buy_policy = policy.clone();
+    }
+    let created = handle(&call(
+        pool_id(),
+        ActorState::empty(),
+        Some(Actor::new(OWNER, PROGRAM)),
+        message,
+    ))
+    .unwrap();
+    let created = answer_reads(created, &pool_state(), namespace(), [0, 0]).unwrap();
+    let state = PoolAccount::decode(&created.post_state.unwrap()).unwrap();
+    assert_eq!(state.buy_policy, policy);
+    assert!(!state.funded);
+    let activated = answer_reads(
+        start(&state, Message::ActivatePool { now: 1 }).unwrap(),
+        &state,
+        namespace(),
+        [0, 0],
+    )
+    .unwrap();
+    let state = PoolAccount::decode(&activated.post_state.unwrap()).unwrap();
+    assert_eq!(state.buy_policy, policy);
+    assert!(state.funded);
+}
+
 #[test]
 fn direct_creation_requires_the_creation_identity_signer() {
     assert!(matches!(
@@ -248,6 +491,7 @@ fn accrued_fees_cannot_back_swaps_collection_or_withdrawal() {
             amount_in: 250,
             min_amount_out: 0,
             token_in: TOKEN0,
+            membership: None,
             now: 1,
         },
         Message::CollectFees,
@@ -283,6 +527,7 @@ fn namespace_and_vault_replies_require_the_exact_account_and_program() {
             amount_in: 250,
             min_amount_out: 0,
             token_in: TOKEN0,
+            membership: None,
             now: 1,
         },
     )
@@ -668,18 +913,21 @@ fn namespace_freeze_blocks_each_swap_and_unfreeze_does_not_reopen_expired_pools(
             amount_in: 28,
             min_amount_out: 1,
             token_in: TOKEN1,
+            membership: None,
             now: 1,
         },
         Message::SwapExactOutput {
             amount_out: 200,
             max_amount_in: 100,
             token_in: TOKEN1,
+            membership: None,
             now: 1,
         },
         Message::SwapExactInput {
             amount_in: 250,
             min_amount_out: 1,
             token_in: TOKEN0,
+            membership: None,
             now: 1,
         },
     ] {
@@ -717,6 +965,7 @@ fn namespace_freeze_blocks_each_swap_and_unfreeze_does_not_reopen_expired_pools(
                         amount_in: 28,
                         min_amount_out: 0,
                         token_in: TOKEN1,
+                        membership: None,
                         now: 42
                     }
                 )
@@ -839,12 +1088,14 @@ fn neutral_input_restrictions_apply_to_both_buy_forms_and_sells() {
             amount_in: 28,
             min_amount_out: 0,
             token_in: TOKEN1,
+            membership: None,
             now: 1,
         },
         Message::SwapExactOutput {
             amount_out: 200,
             max_amount_in: 100,
             token_in: TOKEN1,
+            membership: None,
             now: 1,
         },
     ] {
@@ -867,6 +1118,7 @@ fn neutral_input_restrictions_apply_to_both_buy_forms_and_sells() {
                     amount_in: 250,
                     min_amount_out: 0,
                     token_in: TOKEN0,
+                    membership: None,
                     now: 1
                 }
             )
@@ -886,6 +1138,7 @@ fn neutral_input_restrictions_apply_to_both_buy_forms_and_sells() {
                     amount_out: 19,
                     max_amount_in: 1000,
                     token_in: TOKEN0,
+                    membership: None,
                     now: 1
                 }
             )
@@ -908,18 +1161,21 @@ fn live_fee_changes_respect_buy_and_sell_slippage() {
             amount_in: 250,
             min_amount_out: 19,
             token_in: TOKEN0,
+            membership: None,
             now: 1,
         },
         Message::SwapExactInput {
             amount_in: 28,
             min_amount_out: 205,
             token_in: TOKEN1,
+            membership: None,
             now: 1,
         },
         Message::SwapExactOutput {
             amount_out: 200,
             max_amount_in: 26,
             token_in: TOKEN1,
+            membership: None,
             now: 1,
         },
     ] {
@@ -1036,6 +1292,7 @@ fn prepared_pool_cannot_trade_or_settle_until_funding_and_activates_only_once() 
                     amount_in: 1,
                     min_amount_out: 0,
                     token_in: TOKEN1,
+                    membership: None,
                     now: 1
                 }
             )
@@ -1060,6 +1317,41 @@ fn prepared_pool_cannot_trade_or_settle_until_funding_and_activates_only_once() 
         start(&funded, Message::ActivatePool { now: 2 }),
         Err(crate::Error::AlreadyInitialized)
     ));
+}
+
+#[test]
+fn factory_creation_relay_rejects_policy_for_another_namespace() {
+    let factory = AccountId::new([61; 32]);
+    let seed = [62; 32];
+    let owner = AccountId::for_public_pda(&factory, &lee_core::program::PdaSeed::new(seed));
+    let id = compute_pool_pda(NS, PROGRAM, TOKEN0, TOKEN1, owner);
+    let mut message = create_message(true);
+    if let Message::CreatePool {
+        buy_policy,
+        owner: stored,
+        owner_program_id,
+        owner_program_seed,
+        ..
+    } = &mut message
+    {
+        *stored = owner;
+        *owner_program_id = Some(factory);
+        *owner_program_seed = Some(seed);
+        *buy_policy = crate::BuyPolicy::Allowlist(crate::AllowlistPolicy {
+            version: 1,
+            namespace: [99; 32],
+            sale_policy_id: *id.value(),
+            root: [8; 32],
+        });
+    }
+    let mut request = call(
+        owner,
+        ActorState::empty(),
+        Some(Actor::new(owner, factory)),
+        message,
+    );
+    request.is_authorized = true;
+    assert!(matches!(handle(&request), Err(crate::Error::InvalidPool)));
 }
 
 #[test]
@@ -1184,12 +1476,14 @@ fn signed_pool_entry_cannot_be_used_without_authorization_or_for_namespace_contr
             amount_in: 1,
             min_amount_out: 0,
             token_in: TOKEN1,
+            membership: None,
             now: 1,
         },
         Message::SwapExactOutput {
             amount_out: 1,
             max_amount_in: 1,
             token_in: TOKEN1,
+            membership: None,
             now: 1,
         },
     ] {
@@ -1236,12 +1530,14 @@ fn swaps_require_inclusion_before_expiry_without_client_time_freshness() {
             amount_in: 28,
             min_amount_out: 0,
             token_in: TOKEN1,
+            membership: None,
             now: 1_700_000_001,
         },
         Message::SwapExactOutput {
             amount_out: 200,
             max_amount_in: 100,
             token_in: TOKEN1,
+            membership: None,
             now: 1_700_000_001,
         },
     ] {
@@ -1348,6 +1644,7 @@ fn activation_binds_open_and_expired_branches_to_inclusion_time() {
                         amount_in: 28,
                         min_amount_out: 0,
                         token_in: TOKEN1,
+                        membership: None,
                         now: 42
                     }
                 )
@@ -1366,6 +1663,7 @@ fn activation_binds_open_and_expired_branches_to_inclusion_time() {
                         amount_in: 28,
                         min_amount_out: 0,
                         token_in: TOKEN1,
+                        membership: None,
                         now: 1,
                     },
                 )
@@ -1397,6 +1695,7 @@ fn activation_binds_open_and_expired_branches_to_inclusion_time() {
 
 fn pool_state() -> PoolAccount {
     PoolAccount {
+        buy_policy: crate::BuyPolicy::Open,
         allowed_input_token: None,
         funded: true,
         namespace: NS,
@@ -1536,6 +1835,7 @@ fn exact_input_sell_uses_live_collateral_fee_and_synchronous_token_transfers() {
                 amount_in: 250,
                 min_amount_out: 19,
                 token_in: TOKEN0,
+                membership: None,
                 now: 1,
             },
         )
@@ -1595,6 +1895,7 @@ fn exact_output_buy_caps_full_collateral_input_including_live_fees() {
         amount_out: 200,
         max_amount_in: 28,
         token_in: TOKEN1,
+        membership: None,
         now: 1,
     };
     let response = answer_reads(

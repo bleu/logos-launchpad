@@ -1,11 +1,26 @@
 {
   "encoding": "borsh",
   "imports": {
+    "curve": [
+      "eligibility_policy",
+      "pool"
+    ],
+    "factory": [
+      "curve",
+      "eligibility_policy",
+      "hook",
+      "lbp_setup"
+    ],
     "hook": [
       "factory"
     ],
+    "lbp": [
+      "curve"
+    ],
     "lbp_setup": [
-      "factory"
+      "curve",
+      "factory",
+      "lbp"
     ]
   },
   "modules": {
@@ -120,6 +135,10 @@
                 "type": "AccountId"
               },
               {
+                "name": "membership",
+                "type": "Option<MembershipPath>"
+              },
+              {
                 "name": "now",
                 "type": "u64"
               }
@@ -140,6 +159,10 @@
               {
                 "name": "token_in",
                 "type": "AccountId"
+              },
+              {
+                "name": "membership",
+                "type": "Option<MembershipPath>"
               },
               {
                 "name": "now",
@@ -175,6 +198,10 @@
           },
           {
             "fields": [
+              {
+                "name": "buy_policy",
+                "type": "BuyPolicy"
+              },
               {
                 "name": "namespace",
                 "type": "AccountId"
@@ -360,6 +387,10 @@
       "PoolAccount": {
         "fields": [
           {
+            "name": "buy_policy",
+            "type": "BuyPolicy"
+          },
+          {
             "name": "allowed_input_token",
             "type": "Option<pool::TokenSide>"
           },
@@ -394,6 +425,63 @@
         ]
       }
     },
+    "eligibility_policy": {
+      "AllowlistPolicy": {
+        "fields": [
+          {
+            "name": "version",
+            "type": "u8"
+          },
+          {
+            "name": "namespace",
+            "type": "[u8;32]"
+          },
+          {
+            "name": "sale_policy_id",
+            "type": "[u8;32]"
+          },
+          {
+            "name": "root",
+            "type": "[u8;32]"
+          }
+        ]
+      },
+      "BuyPolicy": {
+        "variants": [
+          {
+            "fields": [],
+            "name": "Open",
+            "tag": 0
+          },
+          {
+            "fields": [
+              {
+                "name": "0",
+                "type": "AllowlistPolicy"
+              }
+            ],
+            "name": "Allowlist",
+            "tag": 1
+          }
+        ]
+      },
+      "MembershipPath": {
+        "fields": [
+          {
+            "name": "index",
+            "type": "u32"
+          },
+          {
+            "name": "salt",
+            "type": "[u8;32]"
+          },
+          {
+            "name": "siblings",
+            "type": "[[u8;32];17]"
+          }
+        ]
+      }
+    },
     "factory": {
       "CreationStage": {
         "variants": [
@@ -421,6 +509,10 @@
       },
       "FactoryState": {
         "fields": [
+          {
+            "name": "buy_policy",
+            "type": "BuyPolicy"
+          },
           {
             "name": "trade_mode",
             "type": "TradeMode"
@@ -531,6 +623,10 @@
         "variants": [
           {
             "fields": [
+              {
+                "name": "buy_policy",
+                "type": "BuyPolicy"
+              },
               {
                 "name": "trade_mode",
                 "type": "u8"
@@ -1005,6 +1101,10 @@
       "FixedPricePoolInputs": {
         "fields": [
           {
+            "name": "buy_policy",
+            "type": "BuyPolicy"
+          },
+          {
             "name": "namespace",
             "type": "AccountId"
           },
@@ -1079,6 +1179,10 @@
           {
             "fields": [
               {
+                "name": "membership",
+                "type": "Option<MembershipPath>"
+              },
+              {
                 "name": "amount_in",
                 "type": "u128"
               },
@@ -1096,6 +1200,10 @@
           },
           {
             "fields": [
+              {
+                "name": "membership",
+                "type": "Option<MembershipPath>"
+              },
               {
                 "name": "amount_out",
                 "type": "u128"
@@ -1163,6 +1271,10 @@
           {
             "fields": [
               {
+                "name": "membership",
+                "type": "Option<MembershipPath>"
+              },
+              {
                 "name": "amount_in",
                 "type": "u128"
               },
@@ -1176,6 +1288,10 @@
           },
           {
             "fields": [
+              {
+                "name": "membership",
+                "type": "Option<MembershipPath>"
+              },
               {
                 "name": "amount_out",
                 "type": "u128"
@@ -1229,6 +1345,10 @@
       },
       "PoolAccount": {
         "fields": [
+          {
+            "name": "buy_policy",
+            "type": "BuyPolicy"
+          },
           {
             "name": "mode",
             "type": "PoolMode"
@@ -1357,6 +1477,10 @@
       "WeightedPoolInputs": {
         "fields": [
           {
+            "name": "buy_policy",
+            "type": "BuyPolicy"
+          },
+          {
             "name": "namespace",
             "type": "AccountId"
           },
@@ -1418,6 +1542,10 @@
     "lbp_setup": {
       "FixedPriceInputs": {
         "fields": [
+          {
+            "name": "buy_policy",
+            "type": "curve::BuyPolicy"
+          },
           {
             "name": "namespace",
             "type": "AccountId"
@@ -1506,6 +1634,10 @@
       },
       "LbpLaunchState": {
         "fields": [
+          {
+            "name": "buy_policy",
+            "type": "curve::BuyPolicy"
+          },
           {
             "name": "format",
             "type": "[u8;8]"
@@ -1657,6 +1789,10 @@
       },
       "WeightedInputs": {
         "fields": [
+          {
+            "name": "buy_policy",
+            "type": "curve::BuyPolicy"
+          },
           {
             "name": "namespace",
             "type": "AccountId"
