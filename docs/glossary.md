@@ -35,8 +35,7 @@ This page explains technical shorthand used in this repository. [CONTEXT.md](../
 | Expiry / end timestamp | A configured time that can end a bonding-curve sale or the scheduled end of a fixed-price or weighted sale. |
 | `poke` | A future permissionless weighted-sale call that records a time checkpoint without changing the price schedule. |
 | Pause / freeze | Controls that stop specified actions. Their platform integration and policy remain separate from namespace administration. |
-| Allowlist / proof / nullifier | A list of permitted participants, evidence that a participant is permitted, and a value used to prevent proof reuse. Fixed-price and weighted sale allowlist product rules are accepted; the proof method remains open. |
-| Purchase allowance | Permission for one successful fixed-price or weighted sale buy per approved participant per sale, shared across public and private routes when an allowlist is enabled. |
+| Allowlist / proof / nullifier | A fixed private list of approved public trading accounts, evidence that the actual trader is a member and controls the purchase, and a value that prevents spent private state from being used again. Participants can precompute batches of public addresses; approval is not consumed by a buy. Private accounts can still fund trades and receive returns. All three engines implement public buy admission under [ADR 0021](adr/0021-modes-and-open-limits.md), with signed development authority and replay checks; wallet support and complete private execution remain open. |
 | Dust / oversized trade / input envelope | Very small trades, trades that are too large, and the tested range of values that an implementation accepts safely. |
 
 ## Roles, accounts and custody
@@ -67,7 +66,7 @@ This page explains technical shorthand used in this repository. [CONTEXT.md](../
 | --- | --- |
 | Private route | The planned SDK-managed transaction that deshields input, trades publicly, and returns received tokens, unused input and unused gas to participant-controlled private accounts. Actual fees are excluded. |
 | Shielded / deshield / re-shield | Protected private balance state; moving assets to a public account; and moving received or unused assets back to protected state. |
-| Fresh single-use public account | A new public account used for the trade within one private-route transaction. |
+| Fresh public trading account | An account the wallet prefers to use for one private-route attempt. For an allowlisted buy, its address must already be approved, for example from a precomputed batch. One-use is a wallet privacy preference, not an on-chain purchase restriction. |
 | Public trade effects | Pool state and trade results visible on the public chain. The route does not make them private. |
 | ZK / zero knowledge / zkVM | A proof system that can show a computation was valid without exposing all inputs; a zkVM is a virtual machine that can produce such proofs. RISC Zero is a zkVM project name, but this repository does not select or implement it. |
 | Proving readiness | Evidence that an implementation can meet the proof-related requirements that apply to it. Existing documents make no such production claim. |

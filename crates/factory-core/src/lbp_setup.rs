@@ -10,6 +10,7 @@ pub enum SaleStart {
 }
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize, Serialize, Deserialize)]
 pub struct FixedPriceInputs {
+    pub buy_policy: curve_core::BuyPolicy,
     pub namespace: AccountId,
     pub launch_salt: [u8; 32],
     pub name: String,
@@ -28,6 +29,7 @@ pub struct FixedPriceInputs {
 }
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize, Serialize, Deserialize)]
 pub struct WeightedInputs {
+    pub buy_policy: curve_core::BuyPolicy,
     pub namespace: AccountId,
     pub launch_salt: [u8; 32],
     pub name: String,
@@ -85,6 +87,7 @@ pub enum LbpCreationStage {
 }
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct LbpLaunchState {
+    pub buy_policy: curve_core::BuyPolicy,
     format: [u8; 8],
     version: u16,
     pub creator_role_id: AccountId,
@@ -111,6 +114,7 @@ pub struct LbpLaunchState {
     pub(super) pending: Option<Pending>,
 }
 struct SetupInputs {
+    buy_policy: curve_core::BuyPolicy,
     namespace: AccountId,
     launch_salt: [u8; 32],
     name: String,
@@ -137,6 +141,7 @@ pub(super) fn create_fixed(
     create(
         input,
         SetupInputs {
+            buy_policy: inputs.buy_policy,
             namespace: inputs.namespace,
             launch_salt: inputs.launch_salt,
             name: inputs.name,
@@ -171,6 +176,7 @@ pub(super) fn create_weighted(
     create(
         input,
         SetupInputs {
+            buy_policy: inputs.buy_policy,
             namespace: inputs.namespace,
             launch_salt: inputs.launch_salt,
             name: inputs.name,
@@ -231,7 +237,19 @@ fn create(input: &ReceiveInput, inputs: SetupInputs, command: Message) -> Result
     {
         return Err(Error::InvalidTerms);
     }
+    let pool_id = lbp_core::compute_pool_pda(
+        inputs.namespace,
+        inputs.lbp_program_id,
+        token_definition_id,
+        inputs.collateral_definition_id,
+        input.receiver.account_id,
+    );
+    inputs
+        .buy_policy
+        .validate_binding(inputs.namespace.value(), pool_id.value())
+        .map_err(|_| Error::InvalidTerms)?;
     let state = LbpLaunchState {
+        buy_policy: inputs.buy_policy,
         format: match inputs.mode {
             LbpSetupMode::FixedPrice => *b"LZFXLAUN",
             LbpSetupMode::Weighted { .. } => *b"LZWGLAUN",
@@ -245,13 +263,7 @@ fn create(input: &ReceiveInput, inputs: SetupInputs, command: Message) -> Result
         token_definition_id,
         collateral_definition_id: inputs.collateral_definition_id,
         creator_escrow_id: compute_escrow_pda(inputs.namespace, program, inputs.launch_salt),
-        pool_id: lbp_core::compute_pool_pda(
-            inputs.namespace,
-            inputs.lbp_program_id,
-            token_definition_id,
-            inputs.collateral_definition_id,
-            input.receiver.account_id,
-        ),
+        pool_id,
         namespace_program_id: inputs.namespace_program_id,
         lbp_program_id: inputs.lbp_program_id,
         sale_inventory: inputs.sale_inventory,
@@ -536,7 +548,8 @@ pub(super) fn resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
         {
             let pool = lbp_core::PoolAccount::decode(&pending.values[0])
                 .map_err(|_| Error::InvalidState)?;
-            if !payout_mode_matches(state.mode, pool.mode)
+            if pool.buy_policy != state.buy_policy
+                || !payout_mode_matches(state.mode, pool.mode)
                 || pool.namespace != state.namespace
                 || pool.namespace_program_id != state.namespace_program_id
                 || pool.factory_owner != input.receiver.account_id
@@ -635,7 +648,8 @@ pub(super) fn resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
                 }
                 let pool = lbp_core::PoolAccount::decode(&pending.values[4])
                     .map_err(|_| Error::InvalidState)?;
-                if pool.funded
+                if pool.buy_policy != state.buy_policy
+                    || pool.funded
                     || pool.mode != state.mode.pool_mode()
                     || pool.remaining_inventory != state.sale_inventory
                     || pool.accrued_fees != 0
@@ -745,6 +759,7 @@ pub(super) fn resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
                 let prepare = match state.mode {
                     LbpSetupMode::FixedPrice => lbp_core::Message::PrepareFixedPrice {
                         inputs: lbp_core::FixedPricePoolInputs {
+                            buy_policy: state.buy_policy.clone(),
                             namespace: state.namespace,
                             namespace_program_id: state.namespace_program_id,
                             factory_program_id: input.receiver.program_account_id,
@@ -766,6 +781,7 @@ pub(super) fn resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
                         token_weight_end,
                     } => lbp_core::Message::PrepareWeighted {
                         inputs: lbp_core::WeightedPoolInputs {
+                            buy_policy: state.buy_policy.clone(),
                             namespace: state.namespace,
                             namespace_program_id: state.namespace_program_id,
                             factory_program_id: input.receiver.program_account_id,

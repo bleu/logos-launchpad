@@ -18,6 +18,7 @@ fn frozen_namespace_rejects_current_state_purchase_quotes() {
     )
     .unwrap();
     let pool = curve_core::PoolAccount {
+        buy_policy: curve_core::BuyPolicy::Open,
         allowed_input_token: None,
         funded: true,
         namespace,
@@ -60,6 +61,7 @@ fn purchase_preparation_checks_the_participant_cap_with_current_namespace_fees()
     )
     .unwrap();
     let pool = curve_core::PoolAccount {
+        buy_policy: curve_core::BuyPolicy::Open,
         allowed_input_token: None,
         funded: true,
         namespace,
@@ -93,6 +95,7 @@ fn purchase_preparation_checks_the_participant_cap_with_current_namespace_fees()
             amount_out: 200,
             max_amount_in: 25,
         },
+        None,
         0,
     );
     assert!(matches!(
@@ -119,6 +122,7 @@ fn timed_purchase_declares_the_clock_actor_used_by_the_curve() {
             amount_out: 1,
             max_amount_in: 2,
         },
+        None,
         0,
     );
     assert!(call.actors.contains(&Actor::new(
@@ -198,6 +202,7 @@ fn first_purchase_admits_new_participant_output_holding() {
             amount_out: 1,
             max_amount_in: 2,
         },
+        None,
         0,
     );
     let holding = lez_compat_core::token::holding_address(
@@ -326,6 +331,7 @@ fn creation_request_preserves_unix_seconds_on_the_public_wire() {
         },
         AccountId::new([6; 32]),
         launchpad_client::CreateSaleRequest {
+            buy_policy: curve_core::BuyPolicy::Open,
             trade_mode: launchpad_client::TradeMode::BuyAndSell,
             graduation_hook: None,
             name: "Sale".into(),
@@ -348,7 +354,7 @@ fn creation_request_preserves_unix_seconds_on_the_public_wire() {
             ..
         }
     ));
-    assert_eq!(call.message_bytes().unwrap().len(), 287);
+    assert_eq!(call.message_bytes().unwrap().len(), 288);
     assert!(
         call.message_bytes()
             .unwrap()

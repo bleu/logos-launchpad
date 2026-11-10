@@ -465,6 +465,16 @@ pub(super) fn begin(input: &ReceiveInput, message: Message) -> Result<Response, 
         {
             return Err(Error::Unauthorized);
         }
+        match &message {
+            Message::BuyExactInput { membership, .. }
+            | Message::BuyExactOutput { membership, .. }
+            | Message::BuyWeightedExactInput { membership, .. }
+            | Message::BuyWeightedExactOutput { membership, .. } => state
+                .buy_policy
+                .admit(sender.account_id.value(), membership.as_ref())
+                .map_err(|_| Error::Unauthorized)?,
+            _ => {}
+        }
         sender.account_id
     };
     Pending {

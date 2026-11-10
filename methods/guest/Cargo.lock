@@ -582,6 +582,7 @@ version = "0.1.0"
 dependencies = [
  "borsh",
  "clock_core",
+ "eligibility-policy",
  "lee_core",
  "lez-compat-core",
  "pool",
@@ -769,6 +770,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4445909572dbd556c457c849c4ca58623d84b27c8fff1e74b0b4227d8b90d17b"
 
 [[package]]
+name = "eligibility-policy"
+version = "0.1.0"
+dependencies = [
+ "borsh",
+ "serde",
+ "sha2",
+]
+
+[[package]]
 name = "embedded-io"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -813,6 +823,7 @@ dependencies = [
  "borsh",
  "clock_core",
  "curve-core",
+ "eligibility-policy",
  "lbp-core",
  "lee_core",
  "lez-compat-core",

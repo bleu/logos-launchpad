@@ -1,0 +1,12 @@
+[package]
+name = "eligibility-proof-verifier"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.94.1"
+publish = false
+
+[dependencies]
+eligibility-policy = { path = "../../../../crates/eligibility-policy" }
+
+[dev-dependencies]
+serde_json = "=1.0.145"

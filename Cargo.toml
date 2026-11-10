@@ -4,6 +4,7 @@ resolver = "3"
 members = [
     "crates/curve-core",
     "crates/curve-math",
+    "crates/eligibility-policy",
     "crates/factory-core",
     "crates/lbp-core",
     "crates/launchpad-client",
@@ -14,6 +15,7 @@ members = [
 default-members = [
     "crates/curve-core",
     "crates/curve-math",
+    "crates/eligibility-policy",
     "crates/factory-core",
     "crates/lbp-core",
     "crates/pool",
@@ -43,6 +45,7 @@ clock_core = { git = "https://github.com/logos-blockchain/logos-execution-zone.g
 lez-compat-core = { path = "packages/lez-compat/core" }
 
 curve-math = { path = "crates/curve-math" }
+eligibility-policy = { path = "crates/eligibility-policy" }
 weighted-math-core = { path = "packages/weighted-math/crates/weighted-math-core" }
 pool = { path = "crates/pool" }
 curve-core = { path = "crates/curve-core" }

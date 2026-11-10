@@ -6,6 +6,7 @@ rust-version.workspace = true
 license = "MIT"
 
 [dependencies]
+eligibility-policy = { path = "../eligibility-policy" }
 lez-compat-core.workspace = true
 lbp-core.workspace = true
 borsh.workspace = true
