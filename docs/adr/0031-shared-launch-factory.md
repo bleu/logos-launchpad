@@ -30,23 +30,13 @@ Separate permission to trade from permission to settle. Reuse policy checks with
 
 The allowlist is a shared buy-admission policy, with pre-approved public trading accounts and unlimited repeated purchases under [ADR 0021](0021-modes-and-open-limits.md). All three engines use the maintained `crates/eligibility-policy` verifier and preserve the initial policy through staged setup. The [integration evidence](../../plans/allowlist-program-integration.md#public-execution-evidence) covers signed public buys; weighted tests use a mock clock and normal weighted buys remain unsupported. Private accounts remain planned funding and return endpoints. Policy reuse does not supply private token holdings or a complete private route.
 
-## Policy contract and test seams
+## Policy contract
 
-Keep these defaults during policy extraction:
+Preserve existing fees, ending rules, payouts, live namespace settings and buy-only allowlist admission. See [settlement](0020-settlement-and-graduation.md) and [sale closing](0025-sale-closing.md). New policy choices require explicit accounting rules; neither fixed-price nor weighted sales has a curve `R` reserve.
 
-| Engine | Fees | Ending | Settlement |
-| --- | --- | --- | --- |
-| Bonding-curve | Trader-borne collateral input/output | `D` exhaustion or optional expiry | Burn unsold `D`; manual payout or configured adapter receives `R` and recorded real collateral |
-| Fixed-price | Trader-borne input before pricing | Sellout or optional expiry | Burn unsold inventory; pay recorded net proceeds |
-| Weighted | Creator-borne; full buyer input for pricing | Scheduled end, including after inventory depletion | Burn unsold inventory; pay recorded seed plus net proceeds |
+Share controls and graduation through typed interfaces without changing supported behavior. Creation must fix pause as disabled or authority-controlled. The current creator controls factory sales; the current owner controls direct pools. Authenticate every call, including retries. Pause blocks swaps, but permits fee collection and safe settlement. Resume must not move the schedule or clear emergency freeze. Controls reject closed sales; weighted inventory depletion alone does not end the schedule.
 
-Current roles, live namespace rates and treasury, rounding, inclusion bounds and surplus exclusion stay unchanged. Public allowlist admission remains shared and buy-only. Fixed-price and weighted sells, factory creator early close and caller-selected payout destinations remain unsupported.
-
-Pause/resume, ending, fees and graduation must be available through shared interfaces, with explicit supported configurations. Optional pause/resume is approved for all factory sales and direct curve pools but is not yet shared. Creation will fix pause as disabled or authority-controlled. The current creator will control factory sales, and the current owner will control direct curve pools. Each call must authenticate, including repeated calls. Pause must block supported swaps, not fee collection or safe settlement; resume must not move a schedule or clear emergency freeze. Controls must reject effective closure, including no-end fixed-price sellout. Weighted inventory depletion alone keeps its scheduled ending. Existing weighted controls and their change-only event remain available; common control events are pending.
-
-Shared implementation does not approve new fee incidence or settlement rights. New fee/ending selections require a checked accounting contract. Before fixed-price or weighted graduation can be enabled, approve each asset's source and destination, including creator seed, unsold inventory, proceeds, fees, surplus and allocation. Neither engine has a curve `R` reserve. Keep callback success distinct from DEX liquidity.
-
-Test pure pricing and policy decisions through their caller interfaces. Test account bindings, role checks and policy bypass through the pool handlers. Signed guest transactions must prove token effects, full rollback and exact-once retries. The same policy cases must run across the supported engines; host assertions about emitted calls do not establish execution.
+Test shared policies through each engine's interface. Signed guest tests must check token effects, rollback and retries. Callback success does not prove DEX liquidity.
 
 ## Consequences
 
