@@ -15,6 +15,7 @@ fn id(n: u8) -> AccountId {
 fn weighted_inputs() -> WeightedPoolInputs {
     WeightedPoolInputs {
         buy_policy: curve_core::BuyPolicy::Open,
+        pause_policy: lbp_core::PausePolicy::AuthorityControlled,
         namespace: id(40),
         namespace_program_id: id(6),
         factory_program_id: id(7),
@@ -441,5 +442,22 @@ fn weighted_policy_survives_every_prepare_and_activation_callback() {
                 .funded,
             activate
         );
+    }
+}
+
+#[test]
+fn weighted_preparation_preserves_each_explicit_pause_policy() {
+    for policy in [
+        lbp_core::PausePolicy::Disabled,
+        lbp_core::PausePolicy::AuthorityControlled,
+    ] {
+        let mut input = prepare();
+        let mut inputs = weighted_inputs();
+        inputs.pause_policy = policy;
+        input.message = borsh::to_vec(&Message::PrepareWeighted { inputs }).unwrap();
+        let response = handle(&input).unwrap();
+        let state = lbp_core::PoolAccount::decode(response.post_state.as_ref().unwrap()).unwrap();
+        assert_eq!(state.trade_control.policy(), policy);
+        assert!(!state.trade_control.is_paused());
     }
 }

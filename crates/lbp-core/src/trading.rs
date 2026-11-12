@@ -138,6 +138,9 @@ impl Pending {
             return Err(Error::InvalidFee);
         }
 
+        if self.state.trade_control.is_paused() {
+            return Err(Error::Paused);
+        }
         validate_buy_window(&self.state, &self.message)?;
         if self.state.proceeds_settled || self.state.remaining_inventory == 0 {
             return Err(Error::Closed);
@@ -434,8 +437,11 @@ pub(super) fn begin(input: &ReceiveInput, message: Message) -> Result<Response, 
     }
     if matches!(
         message,
-        Message::BuyWeightedExactInput { .. } | Message::BuyWeightedExactOutput { .. }
-    ) && matches!(state.mode, PoolMode::Weighted { paused: true, .. })
+        Message::BuyExactInput { .. }
+            | Message::BuyExactOutput { .. }
+            | Message::BuyWeightedExactInput { .. }
+            | Message::BuyWeightedExactOutput { .. }
+    ) && state.trade_control.is_paused()
     {
         return Err(Error::Paused);
     }
@@ -678,4 +684,128 @@ fn settlement_payout(
         creator,
         proceeds,
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{CreatorAllocationRelease, FixedPrice, TradeControl};
+
+    #[test]
+    fn final_buy_boundary_checks_common_pause_for_every_buy_form() {
+        let id = |n| AccountId::new([n; 32]);
+        let namespace = id(40);
+        let namespace_program = id(6);
+        let namespace_input = ReceiveInput {
+            receiver: Actor::new(
+                curve_core::compute_config_pda(namespace, namespace_program),
+                namespace_program,
+            ),
+            from: Some(Actor::new(namespace, namespace_program)),
+            is_authorized: false,
+            pre_state: vec![].into(),
+            message: borsh::to_vec(&curve_core::Message::InitializeNamespace {
+                namespace,
+                protocol_fee_bps: 0,
+                treasury: id(43),
+            })
+            .unwrap(),
+        };
+        let config = Config::decode(
+            curve_core::handle(&namespace_input)
+                .unwrap()
+                .post_state
+                .as_ref()
+                .unwrap(),
+        )
+        .unwrap();
+        let state = PoolAccount {
+            buy_policy: crate::BuyPolicy::Open,
+            trade_control: TradeControl::Paused,
+            mode: PoolMode::FixedPrice,
+            funded: true,
+            namespace,
+            namespace_program_id: namespace_program,
+            factory_owner: id(7),
+            factory_program_id: id(8),
+            factory_seed: [3; 32],
+            token_definition_id: id(41),
+            collateral_definition_id: id(42),
+            sale_inventory: 800,
+            remaining_inventory: 800,
+            creator_allocation: 0,
+            price: FixedPrice {
+                collateral_units: 3,
+                token_units: 2,
+            },
+            start_timestamp: 100,
+            end_timestamp: Some(200),
+            creator_allocation_release: CreatorAllocationRelease::AfterSetup,
+            recorded_collateral: 0,
+            accrued_fees: 0,
+            proceeds_settled: false,
+            pending: None,
+        };
+        let weighted = PoolMode::Weighted {
+            token_weight_start: crate::WEIGHT_TOTAL / 2,
+            token_weight_end: crate::WEIGHT_TOTAL / 2,
+            collateral_seed: 100,
+            pricing_collateral: 100,
+            checkpoint_time: 0,
+            checkpoint_token_weight: 0,
+        };
+        for (mode, message) in [
+            (
+                PoolMode::FixedPrice,
+                Message::BuyExactInput {
+                    membership: None,
+                    amount_in: 5,
+                    min_amount_out: 1,
+                    now: 100,
+                },
+            ),
+            (
+                PoolMode::FixedPrice,
+                Message::BuyExactOutput {
+                    membership: None,
+                    amount_out: 3,
+                    max_amount_in: 6,
+                    now: 100,
+                },
+            ),
+            (
+                weighted,
+                Message::BuyWeightedExactInput {
+                    membership: None,
+                    amount_in: 5,
+                    min_amount_out: 1,
+                },
+            ),
+            (
+                weighted,
+                Message::BuyWeightedExactOutput {
+                    membership: None,
+                    amount_out: 3,
+                    max_amount_in: 6,
+                },
+            ),
+        ] {
+            let mut state = state.clone();
+            state.mode = mode;
+            let pending = Pending {
+                tag: *b"LZLBPEND",
+                state,
+                message,
+                buyer: id(50),
+                step: 4,
+                pricing_time: Some(100),
+                config: Some(config.clone()),
+                balances: [100, 800, 100],
+            };
+            assert_eq!(
+                pending.finish(Actor::new(id(9), id(8))).err(),
+                Some(Error::Paused)
+            );
+        }
+    }
 }

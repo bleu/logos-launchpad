@@ -19,6 +19,7 @@ fn frozen_namespace_rejects_current_state_purchase_quotes() {
     .unwrap();
     let pool = curve_core::PoolAccount {
         buy_policy: curve_core::BuyPolicy::Open,
+        trade_control: curve_core::TradeControl::Unrestricted,
         allowed_input_token: None,
         funded: true,
         namespace,
@@ -62,6 +63,7 @@ fn purchase_preparation_checks_the_participant_cap_with_current_namespace_fees()
     .unwrap();
     let pool = curve_core::PoolAccount {
         buy_policy: curve_core::BuyPolicy::Open,
+        trade_control: curve_core::TradeControl::Unrestricted,
         allowed_input_token: None,
         funded: true,
         namespace,
@@ -332,6 +334,7 @@ fn creation_request_preserves_unix_seconds_on_the_public_wire() {
         AccountId::new([6; 32]),
         launchpad_client::CreateSaleRequest {
             buy_policy: curve_core::BuyPolicy::Open,
+            pause_policy: curve_core::PausePolicy::Disabled,
             trade_mode: launchpad_client::TradeMode::BuyAndSell,
             graduation_hook: None,
             name: "Sale".into(),
@@ -354,7 +357,7 @@ fn creation_request_preserves_unix_seconds_on_the_public_wire() {
             ..
         }
     ));
-    assert_eq!(call.message_bytes().unwrap().len(), 288);
+    assert_eq!(call.message_bytes().unwrap().len(), 289);
     assert!(
         call.message_bytes()
             .unwrap()

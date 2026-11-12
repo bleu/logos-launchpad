@@ -31,6 +31,7 @@ fn sale() -> FactorySale {
 fn creation() -> CreateSaleRequest {
     CreateSaleRequest {
         buy_policy: curve_core::BuyPolicy::Open,
+        pause_policy: curve_core::PausePolicy::Disabled,
         trade_mode: factory_core::TradeMode::BuyAndSell,
         graduation_hook: None,
         name: "E2E token".into(),
@@ -48,6 +49,7 @@ fn creation() -> CreateSaleRequest {
 fn pool_snapshot() -> (curve_core::PoolAccount, curve_core::Config) {
     let pool = curve_core::PoolAccount {
         buy_policy: curve_core::BuyPolicy::Open,
+        trade_control: curve_core::TradeControl::Unrestricted,
         allowed_input_token: None,
         funded: true,
         namespace: AccountId::new([0xAD; 32]),
@@ -90,6 +92,7 @@ fn valid_factory_state(sale: FactorySale) -> FactoryState {
         };
     }
     field!(curve_core::BuyPolicy::Open);
+    field!(curve_core::PausePolicy::Disabled);
     field!(factory_core::TradeMode::BuyAndSell);
     field!(None::<factory_core::GraduationHook>);
     field!(CreationStage::Active);
@@ -265,6 +268,7 @@ fn fixed_creation() -> factory_core::FixedPriceInputs {
             sale_policy_id: *pool.value(),
             root: [42; 32],
         }),
+        pause_policy: curve_core::PausePolicy::Disabled,
         namespace: sale.namespace,
         launch_salt: sale.launch_salt,
         name: "Sale".into(),
@@ -426,6 +430,7 @@ fn weighted_creation() -> factory_core::WeightedInputs {
     let fixed = fixed_creation();
     factory_core::WeightedInputs {
         buy_policy: fixed.buy_policy,
+        pause_policy: curve_core::PausePolicy::AuthorityControlled,
         namespace: fixed.namespace,
         launch_salt: fixed.launch_salt,
         name: fixed.name,
@@ -1482,4 +1487,155 @@ fn creation_and_continuations_admit_the_factory_curve_relay_without_authorizatio
         ));
         assert_eq!(call.message_bytes().unwrap()[0], u8::from(stage.is_some()));
     }
+}
+
+#[test]
+fn pause_builders_keep_current_role_signers_and_factory_relay_admission() {
+    let creator = AccountId::new([9; 32]);
+    let curve = super::build_set_factory_paused_invocation(sale(), creator, true);
+    let lbp = super::build_set_lbp_paused_invocation(lbp_sale(), creator, true);
+    for (call, namespace, salt, factory_program, engine, role) in [
+        (
+            &curve,
+            sale().namespace,
+            sale().launch_salt,
+            sale().factory_program_id,
+            sale().curve_program_id,
+            factory_core::compute_curve_creator_role_pda(
+                sale().namespace,
+                sale().factory_program_id,
+                sale().launch_salt,
+            ),
+        ),
+        (
+            &lbp,
+            lbp_sale().namespace,
+            lbp_sale().launch_salt,
+            lbp_sale().factory_program_id,
+            lbp_sale().lbp_program_id,
+            factory_core::compute_creator_role_pda(
+                lbp_sale().namespace,
+                lbp_sale().factory_program_id,
+                lbp_sale().launch_salt,
+            ),
+        ),
+    ] {
+        let factory = factory_core::compute_factory_pda(namespace, factory_program, salt);
+        assert_eq!(call.destination, Actor::new(factory, factory_program));
+        assert_eq!(call.signer_accounts, [creator]);
+        assert_eq!(
+            call.instruction,
+            factory_core::Message::SetPaused {
+                creator,
+                paused: true
+            }
+        );
+        assert!(call.actors.contains(&Actor::new(
+            creator,
+            curve_core::AUTHORITY_PROGRAM_ACCOUNT_ID
+        )));
+        for actor in [
+            Actor::new(factory, engine),
+            Actor::new(role, curve_core::AUTHORITY_PROGRAM_ACCOUNT_ID),
+        ] {
+            assert!(
+                call.account_mentions()
+                    .iter()
+                    .any(|mention| mention.actor() == actor
+                        && !mention.authorizes
+                        && matches!(mention.identity, wallet::AccountIdentity::PublicPda { .. }))
+            );
+        }
+    }
+}
+
+#[test]
+fn direct_pause_builder_uses_owner_role_and_signed_curve_envelope() {
+    let owner = AccountId::new([9; 32]);
+    let pool = AccountId::new([10; 32]);
+    let call = super::build_set_curve_paused_invocation(
+        sale().namespace,
+        CURVE_PROGRAM_ID,
+        pool,
+        owner,
+        false,
+    );
+    assert_eq!(call.destination, Actor::new(owner, CURVE_PROGRAM_ID));
+    assert_eq!(call.signer_accounts, [owner]);
+    assert_eq!(
+        call.instruction,
+        curve_core::Message::Execute {
+            pool,
+            instruction: Box::new(curve_core::Message::SetPaused { paused: false })
+        }
+    );
+    let role = curve_core::compute_pool_owner_role(sale().namespace, pool, CURVE_PROGRAM_ID);
+    assert!(call.account_mentions().iter().any(|mention| mention.actor()
+        == Actor::new(role, curve_core::AUTHORITY_PROGRAM_ACCOUNT_ID)
+        && !mention.authorizes
+        && matches!(mention.identity, wallet::AccountIdentity::PublicPda { .. })));
+    assert!(call.actors.contains(&super::clock_actor()));
+}
+
+#[test]
+fn creation_preserves_pause_policy_and_resumption_rejects_changes_at_every_stage() {
+    for policy in [
+        curve_core::PausePolicy::Disabled,
+        curve_core::PausePolicy::AuthorityControlled,
+    ] {
+        let mut request = creation();
+        request.pause_policy = policy;
+        let call =
+            build_create_sale_invocation(sale(), AccountId::new([9; 32]), request.clone()).unwrap();
+        assert!(
+            matches!(call.instruction, factory_core::Message::CreateFactoryPool { pause_policy, .. } if pause_policy == policy)
+        );
+        for stage in [
+            CreationStage::Minted,
+            CreationStage::Allocated,
+            CreationStage::PoolPrepared,
+            CreationStage::Active,
+        ] {
+            let mut state = valid_factory_state(sale());
+            state.creation_stage = stage;
+            state.pause_policy = policy;
+            assert!(
+                super::next_creation_invocation(
+                    sale(),
+                    AccountId::new([9; 32]),
+                    request.clone(),
+                    Some(&state)
+                )
+                .is_ok()
+            );
+            state.pause_policy = match policy {
+                curve_core::PausePolicy::Disabled => curve_core::PausePolicy::AuthorityControlled,
+                curve_core::PausePolicy::AuthorityControlled => curve_core::PausePolicy::Disabled,
+            };
+            assert!(matches!(
+                super::next_creation_invocation(
+                    sale(),
+                    AccountId::new([9; 32]),
+                    request.clone(),
+                    Some(&state)
+                ),
+                Err(ClientError::LaunchParametersMismatch)
+            ));
+        }
+    }
+}
+
+#[test]
+fn paused_curve_quotes_reject_both_buy_forms_and_sells_without_changing_state() {
+    let (mut pool, config) = pool_snapshot();
+    pool.trade_control = curve_core::TradeControl::Paused;
+    let before = pool.clone();
+    for result in [
+        quote_buy(&pool, &config, 1, 1),
+        quote_buy_with_collateral(&pool, &config, 1, 1),
+        quote_sell(&pool, &config, 1, 1),
+    ] {
+        assert!(matches!(result, Err(ClientError::PoolPaused)));
+    }
+    assert_eq!(pool, before);
 }

@@ -20,7 +20,10 @@ pub fn begin(input: &ReceiveInput, message: Message) -> Result<Response, Error> 
         queries.extend([Query::Namespace, Query::Vault0, Query::Vault1]);
         return Pending::new(state, message, authority, queries).advance(input.receiver);
     }
-    if matches!(message, Message::ClosePool { .. }) {
+    if matches!(
+        message,
+        Message::ClosePool { .. } | Message::SetPaused { .. }
+    ) {
         let (authority, queries) = crate::authority::owner(input, &state)?;
         return Pending::new(state, message, authority, queries).advance(input.receiver);
     }
@@ -33,6 +36,21 @@ pub fn begin(input: &ReceiveInput, message: Message) -> Result<Response, Error> 
     .advance(input.receiver)
 }
 pub(crate) fn finish(mut pending: Pending, receiver: Actor) -> Result<Response, Error> {
+    if let Message::SetPaused { paused } = pending.message {
+        if pending.state.pool.lifecycle != pool::PoolLifecycle::Open {
+            return Err(Error::Closed);
+        }
+        pending
+            .state
+            .trade_control
+            .set_paused(paused)
+            .map_err(|_| Error::PauseDisabled)?;
+        return crate::with_time_bounds(
+            Response::set_state(borsh::to_vec(&pending.state).unwrap()),
+            None,
+            pending.state.pool.close_timestamp,
+        );
+    }
     if let Message::ClosePool { now } = pending.message {
         pending
             .state

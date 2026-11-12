@@ -41,6 +41,7 @@ fn seeded_state(
     let token = Program::new(Cow::Borrowed(lez_compat_methods::COMPAT_TOKEN_ELF)).unwrap();
     let pool_state = PoolAccount {
         buy_policy: curve_core::BuyPolicy::Open,
+        trade_control: curve_core::TradeControl::Unrestricted,
         allowed_input_token: Some(pool::TokenSide::Token1),
         funded: true,
         namespace: NAMESPACE,
@@ -219,6 +220,7 @@ fn fixed_state(buyer: AccountId, end: Option<u64>) -> (V03State, AccountId) {
     let bytes = borsh::to_vec(&(
         (
             curve_core::BuyPolicy::Open,
+            lbp_core::TradeControl::Unrestricted,
             lbp_core::PoolMode::FixedPrice,
             true,
             NAMESPACE,
@@ -302,8 +304,8 @@ fn fixed_pool(state: &V03State, pool: AccountId) -> lbp_core::PoolAccount {
 fn weighted_state(buyer: AccountId) -> (V03State, AccountId) {
     let (state, pool) = fixed_state(buyer, Some(200));
     let mut sale = fixed_pool(&state, pool);
+    sale.trade_control = lbp_core::TradeControl::Running;
     sale.mode = lbp_core::PoolMode::Weighted {
-        paused: false,
         token_weight_start: lbp_core::WEIGHT_TOTAL / 2,
         token_weight_end: lbp_core::WEIGHT_TOTAL / 2,
         collateral_seed: 100,
@@ -1356,6 +1358,7 @@ fn curve_factory_locks_allowlist_before_setup_and_buys_with_the_same_policy() {
         &mut state,
         factory_core::Message::CreateFactoryPool {
             buy_policy: policy.clone(),
+            pause_policy: curve_core::PausePolicy::Disabled,
             trade_mode: 1,
             graduation_hook_program_id: None,
             graduation_hook_configuration: vec![],
@@ -1626,6 +1629,14 @@ fn fixed_factory_env(
     end: Option<u64>,
     release: factory_core::CreatorAllocationRelease,
 ) -> FixedFactoryEnv {
+    fixed_factory_env_with_policy(end, release, curve_core::PausePolicy::Disabled)
+}
+
+fn fixed_factory_env_with_policy(
+    end: Option<u64>,
+    release: factory_core::CreatorAllocationRelease,
+    pause_policy: curve_core::PausePolicy,
+) -> FixedFactoryEnv {
     const FACTORY: AccountId = AccountId::new([17; 32]);
     let key = PrivateKey::try_new([23; 32]).unwrap();
     let creator = AccountId::from(&PublicKey::new_from_private_key(&key));
@@ -1733,6 +1744,7 @@ fn fixed_factory_env(
         factory_core::Message::CreateFixedPriceLbp {
             inputs: factory_core::FixedPriceInputs {
                 buy_policy: policy.clone(),
+                pause_policy,
                 namespace: NAMESPACE,
                 launch_salt: salt,
                 name: "Fixed".into(),
@@ -2174,6 +2186,7 @@ fn weighted_factory_executes_all_stages_and_rolls_back_failed_funding() {
         let creation = factory_core::Message::CreateWeightedLbp {
             inputs: WeightedInputs {
                 buy_policy: policy.clone(),
+                pause_policy: curve_core::PausePolicy::AuthorityControlled,
                 namespace: NAMESPACE,
                 launch_salt: salt,
                 name: "Weighted".into(),
@@ -2605,6 +2618,7 @@ fn weighted_factory_env() -> (
         factory_core::Message::CreateWeightedLbp {
             inputs: WeightedInputs {
                 buy_policy: curve_core::BuyPolicy::Open,
+                pause_policy: curve_core::PausePolicy::AuthorityControlled,
                 namespace: NAMESPACE,
                 launch_salt: salt,
                 name: "Weighted".into(),
@@ -3963,4 +3977,361 @@ fn fixed_payouts_reject_wrong_caller_other_sale_creator_and_namespace_admin() {
 fn weighted_payouts_reject_wrong_caller_other_sale_creator_and_namespace_admin() {
     let (state, factory, pool, launch, _escrow, _key, actors, salt) = weighted_factory_env();
     reject_payout_roles(state, factory, pool, launch, &actors, salt, true);
+}
+
+#[test]
+fn fixed_shared_pause_blocks_both_buys_but_keeps_frozen_collection_and_settlement() {
+    let mut env = fixed_factory_env_with_policy(
+        Some(200),
+        factory_core::CreatorAllocationRelease::AfterEnd,
+        curve_core::PausePolicy::AuthorityControlled,
+    );
+    let creator = env.creator();
+    let initial = fixed_pool(&env.state, env.pool);
+    for paused in [false, true, true] {
+        env.execute(factory_core::Message::SetPaused { creator, paused }, 99_999)
+            .unwrap();
+        assert_eq!(
+            fixed_pool(&env.state, env.pool).trade_control.is_paused(),
+            paused
+        );
+    }
+    for operation in [
+        lbp_core::Message::BuyExactInput {
+            membership: Some(env.path.clone()),
+            amount_in: 50,
+            min_amount_out: 1,
+            now: 100,
+        },
+        lbp_core::Message::BuyExactOutput {
+            membership: Some(env.path.clone()),
+            amount_out: 10,
+            max_amount_in: 100,
+            now: 100,
+        },
+    ] {
+        fixed_rejected(&mut env.state, env.pool, &env.key, operation, "Paused");
+    }
+    env.execute(
+        factory_core::Message::SetPaused {
+            creator,
+            paused: false,
+        },
+        100_000,
+    )
+    .unwrap();
+    env.buy(100, 156);
+    env.execute(
+        factory_core::Message::SetPaused {
+            creator,
+            paused: true,
+        },
+        100_000,
+    )
+    .unwrap();
+    env.state = fixed_config(env.state, 333, TREASURY, true);
+    env.execute(
+        factory_core::Message::SetPaused {
+            creator,
+            paused: false,
+        },
+        100_000,
+    )
+    .unwrap();
+    fixed_rejected(
+        &mut env.state,
+        env.pool,
+        &env.key,
+        lbp_core::Message::BuyExactOutput {
+            membership: Some(env.path.clone()),
+            amount_out: 10,
+            max_amount_in: 100,
+            now: 100,
+        },
+        "Frozen",
+    );
+    env.execute(
+        factory_core::Message::SetPaused {
+            creator,
+            paused: true,
+        },
+        199_999,
+    )
+    .unwrap();
+    let sale = fixed_pool(&env.state, env.pool);
+    assert_eq!(sale.start_timestamp, initial.start_timestamp);
+    assert_eq!(sale.end_timestamp, initial.end_timestamp);
+    for paused in [false, true] {
+        let before = env.state.clone();
+        let result = env.execute(
+            factory_core::Message::SetPaused { creator, paused },
+            200_000,
+        );
+        assert!(
+            matches!(result, Err(lee::error::LeeError::OutOfValidityWindow)),
+            "{result:?}"
+        );
+        assert!(env.state == before);
+    }
+    fixed_execute_at(
+        &mut env.state,
+        env.pool,
+        &env.key,
+        lbp_core::Message::CollectFees,
+        200_000,
+    )
+    .unwrap();
+    assert_eq!(balance(&env.state, TREASURY, COLLATERAL), 6);
+    env.execute(
+        factory_core::Message::WithdrawFactoryProceeds { creator, now: 200 },
+        200_000,
+    )
+    .unwrap();
+    env.execute(
+        factory_core::Message::ClaimCreatorAllocation { creator, now: 200 },
+        200_000,
+    )
+    .unwrap();
+    let sale = fixed_pool(&env.state, env.pool);
+    assert!(sale.proceeds_settled);
+    assert!(sale.trade_control.is_paused());
+    assert_eq!(balance(&env.state, env.escrow, env.launch), 0);
+}
+
+#[test]
+fn fixed_shared_controls_reject_disabled_policy_and_no_end_sellout() {
+    for enabled in [false, true] {
+        let mut env = fixed_factory_env_with_policy(
+            None,
+            factory_core::CreatorAllocationRelease::AfterEnd,
+            if enabled {
+                curve_core::PausePolicy::AuthorityControlled
+            } else {
+                curve_core::PausePolicy::Disabled
+            },
+        );
+        let creator = env.creator();
+        if enabled {
+            env.state = env
+                .state
+                .with_public_accounts([token_holding(creator, COLLATERAL, 2_000)]);
+            env.buy(800, 1_242);
+        }
+        for paused in [false, true] {
+            let before = env.state.clone();
+            let result = env.execute(
+                factory_core::Message::SetPaused { creator, paused },
+                100_000,
+            );
+            let reason = if enabled { "Closed" } else { "PauseDisabled" };
+            assert!(
+                matches!(&result, Err(lee::error::LeeError::ProgramExecutionFailed(error)) if error.contains(reason)),
+                "{result:?}"
+            );
+            assert!(env.state == before);
+        }
+    }
+}
+
+#[test]
+fn shared_lbp_controls_authenticate_no_ops_and_reject_direct_pool_bypass() {
+    const FACTORY: AccountId = AccountId::new([17; 32]);
+    for weighted in [false, true] {
+        let (mut state, factory, pool, launch, _escrow, key, actors, salt) = if weighted {
+            weighted_factory_env()
+        } else {
+            let env = fixed_factory_env_with_policy(
+                Some(300),
+                factory_core::CreatorAllocationRelease::AfterEnd,
+                curve_core::PausePolicy::AuthorityControlled,
+            );
+            (
+                env.state,
+                env.factory,
+                env.pool,
+                env.launch,
+                env.escrow,
+                env.key,
+                env.actors,
+                env.salt,
+            )
+        };
+        let creator = AccountId::from(&PublicKey::new_from_private_key(&key));
+        for paused in [false, true] {
+            factory_execute_at(
+                &mut state,
+                factory,
+                &actors,
+                &key,
+                salt,
+                launch,
+                pool,
+                factory_core::Message::SetPaused { creator, paused },
+                150_000,
+            )
+            .unwrap();
+            for (seed, role) in [
+                (97, None),
+                (
+                    98,
+                    Some(factory_core::compute_creator_role_pda(
+                        NAMESPACE, FACTORY, [25; 32],
+                    )),
+                ),
+                (99, Some(curve_core::compute_admin_role(NAMESPACE, CURVE))),
+            ] {
+                let wrong_key = PrivateKey::try_new([seed; 32]).unwrap();
+                let caller = AccountId::from(&PublicKey::new_from_private_key(&wrong_key));
+                let mut rejected = state.clone();
+                let mut actors = actors.clone();
+                if let Some(role) = role {
+                    rejected = rejected.with_public_accounts([seeded_role(role, caller)]);
+                    actors.push(Actor::new(role, factory_core::AUTHORITY_PROGRAM_ACCOUNT_ID));
+                }
+                actors.extend([
+                    Actor::new(caller, factory_core::AUTHORITY_PROGRAM_ACCOUNT_ID),
+                    Actor::new(caller, FACTORY),
+                    Actor::new(caller, LBP),
+                ]);
+                let before = rejected.clone();
+                let result = factory_execute_at(
+                    &mut rejected,
+                    factory,
+                    &actors,
+                    &wrong_key,
+                    salt,
+                    launch,
+                    pool,
+                    factory_core::Message::SetPaused {
+                        creator: caller,
+                        paused,
+                    },
+                    150_000,
+                );
+                assert!(
+                    matches!(&result, Err(lee::error::LeeError::ProgramExecutionFailed(error)) if error.contains("Unauthorized")),
+                    "{result:?}"
+                );
+                assert!(rejected == before, "rejected no-op changed runtime state");
+            }
+            let before = state.clone();
+            let result = fixed_execute_at(
+                &mut state,
+                pool,
+                &key,
+                lbp_core::Message::SetPaused { paused },
+                150_000,
+            );
+            assert!(result.is_err(), "creator bypassed the factory actor");
+            assert!(state == before);
+        }
+    }
+}
+
+#[test]
+fn weighted_shared_controls_keep_legacy_alias_and_frozen_resume_independent() {
+    let (mut state, factory, pool, launch, _escrow, key, actors, salt) = weighted_factory_env();
+    let creator = AccountId::from(&PublicKey::new_from_private_key(&key));
+    for paused in [false, true, true, false] {
+        factory_execute_at(
+            &mut state,
+            factory,
+            &actors,
+            &key,
+            salt,
+            launch,
+            pool,
+            factory_core::Message::SetPaused { creator, paused },
+            150_000,
+        )
+        .unwrap();
+        assert_eq!(fixed_pool(&state, pool).trade_control.is_paused(), paused);
+    }
+    factory_execute_at(
+        &mut state,
+        factory,
+        &actors,
+        &key,
+        salt,
+        launch,
+        pool,
+        factory_core::Message::SetWeightedPaused {
+            creator,
+            paused: true,
+        },
+        150_000,
+    )
+    .unwrap();
+    for operation in [
+        lbp_core::Message::BuyWeightedExactInput {
+            membership: None,
+            amount_in: 10,
+            min_amount_out: 1,
+        },
+        lbp_core::Message::BuyWeightedExactOutput {
+            membership: None,
+            amount_out: 1,
+            max_amount_in: 100,
+        },
+    ] {
+        let before = state.clone();
+        let result = fixed_execute_at(&mut state, pool, &key, operation, 150_000);
+        assert!(
+            matches!(&result, Err(lee::error::LeeError::ProgramExecutionFailed(error)) if error.contains("Paused")),
+            "{result:?}"
+        );
+        assert!(state == before);
+    }
+    state = fixed_config(state, 100, TREASURY, true);
+    factory_execute_at(
+        &mut state,
+        factory,
+        &actors,
+        &key,
+        salt,
+        launch,
+        pool,
+        factory_core::Message::SetPaused {
+            creator,
+            paused: false,
+        },
+        150_000,
+    )
+    .unwrap();
+    let before = state.clone();
+    let result = fixed_execute_at(
+        &mut state,
+        pool,
+        &key,
+        lbp_core::Message::BuyWeightedExactInput {
+            membership: None,
+            amount_in: 10,
+            min_amount_out: 1,
+        },
+        150_000,
+    );
+    assert!(
+        matches!(&result, Err(lee::error::LeeError::ProgramExecutionFailed(error)) if error.contains("Frozen")),
+        "{result:?}"
+    );
+    assert!(state == before);
+    for paused in [false, true] {
+        let before = state.clone();
+        let result = factory_execute_at(
+            &mut state,
+            factory,
+            &actors,
+            &key,
+            salt,
+            launch,
+            pool,
+            factory_core::Message::SetPaused { creator, paused },
+            300_000,
+        );
+        assert!(
+            matches!(result, Err(lee::error::LeeError::OutOfValidityWindow)),
+            "{result:?}"
+        );
+        assert!(state == before);
+    }
 }

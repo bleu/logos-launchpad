@@ -72,6 +72,8 @@ pub enum ClientError {
     NamespaceFrozen,
     #[error("pool funding is pending")]
     PoolFundingPending,
+    #[error("pool swaps are paused")]
+    PoolPaused,
     #[error("cannot quote purchase: {0}")]
     #[strum(serialize = "quote_buy")]
     QuoteBuy(#[source] pool::SwapError),

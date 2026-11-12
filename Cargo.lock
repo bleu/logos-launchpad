@@ -1513,6 +1513,7 @@ dependencies = [
  "lez-compat-core",
  "pool",
  "risc0-zkvm",
+ "sale-policy",
 ]
 
 [[package]]
@@ -7143,7 +7144,9 @@ dependencies = [
 name = "sale-policy"
 version = "0.1.0"
 dependencies = [
+ "borsh",
  "integer-math",
+ "serde",
 ]
 
 [[package]]

@@ -5,7 +5,9 @@
 mod error;
 mod lifecycle;
 mod types;
-pub use curve_core::{AllowlistPolicy, BuyPolicy, MembershipPath, TOKEN_PROGRAM_ACCOUNT_ID};
+pub use curve_core::{
+    AllowlistPolicy, BuyPolicy, MembershipPath, PausePolicy, TOKEN_PROGRAM_ACCOUNT_ID, TradeControl,
+};
 pub use error::{ClientError, Result};
 pub use factory_core::{CreationStage, GraduationHook, SettlementStage, TradeMode};
 pub use lifecycle::{FactorySession, LifecycleReceipt, next_creation_invocation};
@@ -62,6 +64,7 @@ pub fn load_program(path: &Path) -> Result<Program> {
 #[derive(Debug, Clone)]
 pub struct CreateSaleRequest {
     pub buy_policy: BuyPolicy,
+    pub pause_policy: PausePolicy,
     pub trade_mode: TradeMode,
     pub graduation_hook: Option<GraduationHook>,
     pub name: String,
@@ -474,6 +477,7 @@ pub fn build_create_sale_invocation(
             vec![creator],
             FactoryInstruction::CreateFactoryPool {
                 buy_policy: request.buy_policy,
+                pause_policy: request.pause_policy,
                 trade_mode: request.trade_mode as u8,
                 graduation_hook_program_id: request.graduation_hook.as_ref().map(|h| h.program_id),
                 graduation_hook_configuration: request
@@ -499,6 +503,53 @@ pub fn build_create_sale_invocation(
     )
     .with_holding(creator, a.token_definition)
     .with_holding(creator, sale.collateral_definition))
+}
+
+pub fn build_set_factory_paused_invocation(
+    sale: FactorySale,
+    creator: AccountId,
+    paused: bool,
+) -> PublicInvocation<FactoryInstruction> {
+    let a = factory_pool_addresses(sale);
+    admit_factory_accounts(
+        invocation(
+            Actor::new(a.factory, sale.factory_program_id),
+            factory_actors(sale, creator, None),
+            vec![creator],
+            FactoryInstruction::SetPaused { creator, paused },
+        ),
+        sale,
+    )
+}
+
+pub fn build_set_curve_paused_invocation(
+    namespace: AccountId,
+    curve: AccountId,
+    pool: AccountId,
+    owner: AccountId,
+    paused: bool,
+) -> PublicInvocation<CurveInstruction> {
+    invocation(
+        Actor::new(owner, curve),
+        vec![
+            Actor::new(pool, curve),
+            Actor::new(
+                curve_core::compute_pool_owner_role(namespace, pool, curve),
+                curve_core::AUTHORITY_PROGRAM_ACCOUNT_ID,
+            ),
+            Actor::new(owner, curve_core::AUTHORITY_PROGRAM_ACCOUNT_ID),
+            clock_actor(),
+        ],
+        vec![owner],
+        CurveInstruction::Execute {
+            pool,
+            instruction: Box::new(CurveInstruction::SetPaused { paused }),
+        },
+    )
+    .with_pda(
+        curve,
+        curve_core::compute_pool_owner_role_seed(namespace, pool),
+    )
 }
 
 pub fn build_withdraw_factory_proceeds_invocation(
@@ -818,6 +869,18 @@ fn lbp_setup_invocation(
         }
     }
     call
+}
+
+pub fn build_set_lbp_paused_invocation(
+    sale: LbpSale,
+    creator: AccountId,
+    paused: bool,
+) -> PublicInvocation<FactoryInstruction> {
+    lbp_setup_invocation(
+        sale,
+        creator,
+        FactoryInstruction::SetPaused { creator, paused },
+    )
 }
 
 pub fn build_create_fixed_price_invocation(
@@ -1348,6 +1411,9 @@ pub fn quote_buy(
     if !pool_account.funded {
         return Err(ClientError::PoolFundingPending);
     }
+    if pool_account.trade_control.is_paused() {
+        return Err(ClientError::PoolPaused);
+    }
     if pool_account
         .allowed_input_token
         .is_some_and(|side| side != pool::TokenSide::Token1)
@@ -1380,6 +1446,9 @@ pub fn quote_sell(
     if !pool_account.funded {
         return Err(ClientError::PoolFundingPending);
     }
+    if pool_account.trade_control.is_paused() {
+        return Err(ClientError::PoolPaused);
+    }
     if pool_account
         .allowed_input_token
         .is_some_and(|side| side != pool::TokenSide::Token0)
@@ -1410,6 +1479,9 @@ pub fn quote_buy_with_collateral(
     }
     if !pool_account.funded {
         return Err(ClientError::PoolFundingPending);
+    }
+    if pool_account.trade_control.is_paused() {
+        return Err(ClientError::PoolPaused);
     }
     if pool_account
         .allowed_input_token

@@ -587,6 +587,7 @@ dependencies = [
  "lez-compat-core",
  "pool",
  "risc0-zkvm",
+ "sale-policy",
 ]
 
 [[package]]
@@ -1823,7 +1824,9 @@ checksum = "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
 name = "sale-policy"
 version = "0.1.0"
 dependencies = [
+ "borsh",
  "integer-math",
+ "serde",
 ]
 
 [[package]]

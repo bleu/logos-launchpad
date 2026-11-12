@@ -14,6 +14,7 @@ fn id(n: u8) -> AccountId {
 fn inputs() -> WeightedInputs {
     WeightedInputs {
         buy_policy: curve_core::BuyPolicy::Open,
+        pause_policy: curve_core::PausePolicy::AuthorityControlled,
         namespace: id(40),
         launch_salt: [3; 32],
         name: "Weighted".into(),
@@ -175,7 +176,14 @@ fn prepared(release: CreatorAllocationRelease) -> (ReceiveInput, Response, Vec<u
 }
 fn prepared_with_terms(terms: WeightedInputs) -> (ReceiveInput, Response, Vec<u8>) {
     let policy = terms.buy_policy.clone();
+    let pause_policy = terms.pause_policy;
     let (input, response) = minted_with_terms(terms);
+    assert_eq!(
+        LbpLaunchState::decode(response.post_state.as_ref().unwrap())
+            .unwrap()
+            .pause_policy,
+        pause_policy
+    );
     assert_eq!(
         LbpLaunchState::decode(response.post_state.as_ref().unwrap())
             .unwrap()
@@ -183,6 +191,12 @@ fn prepared_with_terms(terms: WeightedInputs) -> (ReceiveInput, Response, Vec<u8
         policy
     );
     let allocated = advance(&input, &response, vec![]).unwrap();
+    assert_eq!(
+        LbpLaunchState::decode(allocated.post_state.as_ref().unwrap())
+            .unwrap()
+            .pause_policy,
+        pause_policy
+    );
     assert_eq!(
         LbpLaunchState::decode(allocated.post_state.as_ref().unwrap())
             .unwrap()
@@ -454,4 +468,196 @@ fn weighted_creation_rejects_wrong_policy_version_namespace_or_pool() {
             "case {case}"
         );
     }
+}
+
+#[test]
+fn weighted_pause_policy_survives_setup_and_rejects_substitution() {
+    for policy in [
+        curve_core::PausePolicy::Disabled,
+        curve_core::PausePolicy::AuthorityControlled,
+    ] {
+        let mut terms = inputs();
+        terms.pause_policy = policy;
+        let (input, prepared, bytes) = prepared_with_terms(terms);
+        let state = LbpLaunchState::decode(prepared.post_state.as_ref().unwrap()).unwrap();
+        assert_eq!(state.pause_policy, policy);
+        let pool = lbp_core::PoolAccount::decode(&bytes).unwrap();
+        assert_eq!(pool.trade_control.policy(), policy);
+        for control in [
+            curve_core::TradeControl::Unrestricted,
+            curve_core::TradeControl::Running,
+            curve_core::TradeControl::Paused,
+        ] {
+            let mut pool = pool.clone();
+            pool.trade_control = control;
+            let result = advance(
+                &input,
+                &prepared,
+                vec![
+                    borsh::to_vec(&pool).unwrap(),
+                    holding(state.pool_id, state.token_definition_id, 0),
+                    holding(state.pool_id, state.collateral_definition_id, 0),
+                    holding(id(42), state.collateral_definition_id, 100),
+                ],
+            );
+            if control.policy() != policy {
+                assert_eq!(result.err(), Some(Error::InvalidState));
+            } else {
+                let complete =
+                    LbpLaunchState::decode(result.unwrap().post_state.as_ref().unwrap()).unwrap();
+                assert_eq!(complete.pause_policy, policy);
+                assert_eq!(complete.creation_stage, LbpCreationStage::Complete);
+            }
+        }
+    }
+}
+
+#[test]
+fn shared_pause_requires_the_sale_creator_on_every_call_before_pool_forwarding() {
+    let (mut input, response) = minted(CreatorAllocationRelease::AfterEnd);
+    let mut state = LbpLaunchState::decode(response.post_state.as_ref().unwrap()).unwrap();
+    state.creation_stage = LbpCreationStage::Complete;
+    state.pause_policy = curve_core::PausePolicy::AuthorityControlled;
+    for paused in [true, true, false, false] {
+        input.pre_state = borsh::to_vec(&state).unwrap().into();
+        input.from = None;
+        input.is_authorized = true;
+        input.message = borsh::to_vec(&Message::SetPaused {
+            creator: id(99),
+            paused,
+        })
+        .unwrap();
+        let response = handle(&input).unwrap();
+        assert_eq!(response.sync_messages.len(), 1);
+        let check = &response.sync_messages[0];
+        assert_eq!(
+            check.to,
+            Actor::new(id(99), factory_core::AUTHORITY_PROGRAM_ACCOUNT_ID)
+        );
+        assert_eq!(
+            borsh::from_slice::<lez_compat_core::authority::Message>(&check.message).unwrap(),
+            lez_compat_core::authority::Message::Check {
+                role: state.creator_role_id,
+                callback: input.receiver
+            }
+        );
+        assert!(check.pda_seeds.is_empty());
+        let valid = ReceiveInput {
+            receiver: input.receiver,
+            from: Some(Actor::new(
+                state.creator_role_id,
+                factory_core::AUTHORITY_PROGRAM_ACCOUNT_ID,
+            )),
+            is_authorized: false,
+            pre_state: response.post_state.clone().unwrap(),
+            message: borsh::to_vec(&lez_compat_core::authority::Authorized {
+                role: state.creator_role_id,
+                authority: id(99),
+            })
+            .unwrap(),
+        };
+        for other_role in [
+            factory_core::compute_creator_role_pda(
+                state.namespace,
+                input.receiver.program_account_id,
+                [4; 32],
+            ),
+            factory_core::compute_creator_role_pda(
+                id(41),
+                input.receiver.program_account_id,
+                state.launch_salt,
+            ),
+            factory_core::compute_curve_creator_role_pda(
+                state.namespace,
+                input.receiver.program_account_id,
+                state.launch_salt,
+            ),
+            curve_core::compute_config_pda(state.namespace, state.namespace_program_id),
+        ] {
+            let mut forged = valid.clone();
+            forged.from = Some(Actor::new(
+                other_role,
+                factory_core::AUTHORITY_PROGRAM_ACCOUNT_ID,
+            ));
+            forged.message = borsh::to_vec(&lez_compat_core::authority::Authorized {
+                role: other_role,
+                authority: id(99),
+            })
+            .unwrap();
+            assert_eq!(handle(&forged).err(), Some(Error::Unauthorized));
+        }
+        for authority in [id(42), state.namespace] {
+            let mut forged = valid.clone();
+            forged.message = borsh::to_vec(&lez_compat_core::authority::Authorized {
+                role: state.creator_role_id,
+                authority,
+            })
+            .unwrap();
+            assert_eq!(handle(&forged).err(), Some(Error::Unauthorized));
+        }
+        let mut forged = valid.clone();
+        forged.from = Some(Actor::new(state.creator_role_id, id(90)));
+        assert_eq!(handle(&forged).err(), Some(Error::Unauthorized));
+        forged = valid.clone();
+        forged.receiver.account_id = id(90);
+        assert_eq!(handle(&forged).err(), Some(Error::WrongAccount));
+        let forwarded = handle(&valid).unwrap();
+        assert_eq!(forwarded.sync_messages.len(), 1);
+        let call = &forwarded.sync_messages[0];
+        assert_eq!(call.to, Actor::new(state.pool_id, state.lbp_program_id));
+        assert_eq!(
+            borsh::from_slice::<lbp_core::Message>(&call.message).unwrap(),
+            lbp_core::Message::SetPaused { paused }
+        );
+        assert_eq!(
+            call.pda_seeds,
+            [factory_core::compute_factory_seed(
+                state.namespace,
+                state.launch_salt
+            )]
+            .into()
+        );
+        assert_eq!(
+            factory_core::LbpLaunchState::decode(forwarded.post_state.as_ref().unwrap()).unwrap(),
+            state
+        );
+    }
+    state.creation_stage = factory_core::LbpCreationStage::PoolPrepared;
+    input.pre_state = borsh::to_vec(&state).unwrap().into();
+    assert_eq!(handle(&input).err(), Some(Error::CreationPending));
+}
+
+#[test]
+fn legacy_weighted_pause_keeps_its_weighted_pool_alias() {
+    let (mut input, response) = minted(CreatorAllocationRelease::AfterEnd);
+    let mut state = LbpLaunchState::decode(response.post_state.as_ref().unwrap()).unwrap();
+    state.creation_stage = LbpCreationStage::Complete;
+    input.pre_state = borsh::to_vec(&state).unwrap().into();
+    input.message = borsh::to_vec(&Message::SetWeightedPaused {
+        creator: id(42),
+        paused: true,
+    })
+    .unwrap();
+    let response = handle(&input).unwrap();
+    assert_eq!(response.sync_messages.len(), 1);
+    input.pre_state = response.post_state.unwrap();
+    input.from = Some(Actor::new(
+        state.creator_role_id,
+        factory_core::AUTHORITY_PROGRAM_ACCOUNT_ID,
+    ));
+    input.message = borsh::to_vec(&lez_compat_core::authority::Authorized {
+        role: state.creator_role_id,
+        authority: id(42),
+    })
+    .unwrap();
+    let response = handle(&input).unwrap();
+    assert_eq!(response.sync_messages.len(), 1);
+    assert_eq!(
+        response.sync_messages[0].to,
+        Actor::new(state.pool_id, state.lbp_program_id)
+    );
+    assert_eq!(
+        borsh::from_slice::<lbp_core::Message>(&response.sync_messages[0].message).unwrap(),
+        lbp_core::Message::SetWeightedPaused { paused: true }
+    );
 }
