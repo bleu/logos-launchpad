@@ -168,6 +168,101 @@ fn supply(fixture: &FactoryFixture) -> u128 {
 
 #[test]
 #[ignore = "requires fresh application and compatibility ELFs and the pinned clock ELF"]
+fn curve_late_activation_failure_restores_funding_and_continuation_activates_once() {
+    let mut fixture = factory_fixture();
+    let creator = key(48);
+    fixture
+        .call(
+            &creator,
+            factory_core::Message::CreateFactoryPool {
+                buy_policy: curve_core::BuyPolicy::Open,
+                trade_mode: 0,
+                graduation_hook_program_id: None,
+                graduation_hook_configuration: vec![],
+                namespace: fixture.namespace,
+                launch_salt: SALT,
+                name: "Recovery".into(),
+                uri: "ipfs://recovery".into(),
+                sale_reserve: 400,
+                dex_seed_reserve: 100,
+                creator_allocation: 50,
+                virtual_token_reserve: 1_000,
+                virtual_collateral_reserve: 1_000,
+                end_timestamp: Some(2),
+                curve_program_id: CURVE,
+                collateral_definition_id: COLLATERAL,
+                creator: id(&creator),
+                now: 1,
+            },
+        )
+        .unwrap();
+    let continuation = factory_core::Message::ContinueCreation {
+        creator: id(&creator),
+        now: 1,
+    };
+    for stage in [
+        factory_core::CreationStage::Allocated,
+        factory_core::CreationStage::PoolPrepared,
+    ] {
+        fixture.call(&creator, continuation.clone()).unwrap();
+        assert_eq!(saved(&fixture).creation_stage, stage);
+    }
+    let pool = fixture.pool;
+    set_holding(&mut fixture, pool, COLLATERAL, LAUNCH, 0);
+    rejected(
+        &mut fixture,
+        |fixture| fixture.call(&creator, continuation.clone()),
+        "InvalidToken",
+    );
+    assert_eq!(
+        saved(&fixture).creation_stage,
+        factory_core::CreationStage::PoolPrepared
+    );
+    assert!(!pool_state(&fixture).funded);
+    assert_eq!(
+        balance(&fixture.state, fixture.factory, fixture.definition),
+        500
+    );
+    assert_eq!(balance(&fixture.state, pool, fixture.definition), 0);
+    assert_eq!(
+        balance(
+            &fixture.state,
+            saved(&fixture).creator_escrow_id,
+            fixture.definition
+        ),
+        50
+    );
+    assert_eq!(supply(&fixture), 550);
+    set_holding(&mut fixture, pool, COLLATERAL, COLLATERAL, 0);
+    fixture.call(&creator, continuation.clone()).unwrap();
+    assert_eq!(
+        saved(&fixture).creation_stage,
+        factory_core::CreationStage::Active
+    );
+    assert!(pool_state(&fixture).funded);
+    assert_eq!(
+        balance(&fixture.state, fixture.factory, fixture.definition),
+        100
+    );
+    assert_eq!(balance(&fixture.state, pool, fixture.definition), 400);
+    assert_eq!(
+        balance(
+            &fixture.state,
+            saved(&fixture).creator_escrow_id,
+            fixture.definition
+        ),
+        50
+    );
+    assert_eq!(supply(&fixture), 550);
+    rejected(
+        &mut fixture,
+        |fixture| fixture.call(&creator, continuation),
+        "StaleStage",
+    );
+}
+
+#[test]
+#[ignore = "requires fresh application and compatibility ELFs and the pinned clock ELF"]
 fn settlement_burn_supply_failure_restores_debited_inventory_and_retry_burns_once() {
     let mut fixture = closed_sale(None, vec![], 100, true);
     manual(&mut fixture).unwrap();
@@ -592,6 +687,163 @@ fn settlement_final_ack_failure_rolls_back_adapter_receipt_payouts_and_graduated
     assert_eq!(balance(&fixture.state, custody(&fixture), COLLATERAL), 112);
     assert_eq!(supply(&fixture), 250);
     rejected(&mut fixture, hook, "AlreadySettled");
+}
+
+fn nested_configuration(target: Actor, message: impl borsh::BorshSerialize) -> Vec<u8> {
+    let mut configuration = b"nested-call:".to_vec();
+    configuration.extend_from_slice(target.account_id.value());
+    configuration.extend_from_slice(target.program_account_id.value());
+    configuration.extend(borsh::to_vec(&message).unwrap());
+    configuration
+}
+
+fn creator_hook(fixture: &mut FactoryFixture) -> Result<(), lee::error::LeeError> {
+    fixture.call(
+        &key(48),
+        factory_core::Message::ExecuteGraduationHook { now: 2 },
+    )
+}
+
+fn assert_hook_custody(fixture: &FactoryFixture, graduated: bool) {
+    let adapter = custody(fixture);
+    assert_eq!(
+        saved(fixture).settlement_stage,
+        if graduated {
+            factory_core::SettlementStage::Graduated
+        } else {
+            factory_core::SettlementStage::HookReady {
+                collateral_due: 112,
+            }
+        }
+    );
+    assert_eq!(adapter_state(fixture).receipt.is_some(), graduated);
+    assert_eq!(
+        balance(&fixture.state, adapter, fixture.definition),
+        if graduated { 100 } else { 0 }
+    );
+    assert_eq!(
+        balance(&fixture.state, adapter, COLLATERAL),
+        if graduated { 112 } else { 0 }
+    );
+    assert_eq!(
+        balance(&fixture.state, fixture.factory, fixture.definition),
+        if graduated { 0 } else { 100 }
+    );
+    assert_eq!(
+        balance(&fixture.state, fixture.factory, COLLATERAL),
+        if graduated { 0 } else { 112 }
+    );
+    assert_eq!(balance(&fixture.state, id(&key(48)), fixture.definition), 0);
+    assert_eq!(balance(&fixture.state, id(&key(48)), COLLATERAL), 1_000);
+    assert_eq!(
+        balance(
+            &fixture.state,
+            saved(fixture).creator_escrow_id,
+            fixture.definition
+        ),
+        50
+    );
+    assert!(!saved(fixture).creator_allocation_claimed);
+    assert_eq!(balance(&fixture.state, TREASURY, COLLATERAL), 13);
+    assert_eq!(balance(&fixture.state, fixture.pool, fixture.definition), 0);
+    assert_eq!(balance(&fixture.state, fixture.pool, COLLATERAL), 0);
+    assert_eq!(supply(fixture), 250);
+}
+
+#[test]
+#[ignore = "requires fresh application, fault adapter and compatibility ELFs and the pinned clock ELF"]
+fn settlement_nested_adapter_calls_roll_back_and_repaired_retry_pays_once() {
+    let namespace = id(&key(47));
+    let factory = factory_core::compute_factory_pda(namespace, FACTORY, SALT);
+    let definition = factory_core::compute_definition_pda(namespace, FACTORY, SALT);
+    let pool = curve_core::compute_pool_pda(namespace, CURVE, definition, COLLATERAL, factory);
+    let factory_actor = Actor::new(factory, FACTORY);
+    let mut attempts = vec![];
+    for message in [
+        factory_core::Message::ExecuteGraduationHook { now: 2 },
+        factory_core::Message::WithdrawFactoryProceeds {
+            creator: id(&key(48)),
+            now: 2,
+        },
+        factory_core::Message::ClaimCreatorAllocation {
+            creator: id(&key(48)),
+            now: 2,
+        },
+        factory_core::Message::ContinueCreation {
+            creator: id(&key(48)),
+            now: 2,
+        },
+    ] {
+        attempts.push((
+            nested_configuration(factory_actor, message),
+            "InvalidMessage",
+        ));
+    }
+    attempts.push((
+        nested_configuration(factory_actor, factory_core::GraduationResult { factory }),
+        "InvalidMessage",
+    ));
+    for message in [
+        curve_core::Message::ClosePool { now: 2 },
+        curve_core::Message::WithdrawReserves { now: 2 },
+    ] {
+        attempts.push((
+            nested_configuration(Actor::new(pool, CURVE), message),
+            "Unauthorized",
+        ));
+    }
+    attempts.push((
+        nested_configuration(
+            Actor::new(curve_core::compute_config_pda(namespace, CURVE), CURVE),
+            curve_core::Message::UpdateTreasury {
+                namespace,
+                treasury: factory_core::compute_graduation_pda(ADAPTER, factory),
+            },
+        ),
+        "Unauthorized",
+    ));
+    for (configuration, reason) in attempts {
+        let mut fixture = hook_ready(
+            configuration.clone(),
+            100,
+            true,
+            "LAUNCHPAD_GRADUATION_FAULT_ELF",
+        );
+        // The creator signs so ambient signer access cannot explain rejection.
+        rejected(&mut fixture, creator_hook, reason);
+        assert_hook_custody(&fixture, false);
+        // Replace only test code, not the saved adapter identity or configuration.
+        fixture.state = fixture
+            .state
+            .with_named_programs([(ADAPTER, guest("LAUNCHPAD_ADAPTER_ELF"))]);
+        creator_hook(&mut fixture).unwrap();
+        assert_hook_custody(&fixture, true);
+        assert_eq!(
+            adapter_state(&fixture).receipt.unwrap().configuration,
+            configuration
+        );
+        rejected(&mut fixture, creator_hook, "AlreadySettled");
+        rejected(&mut fixture, manual, "AlreadySettled");
+        assert_hook_custody(&fixture, true);
+    }
+}
+
+#[test]
+#[ignore = "requires fresh application, fault adapter and compatibility ELFs and the pinned clock ELF"]
+fn settlement_nested_permissionless_fee_collection_cannot_redirect_or_repeat_fees() {
+    let namespace = id(&key(47));
+    let factory = factory_core::compute_factory_pda(namespace, FACTORY, SALT);
+    let definition = factory_core::compute_definition_pda(namespace, FACTORY, SALT);
+    let pool = curve_core::compute_pool_pda(namespace, CURVE, definition, COLLATERAL, factory);
+    let configuration =
+        nested_configuration(Actor::new(pool, CURVE), curve_core::Message::CollectFees);
+    let mut fixture = hook_ready(configuration, 100, true, "LAUNCHPAD_GRADUATION_FAULT_ELF");
+    assert_hook_custody(&fixture, false);
+    creator_hook(&mut fixture).unwrap();
+    assert_hook_custody(&fixture, true);
+    assert_eq!(pool_state(&fixture).pool.fees_accrued, 0);
+    rejected(&mut fixture, creator_hook, "AlreadySettled");
+    assert_hook_custody(&fixture, true);
 }
 
 #[test]

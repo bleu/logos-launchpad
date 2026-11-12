@@ -38,7 +38,7 @@ Run from the repository root after setting `CURVE_EMERGENCY_AUTHORITY` as above:
 
 ```sh
 bash verify/check-pins.sh
-bash verify/check-builds.sh --execution
+LAUNCHPAD_MOCK_CLOCK=1 bash verify/check-builds.sh --execution
 bash verify/check-idl.sh
 ```
 
@@ -70,17 +70,16 @@ The [role-authority guest tests](../../crates/launchpad-client/tests/role_author
 
 The [settlement tests](../../crates/launchpad-client/tests/role_authority_guest/settlement.rs) cover manual and graduation routes, allocation, unsold-token burn, payout failures, callback rejection and invalid final acknowledgment. Failed transactions preserve full state and signer nonces; repaired retries do not repeat completed payments or burns. Tests also cover competing-route rejection, manual recovery, frozen settlement and the permitted zero-payout hook. A real adapter receives payouts and records a successful callback. This proves local graduation execution, not DEX liquidity.
 
-The seeded fixed-price trade checks do not exercise fresh setup or settlement. Weighted setup has the separate factory test above. To run those trade fixtures directly:
+Fresh fixed-price setup, immediate allocation and allowlisted buys are covered by the [public integration evidence](../../plans/allowlist-program-integration.md#public-execution-evidence). The sale fixtures also cover signed fixed-price expiry and no-end sellout settlement, both allocation/proceeds orders, frozen payouts, surplus retention, caller rejection and inclusion bounds. Fee-credit, burn, proceeds-credit and allocation-credit faults restore full runtime state and signer nonce; repaired retries pay and burn once. To run the sale fixtures directly:
 
 ```sh
-RISC0_BUILD_LOCKED=1 cargo +1.98.1 test --manifest-path methods/Cargo.toml --release --locked --features actor-execution-tests --test actor_sale
+LAUNCHPAD_MOCK_CLOCK=1 RISC0_BUILD_LOCKED=1 cargo +1.98.1 test --manifest-path methods/Cargo.toml --release --locked --features actor-execution-tests --test actor_sale
 ```
 
-The local `bash verify/check-builds.sh --execution` gate passed with unchanged lockfiles. It checks release host tests, application and compatibility guests, weighted-math parity, release-overflow checks, token execution, seeded sale tests and the signed curve contract guest tests. IDL and wire checks, formatting, pins and shell regressions are separate checks. Linux CI has not run for the expanded curve evidence.
+On 12 November 2026, `LAUNCHPAD_MOCK_CLOCK=1 bash verify/check-builds.sh --execution` passed for the baseline signed contract tests, including 39 sale guest tests and 34 signed role-authority guest tests. Lockfiles stayed unchanged during verification. New checks cover weighted buy-limit equality, payout role isolation, late curve activation failure and recovery, and nested adapter calls. The nested valid callback case proves rollback when the queued callback repeats it; it does not prove that the first valid callback is rejected. Permissionless nested fee collection cannot redirect or repeat fees. The gate also checks release host tests, application and compatibility guests, weighted-math parity, release-overflow checks and token execution. IDL and wire checks, formatting, pins and shell regressions passed separately. This is local execution evidence; Linux CI has not established the same results.
 
-A separate direct run passed all eleven sale tests, including the weighted factory test.
 
-Fixed-price setup and payout runtime checks remain deferred, as do sequencer `Tick`, wallet/service integration and real proofs. Old namespace and private-helper guest evidence predates this actor migration and cannot establish compatibility on the selected revision. Private purchase and authority helpers return explicit unsupported errors because the compatibility token implementation has no private holdings.
+Sequencer `Tick`, wallet/service integration and real proofs remain open. The test fault adapter can be replaced in disposable runtime state to exercise a repaired retry; this does not establish replacement of an immutable live adapter. Old namespace and private-helper guest evidence predates this actor migration and cannot establish compatibility on the selected revision. Private purchase and authority helpers return explicit unsupported errors because the compatibility token implementation has no private holdings.
 
 The three launchpad package archives passed the Nix build. Installation, loading and `Test backend` are blocked by missing Basecamp and `lgpm`; no `Backend OK` result is recorded. See the [package README](../../packages/launchpad/README.md) for the command and local requirements.
 
