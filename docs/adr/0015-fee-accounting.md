@@ -12,9 +12,9 @@ If the curve pool is the treasury, collection records and clears fees without a 
 
 Namespace fee rates must be integers from 0 through 9,999 basis points at creation and update. Reject 10,000 or more: a 100% fee consumes all curve buy input. Rounding can still consume a small trade below this limit, so trade guards remain necessary.
 
-Curve swaps use the live namespace rate. Deduct fees from buy input or sell output in token1, the factory's collateral token. Fixed-price buys use fee-first pricing under [ADR 0035](0035-fixed-price-swap-fees.md). Weighted-sale fees remain creator-borne under [ADR 0016](0016-lbp-live-fees.md). Both fixed-price and weighted-sale RFP departures remain `To be reviewed by Logos team`.
+All engines use the live namespace rate and charge namespace fees in collateral: buy input or sell output. Curve factory collateral is token1. Price buys from net input; exact-output buys gross up the required net collateral. [ADR 0031](0031-shared-launch-factory.md) supersedes weighted creator-borne incidence. Fixed-price pricing follows [ADR 0035](0035-fixed-price-swap-fees.md); weighted accounting follows [ADR 0030](0030-lbp-pricing-collateral.md). This adds no new sells or retained fees. Fixed-price and weighted-sale RFP departures remain `To be reviewed by Logos team`.
 
-Fee-rate and treasury updates must be separate operations under [ADR 0006](0006-namespaces-and-authority.md). The curve PoC enforces the rate limit but still uses one combined configuration update. Fixed-price public buys and fee collection follow ADR 0035; weighted-sale fees and collection use the creator-borne rules in ADR 0016. See the [shared contract](../product/namespace-fee-contract.md) for custody checks.
+Fee-rate and treasury updates must be separate operations under [ADR 0006](0006-namespaces-and-authority.md). The curve PoC enforces the rate limit but still uses one combined configuration update. Fixed-price and weighted public buys use the shared namespace fee rule; collection retains ADR 0016 rules. See the [shared contract](../product/namespace-fee-contract.md) for custody checks.
 
 ## Sources
 

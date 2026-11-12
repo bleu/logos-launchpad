@@ -1,3 +1,4 @@
+use pool::EndingPolicy;
 use pool::{
     ExactInputSwap, ExactOutputSwap, FeeSide, Pool, PoolCreateParams, PoolLifecycle, SwapOutcome,
     TokenSide,
@@ -104,6 +105,7 @@ fn pool_strategy() -> impl Strategy<Value = Pool> {
                     token1_amount: real1,
                     virtual_reserve0: virtual0,
                     virtual_reserve1: virtual1,
+                    ending_policy: EndingPolicy::Manual,
                     close_timestamp: None,
                     close_on_depletion: None,
                 })
@@ -115,6 +117,7 @@ fn pool_strategy() -> impl Strategy<Value = Pool> {
                 token1_amount: u128::MAX,
                 virtual_reserve0: 1,
                 virtual_reserve1: (1_u128 << 64) - 1,
+                ending_policy: EndingPolicy::Manual,
                 close_timestamp: None,
                 close_on_depletion: None,
             })
@@ -124,6 +127,7 @@ fn pool_strategy() -> impl Strategy<Value = Pool> {
                 token1_amount: u128::MAX,
                 virtual_reserve0: (1_u128 << 64) - 1,
                 virtual_reserve1: (1_u128 << 64) - 1,
+                ending_policy: EndingPolicy::Manual,
                 close_timestamp: None,
                 close_on_depletion: None,
             })
@@ -208,6 +212,7 @@ fn collateral_buy_fee_rounds_up_before_pricing() {
         token1_amount: 800,
         virtual_reserve0: 1_000,
         virtual_reserve1: 1_000,
+        ending_policy: EndingPolicy::Manual,
         close_timestamp: None,
         close_on_depletion: None,
     })
@@ -235,6 +240,7 @@ fn manual_close_and_withdraw_are_permanent_and_post_close_swaps_fail_atomically(
         token1_amount: 200,
         virtual_reserve0: 1_000,
         virtual_reserve1: 100,
+        ending_policy: EndingPolicy::Manual,
         close_timestamp: None,
         close_on_depletion: None,
     })
@@ -267,6 +273,7 @@ fn fee_counter_overflow_rejects_both_buy_forms_without_mutation() {
             token1_amount: 100,
             virtual_reserve0: 1000,
             virtual_reserve1: 100,
+            ending_policy: EndingPolicy::Manual,
             close_timestamp: None,
             close_on_depletion: None,
         })

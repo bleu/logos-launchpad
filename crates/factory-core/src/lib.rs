@@ -13,7 +13,9 @@ use serde::{Deserialize, Serialize};
 
 mod hook;
 mod lbp_setup;
-pub use curve_core::{AUTHORITY_PROGRAM_ACCOUNT_ID, PausePolicy, TOKEN_PROGRAM_ACCOUNT_ID};
+pub use curve_core::{
+    AUTHORITY_PROGRAM_ACCOUNT_ID, EndingPolicy, PausePolicy, TOKEN_PROGRAM_ACCOUNT_ID,
+};
 pub use hook::{AdapterMessage, AdapterState, GraduationRequest, GraduationResult, handle_adapter};
 pub use lbp_setup::{
     CreatorAllocationRelease, FixedPrice, FixedPriceInputs, LbpCreationStage, LbpLaunchState,
@@ -71,6 +73,7 @@ pub struct GraduationHook {
 pub struct FactoryState {
     pub buy_policy: BuyPolicy,
     pub pause_policy: PausePolicy,
+    pub ending_policy: EndingPolicy,
     pub trade_mode: TradeMode,
     pub graduation_hook: Option<GraduationHook>,
     pub creation_stage: CreationStage,
@@ -106,7 +109,12 @@ impl FactoryState {
         call.message = read.message.clone();
         self.response().send(call)
     }
+    fn validate_terms(&self) -> Result<(), Error> {
+        validate_curve_policies(self.ending_policy, self.end_timestamp)
+            .map_err(|_| Error::InvalidState)
+    }
     fn validate(&self, actor: Actor) -> Result<(), Error> {
+        self.validate_terms()?;
         if actor.account_id
             != compute_factory_pda(self.namespace, actor.program_account_id, self.launch_salt)
             || self.token_definition_id
@@ -137,7 +145,9 @@ impl FactoryState {
         Ok(())
     }
     pub fn decode(bytes: &[u8]) -> Result<Self, Error> {
-        borsh::from_slice(bytes).map_err(|_| Error::InvalidState)
+        let state: Self = borsh::from_slice(bytes).map_err(|_| Error::InvalidState)?;
+        state.validate_terms()?;
+        Ok(state)
     }
 }
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -145,6 +155,7 @@ pub enum Message {
     CreateFactoryPool {
         buy_policy: BuyPolicy,
         pause_policy: PausePolicy,
+        ending_policy: EndingPolicy,
         trade_mode: u8,
         graduation_hook_program_id: Option<AccountId>,
         graduation_hook_configuration: Vec<u8>,
@@ -418,10 +429,29 @@ fn transfer(
         .with_pda_seeds([seed]),
     )
 }
+fn validate_window(
+    ending: EndingPolicy,
+    start: Option<u64>,
+    end: Option<u64>,
+) -> Result<(), Error> {
+    ending
+        .validate(start, end)
+        .map_err(|_| Error::InvalidTerms)?;
+    let _ = curve_core::with_time_bounds(Response::keep_state(), start, end)
+        .map_err(|_| Error::InvalidTerms)?;
+    Ok(())
+}
+pub fn validate_curve_policies(ending: EndingPolicy, end: Option<u64>) -> Result<(), Error> {
+    if ending == EndingPolicy::Manual {
+        return Err(Error::InvalidTerms);
+    }
+    validate_window(ending, None, end)
+}
 fn create_curve(input: &ReceiveInput, command: Message) -> Result<Response, Error> {
     let Message::CreateFactoryPool {
         buy_policy,
         pause_policy,
+        ending_policy,
         trade_mode,
         graduation_hook_program_id,
         graduation_hook_configuration,
@@ -459,6 +489,7 @@ fn create_curve(input: &ReceiveInput, command: Message) -> Result<Response, Erro
     {
         return Err(Error::InvalidTerms);
     }
+    validate_curve_policies(ending_policy, end_timestamp)?;
     let total_supply = total_supply(sale_reserve, dex_seed_reserve, creator_allocation)
         .map_err(|_| Error::InvalidTerms)?;
     validate_curve_parameters(
@@ -475,6 +506,7 @@ fn create_curve(input: &ReceiveInput, command: Message) -> Result<Response, Erro
     let state = FactoryState {
         buy_policy,
         pause_policy,
+        ending_policy,
         trade_mode: TradeMode::try_from(trade_mode).map_err(|_| Error::InvalidTerms)?,
         graduation_hook: graduation_hook_program_id.map(|program_id| GraduationHook {
             program_id,
@@ -544,6 +576,9 @@ fn validate_pool(
     actor: Actor,
     saved: &curve_core::PoolAccount,
 ) -> Result<(), Error> {
+    if saved.pool.ending_policy != state.ending_policy {
+        return Err(Error::InvalidCustody);
+    }
     if saved.buy_policy != state.buy_policy
         || saved.trade_control.policy() != state.pause_policy
         || saved.namespace != state.namespace
@@ -561,7 +596,11 @@ fn validate_pool(
                 .checked_mul(state.virtual_collateral_reserve)
                 .ok_or(Error::Overflow)?
         || saved.pool.close_timestamp != state.end_timestamp
-        || saved.pool.close_on_depletion != Some(pool::TokenSide::Token0)
+        || saved.pool.close_on_depletion
+            != match state.ending_policy {
+                EndingPolicy::Scheduled => None,
+                _ => Some(pool::TokenSide::Token0),
+            }
         || saved.allowed_input_token
             != match state.trade_mode {
                 TradeMode::BuyOnly => Some(pool::TokenSide::Token1),
@@ -755,7 +794,7 @@ fn begin_settlement(input: &ReceiveInput, command: Message) -> Result<Response, 
     }
 }
 fn curve_resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
-    let mut state = FactoryState::decode(&input.pre_state).ok()?;
+    let mut state: FactoryState = borsh::from_slice(&input.pre_state).ok()?;
     let mut pending = state.pending.take()?;
     Some((|| {
         state.validate(input.receiver)?;
@@ -854,11 +893,12 @@ fn curve_resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
                 if !saved.funded {
                     return Err(Error::CreationPending);
                 }
-                let expiry = if saved.pool.lifecycle == pool::PoolLifecycle::Open {
-                    Some(saved.pool.close_timestamp.ok_or(Error::NotClosed)?)
-                } else {
-                    None
-                };
+                let expiry = saved
+                    .pool
+                    .ending_decision()
+                    .map_err(|_| Error::NotClosed)?
+                    .inclusion_bounds()
+                    .at_least;
                 if state.creator_allocation != 0
                     && balance(
                         &pending.values[1],
@@ -892,11 +932,12 @@ fn curve_resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
                 if !saved.funded {
                     return Err(Error::CreationPending);
                 }
-                let expiry = if saved.pool.lifecycle == pool::PoolLifecycle::Open {
-                    Some(saved.pool.close_timestamp.ok_or(Error::NotClosed)?)
-                } else {
-                    None
-                };
+                let expiry = saved
+                    .pool
+                    .ending_decision()
+                    .map_err(|_| Error::NotClosed)?
+                    .inclusion_bounds()
+                    .at_least;
                 balance(
                     &pending.values[1],
                     input.receiver.account_id,
@@ -1222,6 +1263,7 @@ fn curve_resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
                             &curve_core::Message::CreatePool {
                                 buy_policy: state.buy_policy.clone(),
                                 pause_policy: state.pause_policy,
+                                ending_policy: state.ending_policy,
                                 namespace: state.namespace,
                                 token0_definition_id: state.token_definition_id,
                                 token1_definition_id: state.collateral_definition_id,
@@ -1235,7 +1277,10 @@ fn curve_resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
                                 virtual_reserve0: state.virtual_token_reserve,
                                 virtual_reserve1: state.virtual_collateral_reserve,
                                 close_timestamp: state.end_timestamp,
-                                close_on_depletion: Some(0),
+                                close_on_depletion: match state.ending_policy {
+                                    EndingPolicy::Scheduled => None,
+                                    _ => Some(0),
+                                },
                                 owner: input.receiver.account_id,
                                 owner_program_id: Some(input.receiver.program_account_id),
                                 owner_program_seed: Some(

@@ -369,6 +369,11 @@ fn sale_with_pause(
             factory_core::Message::CreateFactoryPool {
                 buy_policy: curve_core::BuyPolicy::Open,
                 pause_policy,
+                ending_policy: if end_timestamp.is_some() {
+                    curve_core::EndingPolicy::Either
+                } else {
+                    curve_core::EndingPolicy::Depletion
+                },
                 trade_mode,
                 graduation_hook_program_id: None,
                 graduation_hook_configuration: vec![],
@@ -925,6 +930,7 @@ fn namespace_freeze_and_emergency_transfer_do_not_control_another_namespace_pool
         curve_core::Message::CreatePool {
             buy_policy: curve_core::BuyPolicy::Open,
             pause_policy: curve_core::PausePolicy::Disabled,
+            ending_policy: curve_core::EndingPolicy::Manual,
             namespace: other_id,
             token0_definition_id: LAUNCH,
             token1_definition_id: COLLATERAL,
@@ -1110,6 +1116,7 @@ fn frozen_direct_pool_keeps_owner_close_and_reserve_recovery_checks() {
         curve_core::Message::CreatePool {
             buy_policy: curve_core::BuyPolicy::Open,
             pause_policy: curve_core::PausePolicy::Disabled,
+            ending_policy: curve_core::EndingPolicy::Manual,
             namespace: ns,
             token0_definition_id: LAUNCH,
             token1_definition_id: COLLATERAL,
@@ -1539,6 +1546,7 @@ fn direct_curve_pause_follows_transferred_owner_and_keeps_reserve_recovery() {
         curve_core::Message::CreatePool {
             buy_policy: curve_core::BuyPolicy::Open,
             pause_policy: curve_core::PausePolicy::AuthorityControlled,
+            ending_policy: curve_core::EndingPolicy::Manual,
             namespace: ns,
             token0_definition_id: LAUNCH,
             token1_definition_id: COLLATERAL,

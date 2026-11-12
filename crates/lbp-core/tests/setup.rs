@@ -14,6 +14,7 @@ fn prepare() -> ReceiveInput {
     let inputs = FixedPricePoolInputs {
         buy_policy: curve_core::BuyPolicy::Open,
         pause_policy: lbp_core::PausePolicy::Disabled,
+        ending_policy: lbp_core::EndingPolicy::Either,
         namespace: id(40),
         namespace_program_id: id(6),
         factory_program_id: id(7),
@@ -452,6 +453,7 @@ fn buy_windows_keep_zero_start_no_end_and_reject_overflow() {
     let (input, mut state) = funded();
     state.start_timestamp = 0;
     state.end_timestamp = None;
+    state.ending_policy = lbp_core::EndingPolicy::Depletion;
     let response = operation(
         &input,
         &state,
@@ -476,6 +478,7 @@ fn buy_windows_keep_zero_start_no_end_and_reject_overflow() {
     );
     state.start_timestamp = u64::MAX;
     state.end_timestamp = None;
+    state.ending_policy = lbp_core::EndingPolicy::Depletion;
     let message = Message::BuyExactInput {
         membership: None,
         amount_in: 5,
@@ -853,6 +856,7 @@ fn buys_reject_limits_zero_inventory_time_freeze_and_underbacking() {
 fn no_end_sellout_donations_and_anytime_collection_keep_separate_accounts() {
     let (mut input, mut state) = funded();
     state.end_timestamp = None;
+    state.ending_policy = lbp_core::EndingPolicy::Depletion;
     let response = operation(
         &input,
         &state,
@@ -1406,6 +1410,7 @@ fn settlement_uses_only_end_or_sellout_and_checks_time_conversion() {
     let response = settle(&input, &state, 199, config(100, id(43), false), [0, 800]).unwrap();
     assert_eq!(response.validity.timestamps.start(), Some(200_000));
     state.end_timestamp = None;
+    state.ending_policy = lbp_core::EndingPolicy::Depletion;
     assert_eq!(
         settle(
             &input,
@@ -1432,6 +1437,11 @@ fn settlement_uses_only_end_or_sellout_and_checks_time_conversion() {
     state.remaining_inventory = 0;
     for end in [None, Some(200)] {
         state.end_timestamp = end;
+        state.ending_policy = if end.is_some() {
+            lbp_core::EndingPolicy::Either
+        } else {
+            lbp_core::EndingPolicy::Depletion
+        };
         let response = settle(&input, &state, 100, config(100, id(43), false), [0, 0]).unwrap();
         assert!(state_of(&response).proceeds_settled);
         assert!(response.sync_messages.is_empty());
@@ -1820,12 +1830,10 @@ fn fixed_price_policy_survives_every_prepare_and_activation_callback() {
             let source = response.sync_messages.last().unwrap().to;
             input = reply(&input, &response, source, bytes);
             response = handle(&input).unwrap();
-            assert_eq!(
-                lbp_core::PoolAccount::decode(response.post_state.as_ref().unwrap())
-                    .unwrap()
-                    .buy_policy,
-                policy
-            );
+            let saved =
+                lbp_core::PoolAccount::decode(response.post_state.as_ref().unwrap()).unwrap();
+            assert_eq!(saved.buy_policy, policy);
+            assert_eq!(saved.ending_policy, lbp_core::EndingPolicy::Either);
         }
         assert_eq!(
             lbp_core::PoolAccount::decode(response.post_state.as_ref().unwrap())
@@ -1922,6 +1930,11 @@ fn fixed_control_noops_authenticate_and_reject_disabled_unfunded_and_ended_sales
         for end in [None, Some(200)] {
             let mut sold = state.clone();
             sold.end_timestamp = end;
+            sold.ending_policy = if end.is_some() {
+                lbp_core::EndingPolicy::Either
+            } else {
+                lbp_core::EndingPolicy::Depletion
+            };
             sold.remaining_inventory = 0;
             assert_eq!(
                 control(&input, &sold, paused).err(),
@@ -1942,6 +1955,7 @@ fn fixed_control_noops_authenticate_and_reject_disabled_unfunded_and_ended_sales
         );
         let mut open = state.clone();
         open.end_timestamp = None;
+        open.ending_policy = lbp_core::EndingPolicy::Depletion;
         let response = control(&input, &open, paused).unwrap();
         assert_eq!(response.validity.timestamps.end(), None);
     }
@@ -2026,6 +2040,7 @@ fn fixed_pause_and_freeze_leave_collection_and_safe_settlement_available() {
     assert!(state_of(&response).proceeds_settled);
     assert!(state_of(&response).trade_control.is_paused());
     state.end_timestamp = None;
+    state.ending_policy = lbp_core::EndingPolicy::Depletion;
     assert_eq!(
         settle(
             &input,
@@ -2041,4 +2056,280 @@ fn fixed_pause_and_freeze_leave_collection_and_safe_settlement_available() {
     let response = settle(&input, &state, 100, config(100, id(43), true), [5, 0]).unwrap();
     assert_eq!(response.validity.timestamps.start(), None);
     assert!(state_of(&response).proceeds_settled);
+}
+
+#[test]
+fn fixed_policy_matrix_rejects_unsupported_terms_before_setup_queries() {
+    use lbp_core::EndingPolicy;
+    for ending in [
+        EndingPolicy::Manual,
+        EndingPolicy::Scheduled,
+        EndingPolicy::Depletion,
+        EndingPolicy::Either,
+    ] {
+        for end in [None, Some(200)] {
+            let mut input = prepare();
+            let Message::PrepareFixedPrice { mut inputs } =
+                borsh::from_slice(&input.message).unwrap()
+            else {
+                unreachable!()
+            };
+            inputs.ending_policy = ending;
+            inputs.end_timestamp = end;
+            input.message = borsh::to_vec(&Message::PrepareFixedPrice { inputs }).unwrap();
+            let result = handle(&input);
+            if (ending == EndingPolicy::Depletion && end.is_none())
+                || (matches!(ending, EndingPolicy::Scheduled | EndingPolicy::Either)
+                    && end.is_some())
+            {
+                let state = state_of(&result.unwrap());
+                assert_eq!(state.ending_policy, ending);
+                assert_eq!(state.end_timestamp, end);
+            } else {
+                assert_eq!(result.err(), Some(lbp_core::Error::InvalidTerms));
+            }
+        }
+    }
+}
+
+#[test]
+fn fixed_preparation_checks_both_timestamp_conversions_before_queries() {
+    let last = u64::MAX / 1000;
+    for (start, end, valid) in [
+        (0, None, true),
+        (last, None, true),
+        (last - 1, Some(last), true),
+        (last + 1, None, false),
+        (0, Some(last + 1), false),
+        (100, Some(100), false),
+        (101, Some(100), false),
+    ] {
+        let mut input = prepare();
+        let Message::PrepareFixedPrice { mut inputs } = borsh::from_slice(&input.message).unwrap()
+        else {
+            unreachable!()
+        };
+        inputs.start_timestamp = start;
+        inputs.end_timestamp = end;
+        inputs.ending_policy = if end.is_some() {
+            lbp_core::EndingPolicy::Either
+        } else {
+            lbp_core::EndingPolicy::Depletion
+        };
+        input.message = borsh::to_vec(&Message::PrepareFixedPrice { inputs }).unwrap();
+        let result = handle(&input);
+        if valid {
+            assert!(result.is_ok());
+        } else {
+            assert_eq!(result.err(), Some(lbp_core::Error::InvalidTerms));
+        }
+    }
+}
+
+#[test]
+fn malformed_fixed_policies_cannot_bypass_pool_entry_or_setup_replies() {
+    for case in 0..5 {
+        let (mut input, state) = funded();
+        let mut malformed = state.clone();
+        match case {
+            0 => malformed.ending_policy = lbp_core::EndingPolicy::Manual,
+            1 => malformed.ending_policy = lbp_core::EndingPolicy::Depletion,
+            2 => malformed.ending_policy = lbp_core::EndingPolicy::Manual,
+            3 => malformed.start_timestamp = u64::MAX,
+            _ => malformed.end_timestamp = Some(100),
+        }
+        let expected = if case == 0 || case == 2 {
+            lbp_core::Error::InvalidState
+        } else {
+            lbp_core::Error::InvalidTerms
+        };
+        input.from = Some(Actor::new(state.factory_owner, state.factory_program_id));
+        input.pre_state = borsh::to_vec(&malformed).unwrap().into();
+        for message in [
+            Message::ReadState,
+            Message::ActivateFixedPrice,
+            exact_in(5),
+            Message::BuyExactOutput {
+                membership: None,
+                amount_out: 3,
+                max_amount_in: 6,
+                now: 100,
+            },
+            Message::SetPaused { paused: false },
+            Message::SettleFixedPrice {
+                creator: id(60),
+                now: 200,
+            },
+            Message::CollectFees,
+        ] {
+            input.message = borsh::to_vec(&message).unwrap();
+            assert_eq!(handle(&input).err(), Some(expected));
+        }
+        let setup = prepare();
+        let response = handle(&setup).unwrap();
+        let mut pending = state_of(&response);
+        pending.ending_policy = lbp_core::EndingPolicy::Manual;
+
+        let mut callback = reply(
+            &setup,
+            &response,
+            response.sync_messages[0].to,
+            namespace_state(),
+        );
+        callback.pre_state = borsh::to_vec(&pending).unwrap().into();
+        assert_eq!(handle(&callback).err(), Some(lbp_core::Error::InvalidState));
+    }
+}
+
+#[test]
+fn fixed_final_sellout_buy_keeps_pre_trade_inclusion_bounds_for_both_forms() {
+    let (input, mut state) = funded();
+    state.remaining_inventory = 2;
+    for end in [None, Some(200)] {
+        state.end_timestamp = end;
+        state.ending_policy = if end.is_some() {
+            lbp_core::EndingPolicy::Either
+        } else {
+            lbp_core::EndingPolicy::Depletion
+        };
+        for message in [
+            Message::BuyExactInput {
+                membership: None,
+                amount_in: 4,
+                min_amount_out: 2,
+                now: 199,
+            },
+            Message::BuyExactOutput {
+                membership: None,
+                amount_out: 2,
+                max_amount_in: 4,
+                now: 199,
+            },
+        ] {
+            let response = operation(
+                &input,
+                &state,
+                message,
+                config(100, id(43), false),
+                [17, 9, 4],
+            )
+            .unwrap();
+            let next = state_of(&response);
+            assert_eq!(
+                (
+                    next.remaining_inventory,
+                    next.recorded_collateral,
+                    next.accrued_fees
+                ),
+                (0, 3, 1)
+            );
+            assert_eq!(next.ending_policy, state.ending_policy);
+            assert_eq!(response.validity.timestamps.start(), Some(100_000));
+            assert_eq!(
+                response.validity.timestamps.end(),
+                end.map(|value| value * 1000)
+            );
+            assert_eq!(next.close_time_bound().unwrap(), None);
+        }
+    }
+}
+
+#[test]
+fn fixed_exact_time_edges_apply_to_both_buy_forms() {
+    let (input, state) = funded();
+    for now in [99, 100, 199, 200] {
+        for message in [
+            Message::BuyExactInput {
+                membership: None,
+                amount_in: 5,
+                min_amount_out: 0,
+                now,
+            },
+            Message::BuyExactOutput {
+                membership: None,
+                amount_out: 3,
+                max_amount_in: 6,
+                now,
+            },
+        ] {
+            let result = operation(
+                &input,
+                &state,
+                message,
+                config(100, id(43), false),
+                [0, 800, 100],
+            );
+            if (100..200).contains(&now) {
+                let response = result.unwrap();
+                assert_eq!(response.validity.timestamps.start(), Some(100_000));
+                assert_eq!(response.validity.timestamps.end(), Some(200_000));
+            } else {
+                assert_eq!(result.err(), Some(lbp_core::Error::Closed));
+            }
+        }
+    }
+}
+
+#[test]
+fn fixed_unsold_burn_keeps_expiry_evidence_after_settlement() {
+    let (input, state) = funded();
+    let response = settle(&input, &state, 0, config(100, id(43), true), [0, 817]).unwrap();
+    let next = state_of(&response);
+    assert_eq!(next.remaining_inventory, 800);
+    assert_eq!(next.close_time_bound().unwrap(), Some(200));
+    assert_eq!(
+        next.ending_policy
+            .settlement(next.end_timestamp, next.remaining_inventory)
+            .unwrap()
+            .reason(),
+        sale_policy::EndingReason::ScheduledEnd
+    );
+}
+
+#[test]
+fn fixed_selected_ending_separates_empty_inventory_from_scheduled_close() {
+    let (input, original) = funded();
+    for ending in [
+        lbp_core::EndingPolicy::Scheduled,
+        lbp_core::EndingPolicy::Depletion,
+        lbp_core::EndingPolicy::Either,
+    ] {
+        let mut state = original.clone();
+        state.ending_policy = ending;
+        state.end_timestamp = if ending == lbp_core::EndingPolicy::Depletion {
+            None
+        } else {
+            Some(200)
+        };
+        state.remaining_inventory = 0;
+        let response = settle(&input, &state, 100, config(100, id(43), false), [0, 0]).unwrap();
+        let expected = if ending == lbp_core::EndingPolicy::Scheduled {
+            Some(200_000)
+        } else {
+            None
+        };
+        assert_eq!(response.validity.timestamps.start(), expected);
+        assert_eq!(
+            state_of(&response).close_time_bound().unwrap(),
+            expected.map(|time| time / 1000)
+        );
+        assert_eq!(
+            operation(
+                &input,
+                &state,
+                exact_in(5),
+                config(100, id(43), false),
+                [0, 0, 100]
+            )
+            .err(),
+            Some(lbp_core::Error::Closed)
+        );
+        state.remaining_inventory = 1;
+        let close = state.close_time_bound();
+        if ending == lbp_core::EndingPolicy::Depletion {
+            assert_eq!(close.err(), Some(lbp_core::Error::NotClosed));
+        } else {
+            assert_eq!(close.unwrap(), Some(200));
+        }
+    }
 }

@@ -54,6 +54,11 @@ fn seeded_state(
             token1_amount: 0,
             virtual_reserve0: 10_000,
             virtual_reserve1: 1_000,
+            ending_policy: if close_timestamp.is_some() {
+                curve_core::EndingPolicy::Either
+            } else {
+                curve_core::EndingPolicy::Depletion
+            },
             close_timestamp,
             close_on_depletion: Some(pool::TokenSide::Token0),
         })
@@ -221,6 +226,11 @@ fn fixed_state(buyer: AccountId, end: Option<u64>) -> (V03State, AccountId) {
         (
             curve_core::BuyPolicy::Open,
             lbp_core::TradeControl::Unrestricted,
+            if end.is_some() {
+                lbp_core::EndingPolicy::Either
+            } else {
+                lbp_core::EndingPolicy::Depletion
+            },
             lbp_core::PoolMode::FixedPrice,
             true,
             NAMESPACE,
@@ -305,6 +315,7 @@ fn weighted_state(buyer: AccountId) -> (V03State, AccountId) {
     let (state, pool) = fixed_state(buyer, Some(200));
     let mut sale = fixed_pool(&state, pool);
     sale.trade_control = lbp_core::TradeControl::Running;
+    sale.ending_policy = lbp_core::EndingPolicy::Scheduled;
     sale.mode = lbp_core::PoolMode::Weighted {
         token_weight_start: lbp_core::WEIGHT_TOTAL / 2,
         token_weight_end: lbp_core::WEIGHT_TOTAL / 2,
@@ -361,7 +372,7 @@ fn weighted_clock_prices_at_saved_time_and_rejects_outside_sale() {
         fixed_execute(&mut valid, pool, &key, buy.clone()).unwrap();
         assert!(balance(&valid, buyer, LAUNCH) > 0);
         if timestamp == 100_000 {
-            assert_eq!(balance(&valid, buyer, LAUNCH), 333);
+            assert_eq!(balance(&valid, buyer, LAUNCH), 324);
         }
         if timestamp == 199_999 {
             assert!(balance(&valid, buyer, LAUNCH) < 100);
@@ -427,7 +438,7 @@ fn weighted_collection_keeps_pricing_and_same_second_buys_use_current_reserves()
         BuyWeightedExactInput {
             membership: None,
             amount_in: 50,
-            min_amount_out: 333,
+            min_amount_out: 324,
         },
     )
     .unwrap();
@@ -443,17 +454,17 @@ fn weighted_collection_keeps_pricing_and_same_second_buys_use_current_reserves()
     fixed_execute(&mut state, pool, &key, next_buy.clone()).unwrap();
     fixed_execute(&mut without_collection, pool, &key, next_buy).unwrap();
     assert_eq!(balance(&state, buyer, COLLATERAL), 1923);
-    assert_eq!(balance(&state, buyer, LAUNCH), 433);
+    assert_eq!(balance(&state, buyer, LAUNCH), 424);
     assert_eq!(
         balance(&state, buyer, COLLATERAL),
         balance(&without_collection, buyer, COLLATERAL)
     );
     let sale = fixed_pool(&state, pool);
-    assert_eq!(sale.remaining_inventory, 567);
+    assert_eq!(sale.remaining_inventory, 576);
     assert!(matches!(
         sale.mode,
         lbp_core::PoolMode::Weighted {
-            pricing_collateral: 177,
+            pricing_collateral: 174,
             ..
         }
     ));
@@ -509,7 +520,7 @@ fn weighted_accuracy_and_vault_overflow_rejections_preserve_state_and_nonce() {
         lbp_core::Message::BuyWeightedExactInput {
             membership: None,
             amount_in: 50,
-            min_amount_out: 333,
+            min_amount_out: 324,
         },
         "Arithmetic",
     );
@@ -538,7 +549,7 @@ fn weighted_output_credit_failure_rolls_back_input_records_and_nonce() {
         lbp_core::Message::BuyWeightedExactInput {
             membership: None,
             amount_in: 50,
-            min_amount_out: 333,
+            min_amount_out: 324,
         },
         "Overflow",
     );
@@ -1246,190 +1257,208 @@ fn curve_allowlist_signed_buy_checks_actual_trader_and_reuses_membership() {
 
 #[test]
 fn curve_factory_locks_allowlist_before_setup_and_buys_with_the_same_policy() {
-    const FACTORY: AccountId = AccountId::new([17; 32]);
-    let key = PrivateKey::try_new([21; 32]).unwrap();
-    let creator = AccountId::from(&PublicKey::new_from_private_key(&key));
-    let salt = [24; 32];
-    let factory = factory_core::compute_factory_pda(NAMESPACE, FACTORY, salt);
-    let launch = factory_core::compute_definition_pda(NAMESPACE, FACTORY, salt);
-    let mint = factory_core::compute_mint_pda(NAMESPACE, FACTORY, salt);
-    let escrow = factory_core::compute_escrow_pda(NAMESPACE, FACTORY, salt);
-    let role = factory_core::compute_curve_creator_role_pda(NAMESPACE, FACTORY, salt);
-    let pool = curve_core::compute_pool_pda(NAMESPACE, CURVE, launch, COLLATERAL, factory);
-    let (policy, path) = allowlist_for(pool, creator);
-    let mut state = fixed_config(
-        V03State::new()
-            .with_named_programs([
-                (
-                    FACTORY,
-                    Program::new(Cow::Borrowed(launchpad_methods::FACTORY_ELF)).unwrap(),
-                ),
-                (
-                    CURVE,
-                    Program::new(Cow::Borrowed(launchpad_methods::CURVE_ELF)).unwrap(),
-                ),
-                (
-                    TOKEN_PROGRAM_ACCOUNT_ID,
-                    Program::new(Cow::Borrowed(lez_compat_methods::COMPAT_TOKEN_ELF)).unwrap(),
-                ),
-                (
-                    factory_core::AUTHORITY_PROGRAM_ACCOUNT_ID,
-                    Program::new(Cow::Borrowed(lez_compat_methods::COMPAT_AUTHORITY_ELF)).unwrap(),
-                ),
-            ])
-            .with_public_accounts([
-                account(
-                    Actor::new(COLLATERAL, TOKEN_PROGRAM_ACCOUNT_ID),
-                    borsh::to_vec(&TokenState::Definition {
-                        name: "Collateral".into(),
-                        kind: TokenKind::Fungible,
-                        supply: 10_000,
-                        metadata: None,
-                    })
-                    .unwrap(),
-                ),
-                account(
-                    holding(creator, COLLATERAL),
-                    borsh::to_vec(&TokenState::Holding {
-                        owner: creator,
-                        definition: COLLATERAL,
-                        kind: TokenKind::Fungible,
-                        balance: 1_000,
-                    })
-                    .unwrap(),
-                ),
-            ]),
-        0,
-        TREASURY,
-        false,
-    );
-    let mut actors = vec![
-        Actor::new(factory, FACTORY),
-        Actor::new(pool, CURVE),
-        Actor::new(role, factory_core::AUTHORITY_PROGRAM_ACCOUNT_ID),
-        Actor::new(creator, factory_core::AUTHORITY_PROGRAM_ACCOUNT_ID),
-        Actor::new(curve_core::compute_config_pda(NAMESPACE, CURVE), CURVE),
-        Actor::new(launch, TOKEN_PROGRAM_ACCOUNT_ID),
-        Actor::new(COLLATERAL, TOKEN_PROGRAM_ACCOUNT_ID),
-    ];
-    for owner in [factory, mint, escrow, pool, creator, role, launch] {
-        actors.extend([
-            Actor::new(owner, FACTORY),
-            Actor::new(owner, CURVE),
-            Actor::new(owner, TOKEN_PROGRAM_ACCOUNT_ID),
-            holding(owner, launch),
-            holding(owner, COLLATERAL),
-        ]);
-    }
-    let execute = |state: &mut V03State, instruction: factory_core::Message| {
-        let mut message = Message::try_new(
+    for ending_policy in [
+        curve_core::EndingPolicy::Scheduled,
+        curve_core::EndingPolicy::Depletion,
+        curve_core::EndingPolicy::Either,
+    ] {
+        const FACTORY: AccountId = AccountId::new([17; 32]);
+        let key = PrivateKey::try_new([21; 32]).unwrap();
+        let creator = AccountId::from(&PublicKey::new_from_private_key(&key));
+        let salt = [24; 32];
+        let factory = factory_core::compute_factory_pda(NAMESPACE, FACTORY, salt);
+        let launch = factory_core::compute_definition_pda(NAMESPACE, FACTORY, salt);
+        let mint = factory_core::compute_mint_pda(NAMESPACE, FACTORY, salt);
+        let escrow = factory_core::compute_escrow_pda(NAMESPACE, FACTORY, salt);
+        let role = factory_core::compute_curve_creator_role_pda(NAMESPACE, FACTORY, salt);
+        let pool = curve_core::compute_pool_pda(NAMESPACE, CURVE, launch, COLLATERAL, factory);
+        let (policy, path) = allowlist_for(pool, creator);
+        let mut state = fixed_config(
+            V03State::new()
+                .with_named_programs([
+                    (
+                        FACTORY,
+                        Program::new(Cow::Borrowed(launchpad_methods::FACTORY_ELF)).unwrap(),
+                    ),
+                    (
+                        CURVE,
+                        Program::new(Cow::Borrowed(launchpad_methods::CURVE_ELF)).unwrap(),
+                    ),
+                    (
+                        TOKEN_PROGRAM_ACCOUNT_ID,
+                        Program::new(Cow::Borrowed(lez_compat_methods::COMPAT_TOKEN_ELF)).unwrap(),
+                    ),
+                    (
+                        factory_core::AUTHORITY_PROGRAM_ACCOUNT_ID,
+                        Program::new(Cow::Borrowed(lez_compat_methods::COMPAT_AUTHORITY_ELF))
+                            .unwrap(),
+                    ),
+                ])
+                .with_public_accounts([
+                    account(
+                        Actor::new(COLLATERAL, TOKEN_PROGRAM_ACCOUNT_ID),
+                        borsh::to_vec(&TokenState::Definition {
+                            name: "Collateral".into(),
+                            kind: TokenKind::Fungible,
+                            supply: 10_000,
+                            metadata: None,
+                        })
+                        .unwrap(),
+                    ),
+                    account(
+                        holding(creator, COLLATERAL),
+                        borsh::to_vec(&TokenState::Holding {
+                            owner: creator,
+                            definition: COLLATERAL,
+                            kind: TokenKind::Fungible,
+                            balance: 1_000,
+                        })
+                        .unwrap(),
+                    ),
+                ]),
+            0,
+            TREASURY,
+            false,
+        );
+        let mut actors = vec![
             Actor::new(factory, FACTORY),
-            actors.clone(),
-            BTreeMap::from([(creator, state.get_account_by_id(creator).nonce)]),
-            instruction,
-        )
-        .unwrap();
-        message.admission_evidence = vec![
-            lee::PublicAccountEvidence::Pda {
-                program: FACTORY,
-                seed: factory_core::compute_factory_seed(NAMESPACE, salt),
-            },
-            lee::PublicAccountEvidence::Pda {
-                program: CURVE,
-                seed: curve_core::compute_pool_pda_seed(NAMESPACE, launch, COLLATERAL, factory),
-            },
+            Actor::new(pool, CURVE),
+            Actor::new(role, factory_core::AUTHORITY_PROGRAM_ACCOUNT_ID),
+            Actor::new(creator, factory_core::AUTHORITY_PROGRAM_ACCOUNT_ID),
+            Actor::new(curve_core::compute_config_pda(NAMESPACE, CURVE), CURVE),
+            Actor::new(launch, TOKEN_PROGRAM_ACCOUNT_ID),
+            Actor::new(COLLATERAL, TOKEN_PROGRAM_ACCOUNT_ID),
         ];
-        for owner in [factory, mint, escrow, pool, creator] {
-            for definition in [launch, COLLATERAL] {
-                message
-                    .admission_evidence
-                    .push(lee::PublicAccountEvidence::Pda {
-                        program: TOKEN_PROGRAM_ACCOUNT_ID,
-                        seed: token::holding_seed(owner, definition),
-                    });
-            }
+        for owner in [factory, mint, escrow, pool, creator, role, launch] {
+            actors.extend([
+                Actor::new(owner, FACTORY),
+                Actor::new(owner, CURVE),
+                Actor::new(owner, TOKEN_PROGRAM_ACCOUNT_ID),
+                holding(owner, launch),
+                holding(owner, COLLATERAL),
+            ]);
         }
-        let witnesses = WitnessSet::for_message(&message, &[&key]);
-        state
-            .transition_from_public_transaction(&PublicTransaction::new(message, witnesses), 1, 0)
+        let execute = |state: &mut V03State, instruction: factory_core::Message| {
+            let mut message = Message::try_new(
+                Actor::new(factory, FACTORY),
+                actors.clone(),
+                BTreeMap::from([(creator, state.get_account_by_id(creator).nonce)]),
+                instruction,
+            )
             .unwrap();
-    };
-    execute(
-        &mut state,
-        factory_core::Message::CreateFactoryPool {
-            buy_policy: policy.clone(),
-            pause_policy: curve_core::PausePolicy::Disabled,
-            trade_mode: 1,
-            graduation_hook_program_id: None,
-            graduation_hook_configuration: vec![],
-            namespace: NAMESPACE,
-            launch_salt: salt,
-            name: "Curve".into(),
-            uri: "https://example.test/curve".into(),
-            sale_reserve: 4_000,
-            dex_seed_reserve: 0,
-            creator_allocation: 0,
-            virtual_token_reserve: 10_000,
-            virtual_collateral_reserve: 1_000,
-            end_timestamp: None,
-            curve_program_id: CURVE,
-            collateral_definition_id: COLLATERAL,
-            creator,
-            now: 1,
-        },
-    );
-    for _ in 0..3 {
-        let stored = factory_core::FactoryState::decode(
-            state.get_account_by_id(factory).data.actor_state(FACTORY),
-        )
-        .unwrap();
-        assert_eq!(stored.buy_policy, policy);
+            message.admission_evidence = vec![
+                lee::PublicAccountEvidence::Pda {
+                    program: FACTORY,
+                    seed: factory_core::compute_factory_seed(NAMESPACE, salt),
+                },
+                lee::PublicAccountEvidence::Pda {
+                    program: CURVE,
+                    seed: curve_core::compute_pool_pda_seed(NAMESPACE, launch, COLLATERAL, factory),
+                },
+            ];
+            for owner in [factory, mint, escrow, pool, creator] {
+                for definition in [launch, COLLATERAL] {
+                    message
+                        .admission_evidence
+                        .push(lee::PublicAccountEvidence::Pda {
+                            program: TOKEN_PROGRAM_ACCOUNT_ID,
+                            seed: token::holding_seed(owner, definition),
+                        });
+                }
+            }
+            let witnesses = WitnessSet::for_message(&message, &[&key]);
+            state
+                .transition_from_public_transaction(
+                    &PublicTransaction::new(message, witnesses),
+                    1,
+                    0,
+                )
+                .unwrap();
+        };
         execute(
             &mut state,
-            factory_core::Message::ContinueCreation { creator, now: 1 },
-        );
-    }
-    let stored =
-        PoolAccount::decode(state.get_account_by_id(pool).data.actor_state(CURVE)).unwrap();
-    assert!(stored.funded);
-    assert_eq!(stored.buy_policy, policy);
-    let mut message = Message::try_new(
-        Actor::new(creator, CURVE),
-        actors,
-        BTreeMap::from([(creator, state.get_account_by_id(creator).nonce)]),
-        CurveMessage::Execute {
-            pool,
-            instruction: Box::new(CurveMessage::SwapExactInput {
-                amount_in: 50,
-                min_amount_out: 1,
-                token_in: COLLATERAL,
+            factory_core::Message::CreateFactoryPool {
+                buy_policy: policy.clone(),
+                pause_policy: curve_core::PausePolicy::Disabled,
+                ending_policy,
+                trade_mode: 1,
+                graduation_hook_program_id: None,
+                graduation_hook_configuration: vec![],
+                namespace: NAMESPACE,
+                launch_salt: salt,
+                name: "Curve".into(),
+                uri: "https://example.test/curve".into(),
+                sale_reserve: 4_000,
+                dex_seed_reserve: 0,
+                creator_allocation: 0,
+                virtual_token_reserve: 10_000,
+                virtual_collateral_reserve: 1_000,
+                end_timestamp: if ending_policy == curve_core::EndingPolicy::Depletion {
+                    None
+                } else {
+                    Some(200)
+                },
+                curve_program_id: CURVE,
+                collateral_definition_id: COLLATERAL,
+                creator,
                 now: 1,
-                membership: Some(path),
-            }),
-        },
-    )
-    .unwrap();
-    message
-        .admission_evidence
-        .push(lee::PublicAccountEvidence::Pda {
-            program: TOKEN_PROGRAM_ACCOUNT_ID,
-            seed: token::holding_seed(creator, launch),
-        });
-    let witnesses = WitnessSet::for_message(&message, &[&key]);
-    let transaction = PublicTransaction::new(message, witnesses);
-    let (diff, charge) = lee::ValidatedStateDiff::from_public_transaction_with_cycle_budget(
-        &transaction,
-        &state,
-        1,
-        0,
-        10_000_000,
-    )
-    .unwrap();
-    eprintln!("created curve allowlist buy cycles: {}", charge.cycles);
-    state.apply_state_diff(diff).unwrap();
-    assert_eq!(balance(&state, creator, COLLATERAL), 950);
-    assert!(balance(&state, creator, launch) > 0);
-    assert_eq!(balance(&state, pool, COLLATERAL), 50);
+            },
+        );
+        for _ in 0..3 {
+            let stored = factory_core::FactoryState::decode(
+                state.get_account_by_id(factory).data.actor_state(FACTORY),
+            )
+            .unwrap();
+            assert_eq!(stored.buy_policy, policy);
+            assert_eq!(stored.ending_policy, ending_policy);
+            execute(
+                &mut state,
+                factory_core::Message::ContinueCreation { creator, now: 1 },
+            );
+        }
+        let stored =
+            PoolAccount::decode(state.get_account_by_id(pool).data.actor_state(CURVE)).unwrap();
+        assert!(stored.funded);
+        assert_eq!(stored.buy_policy, policy);
+        assert_eq!(stored.pool.ending_policy, ending_policy);
+        let mut message = Message::try_new(
+            Actor::new(creator, CURVE),
+            actors,
+            BTreeMap::from([(creator, state.get_account_by_id(creator).nonce)]),
+            CurveMessage::Execute {
+                pool,
+                instruction: Box::new(CurveMessage::SwapExactInput {
+                    amount_in: 50,
+                    min_amount_out: 1,
+                    token_in: COLLATERAL,
+                    now: 1,
+                    membership: Some(path),
+                }),
+            },
+        )
+        .unwrap();
+        message
+            .admission_evidence
+            .push(lee::PublicAccountEvidence::Pda {
+                program: TOKEN_PROGRAM_ACCOUNT_ID,
+                seed: token::holding_seed(creator, launch),
+            });
+        let witnesses = WitnessSet::for_message(&message, &[&key]);
+        let transaction = PublicTransaction::new(message, witnesses);
+        let (diff, charge) = lee::ValidatedStateDiff::from_public_transaction_with_cycle_budget(
+            &transaction,
+            &state,
+            1,
+            0,
+            10_000_000,
+        )
+        .unwrap();
+        eprintln!("created curve allowlist buy cycles: {}", charge.cycles);
+        state.apply_state_diff(diff).unwrap();
+        assert_eq!(balance(&state, creator, COLLATERAL), 950);
+        assert!(balance(&state, creator, launch) > 0);
+        assert_eq!(balance(&state, pool, COLLATERAL), 50);
+    }
 }
 
 #[test]
@@ -1637,6 +1666,24 @@ fn fixed_factory_env_with_policy(
     release: factory_core::CreatorAllocationRelease,
     pause_policy: curve_core::PausePolicy,
 ) -> FixedFactoryEnv {
+    fixed_factory_env_with_ending(
+        end,
+        release,
+        pause_policy,
+        if end.is_some() {
+            lbp_core::EndingPolicy::Either
+        } else {
+            lbp_core::EndingPolicy::Depletion
+        },
+    )
+}
+
+fn fixed_factory_env_with_ending(
+    end: Option<u64>,
+    release: factory_core::CreatorAllocationRelease,
+    pause_policy: curve_core::PausePolicy,
+    ending_policy: lbp_core::EndingPolicy,
+) -> FixedFactoryEnv {
     const FACTORY: AccountId = AccountId::new([17; 32]);
     let key = PrivateKey::try_new([23; 32]).unwrap();
     let creator = AccountId::from(&PublicKey::new_from_private_key(&key));
@@ -1745,6 +1792,7 @@ fn fixed_factory_env_with_policy(
             inputs: factory_core::FixedPriceInputs {
                 buy_policy: policy.clone(),
                 pause_policy,
+                ending_policy,
                 namespace: NAMESPACE,
                 launch_salt: salt,
                 name: "Fixed".into(),
@@ -1776,6 +1824,7 @@ fn fixed_factory_env_with_policy(
         )
         .unwrap();
         assert_eq!(stored.buy_policy, policy);
+        assert_eq!(stored.ending_policy, ending_policy);
         execute(
             &mut state,
             factory_core::Message::ContinueFixedPriceCreation {
@@ -1820,6 +1869,7 @@ fn fixed_factory_preserves_allowlist_through_setup_and_signed_purchase() {
     let stored = fixed_pool(&state, pool);
     assert!(stored.funded);
     assert_eq!(stored.buy_policy, policy);
+    assert_eq!(stored.ending_policy, lbp_core::EndingPolicy::Either);
     assert_eq!(balance(&state, creator, launch), 200);
     let transaction = fixed_transaction(
         &state,
@@ -1877,7 +1927,7 @@ fn weighted_allowlist_signed_buy_checks_control_replay_reuse_and_rollback() {
     let buy = lbp_core::Message::BuyWeightedExactInput {
         membership: Some(path.clone()),
         amount_in: 50,
-        min_amount_out: 333,
+        min_amount_out: 324,
     };
     let valid = fixed_transaction(&state, pool, &key, buy.clone());
     for (key, membership) in [(&key, None), (&other_key, Some(path.clone()))] {
@@ -1888,7 +1938,7 @@ fn weighted_allowlist_signed_buy_checks_control_replay_reuse_and_rollback() {
             lbp_core::Message::BuyWeightedExactInput {
                 membership,
                 amount_in: 50,
-                min_amount_out: 333,
+                min_amount_out: 324,
             },
             "Unauthorized",
         );
@@ -1915,7 +1965,7 @@ fn weighted_allowlist_signed_buy_checks_control_replay_reuse_and_rollback() {
         instruction: Box::new(lbp_core::Message::BuyWeightedExactInput {
             membership: Some(path.clone()),
             amount_in: 51,
-            min_amount_out: 333,
+            min_amount_out: 324,
         }),
     })
     .unwrap();
@@ -1964,7 +2014,7 @@ fn weighted_allowlist_signed_buy_checks_control_replay_reuse_and_rollback() {
         charge.cycles
     );
     state.apply_state_diff(diff).unwrap();
-    assert_eq!(balance(&state, trader, LAUNCH), 333);
+    assert_eq!(balance(&state, trader, LAUNCH), 324);
     let before = state.clone();
     assert!(
         state
@@ -1991,7 +2041,7 @@ fn weighted_allowlist_signed_buy_checks_control_replay_reuse_and_rollback() {
         charge.cycles
     );
     state.apply_state_diff(diff).unwrap();
-    assert_eq!(balance(&state, trader, LAUNCH), 433);
+    assert_eq!(balance(&state, trader, LAUNCH), 424);
     assert_eq!(balance(&state, trader, COLLATERAL), 1923);
     assert_eq!(balance(&state, other, LAUNCH), 0);
     assert_eq!(fixed_pool(&state, pool).buy_policy, policy);
@@ -2060,9 +2110,19 @@ fn weighted_factory_executes_all_stages_and_rolls_back_failed_funding() {
         CreatorAllocationRelease, LbpCreationStage, LbpLaunchState, WeightedInputs,
     };
     const FACTORY: AccountId = AccountId::new([17; 32]);
-    for release in [
-        CreatorAllocationRelease::AfterEnd,
-        CreatorAllocationRelease::AfterSetup,
+    for (release, ending_policy) in [
+        (
+            CreatorAllocationRelease::AfterEnd,
+            lbp_core::EndingPolicy::Scheduled,
+        ),
+        (
+            CreatorAllocationRelease::AfterSetup,
+            lbp_core::EndingPolicy::Scheduled,
+        ),
+        (
+            CreatorAllocationRelease::AfterEnd,
+            lbp_core::EndingPolicy::Either,
+        ),
     ] {
         let key = PrivateKey::try_new([23; 32]).unwrap();
         let creator = AccountId::from(&PublicKey::new_from_private_key(&key));
@@ -2187,6 +2247,7 @@ fn weighted_factory_executes_all_stages_and_rolls_back_failed_funding() {
             inputs: WeightedInputs {
                 buy_policy: policy.clone(),
                 pause_policy: curve_core::PausePolicy::AuthorityControlled,
+                ending_policy,
                 namespace: NAMESPACE,
                 launch_salt: salt,
                 name: "Weighted".into(),
@@ -2333,6 +2394,7 @@ fn weighted_factory_executes_all_stages_and_rolls_back_failed_funding() {
                 .unwrap();
         assert_eq!(launch_state.creation_stage, LbpCreationStage::Complete);
         assert_eq!(launch_state.buy_policy, policy);
+        assert_eq!(launch_state.ending_policy, ending_policy);
         assert_eq!(balance(&state, pool, launch), 800);
         assert_eq!(balance(&state, pool, COLLATERAL), 141);
         assert_eq!(balance(&state, creator, COLLATERAL), 0);
@@ -2358,6 +2420,7 @@ fn weighted_factory_executes_all_stages_and_rolls_back_failed_funding() {
         let sale = fixed_pool(&state, pool);
         assert!(sale.funded);
         assert_eq!(sale.buy_policy, policy);
+        assert_eq!(sale.ending_policy, ending_policy);
         assert!(matches!(
             sale.mode,
             lbp_core::PoolMode::Weighted {
@@ -2619,6 +2682,7 @@ fn weighted_factory_env() -> (
             inputs: WeightedInputs {
                 buy_policy: curve_core::BuyPolicy::Open,
                 pause_policy: curve_core::PausePolicy::AuthorityControlled,
+                ending_policy: lbp_core::EndingPolicy::Scheduled,
                 namespace: NAMESPACE,
                 launch_salt: salt,
                 name: "Weighted".into(),
@@ -3834,29 +3898,29 @@ fn weighted_buy_limits_accept_equality_and_reject_one_beyond() {
             lbp_core::Message::BuyWeightedExactInput {
                 membership: None,
                 amount_in: 50,
-                min_amount_out: 333,
+                min_amount_out: 324,
             },
             lbp_core::Message::BuyWeightedExactInput {
                 membership: None,
                 amount_in: 50,
-                min_amount_out: 334,
+                min_amount_out: 325,
             },
-            333,
+            324,
             50,
         ),
         (
             lbp_core::Message::BuyWeightedExactOutput {
                 membership: None,
                 amount_out: 100,
-                max_amount_in: 12,
+                max_amount_in: 13,
             },
             lbp_core::Message::BuyWeightedExactOutput {
                 membership: None,
                 amount_out: 100,
-                max_amount_in: 11,
+                max_amount_in: 12,
             },
             100,
-            12,
+            13,
         ),
     ] {
         let mut rejected = state.clone();
@@ -3864,6 +3928,17 @@ fn weighted_buy_limits_accept_equality_and_reject_one_beyond() {
         fixed_execute(&mut rejected, pool, &key, equal).unwrap();
         assert_eq!(balance(&rejected, buyer, LAUNCH), output);
         assert_eq!(balance(&rejected, buyer, COLLATERAL), 2_000 - input);
+        let sale = fixed_pool(&rejected, pool);
+        let fee = if input == 50 { 2 } else { 1 };
+        assert_eq!(sale.accrued_fees, fee);
+        assert_eq!(sale.recorded_collateral, 100 + input - fee);
+        assert!(
+            matches!(sale.mode, lbp_core::PoolMode::Weighted { pricing_collateral, .. } if pricing_collateral == sale.recorded_collateral)
+        );
+        assert_eq!(
+            balance(&rejected, pool, COLLATERAL),
+            sale.recorded_collateral + sale.accrued_fees + 41
+        );
     }
 }
 
@@ -4348,5 +4423,398 @@ fn weighted_shared_controls_keep_pause_and_frozen_resume_independent() {
             "{result:?}"
         );
         assert!(state == before);
+    }
+}
+
+#[test]
+fn factory_creation_rejects_invalid_ending_matrix_without_state_changes() {
+    use curve_core::{EndingPolicy, PausePolicy};
+    const FACTORY: AccountId = AccountId::new([17; 32]);
+    let key = PrivateKey::try_new([23; 32]).unwrap();
+    let creator = AccountId::from(&PublicKey::new_from_private_key(&key));
+    let salt = [24; 32];
+    let factory = factory_core::compute_factory_pda(NAMESPACE, FACTORY, salt);
+    let launch = factory_core::compute_definition_pda(NAMESPACE, FACTORY, salt);
+    let mint = factory_core::compute_mint_pda(NAMESPACE, FACTORY, salt);
+    let escrow = factory_core::compute_escrow_pda(NAMESPACE, FACTORY, salt);
+    let authority = factory_core::AUTHORITY_PROGRAM_ACCOUNT_ID;
+    let mut state = fixed_config(
+        clock_state(
+            V03State::new()
+                .with_named_programs([
+                    (
+                        FACTORY,
+                        Program::new(Cow::Borrowed(launchpad_methods::FACTORY_ELF)).unwrap(),
+                    ),
+                    (
+                        CURVE,
+                        Program::new(Cow::Borrowed(launchpad_methods::CURVE_ELF)).unwrap(),
+                    ),
+                    (
+                        LBP,
+                        Program::new(Cow::Borrowed(launchpad_methods::LBP_ELF)).unwrap(),
+                    ),
+                    (
+                        TOKEN_PROGRAM_ACCOUNT_ID,
+                        Program::new(Cow::Borrowed(lez_compat_methods::COMPAT_TOKEN_ELF)).unwrap(),
+                    ),
+                    (
+                        authority,
+                        Program::new(Cow::Borrowed(lez_compat_methods::COMPAT_AUTHORITY_ELF))
+                            .unwrap(),
+                    ),
+                    (clock_core::clock_account_id(), programs::clock()),
+                ])
+                .with_public_accounts([
+                    account(
+                        Actor::new(COLLATERAL, TOKEN_PROGRAM_ACCOUNT_ID),
+                        borsh::to_vec(&TokenState::Definition {
+                            name: "Collateral".into(),
+                            kind: TokenKind::Fungible,
+                            supply: 1_000,
+                            metadata: None,
+                        })
+                        .unwrap(),
+                    ),
+                    token_holding(creator, COLLATERAL, 1_000),
+                ]),
+            100_000,
+        ),
+        333,
+        TREASURY,
+        false,
+    );
+    for engine in [CURVE, LBP] {
+        let pool = curve_core::compute_pool_pda(NAMESPACE, engine, launch, COLLATERAL, factory);
+        let mut actors = vec![
+            Actor::new(factory, FACTORY),
+            Actor::new(pool, engine),
+            Actor::new(curve_core::compute_config_pda(NAMESPACE, CURVE), CURVE),
+            Actor::new(COLLATERAL, TOKEN_PROGRAM_ACCOUNT_ID),
+            Actor::new(launch, TOKEN_PROGRAM_ACCOUNT_ID),
+            Actor::new(creator, authority),
+            Actor::new(
+                factory_core::compute_creator_role_pda(NAMESPACE, FACTORY, salt),
+                authority,
+            ),
+            Actor::new(
+                factory_core::compute_curve_creator_role_pda(NAMESPACE, FACTORY, salt),
+                authority,
+            ),
+            Actor::new(
+                clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID,
+                clock_core::clock_account_id(),
+            ),
+        ];
+        for owner in [factory, mint, escrow, pool, creator, launch] {
+            actors.extend([
+                Actor::new(owner, FACTORY),
+                Actor::new(owner, engine),
+                Actor::new(owner, TOKEN_PROGRAM_ACCOUNT_ID),
+                holding(owner, launch),
+                holding(owner, COLLATERAL),
+            ]);
+        }
+        let mut commands = Vec::new();
+        if engine == CURVE {
+            for (ending_policy, end_timestamp) in [
+                (EndingPolicy::Manual, None),
+                (EndingPolicy::Depletion, Some(200)),
+                (EndingPolicy::Scheduled, None),
+                (EndingPolicy::Either, None),
+            ] {
+                commands.push(factory_core::Message::CreateFactoryPool {
+                    buy_policy: curve_core::BuyPolicy::Open,
+                    pause_policy: PausePolicy::Disabled,
+                    ending_policy,
+                    trade_mode: 0,
+                    graduation_hook_program_id: None,
+                    graduation_hook_configuration: vec![],
+                    namespace: NAMESPACE,
+                    launch_salt: salt,
+                    name: "Curve".into(),
+                    uri: "https://example.test/curve".into(),
+                    sale_reserve: 800,
+                    dex_seed_reserve: 0,
+                    creator_allocation: 200,
+                    virtual_token_reserve: 10_000,
+                    virtual_collateral_reserve: 1_000,
+                    end_timestamp,
+                    curve_program_id: CURVE,
+                    collateral_definition_id: COLLATERAL,
+                    creator,
+                    now: 100,
+                });
+            }
+        } else {
+            for (ending_policy, end_timestamp) in [
+                (EndingPolicy::Manual, None),
+                (EndingPolicy::Depletion, Some(200)),
+                (EndingPolicy::Scheduled, None),
+                (EndingPolicy::Either, None),
+            ] {
+                commands.push(factory_core::Message::CreateFixedPriceLbp {
+                    inputs: factory_core::FixedPriceInputs {
+                        buy_policy: curve_core::BuyPolicy::Open,
+                        pause_policy: PausePolicy::Disabled,
+                        ending_policy,
+                        namespace: NAMESPACE,
+                        launch_salt: salt,
+                        name: "Fixed".into(),
+                        uri: "https://example.test/fixed".into(),
+                        sale_inventory: 800,
+                        creator_allocation: 200,
+                        price: lbp_core::FixedPrice {
+                            collateral_units: 3,
+                            token_units: 2,
+                        },
+                        start: factory_core::SaleStart::Now { timestamp: 100 },
+                        end_timestamp,
+                        allocation_release: factory_core::CreatorAllocationRelease::AfterEnd,
+                        namespace_program_id: CURVE,
+                        lbp_program_id: LBP,
+                        collateral_definition_id: COLLATERAL,
+                        creator,
+                        now: 100,
+                    },
+                });
+            }
+            for ending_policy in [EndingPolicy::Depletion, EndingPolicy::Manual] {
+                commands.push(factory_core::Message::CreateWeightedLbp {
+                    inputs: factory_core::WeightedInputs {
+                        buy_policy: curve_core::BuyPolicy::Open,
+                        pause_policy: PausePolicy::Disabled,
+                        ending_policy,
+                        namespace: NAMESPACE,
+                        launch_salt: salt,
+                        name: "Weighted".into(),
+                        uri: "https://example.test/weighted".into(),
+                        sale_inventory: 800,
+                        creator_allocation: 200,
+                        collateral_seed: 100,
+                        token_weight_start: lbp_core::WEIGHT_TOTAL / 2,
+                        token_weight_end: lbp_core::WEIGHT_TOTAL / 2,
+                        start_timestamp: 150,
+                        end_timestamp: 300,
+                        allocation_release: factory_core::CreatorAllocationRelease::AfterEnd,
+                        namespace_program_id: CURVE,
+                        lbp_program_id: LBP,
+                        collateral_definition_id: COLLATERAL,
+                        creator,
+                    },
+                });
+            }
+        }
+        for command in commands {
+            let before = state.clone();
+            let nonce = state.get_account_by_id(creator).nonce;
+            let mut message = Message::try_new(
+                Actor::new(factory, FACTORY),
+                actors.clone(),
+                BTreeMap::from([(creator, nonce)]),
+                command,
+            )
+            .unwrap();
+            message
+                .admission_evidence
+                .push(lee::PublicAccountEvidence::Pda {
+                    program: FACTORY,
+                    seed: factory_core::compute_factory_seed(NAMESPACE, salt),
+                });
+            let witnesses = WitnessSet::for_message(&message, &[&key]);
+            let rejected = state.transition_from_public_transaction(
+                &PublicTransaction::new(message, witnesses),
+                1,
+                100_000,
+            );
+            assert!(
+                matches!(&rejected, Err(lee::error::LeeError::ProgramExecutionFailed(reason)) if reason.contains("InvalidTerms")),
+                "expected policy rejection before creation, got {rejected:?}",
+            );
+            assert!(
+                state == before,
+                "invalid policy creation changed runtime state"
+            );
+            assert_eq!(state.get_account_by_id(creator).nonce, nonce);
+        }
+    }
+}
+
+#[test]
+fn lbp_buys_reject_invalid_saved_ending_matrix_without_factory_checks() {
+    use curve_core::EndingPolicy;
+    let key = PrivateKey::try_new([23; 32]).unwrap();
+    let buyer = AccountId::from(&PublicKey::new_from_private_key(&key));
+    for weighted in [false, true] {
+        let (state, pool) = if weighted {
+            weighted_state(buyer)
+        } else {
+            fixed_state(buyer, Some(200))
+        };
+        let buys = if weighted {
+            [
+                lbp_core::Message::BuyWeightedExactInput {
+                    membership: None,
+                    amount_in: 50,
+                    min_amount_out: 1,
+                },
+                lbp_core::Message::BuyWeightedExactOutput {
+                    membership: None,
+                    amount_out: 10,
+                    max_amount_in: 100,
+                },
+            ]
+        } else {
+            [
+                lbp_core::Message::BuyExactInput {
+                    membership: None,
+                    amount_in: 50,
+                    min_amount_out: 1,
+                    now: 100,
+                },
+                lbp_core::Message::BuyExactOutput {
+                    membership: None,
+                    amount_out: 10,
+                    max_amount_in: 100,
+                    now: 100,
+                },
+            ]
+        };
+        let mut invalid_terms = vec![
+            (EndingPolicy::Manual, None),
+            (EndingPolicy::Depletion, Some(200)),
+            (EndingPolicy::Scheduled, None),
+            (EndingPolicy::Either, None),
+        ];
+        if weighted {
+            invalid_terms.push((EndingPolicy::Depletion, None));
+        }
+        for buy in buys {
+            let transaction = fixed_transaction(&state, pool, &key, buy);
+            for &(ending_policy, end_timestamp) in &invalid_terms {
+                let mut sale = fixed_pool(&state, pool);
+                sale.ending_policy = ending_policy;
+                sale.end_timestamp = end_timestamp;
+                let mut malformed = state.clone().with_public_accounts([account(
+                    Actor::new(pool, LBP),
+                    borsh::to_vec(&sale).unwrap(),
+                )]);
+                let before = malformed.clone();
+                let nonce = malformed.get_account_by_id(buyer).nonce;
+                let rejected =
+                    malformed.transition_from_public_transaction(&transaction, 1, 100_000);
+                let expected = if ending_policy == EndingPolicy::Manual
+                    || (weighted && ending_policy == EndingPolicy::Depletion)
+                {
+                    "InvalidState"
+                } else {
+                    "InvalidTerms"
+                };
+                assert!(
+                    matches!(&rejected, Err(lee::error::LeeError::ProgramExecutionFailed(reason)) if reason.contains(expected)),
+                    "expected pool policy validation, got {rejected:?}",
+                );
+                assert!(
+                    malformed == before,
+                    "pool policy bypass changed runtime state"
+                );
+                assert_eq!(malformed.get_account_by_id(buyer).nonce, nonce);
+            }
+        }
+    }
+}
+
+#[test]
+fn fixed_selected_ending_controls_sellout_settlement() {
+    use lbp_core::EndingPolicy;
+    for ending in [
+        EndingPolicy::Scheduled,
+        EndingPolicy::Depletion,
+        EndingPolicy::Either,
+    ] {
+        let end = if ending == EndingPolicy::Depletion {
+            None
+        } else {
+            Some(200)
+        };
+        let mut env = fixed_factory_env_with_ending(
+            end,
+            factory_core::CreatorAllocationRelease::AfterEnd,
+            curve_core::PausePolicy::Disabled,
+            ending,
+        );
+        let creator = env.creator();
+        env.state = env
+            .state
+            .with_public_accounts([token_holding(creator, COLLATERAL, 2_000)]);
+        assert_eq!(fixed_pool(&env.state, env.pool).ending_policy, ending);
+        env.buy(800, 1_242);
+        let claim = factory_core::Message::ClaimCreatorAllocation { creator, now: 100 };
+        let settle = factory_core::Message::WithdrawFactoryProceeds { creator, now: 100 };
+        if ending == EndingPolicy::Scheduled {
+            for operation in [claim.clone(), settle.clone()] {
+                let before = env.state.clone();
+                assert!(matches!(
+                    env.execute(operation, 100_000),
+                    Err(lee::error::LeeError::OutOfValidityWindow)
+                ));
+                assert!(env.state == before);
+            }
+        }
+        let timestamp = if ending == EndingPolicy::Scheduled {
+            200_000
+        } else {
+            100_000
+        };
+        env.execute(claim, timestamp).unwrap();
+        env.execute(settle, timestamp).unwrap();
+        assert!(fixed_pool(&env.state, env.pool).proceeds_settled);
+        assert_eq!(balance(&env.state, env.escrow, env.launch), 0);
+        assert_eq!(balance(&env.state, creator, env.launch), 1_000);
+        assert_eq!(balance(&env.state, TREASURY, COLLATERAL), 42);
+    }
+}
+
+#[test]
+fn weighted_buys_reject_unbacked_claims_and_mismatched_pricing_records() {
+    let key = PrivateKey::try_new([23; 32]).unwrap();
+    let buyer = AccountId::from(&PublicKey::new_from_private_key(&key));
+    let (state, pool) = weighted_state(buyer);
+    for mismatch in [false, true] {
+        let mut sale = fixed_pool(&state, pool);
+        if mismatch {
+            sale.recorded_collateral += 1;
+        } else {
+            sale.accrued_fees = 42;
+        }
+        let malformed = state.clone().with_public_accounts([account(
+            Actor::new(pool, LBP),
+            borsh::to_vec(&sale).unwrap(),
+        )]);
+        for instruction in [
+            lbp_core::Message::BuyWeightedExactInput {
+                membership: None,
+                amount_in: 50,
+                min_amount_out: 1,
+            },
+            lbp_core::Message::BuyWeightedExactOutput {
+                membership: None,
+                amount_out: 100,
+                max_amount_in: 100,
+            },
+        ] {
+            let mut rejected = malformed.clone();
+            fixed_rejected(
+                &mut rejected,
+                pool,
+                &key,
+                instruction,
+                if mismatch {
+                    "InvalidState"
+                } else {
+                    "Underfunded"
+                },
+            );
+        }
     }
 }

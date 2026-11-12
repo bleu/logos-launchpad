@@ -32,6 +32,7 @@ fn frozen_namespace_rejects_current_state_purchase_quotes() {
             token1_amount: 100,
             virtual_reserve0: 1_000,
             virtual_reserve1: 100,
+            ending_policy: curve_core::EndingPolicy::Manual,
             close_timestamp: None,
             close_on_depletion: None,
         })
@@ -76,6 +77,7 @@ fn purchase_preparation_checks_the_participant_cap_with_current_namespace_fees()
             token1_amount: 100,
             virtual_reserve0: 1_000,
             virtual_reserve1: 100,
+            ending_policy: curve_core::EndingPolicy::Manual,
             close_timestamp: None,
             close_on_depletion: None,
         })
@@ -335,6 +337,7 @@ fn creation_request_preserves_unix_seconds_on_the_public_wire() {
         launchpad_client::CreateSaleRequest {
             buy_policy: curve_core::BuyPolicy::Open,
             pause_policy: curve_core::PausePolicy::Disabled,
+            ending_policy: curve_core::EndingPolicy::Either,
             trade_mode: launchpad_client::TradeMode::BuyAndSell,
             graduation_hook: None,
             name: "Sale".into(),
@@ -357,12 +360,11 @@ fn creation_request_preserves_unix_seconds_on_the_public_wire() {
             ..
         }
     ));
-    assert_eq!(call.message_bytes().unwrap().len(), 289);
-    assert!(
-        call.message_bytes()
-            .unwrap()
-            .ends_with(&[0x00, 0xf1, 0x53, 0x65, 0x00, 0x00, 0x00, 0x00])
-    );
+    let bytes = call.message_bytes().unwrap();
+    assert_eq!(bytes.len(), 290);
+    assert_eq!(&bytes[..6], &[0, 0, 0, 3, 1, 0]);
+    assert_eq!(&bytes[177..186], &[1, 0x10, 0xff, 0x53, 0x65, 0, 0, 0, 0]);
+    assert_eq!(&bytes[282..], &[0x00, 0xf1, 0x53, 0x65, 0, 0, 0, 0]);
 }
 
 #[test]

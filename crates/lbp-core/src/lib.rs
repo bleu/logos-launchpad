@@ -1,7 +1,8 @@
 //! Fixed-price and weighted sale setup, buys and fees and mechanism-specific settlement.
 
 pub use curve_core::{AllowlistPolicy, BuyPolicy, MembershipPath};
-pub use sale_policy::{PausePolicy, TradeControl};
+use sale_policy::{EndingError, TimeBounds};
+pub use sale_policy::{EndingPolicy, PausePolicy, TradeControl};
 
 mod pricing;
 pub mod pricing_clock;
@@ -46,6 +47,7 @@ pub enum CreatorAllocationRelease {
 pub struct FixedPricePoolInputs {
     pub buy_policy: BuyPolicy,
     pub pause_policy: PausePolicy,
+    pub ending_policy: EndingPolicy,
     pub namespace: AccountId,
     pub namespace_program_id: AccountId,
     pub factory_program_id: AccountId,
@@ -72,6 +74,7 @@ pub struct FixedPricePoolInputs {
 pub struct WeightedPoolInputs {
     pub buy_policy: BuyPolicy,
     pub pause_policy: PausePolicy,
+    pub ending_policy: EndingPolicy,
     pub namespace: AccountId,
     pub namespace_program_id: AccountId,
     pub factory_program_id: AccountId,
@@ -171,7 +174,7 @@ pub enum PoolMode {
         token_weight_end: u128,
         /// Immutable creator seed. Surplus does not change this value.
         collateral_seed: u128,
-        /// Seed plus full successful buyer inputs. Fees and custody are separate.
+        /// Seed plus net successful buyer inputs. Fees and custody are separate.
         pricing_collateral: u128,
         /// Last observed pricing second. Zero means no checkpoint recorded.
         checkpoint_time: u64,
@@ -184,6 +187,7 @@ pub enum PoolMode {
 pub struct PoolAccount {
     pub buy_policy: BuyPolicy,
     pub trade_control: TradeControl,
+    pub ending_policy: EndingPolicy,
     pub mode: PoolMode,
     pub funded: bool,
     pub namespace: AccountId,
@@ -248,11 +252,36 @@ impl PoolAccount {
         borsh::from_slice(bytes).map_err(|_| Error::InvalidState)
     }
     pub fn close_time_bound(&self) -> Result<Option<u64>, Error> {
-        if self.remaining_inventory == 0 {
-            Ok(None)
-        } else {
-            self.end_timestamp.map(Some).ok_or(Error::NotClosed)
+        self.validate_policies()?;
+        Ok(self
+            .ending_policy
+            .settlement(self.end_timestamp, self.remaining_inventory)
+            .map_err(ending_error)?
+            .inclusion_bounds()
+            .at_least)
+    }
+    fn trade_bounds(&self) -> Result<TimeBounds, Error> {
+        self.ending_policy
+            .trade_bounds(
+                Some(self.start_timestamp),
+                self.end_timestamp,
+                self.remaining_inventory,
+            )
+            .map_err(ending_error)
+    }
+    fn validate_policies(&self) -> Result<(), Error> {
+        if !supported_ending(
+            matches!(self.mode, PoolMode::Weighted { .. }),
+            self.ending_policy,
+        ) {
+            return Err(Error::InvalidState);
         }
+        validate_policy_terms(
+            matches!(self.mode, PoolMode::Weighted { .. }),
+            self.ending_policy,
+            self.start_timestamp,
+            self.end_timestamp,
+        )
     }
     fn validate_address(&self, receiver: Actor) -> Result<(), Error> {
         self.buy_policy
@@ -269,12 +298,40 @@ impl PoolAccount {
         {
             return Err(Error::WrongAccount);
         }
-        Ok(())
+        self.validate_policies()
     }
     fn response(&self) -> Response {
         Response::set_state(borsh::to_vec(self).unwrap())
     }
 }
+fn ending_error(error: EndingError) -> Error {
+    match error {
+        EndingError::InvalidWindow => Error::InvalidTerms,
+        EndingError::Ended => Error::Closed,
+        EndingError::NotEnded => Error::NotClosed,
+    }
+}
+
+fn supported_ending(weighted: bool, ending: EndingPolicy) -> bool {
+    matches!(ending, EndingPolicy::Scheduled | EndingPolicy::Either)
+        || (!weighted && ending == EndingPolicy::Depletion)
+}
+
+fn validate_policy_terms(
+    weighted: bool,
+    ending: EndingPolicy,
+    start: u64,
+    end: Option<u64>,
+) -> Result<(), Error> {
+    if !supported_ending(weighted, ending) {
+        return Err(Error::InvalidTerms);
+    }
+    ending.validate(Some(start), end).map_err(ending_error)?;
+    let _ = curve_core::with_time_bounds(Response::keep_state(), Some(start), end)
+        .map_err(|_| Error::InvalidTerms)?;
+    Ok(())
+}
+
 pub fn compute_pool_pda(
     namespace: AccountId,
     program: AccountId,
@@ -529,6 +586,12 @@ pub fn handle(input: &ReceiveInput) -> Result<Response, Error> {
             {
                 return Err(Error::InvalidTerms);
             }
+            validate_policy_terms(
+                false,
+                inputs.ending_policy,
+                inputs.start_timestamp,
+                inputs.end_timestamp,
+            )?;
             let factory = AccountId::for_public_pda(
                 &inputs.factory_program_id,
                 &PdaSeed::new(inputs.factory_seed),
@@ -554,6 +617,7 @@ pub fn handle(input: &ReceiveInput) -> Result<Response, Error> {
             let state = PoolAccount {
                 buy_policy: inputs.buy_policy,
                 trade_control: TradeControl::new(inputs.pause_policy),
+                ending_policy: inputs.ending_policy,
                 mode: PoolMode::FixedPrice,
                 funded: false,
                 namespace: inputs.namespace,
@@ -640,6 +704,12 @@ pub fn handle(input: &ReceiveInput) -> Result<Response, Error> {
             {
                 return Err(Error::InvalidTerms);
             }
+            validate_policy_terms(
+                true,
+                inputs.ending_policy,
+                inputs.start_timestamp,
+                Some(inputs.end_timestamp),
+            )?;
             let factory = AccountId::for_public_pda(
                 &inputs.factory_program_id,
                 &PdaSeed::new(inputs.factory_seed),
@@ -665,6 +735,7 @@ pub fn handle(input: &ReceiveInput) -> Result<Response, Error> {
             let state = PoolAccount {
                 buy_policy: inputs.buy_policy,
                 trade_control: TradeControl::new(inputs.pause_policy),
+                ending_policy: inputs.ending_policy,
                 mode: PoolMode::Weighted {
                     token_weight_start: inputs.token_weight_start,
                     token_weight_end: inputs.token_weight_end,

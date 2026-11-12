@@ -88,6 +88,7 @@ impl Pending {
         })
     }
     fn finish(mut self, receiver: Actor) -> Result<Response, Error> {
+        self.state.validate_policies()?;
         let config = self.config.as_ref().ok_or(Error::InvalidState)?;
         let liabilities = self
             .state
@@ -96,6 +97,17 @@ impl Pending {
             .ok_or(Error::Arithmetic)?;
         if self.balances[0] < liabilities {
             return Err(Error::Underfunded);
+        }
+        if !self.state.proceeds_settled
+            && let PoolMode::Weighted {
+                collateral_seed,
+                pricing_collateral,
+                ..
+            } = self.state.mode
+            && (pricing_collateral != self.state.recorded_collateral
+                || pricing_collateral < collateral_seed)
+        {
+            return Err(Error::InvalidState);
         }
         if matches!(self.message, Message::CollectFees) {
             let amount = self.state.accrued_fees;
@@ -110,6 +122,9 @@ impl Pending {
             ));
         }
         if let Message::SettleFixedPrice { creator, .. } = self.message {
+            if self.state.mode != PoolMode::FixedPrice {
+                return Err(Error::InvalidMessage);
+            }
             let expiry = self.state.close_time_bound()?;
             return settlement_payout(
                 self.state,
@@ -121,14 +136,15 @@ impl Pending {
             );
         }
         if let Message::SettleWeighted { creator } = self.message {
-            let end = crate::weighted_lifecycle::end(&self.state)?;
+            crate::weighted_lifecycle::end(&self.state)?;
+            let expiry = self.state.close_time_bound()?;
             return settlement_payout(
                 self.state,
                 receiver,
                 creator,
                 config.treasury,
                 self.balances,
-                Some(end),
+                expiry,
             );
         }
         if config.emergency.is_frozen {
@@ -145,16 +161,8 @@ impl Pending {
         if self.state.proceeds_settled || self.state.remaining_inventory == 0 {
             return Err(Error::Closed);
         }
-        if let PoolMode::Weighted {
-            collateral_seed,
-            pricing_collateral,
-            ..
-        } = self.state.mode
-        {
-            if self.state.remaining_inventory > self.state.sale_inventory
-                || pricing_collateral < collateral_seed
-                || pricing_collateral < liabilities
-            {
+        if matches!(self.state.mode, PoolMode::Weighted { .. }) {
+            if self.state.remaining_inventory > self.state.sale_inventory {
                 return Err(Error::InvalidState);
             }
             if self.balances[1] < self.state.remaining_inventory {
@@ -178,6 +186,7 @@ impl Pending {
                 pricing_collateral,
                 self.pricing_time.ok_or(Error::InvalidState)?,
                 weights.ok_or(Error::InvalidState)?,
+                config.protocol_fee_bps,
             )?,
         };
 
@@ -188,12 +197,11 @@ impl Pending {
             return Err(Error::Underfunded);
         }
 
-        let collateral = FeeRate::new(config.protocol_fee_bps)
-            .and_then(|rate| rate.split(amount_in))
-            .map_err(fee_error)?;
+        let rate = FeeRate::new(config.protocol_fee_bps).map_err(fee_error)?;
+        let collateral = rate.split(amount_in).map_err(fee_error)?;
         let fee = collateral.fee;
         let net_in = collateral.net;
-        if matches!(self.state.mode, PoolMode::FixedPrice) && net_in == 0 {
+        if net_in == 0 {
             return Err(Error::InvalidAmount);
         }
 
@@ -202,7 +210,7 @@ impl Pending {
                 pricing_collateral, ..
             } => Some(
                 pricing_collateral
-                    .checked_add(amount_in)
+                    .checked_add(net_in)
                     .ok_or(Error::Arithmetic)?,
             ),
             PoolMode::FixedPrice => None,
@@ -233,6 +241,7 @@ impl Pending {
         {
             return Err(Error::Underfunded);
         }
+        let bounds = self.state.trade_bounds()?;
         // Save trade records only after all math, coverage and fit checks pass.
         self.state.recorded_collateral = next_recorded;
         self.state.accrued_fees = next_fees;
@@ -266,20 +275,12 @@ impl Pending {
         } else {
             None
         };
-        let response = match self.state.mode {
-            PoolMode::FixedPrice => curve_core::with_time_bounds(
-                self.state.response(),
-                Some(self.state.start_timestamp),
-                self.state.end_timestamp,
-            )
-            .map_err(|_| Error::InvalidTerms)?,
-            PoolMode::Weighted { .. } => curve_core::with_time_bounds(
-                self.state.response(),
-                Some(self.state.start_timestamp),
-                self.state.end_timestamp,
-            )
-            .map_err(|_| Error::Arithmetic)?,
-        };
+        let response =
+            curve_core::with_time_bounds(self.state.response(), bounds.at_least, bounds.before)
+                .map_err(|_| match self.state.mode {
+                    PoolMode::FixedPrice => Error::InvalidTerms,
+                    PoolMode::Weighted { .. } => Error::Arithmetic,
+                })?;
         let response = if let Some(event) = checkpoint_event {
             response.event(event)
         } else {
@@ -352,14 +353,14 @@ fn fixed_price_amounts(
     }
 }
 
-/// Compute amounts from recorded pricing reserves. Creator-borne fees do not
-/// reduce buyer input or change pricing reserves when they are collected.
+/// Price net collateral against recorded reserves. Fee collection leaves pricing unchanged.
 fn weighted_amounts(
     state: &PoolAccount,
     message: &Message,
     pricing_collateral: u128,
     pricing_time: u64,
     (coll_w, token_w): (u128, u128),
+    fee_bps: u16,
 ) -> Result<(u128, u128), Error> {
     let end_ts = state.end_timestamp.ok_or(Error::InvalidState)?;
     if pricing_time < state.start_timestamp || pricing_time >= end_ts {
@@ -379,7 +380,14 @@ fn weighted_amounts(
             min_amount_out,
             ..
         } => {
-            let out = try_calc_out_given_in(coll_bal, coll_w, token_bal, token_w, *amount_in)
+            let net = FeeRate::new(fee_bps)
+                .and_then(|rate| rate.split(*amount_in))
+                .map_err(fee_error)?
+                .net;
+            if net == 0 {
+                return Err(Error::InvalidAmount);
+            }
+            let out = try_calc_out_given_in(coll_bal, coll_w, token_bal, token_w, net)
                 .map_err(math_error)?;
             if out < *min_amount_out {
                 return Err(Error::Slippage);
@@ -394,6 +402,10 @@ fn weighted_amounts(
             let amount_in =
                 try_calc_in_given_out(coll_bal, coll_w, token_bal, token_w, *amount_out)
                     .map_err(math_error)?;
+            let amount_in = FeeRate::new(fee_bps)
+                .and_then(|rate| rate.gross_up(amount_in))
+                .map_err(fee_error)?
+                .gross;
             if amount_in > *max_amount_in {
                 return Err(Error::Slippage);
             }
@@ -470,12 +482,8 @@ pub(super) fn begin(input: &ReceiveInput, message: Message) -> Result<Response, 
             return Err(Error::Unauthorized);
         }
         if state.proceeds_settled {
-            return curve_core::with_time_bounds(
-                state.response(),
-                Some(crate::weighted_lifecycle::end(&state)?),
-                None,
-            )
-            .map_err(|_| Error::InvalidTerms);
+            return curve_core::with_time_bounds(state.response(), state.close_time_bound()?, None)
+                .map_err(|_| Error::InvalidTerms);
         }
         creator
     } else if matches!(message, Message::CollectFees) {
@@ -691,8 +699,7 @@ mod tests {
     use super::*;
     use crate::{CreatorAllocationRelease, FixedPrice, TradeControl};
 
-    #[test]
-    fn final_buy_boundary_checks_common_pause_for_every_buy_form() {
+    fn fixture() -> (PoolAccount, Config) {
         let id = |n| AccountId::new([n; 32]);
         let namespace = id(40);
         let namespace_program = id(6);
@@ -722,6 +729,7 @@ mod tests {
         let state = PoolAccount {
             buy_policy: crate::BuyPolicy::Open,
             trade_control: TradeControl::Paused,
+            ending_policy: crate::EndingPolicy::Either,
             mode: PoolMode::FixedPrice,
             funded: true,
             namespace,
@@ -746,6 +754,13 @@ mod tests {
             proceeds_settled: false,
             pending: None,
         };
+        (state, config)
+    }
+
+    #[test]
+    fn final_buy_boundary_checks_common_pause_for_every_buy_form() {
+        let id = |n| AccountId::new([n; 32]);
+        let (state, config) = fixture();
         let weighted = PoolMode::Weighted {
             token_weight_start: crate::WEIGHT_TOTAL / 2,
             token_weight_end: crate::WEIGHT_TOTAL / 2,
@@ -792,6 +807,10 @@ mod tests {
         ] {
             let mut state = state.clone();
             state.mode = mode;
+            if matches!(mode, PoolMode::Weighted { .. }) {
+                state.recorded_collateral = 100;
+                state.ending_policy = crate::EndingPolicy::Scheduled;
+            }
             let pending = Pending {
                 tag: *b"LZLBPEND",
                 state,
@@ -806,6 +825,117 @@ mod tests {
                 pending.finish(Actor::new(id(9), id(8))).err(),
                 Some(Error::Paused)
             );
+        }
+    }
+
+    #[test]
+    fn saved_trade_and_settlement_replies_reject_malformed_policies_before_effects() {
+        let (base, _) = fixture();
+        for weighted in [false, true] {
+            let mut state = base.clone();
+            state.trade_control = crate::TradeControl::Unrestricted;
+            if weighted {
+                state.mode = PoolMode::Weighted {
+                    token_weight_start: crate::WEIGHT_TOTAL / 2,
+                    token_weight_end: crate::WEIGHT_TOTAL / 2,
+                    collateral_seed: 100,
+                    pricing_collateral: 100,
+                    checkpoint_time: 0,
+                    checkpoint_token_weight: 0,
+                };
+                state.ending_policy = crate::EndingPolicy::Scheduled;
+            }
+            let receiver = Actor::new(
+                crate::compute_pool_pda(
+                    state.namespace,
+                    AccountId::new([8; 32]),
+                    state.token_definition_id,
+                    state.collateral_definition_id,
+                    state.factory_owner,
+                ),
+                AccountId::new([8; 32]),
+            );
+            let buys = if weighted {
+                [
+                    Message::BuyWeightedExactInput {
+                        membership: None,
+                        amount_in: 5,
+                        min_amount_out: 0,
+                    },
+                    Message::BuyWeightedExactOutput {
+                        membership: None,
+                        amount_out: 3,
+                        max_amount_in: 6,
+                    },
+                ]
+            } else {
+                [
+                    Message::BuyExactInput {
+                        membership: None,
+                        amount_in: 5,
+                        min_amount_out: 0,
+                        now: 100,
+                    },
+                    Message::BuyExactOutput {
+                        membership: None,
+                        amount_out: 3,
+                        max_amount_in: 6,
+                        now: 100,
+                    },
+                ]
+            };
+            let settle = if weighted {
+                Message::SettleWeighted {
+                    creator: AccountId::new([50; 32]),
+                }
+            } else {
+                Message::SettleFixedPrice {
+                    creator: AccountId::new([50; 32]),
+                    now: 200,
+                }
+            };
+            for message in [
+                buys[0].clone(),
+                buys[1].clone(),
+                Message::CollectFees,
+                settle,
+            ] {
+                for step in [0, 4] {
+                    for case in 0..4 {
+                        let mut malformed = state.clone();
+                        match case {
+                            0 => malformed.ending_policy = crate::EndingPolicy::Manual,
+                            1 => malformed.ending_policy = crate::EndingPolicy::Depletion,
+                            2 => malformed.start_timestamp = u64::MAX,
+                            _ => malformed.end_timestamp = Some(100),
+                        }
+                        let expected = if case == 0 || (case == 1 && weighted) {
+                            Error::InvalidState
+                        } else {
+                            Error::InvalidTerms
+                        };
+                        let pending = Pending {
+                            tag: *b"LZLBPEND",
+                            state: malformed,
+                            message: message.clone(),
+                            buyer: AccountId::new([50; 32]),
+                            step,
+                            pricing_time: Some(100),
+                            config: None,
+                            balances: [0; 3],
+                        };
+                        let input = ReceiveInput {
+                            receiver,
+                            from: None,
+                            is_authorized: false,
+                            pre_state: borsh::to_vec(&pending).unwrap().into(),
+                            message: vec![],
+                        };
+                        assert_eq!(crate::handle(&input).err(), Some(expected));
+                        assert_eq!(pending.finish(receiver).err(), Some(expected));
+                    }
+                }
+            }
         }
     }
 }

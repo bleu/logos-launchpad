@@ -18,6 +18,7 @@ fn inputs() -> WeightedInputs {
     WeightedInputs {
         buy_policy: curve_core::BuyPolicy::Open,
         pause_policy: curve_core::PausePolicy::AuthorityControlled,
+        ending_policy: factory_core::EndingPolicy::Scheduled,
         namespace: id(40),
         launch_salt: [3; 32],
         name: "Weighted".into(),
@@ -180,6 +181,7 @@ fn prepared(release: CreatorAllocationRelease) -> (ReceiveInput, Response, Vec<u
 fn prepared_with_terms(terms: WeightedInputs) -> (ReceiveInput, Response, Vec<u8>) {
     let policy = terms.buy_policy.clone();
     let pause_policy = terms.pause_policy;
+    let policies = terms.ending_policy;
     let (input, response) = minted_with_terms(terms);
     assert_eq!(
         LbpLaunchState::decode(response.post_state.as_ref().unwrap())
@@ -213,6 +215,10 @@ fn prepared_with_terms(terms: WeightedInputs) -> (ReceiveInput, Response, Vec<u8
             .buy_policy,
         policy
     );
+    for response in [&response, &allocated, &prepared] {
+        let state = LbpLaunchState::decode(response.post_state.as_ref().unwrap()).unwrap();
+        assert_eq!(state.ending_policy, policies);
+    }
     let call = prepared
         .sync_messages
         .iter()
@@ -560,5 +566,257 @@ fn legacy_weighted_pause_keeps_its_weighted_pool_alias() {
     assert_eq!(
         borsh::from_slice::<lbp_core::Message>(&response.sync_messages[0].message).unwrap(),
         lbp_core::Message::SetWeightedPaused { paused: true }
+    );
+}
+
+#[test]
+fn weighted_creation_requires_a_supported_ending_and_a_valid_schedule() {
+    use factory_core::EndingPolicy;
+    for ending in [
+        EndingPolicy::Manual,
+        EndingPolicy::Scheduled,
+        EndingPolicy::Depletion,
+        EndingPolicy::Either,
+    ] {
+        let mut terms = inputs();
+        terms.ending_policy = ending;
+        let result = handle(&creation(terms));
+        if matches!(ending, EndingPolicy::Scheduled | EndingPolicy::Either) {
+            assert!(result.is_ok());
+        } else {
+            assert_eq!(result.err(), Some(Error::InvalidTerms));
+        }
+    }
+    for case in 0..2 {
+        let mut terms = inputs();
+        if case == 0 {
+            terms.start_timestamp = u64::MAX;
+        } else {
+            terms.end_timestamp = u64::MAX;
+        }
+        assert_eq!(handle(&creation(terms)).err(), Some(Error::InvalidTerms));
+    }
+}
+
+#[test]
+fn weighted_policy_choices_survive_setup_and_pool_mismatches_reject_funding() {
+    let (input, prepared, bytes) = prepared(CreatorAllocationRelease::AfterEnd);
+    let state = LbpLaunchState::decode(prepared.post_state.as_ref().unwrap()).unwrap();
+    let pool = lbp_core::PoolAccount::decode(&bytes).unwrap();
+    assert_eq!(state.ending_policy, factory_core::EndingPolicy::Scheduled);
+    assert_eq!(pool.ending_policy, state.ending_policy);
+    for case in 0..3 {
+        let mut changed = pool.clone();
+        match case {
+            0 => changed.ending_policy = factory_core::EndingPolicy::Manual,
+            1 => changed.ending_policy = factory_core::EndingPolicy::Depletion,
+            _ => {}
+        }
+        let result = advance(
+            &input,
+            &prepared,
+            vec![
+                borsh::to_vec(&changed).unwrap(),
+                holding(state.pool_id, state.token_definition_id, 0),
+                holding(state.pool_id, state.collateral_definition_id, 0),
+                holding(id(42), state.collateral_definition_id, 100),
+            ],
+        );
+        if case < 2 {
+            assert_eq!(result.err(), Some(Error::InvalidCustody));
+        } else {
+            let complete =
+                LbpLaunchState::decode(result.unwrap().post_state.as_ref().unwrap()).unwrap();
+            assert_eq!(complete.creation_stage, LbpCreationStage::Complete);
+            assert_eq!(complete.ending_policy, state.ending_policy);
+        }
+    }
+}
+
+fn weighted_authorized(input: &ReceiveInput, response: &Response) -> ReceiveInput {
+    let state = LbpLaunchState::decode(response.post_state.as_ref().unwrap()).unwrap();
+    ReceiveInput {
+        receiver: input.receiver,
+        from: Some(Actor::new(
+            state.creator_role_id,
+            factory_core::AUTHORITY_PROGRAM_ACCOUNT_ID,
+        )),
+        is_authorized: false,
+        pre_state: response.post_state.clone().unwrap(),
+        message: borsh::to_vec(&lez_compat_core::authority::Authorized {
+            role: state.creator_role_id,
+            authority: id(42),
+        })
+        .unwrap(),
+    }
+}
+
+#[test]
+fn scheduled_weighted_allocation_keeps_deadline_and_settlement_delegates_to_pool() {
+    let (input, prepared, bytes) = prepared(CreatorAllocationRelease::AfterEnd);
+    let mut state = LbpLaunchState::decode(prepared.post_state.as_ref().unwrap()).unwrap();
+    state.creation_stage = LbpCreationStage::Complete;
+    let mut pool = lbp_core::PoolAccount::decode(&bytes).unwrap();
+    pool.funded = true;
+    pool.remaining_inventory = 0;
+    pool.recorded_collateral = 100;
+    if let lbp_core::PoolMode::Weighted {
+        pricing_collateral, ..
+    } = &mut pool.mode
+    {
+        *pricing_collateral = 100;
+    }
+    for released in [false, true] {
+        state.creator_allocation_released = released;
+        let mut request = input.clone();
+        request.from = None;
+        request.pre_state = borsh::to_vec(&state).unwrap().into();
+        request.message =
+            borsh::to_vec(&Message::ClaimWeightedAllocation { creator: id(42) }).unwrap();
+        let response = handle(&request).unwrap();
+        request = weighted_authorized(&request, &response);
+        let mut response = handle(&request).unwrap();
+        {
+            for bytes in [
+                borsh::to_vec(&pool).unwrap(),
+                holding(state.creator_escrow_id, state.token_definition_id, 200),
+            ] {
+                request = reply(&request, &response, bytes);
+                response = handle(&request).unwrap();
+            }
+        }
+        assert_eq!(response.validity.timestamps.start(), Some(300_000));
+        assert!(!response.validity.timestamps.is_valid_for(299_999));
+        assert!(response.validity.timestamps.is_valid_for(300_000));
+        assert_eq!(response.sync_messages.len(), usize::from(!released));
+    }
+    let mut request = input;
+    request.from = None;
+    request.pre_state = borsh::to_vec(&state).unwrap().into();
+    request.message =
+        borsh::to_vec(&Message::WithdrawWeightedProceeds { creator: id(42) }).unwrap();
+    let response = handle(&request).unwrap();
+    let response = handle(&weighted_authorized(&request, &response)).unwrap();
+    // The bound pool checks the selected close before settlement effects.
+    assert_eq!(response.validity.timestamps.start(), None);
+    assert_eq!(response.sync_messages.len(), 1);
+    assert_eq!(
+        borsh::from_slice::<lbp_core::Message>(&response.sync_messages[0].message).unwrap(),
+        lbp_core::Message::SettleWeighted { creator: id(42) }
+    );
+}
+
+#[test]
+fn weighted_malformed_saved_policies_cannot_resume_or_forward_payouts() {
+    let input = creation(inputs());
+    let response = handle(&input).unwrap();
+    let state = LbpLaunchState::decode(response.post_state.as_ref().unwrap()).unwrap();
+    for case in 0..3 {
+        let mut changed = state.clone();
+        match case {
+            0 => changed.ending_policy = factory_core::EndingPolicy::Manual,
+            1 => changed.ending_policy = factory_core::EndingPolicy::Depletion,
+            _ => changed.end_timestamp = None,
+        }
+        let bytes = borsh::to_vec(&changed).unwrap();
+        assert_eq!(
+            LbpLaunchState::decode(&bytes).err(),
+            Some(Error::InvalidState)
+        );
+        let mut next = reply(&input, &response, config());
+        next.pre_state = bytes.into();
+        assert_eq!(handle(&next).err(), Some(Error::InvalidState));
+        changed.creation_stage = LbpCreationStage::Complete;
+        next.pre_state = borsh::to_vec(&changed).unwrap().into();
+        next.message =
+            borsh::to_vec(&Message::WithdrawWeightedProceeds { creator: id(42) }).unwrap();
+        assert_eq!(handle(&next).err(), Some(Error::InvalidState));
+    }
+}
+
+#[test]
+fn weighted_allocation_and_retries_use_selected_close_without_releasing_schedule_dust() {
+    for ending in [
+        factory_core::EndingPolicy::Scheduled,
+        factory_core::EndingPolicy::Either,
+    ] {
+        let mut terms = inputs();
+        terms.ending_policy = ending;
+        let (input, prepared, bytes) = prepared_with_terms(terms);
+        let mut state = LbpLaunchState::decode(prepared.post_state.as_ref().unwrap()).unwrap();
+        state.creation_stage = LbpCreationStage::Complete;
+        let original = lbp_core::PoolAccount::decode(&bytes).unwrap();
+        for remaining in [0, 1] {
+            let mut pool = original.clone();
+            pool.funded = true;
+            pool.remaining_inventory = remaining;
+            pool.recorded_collateral = 100;
+            if let lbp_core::PoolMode::Weighted {
+                pricing_collateral, ..
+            } = &mut pool.mode
+            {
+                *pricing_collateral = 100;
+            }
+            for released in [false, true] {
+                state.creator_allocation_released = released;
+                let mut request = input.clone();
+                request.from = None;
+                request.pre_state = borsh::to_vec(&state).unwrap().into();
+                request.message =
+                    borsh::to_vec(&Message::ClaimWeightedAllocation { creator: id(42) }).unwrap();
+                let response = handle(&request).unwrap();
+                request = weighted_authorized(&request, &response);
+                let mut response = handle(&request).unwrap();
+                for bytes in [
+                    borsh::to_vec(&pool).unwrap(),
+                    holding(
+                        state.creator_escrow_id,
+                        state.token_definition_id,
+                        if released { 0 } else { 200 },
+                    ),
+                ] {
+                    request = reply(&request, &response, bytes);
+                    response = handle(&request).unwrap();
+                }
+                let expected = if ending == factory_core::EndingPolicy::Either && remaining == 0 {
+                    None
+                } else {
+                    Some(300_000)
+                };
+                assert_eq!(response.validity.timestamps.start(), expected);
+                assert_eq!(response.sync_messages.len(), usize::from(!released));
+                assert!(
+                    LbpLaunchState::decode(response.post_state.as_ref().unwrap())
+                        .unwrap()
+                        .creator_allocation_released
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn released_after_setup_allocation_retry_stays_available_while_weighted_sale_is_open() {
+    let (input, prepared, bytes) = prepared(CreatorAllocationRelease::AfterSetup);
+    let mut state = LbpLaunchState::decode(prepared.post_state.as_ref().unwrap()).unwrap();
+    state.creation_stage = LbpCreationStage::Complete;
+    state.creator_allocation_released = true;
+    let pool = lbp_core::PoolAccount::decode(&bytes).unwrap();
+    assert!(pool.remaining_inventory > 0);
+    assert_eq!(pool.close_time_bound().unwrap(), Some(300));
+    let mut request = input.clone();
+    request.from = None;
+    request.pre_state = borsh::to_vec(&state).unwrap().into();
+    request.message = borsh::to_vec(&Message::ClaimWeightedAllocation { creator: id(42) }).unwrap();
+    let response = handle(&request).unwrap();
+    let mut callback = weighted_authorized(&request, &response);
+    callback.from = None;
+    assert_eq!(handle(&callback).err(), Some(Error::Unauthorized));
+    let repeated = handle(&weighted_authorized(&request, &response)).unwrap();
+    assert!(repeated.sync_messages.is_empty());
+    assert_eq!(repeated.validity.timestamps.start(), None);
+    assert_eq!(
+        LbpLaunchState::decode(repeated.post_state.as_ref().unwrap()).unwrap(),
+        state
     );
 }

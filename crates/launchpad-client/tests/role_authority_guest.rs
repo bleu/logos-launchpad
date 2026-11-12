@@ -443,6 +443,7 @@ fn transferred_curve_creator_funds_and_settles_without_pool_custody() {
             factory_core::Message::CreateFactoryPool {
                 buy_policy: curve_core::BuyPolicy::Open,
                 pause_policy: curve_core::PausePolicy::Disabled,
+                ending_policy: curve_core::EndingPolicy::Either,
                 trade_mode: 0,
                 graduation_hook_program_id: None,
                 graduation_hook_configuration: vec![],
@@ -737,6 +738,7 @@ fn transferred_direct_pool_owner_funds_closes_and_receives_reserves() {
         curve_core::Message::CreatePool {
             buy_policy: curve_core::BuyPolicy::Open,
             pause_policy: curve_core::PausePolicy::Disabled,
+            ending_policy: curve_core::EndingPolicy::Manual,
             namespace: namespace_id,
             token0_definition_id: LAUNCH,
             token1_definition_id: COLLATERAL,
@@ -902,6 +904,7 @@ fn another_namespace_pool_role_and_namespace_admin_cannot_fund_a_pool() {
             curve_core::Message::CreatePool {
                 buy_policy: curve_core::BuyPolicy::Open,
                 pause_policy: curve_core::PausePolicy::Disabled,
+                ending_policy: curve_core::EndingPolicy::Manual,
                 namespace,
                 token0_definition_id: LAUNCH,
                 token1_definition_id: COLLATERAL,

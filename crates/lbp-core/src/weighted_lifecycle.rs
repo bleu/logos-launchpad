@@ -1,5 +1,4 @@
-//! Weighted controls, scheduled closing and observer checkpoints.
-//! Fixed-price sellout rules do not apply.
+//! Weighted controls, schedule validation and observer checkpoints.
 use crate::{Error, PoolAccount, PoolMode, WEIGHT_TOTAL, valid_weight_endpoints};
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
@@ -34,20 +33,15 @@ pub(super) fn set_paused(input: &ReceiveInput, paused: bool) -> Result<Response,
     if input.from != Some(Actor::new(state.factory_owner, state.factory_program_id)) {
         return Err(Error::Unauthorized);
     }
-    let end = match state.mode {
-        PoolMode::FixedPrice => state.end_timestamp,
-        PoolMode::Weighted { .. } => Some(end(&state)?),
-    };
-    if state.proceeds_settled
-        || (state.mode == PoolMode::FixedPrice && state.remaining_inventory == 0)
-    {
+    if state.proceeds_settled {
         return Err(Error::Closed);
     }
+    let bounds = state.trade_bounds()?;
     let changed = state
         .trade_control
         .set_paused(paused)
         .map_err(|_| Error::PauseDisabled)?;
-    let response = curve_core::with_time_bounds(state.response(), None, end)
+    let response = curve_core::with_time_bounds(state.response(), None, bounds.before)
         .map_err(|_| Error::InvalidTerms)?;
     Ok(
         if changed && matches!(state.mode, PoolMode::Weighted { .. }) {

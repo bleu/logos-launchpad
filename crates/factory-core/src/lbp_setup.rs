@@ -12,6 +12,7 @@ pub enum SaleStart {
 pub struct FixedPriceInputs {
     pub buy_policy: curve_core::BuyPolicy,
     pub pause_policy: PausePolicy,
+    pub ending_policy: EndingPolicy,
     pub namespace: AccountId,
     pub launch_salt: [u8; 32],
     pub name: String,
@@ -32,6 +33,7 @@ pub struct FixedPriceInputs {
 pub struct WeightedInputs {
     pub buy_policy: curve_core::BuyPolicy,
     pub pause_policy: PausePolicy,
+    pub ending_policy: EndingPolicy,
     pub namespace: AccountId,
     pub launch_salt: [u8; 32],
     pub name: String,
@@ -92,6 +94,7 @@ pub enum LbpCreationStage {
 pub struct LbpLaunchState {
     pub buy_policy: curve_core::BuyPolicy,
     pub pause_policy: PausePolicy,
+    pub ending_policy: EndingPolicy,
     format: [u8; 8],
     version: u16,
     pub creator_role_id: AccountId,
@@ -120,6 +123,7 @@ pub struct LbpLaunchState {
 struct SetupInputs {
     buy_policy: curve_core::BuyPolicy,
     pause_policy: PausePolicy,
+    ending_policy: EndingPolicy,
     namespace: AccountId,
     launch_salt: [u8; 32],
     name: String,
@@ -148,6 +152,7 @@ pub(super) fn create_fixed(
         SetupInputs {
             buy_policy: inputs.buy_policy,
             pause_policy: inputs.pause_policy,
+            ending_policy: inputs.ending_policy,
             namespace: inputs.namespace,
             launch_salt: inputs.launch_salt,
             name: inputs.name,
@@ -184,6 +189,7 @@ pub(super) fn create_weighted(
         SetupInputs {
             buy_policy: inputs.buy_policy,
             pause_policy: inputs.pause_policy,
+            ending_policy: inputs.ending_policy,
             namespace: inputs.namespace,
             launch_salt: inputs.launch_salt,
             name: inputs.name,
@@ -211,6 +217,19 @@ pub(super) fn create_weighted(
         },
         command,
     )
+}
+fn validate_lbp_policies(
+    mode: LbpSetupMode,
+    ending: EndingPolicy,
+    start: u64,
+    end: Option<u64>,
+) -> Result<(), Error> {
+    if !matches!(ending, EndingPolicy::Scheduled | EndingPolicy::Either)
+        && !(mode == LbpSetupMode::FixedPrice && ending == EndingPolicy::Depletion)
+    {
+        return Err(Error::InvalidTerms);
+    }
+    validate_window(ending, Some(start), end)
 }
 fn create(input: &ReceiveInput, inputs: SetupInputs, command: Message) -> Result<Response, Error> {
     if input.receiver.account_id
@@ -244,6 +263,12 @@ fn create(input: &ReceiveInput, inputs: SetupInputs, command: Message) -> Result
     {
         return Err(Error::InvalidTerms);
     }
+    validate_lbp_policies(
+        inputs.mode,
+        inputs.ending_policy,
+        start_timestamp,
+        inputs.end_timestamp,
+    )?;
     let pool_id = lbp_core::compute_pool_pda(
         inputs.namespace,
         inputs.lbp_program_id,
@@ -258,11 +283,12 @@ fn create(input: &ReceiveInput, inputs: SetupInputs, command: Message) -> Result
     let state = LbpLaunchState {
         buy_policy: inputs.buy_policy,
         pause_policy: inputs.pause_policy,
+        ending_policy: inputs.ending_policy,
         format: match inputs.mode {
             LbpSetupMode::FixedPrice => *b"LZFXLAUN",
             LbpSetupMode::Weighted { .. } => *b"LZWGLAUN",
         },
-        version: 2,
+        version: 3,
         creator_role_id: compute_creator_role_pda(inputs.namespace, program, inputs.launch_salt),
         mode: inputs.mode,
         creation_stage: LbpCreationStage::Minted,
@@ -456,9 +482,10 @@ pub(super) fn begin_payout(input: &ReceiveInput, command: Message) -> Result<Res
 }
 
 pub(super) fn resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
-    let mut state = LbpLaunchState::decode(&input.pre_state).ok()?;
+    let mut state: LbpLaunchState = borsh::from_slice(&input.pre_state).ok()?;
     let mut pending = state.pending.take()?;
     Some((|| {
+        state.validate_terms()?;
         if input.receiver.account_id
             != compute_factory_pda(
                 state.namespace,
@@ -516,17 +543,10 @@ pub(super) fn resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
                 pending.command,
                 Message::ClaimCreatorAllocation { .. } | Message::ClaimWeightedAllocation { .. }
             ) {
-                if state.creator_allocation_released {
-                    return if matches!(state.mode, LbpSetupMode::Weighted { .. }) {
-                        curve_core::with_time_bounds(
-                            state.response(),
-                            Some(state.end_timestamp.ok_or(Error::InvalidState)?),
-                            None,
-                        )
-                        .map_err(|_| Error::InvalidTerms)
-                    } else {
-                        Ok(state.response())
-                    };
+                if state.creator_allocation_released
+                    && state.allocation_release == CreatorAllocationRelease::AfterSetup
+                {
+                    return Ok(state.response());
                 }
                 pending.proof = false;
                 state.pending = Some(pending);
@@ -569,6 +589,9 @@ pub(super) fn resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
         {
             let pool = lbp_core::PoolAccount::decode(&pending.values[0])
                 .map_err(|_| Error::InvalidState)?;
+            if pool.ending_policy != state.ending_policy {
+                return Err(Error::InvalidCustody);
+            }
             if pool.buy_policy != state.buy_policy
                 || pool.trade_control.policy() != state.pause_policy
                 || !payout_mode_matches(state.mode, pool.mode)
@@ -592,17 +615,14 @@ pub(super) fn resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
             if !pool.funded {
                 return Err(Error::CreationPending);
             }
-            let expiry = (match state.mode {
-                LbpSetupMode::FixedPrice => pool.close_time_bound(),
-                LbpSetupMode::Weighted { .. } => pool
-                    .end_timestamp
-                    .map(Some)
-                    .ok_or(lbp_core::Error::InvalidState),
-            })
-            .map_err(|error| match error {
+            let expiry = pool.close_time_bound().map_err(|error| match error {
                 lbp_core::Error::NotClosed => Error::NotClosed,
                 _ => Error::InvalidTerms,
             })?;
+            if state.creator_allocation_released {
+                return curve_core::with_time_bounds(state.response(), expiry, None)
+                    .map_err(|_| Error::InvalidTerms);
+            }
             if state.creator_allocation != 0
                 && balance(
                     &pending.values[1],
@@ -670,6 +690,9 @@ pub(super) fn resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
                 }
                 let pool = lbp_core::PoolAccount::decode(&pending.values[4])
                     .map_err(|_| Error::InvalidState)?;
+                if pool.ending_policy != state.ending_policy {
+                    return Err(Error::InvalidCustody);
+                }
                 if pool.buy_policy != state.buy_policy
                     || pool.trade_control.policy() != state.pause_policy
                     || pool.funded
@@ -784,6 +807,7 @@ pub(super) fn resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
                         inputs: lbp_core::FixedPricePoolInputs {
                             buy_policy: state.buy_policy.clone(),
                             pause_policy: state.pause_policy,
+                            ending_policy: state.ending_policy,
                             namespace: state.namespace,
                             namespace_program_id: state.namespace_program_id,
                             factory_program_id: input.receiver.program_account_id,
@@ -807,6 +831,7 @@ pub(super) fn resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
                         inputs: lbp_core::WeightedPoolInputs {
                             buy_policy: state.buy_policy.clone(),
                             pause_policy: state.pause_policy,
+                            ending_policy: state.ending_policy,
                             namespace: state.namespace,
                             namespace_program_id: state.namespace_program_id,
                             factory_program_id: input.receiver.program_account_id,
@@ -966,6 +991,23 @@ pub(super) fn resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
     })())
 }
 impl LbpLaunchState {
+    fn validate_terms(&self) -> Result<(), Error> {
+        validate_lbp_policies(
+            self.mode,
+            self.ending_policy,
+            self.start_timestamp,
+            self.end_timestamp,
+        )
+        .map_err(|_| Error::InvalidState)?;
+        let expected = match self.mode {
+            LbpSetupMode::FixedPrice => *b"LZFXLAUN",
+            LbpSetupMode::Weighted { .. } => *b"LZWGLAUN",
+        };
+        if self.format != expected || self.version != 3 {
+            return Err(Error::InvalidState);
+        }
+        Ok(())
+    }
     fn with_setup_deadline(&self, response: Response) -> Result<Response, Error> {
         if matches!(self.mode, LbpSetupMode::FixedPrice) {
             return curve_core::with_time_bounds(response, None, self.end_timestamp)
@@ -1006,13 +1048,7 @@ impl LbpLaunchState {
 
     pub fn decode(bytes: &[u8]) -> Result<Self, Error> {
         let state: Self = borsh::from_slice(bytes).map_err(|_| Error::InvalidState)?;
-        let expected = match state.mode {
-            LbpSetupMode::FixedPrice => *b"LZFXLAUN",
-            LbpSetupMode::Weighted { .. } => *b"LZWGLAUN",
-        };
-        if state.format != expected || state.version != 2 {
-            return Err(Error::InvalidState);
-        }
+        state.validate_terms()?;
         Ok(state)
     }
 }

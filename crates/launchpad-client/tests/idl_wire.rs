@@ -477,6 +477,7 @@ fn direct_pool_creation_keeps_namespace_owner_and_funding_terms_on_wire() {
         curve_core::Message::CreatePool {
             buy_policy: curve_core::BuyPolicy::Open,
             pause_policy: curve_core::PausePolicy::Disabled,
+            ending_policy: curve_core::EndingPolicy::Either,
             namespace: AccountId::new([1; 32]),
             token0_definition_id: AccountId::new([2; 32]),
             token1_definition_id: AccountId::new([3; 32]),
@@ -495,7 +496,7 @@ fn direct_pool_creation_keeps_namespace_owner_and_funding_terms_on_wire() {
             now: 13,
         },
         concat!(
-            "080000",
+            "08000003",
             "0101010101010101010101010101010101010101010101010101010101010101",
             "0202020202020202020202020202020202020202020202020202020202020202",
             "0303030303030303030303030303030303030303030303030303030303030303",
@@ -521,6 +522,7 @@ fn direct_pool_creation_keeps_namespace_owner_and_funding_terms_on_wire() {
             "tag":8,"name":"CreatePool","fields":[
                 {"name":"buy_policy","type":"BuyPolicy"},
                 {"name":"pause_policy","type":"PausePolicy"},
+                {"name":"ending_policy","type":"EndingPolicy"},
                 {"name":"namespace","type":"AccountId"},
                 {"name":"token0_definition_id","type":"AccountId"},
                 {"name":"token1_definition_id","type":"AccountId"},
@@ -543,6 +545,7 @@ fn factory_creation_keeps_creator_namespace_and_saved_hook_terms_on_wire() {
         factory_core::Message::CreateFactoryPool {
             buy_policy: curve_core::BuyPolicy::Open,
             pause_policy: curve_core::PausePolicy::Disabled,
+            ending_policy: curve_core::EndingPolicy::Either,
             trade_mode: 1,
             graduation_hook_program_id: Some(AccountId::new([1; 32])),
             graduation_hook_configuration: vec![2, 3],
@@ -562,7 +565,7 @@ fn factory_creation_keeps_creator_namespace_and_saved_hook_terms_on_wire() {
             now: 15,
         },
         concat!(
-            "0000000101",
+            "000000030101",
             "0101010101010101010101010101010101010101010101010101010101010101",
             "020000000203",
             "0404040404040404040404040404040404040404040404040404040404040404",
@@ -587,6 +590,7 @@ fn factory_creation_keeps_creator_namespace_and_saved_hook_terms_on_wire() {
             "tag":0,"name":"CreateFactoryPool","fields":[
                 {"name":"buy_policy","type":"BuyPolicy"},
                 {"name":"pause_policy","type":"PausePolicy"},
+                {"name":"ending_policy","type":"EndingPolicy"},
                 {"name":"trade_mode","type":"u8"},
                 {"name":"graduation_hook_program_id","type":"Option<AccountId>"},
                 {"name":"graduation_hook_configuration","type":"Vec<u8>"},
@@ -1221,6 +1225,7 @@ fn weighted_factory_messages_keep_distinct_tags_and_normalized_weights() {
     let inputs = factory_core::WeightedInputs {
         buy_policy: curve_core::BuyPolicy::Open,
         pause_policy: curve_core::PausePolicy::AuthorityControlled,
+        ending_policy: curve_core::EndingPolicy::Scheduled,
         namespace: creator,
         launch_salt: [6; 32],
         name: "W".into(),
@@ -1241,7 +1246,7 @@ fn weighted_factory_messages_keep_distinct_tags_and_normalized_weights() {
     let message = factory_core::Message::CreateWeightedLbp {
         inputs: inputs.clone(),
     };
-    let mut expected = vec![8, 0, 1];
+    let mut expected = vec![8, 0, 1, 1];
     expected.extend_from_slice(creator.value());
     expected.extend_from_slice(&[6; 32]);
     expected.extend_from_slice(&[1, 0, 0, 0, b'W', 1, 0, 0, 0, b'u']);
@@ -1316,7 +1321,7 @@ fn pause_policy_and_trade_control_have_independent_wire_tags() {
     ] {
         assert_wire(policy, &format!("{tag:02x}"));
         assert_eq!(
-            variant("sale_policy", "PausePolicy", name),
+            variant("controls", "PausePolicy", name),
             json!({"tag":tag,"name":name,"fields":[]})
         );
     }
@@ -1327,7 +1332,7 @@ fn pause_policy_and_trade_control_have_independent_wire_tags() {
     ] {
         assert_wire(control, &format!("{tag:02x}"));
         assert_eq!(
-            variant("sale_policy", "TradeControl", name),
+            variant("controls", "TradeControl", name),
             json!({"tag":tag,"name":name,"fields":[]})
         );
     }
@@ -1357,4 +1362,96 @@ fn pause_policy_and_trade_control_have_independent_wire_tags() {
             "{module}::{name}"
         );
     }
+}
+
+#[test]
+fn ending_policies_have_independent_wire_tags() {
+    assert_eq!(
+        schema()["imports"]["sale_policy"],
+        json!(["controls", "terms"])
+    );
+    for (policy, tag, name) in [
+        (curve_core::EndingPolicy::Manual, 0, "Manual"),
+        (curve_core::EndingPolicy::Scheduled, 1, "Scheduled"),
+        (curve_core::EndingPolicy::Depletion, 2, "Depletion"),
+        (curve_core::EndingPolicy::Either, 3, "Either"),
+    ] {
+        assert_wire(policy, &format!("{tag:02x}"));
+        assert_eq!(
+            variant("terms", "EndingPolicy", name),
+            json!({"tag":tag,"name":name,"fields":[]})
+        );
+    }
+}
+
+#[test]
+fn immutable_policy_fields_follow_controls_except_inside_the_curve_pool() {
+    let schema = schema();
+    for (module, name, previous) in [
+        ("factory", "FactoryState", "pause_policy"),
+        ("lbp_setup", "FixedPriceInputs", "pause_policy"),
+        ("lbp_setup", "WeightedInputs", "pause_policy"),
+        ("lbp_setup", "LbpLaunchState", "pause_policy"),
+        ("lbp", "FixedPricePoolInputs", "pause_policy"),
+        ("lbp", "WeightedPoolInputs", "pause_policy"),
+        ("lbp", "PoolAccount", "trade_control"),
+        ("pool", "Pool", "fees_collected"),
+    ] {
+        let fields = schema["modules"][module][name]["fields"]
+            .as_array()
+            .unwrap();
+        let index = fields
+            .iter()
+            .position(|field| field["name"] == previous)
+            .unwrap();
+        assert_eq!(
+            fields[index + 1],
+            json!({"name":"ending_policy","type":"EndingPolicy"}),
+            "{module}::{name}"
+        );
+        if module == "pool" {
+            assert_eq!(fields[index + 2]["name"], "close_timestamp");
+        }
+    }
+    let outer = schema["modules"]["curve"]["PoolAccount"]["fields"]
+        .as_array()
+        .unwrap();
+    assert!(
+        outer
+            .iter()
+            .all(|field| field["name"] != "fee_policy" && field["name"] != "ending_policy")
+    );
+}
+
+#[test]
+fn fixed_pool_state_tuple_places_policies_after_trade_control() {
+    let account = AccountId::new([5; 32]);
+    let mut bytes = borsh::to_vec(&(
+        curve_core::BuyPolicy::Open,
+        curve_core::TradeControl::Unrestricted,
+        lbp_core::EndingPolicy::Either,
+        lbp_core::PoolMode::FixedPrice,
+        true,
+        (
+            account, account, account, account, [6u8; 32], account, account,
+        ),
+        (800u128, 800u128, 200u128),
+        lbp_core::FixedPrice {
+            collateral_units: 25,
+            token_units: 10,
+        },
+        (
+            9u64,
+            Some(100u64),
+            lbp_core::CreatorAllocationRelease::AfterEnd,
+        ),
+        (0u128, 0u128, false),
+    ))
+    .unwrap();
+    bytes.push(0); // No pending operation.
+    let pool = lbp_core::PoolAccount::decode(&bytes).unwrap();
+    assert_eq!(pool.ending_policy, lbp_core::EndingPolicy::Either);
+    assert_eq!(pool.remaining_inventory, 800);
+    assert_eq!(&bytes[..3], &[0, 0, 3]);
+    assert_eq!(borsh::to_vec(&pool).unwrap(), bytes);
 }

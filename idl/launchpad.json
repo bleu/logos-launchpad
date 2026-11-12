@@ -26,9 +26,48 @@
     ],
     "pool": [
       "sale_policy"
+    ],
+    "sale_policy": [
+      "controls",
+      "terms"
     ]
   },
   "modules": {
+    "controls": {
+      "PausePolicy": {
+        "variants": [
+          {
+            "fields": [],
+            "name": "Disabled",
+            "tag": 0
+          },
+          {
+            "fields": [],
+            "name": "AuthorityControlled",
+            "tag": 1
+          }
+        ]
+      },
+      "TradeControl": {
+        "variants": [
+          {
+            "fields": [],
+            "name": "Unrestricted",
+            "tag": 0
+          },
+          {
+            "fields": [],
+            "name": "Running",
+            "tag": 1
+          },
+          {
+            "fields": [],
+            "name": "Paused",
+            "tag": 2
+          }
+        ]
+      }
+    },
     "curve": {
       "AdminCandidate": {
         "variants": [
@@ -210,6 +249,10 @@
               {
                 "name": "pause_policy",
                 "type": "PausePolicy"
+              },
+              {
+                "name": "ending_policy",
+                "type": "EndingPolicy"
               },
               {
                 "name": "namespace",
@@ -541,6 +584,10 @@
             "type": "PausePolicy"
           },
           {
+            "name": "ending_policy",
+            "type": "EndingPolicy"
+          },
+          {
             "name": "trade_mode",
             "type": "TradeMode"
           },
@@ -657,6 +704,10 @@
               {
                 "name": "pause_policy",
                 "type": "PausePolicy"
+              },
+              {
+                "name": "ending_policy",
+                "type": "EndingPolicy"
               },
               {
                 "name": "trade_mode",
@@ -1154,6 +1205,10 @@
             "type": "PausePolicy"
           },
           {
+            "name": "ending_policy",
+            "type": "EndingPolicy"
+          },
+          {
             "name": "namespace",
             "type": "AccountId"
           },
@@ -1413,6 +1468,10 @@
             "type": "TradeControl"
           },
           {
+            "name": "ending_policy",
+            "type": "EndingPolicy"
+          },
+          {
             "name": "mode",
             "type": "PoolMode"
           },
@@ -1544,6 +1603,10 @@
             "type": "PausePolicy"
           },
           {
+            "name": "ending_policy",
+            "type": "EndingPolicy"
+          },
+          {
             "name": "namespace",
             "type": "AccountId"
           },
@@ -1612,6 +1675,10 @@
           {
             "name": "pause_policy",
             "type": "PausePolicy"
+          },
+          {
+            "name": "ending_policy",
+            "type": "EndingPolicy"
           },
           {
             "name": "namespace",
@@ -1708,6 +1775,10 @@
           {
             "name": "pause_policy",
             "type": "PausePolicy"
+          },
+          {
+            "name": "ending_policy",
+            "type": "EndingPolicy"
           },
           {
             "name": "format",
@@ -1869,6 +1940,10 @@
             "type": "PausePolicy"
           },
           {
+            "name": "ending_policy",
+            "type": "EndingPolicy"
+          },
+          {
             "name": "namespace",
             "type": "AccountId"
           },
@@ -1967,6 +2042,10 @@
             "type": "u128"
           },
           {
+            "name": "ending_policy",
+            "type": "EndingPolicy"
+          },
+          {
             "name": "close_timestamp",
             "type": "Option<u64>"
           },
@@ -2014,37 +2093,29 @@
         ]
       }
     },
-    "sale_policy": {
-      "PausePolicy": {
+    "sale_policy": {},
+    "terms": {
+      "EndingPolicy": {
         "variants": [
           {
             "fields": [],
-            "name": "Disabled",
+            "name": "Manual",
             "tag": 0
           },
           {
             "fields": [],
-            "name": "AuthorityControlled",
-            "tag": 1
-          }
-        ]
-      },
-      "TradeControl": {
-        "variants": [
-          {
-            "fields": [],
-            "name": "Unrestricted",
-            "tag": 0
-          },
-          {
-            "fields": [],
-            "name": "Running",
+            "name": "Scheduled",
             "tag": 1
           },
           {
             "fields": [],
-            "name": "Paused",
+            "name": "Depletion",
             "tag": 2
+          },
+          {
+            "fields": [],
+            "name": "Either",
+            "tag": 3
           }
         ]
       }

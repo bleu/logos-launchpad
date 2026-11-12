@@ -71,6 +71,7 @@ fn closed_sale(
             factory_core::Message::CreateFactoryPool {
                 buy_policy: curve_core::BuyPolicy::Open,
                 pause_policy: curve_core::PausePolicy::Disabled,
+                ending_policy: curve_core::EndingPolicy::Either,
                 trade_mode: 0,
                 graduation_hook_program_id: hook,
                 graduation_hook_configuration: configuration,
@@ -178,6 +179,7 @@ fn curve_late_activation_failure_restores_funding_and_continuation_activates_onc
             factory_core::Message::CreateFactoryPool {
                 buy_policy: curve_core::BuyPolicy::Open,
                 pause_policy: curve_core::PausePolicy::Disabled,
+                ending_policy: curve_core::EndingPolicy::Either,
                 trade_mode: 0,
                 graduation_hook_program_id: None,
                 graduation_hook_configuration: vec![],

@@ -16,6 +16,7 @@ fn inputs() -> FixedPriceInputs {
     FixedPriceInputs {
         buy_policy: curve_core::BuyPolicy::Open,
         pause_policy: curve_core::PausePolicy::Disabled,
+        ending_policy: factory_core::EndingPolicy::Either,
         namespace: id(40),
         launch_salt: [3; 32],
         name: "Launch".into(),
@@ -237,6 +238,11 @@ fn creation_intersects_saved_start_with_optional_setup_end() {
         let mut terms = inputs();
         terms.start = start;
         terms.end_timestamp = end_timestamp;
+        terms.ending_policy = if end_timestamp.is_some() {
+            factory_core::EndingPolicy::Either
+        } else {
+            factory_core::EndingPolicy::Depletion
+        };
         input.message = borsh::to_vec(&Message::CreateFixedPriceLbp { inputs: terms }).unwrap();
         let mut response = handle(&input).unwrap();
         for bytes in [namespace_state(), collateral()] {
@@ -269,11 +275,12 @@ fn creation_rejects_timestamp_conversion_overflow_before_minting() {
         let mut terms = inputs();
         terms.start = start;
         terms.end_timestamp = end_timestamp;
+        terms.ending_policy = if end_timestamp.is_some() {
+            factory_core::EndingPolicy::Either
+        } else {
+            factory_core::EndingPolicy::Depletion
+        };
         input.message = borsh::to_vec(&Message::CreateFixedPriceLbp { inputs: terms }).unwrap();
-        let response = handle(&input).unwrap();
-        input = reply(&input, &response, namespace_state());
-        let response = handle(&input).unwrap();
-        input = reply(&input, &response, collateral());
         assert_eq!(handle(&input).err(), Some(Error::InvalidTerms));
     }
 }
@@ -373,6 +380,7 @@ fn pool_preparation_uses_saved_terms_and_separate_setup_stage() {
         panic!("pool preparation")
     };
     assert_eq!(inputs.sale_inventory, 800);
+    assert_eq!(inputs.ending_policy, factory_core::EndingPolicy::Either);
     assert_eq!(inputs.start_timestamp, 0);
     assert_eq!(inputs.end_timestamp, Some(200));
     assert_eq!(inputs.factory_program_id, input.receiver.program_account_id);
@@ -384,6 +392,7 @@ fn prepared_pool(state: &factory_core::FixedPriceLaunchState, factory: Actor) ->
     let inputs = lbp_core::FixedPricePoolInputs {
         buy_policy: state.buy_policy.clone(),
         pause_policy: state.pause_policy,
+        ending_policy: state.ending_policy,
         namespace: state.namespace,
         namespace_program_id: state.namespace_program_id,
         factory_program_id: factory.program_account_id,
@@ -572,6 +581,11 @@ fn setup_checks_optional_expiry_at_every_stage_and_callback() {
         let mut input = creation();
         let mut terms = inputs();
         terms.end_timestamp = end_timestamp;
+        terms.ending_policy = if end_timestamp.is_some() {
+            factory_core::EndingPolicy::Either
+        } else {
+            factory_core::EndingPolicy::Depletion
+        };
         terms.now = 1_000;
         input.message = borsh::to_vec(&Message::CreateFixedPriceLbp { inputs: terms }).unwrap();
         let mut mint = handle(&input).unwrap();
@@ -638,6 +652,14 @@ fn setup_checks_optional_expiry_at_every_stage_and_callback() {
                 factory_core::FixedPriceLaunchState::decode(response.post_state.as_ref().unwrap())
                     .unwrap();
             assert_eq!(state.end_timestamp, end_timestamp);
+            assert_eq!(
+                state.ending_policy,
+                if end_timestamp.is_some() {
+                    factory_core::EndingPolicy::Either
+                } else {
+                    factory_core::EndingPolicy::Depletion
+                }
+            );
             assert!(!state.creator_allocation_released);
             assert_eq!(
                 response.validity.timestamps.start(),
@@ -668,6 +690,11 @@ fn optional_end_must_be_strictly_after_the_saved_start() {
             let mut terms = inputs();
             terms.start = start;
             terms.end_timestamp = end_timestamp;
+            terms.ending_policy = if end_timestamp.is_some() {
+                factory_core::EndingPolicy::Either
+            } else {
+                factory_core::EndingPolicy::Depletion
+            };
             input.message = borsh::to_vec(&Message::CreateFixedPriceLbp { inputs: terms }).unwrap();
             let result = handle(&input);
             if valid {
@@ -978,7 +1005,7 @@ fn after_end_allocation_claim_at_expiry_does_not_settle_proceeds() {
 }
 
 #[test]
-fn released_allocation_retry_requires_authority_but_no_time_bound_or_escrow_transfer() {
+fn released_allocation_retry_keeps_selected_close_bound_without_another_transfer() {
     let (input, state) = completed();
     let pool = active_pool(&state, input.receiver);
     let response = claim_allocation(&input, &state, &pool, 200, 200).unwrap();
@@ -986,7 +1013,7 @@ fn released_allocation_retry_requires_authority_but_no_time_bound_or_escrow_tran
         factory_core::FixedPriceLaunchState::decode(response.post_state.as_ref().unwrap()).unwrap();
     let repeated = claim_allocation(&input, &claimed, &pool, 0, 0).unwrap();
     assert!(repeated.sync_messages.is_empty());
-    assert_eq!(repeated.validity.timestamps.start(), None);
+    assert_eq!(repeated.validity.timestamps.start(), Some(200_000));
     assert_eq!(repeated.validity.timestamps.end(), None);
     assert_eq!(
         factory_core::FixedPriceLaunchState::decode(repeated.post_state.as_ref().unwrap()).unwrap(),
@@ -1038,6 +1065,11 @@ fn sellout_releases_after_end_allocation_before_or_after_proceeds_settlement() {
     let (input, mut state) = completed();
     for end in [None, Some(200)] {
         state.end_timestamp = end;
+        state.ending_policy = if end.is_some() {
+            factory_core::EndingPolicy::Either
+        } else {
+            factory_core::EndingPolicy::Depletion
+        };
         let mut pool = active_pool(&state, input.receiver);
         pool.remaining_inventory = 0;
         for settled in [false, true] {
@@ -1073,6 +1105,7 @@ fn allocation_stays_locked_before_close_and_requires_escrow_coverage() {
         Some(Error::InvalidCustody)
     );
     state.end_timestamp = None;
+    state.ending_policy = factory_core::EndingPolicy::Depletion;
     let pool = active_pool(&state, input.receiver);
     assert_eq!(
         claim_allocation(&input, &state, &pool, u64::MAX, 200).err(),
@@ -1083,7 +1116,7 @@ fn allocation_stays_locked_before_close_and_requires_escrow_coverage() {
     pool.end_timestamp = state.end_timestamp;
     assert_eq!(
         claim_allocation(&input, &state, &pool, u64::MAX, 200).err(),
-        Some(Error::InvalidTerms)
+        Some(Error::InvalidState)
     );
 }
 
@@ -1641,4 +1674,205 @@ fn legacy_weighted_pause_does_not_route_to_fixed_price_sales() {
     })
     .unwrap();
     assert_eq!(handle(&input).err(), Some(Error::InvalidState));
+}
+
+#[test]
+fn fixed_price_creation_checks_every_ending_and_deadline_combination() {
+    use factory_core::EndingPolicy;
+    for ending in [
+        EndingPolicy::Manual,
+        EndingPolicy::Scheduled,
+        EndingPolicy::Depletion,
+        EndingPolicy::Either,
+    ] {
+        for end in [None, Some(200)] {
+            let mut terms = inputs();
+            terms.ending_policy = ending;
+            terms.end_timestamp = end;
+            let mut input = creation();
+            input.message = borsh::to_vec(&Message::CreateFixedPriceLbp { inputs: terms }).unwrap();
+            let result = handle(&input);
+            if (ending == EndingPolicy::Depletion && end.is_none())
+                || (matches!(ending, EndingPolicy::Scheduled | EndingPolicy::Either)
+                    && end.is_some())
+            {
+                let state = factory_core::LbpLaunchState::decode(
+                    result.unwrap().post_state.as_ref().unwrap(),
+                )
+                .unwrap();
+                assert_eq!(state.ending_policy, ending);
+            } else {
+                assert_eq!(result.err(), Some(Error::InvalidTerms));
+            }
+        }
+    }
+}
+
+#[test]
+fn fixed_price_rejects_malformed_saved_terms_and_the_old_record_version() {
+    let (input, response) = minted();
+    let state =
+        factory_core::LbpLaunchState::decode(response.post_state.as_ref().unwrap()).unwrap();
+    for case in 0..4 {
+        let mut changed = state.clone();
+        match case {
+            0 => changed.ending_policy = factory_core::EndingPolicy::Manual,
+            1 => changed.ending_policy = factory_core::EndingPolicy::Depletion,
+            2 => changed.end_timestamp = Some(u64::MAX),
+            _ => changed.start_timestamp = u64::MAX,
+        }
+        let mut request = input.clone();
+        request.pre_state = borsh::to_vec(&changed).unwrap().into();
+        request.message = borsh::to_vec(&Message::ContinueFixedPriceCreation {
+            expected_stage: factory_core::LbpCreationStage::Minted,
+            creator: id(42),
+            now: 0,
+        })
+        .unwrap();
+        assert_eq!(
+            factory_core::LbpLaunchState::decode(&request.pre_state).err(),
+            Some(Error::InvalidState)
+        );
+        assert_eq!(handle(&request).err(), Some(Error::InvalidState));
+    }
+    let mut bytes = borsh::to_vec(&state).unwrap();
+    let version_offset =
+        borsh::to_vec(&(state.buy_policy, state.pause_policy, state.ending_policy))
+            .unwrap()
+            .len()
+            + 8;
+    assert_eq!(
+        &bytes[version_offset..version_offset + 2],
+        &3_u16.to_le_bytes()
+    );
+    bytes[version_offset..version_offset + 2].copy_from_slice(&2_u16.to_le_bytes());
+    assert_eq!(
+        factory_core::LbpLaunchState::decode(&bytes).err(),
+        Some(Error::InvalidState)
+    );
+}
+
+#[test]
+fn fixed_price_pending_callbacks_reject_malformed_saved_policies() {
+    let input = creation();
+    let response = handle(&input).unwrap();
+    let mut state =
+        factory_core::LbpLaunchState::decode(response.post_state.as_ref().unwrap()).unwrap();
+    state.ending_policy = factory_core::EndingPolicy::Manual;
+    let mut next = reply(&input, &response, namespace_state());
+    next.pre_state = borsh::to_vec(&state).unwrap().into();
+    assert_eq!(handle(&next).err(), Some(Error::InvalidState));
+}
+
+#[test]
+fn fixed_price_setup_and_allocation_reject_changed_pool_policies() {
+    let (input, prepared) = allowlisted_prepared();
+    let state =
+        factory_core::LbpLaunchState::decode(prepared.post_state.as_ref().unwrap()).unwrap();
+    for case in 0..2 {
+        let (mut next, mut response) = continue_sale(
+            &input,
+            &prepared,
+            factory_core::LbpCreationStage::PoolPrepared,
+            0,
+            800,
+            200,
+        );
+        let mut pool =
+            lbp_core::PoolAccount::decode(&prepared_pool(&state, input.receiver)).unwrap();
+        if case == 0 {
+            pool.ending_policy = factory_core::EndingPolicy::Manual;
+        } else {
+            pool.ending_policy = factory_core::EndingPolicy::Scheduled;
+        }
+        let values = [
+            borsh::to_vec(&pool).unwrap(),
+            holding(state.pool_id, state.token_definition_id, 0),
+            holding(state.pool_id, state.collateral_definition_id, 0),
+        ];
+        for (slot, bytes) in values.into_iter().enumerate() {
+            next = reply(&next, &response, bytes);
+            let result = handle(&next);
+            if slot == 2 {
+                assert_eq!(result.err(), Some(Error::InvalidCustody));
+            } else {
+                response = result.unwrap();
+            }
+        }
+        let mut complete = state.clone();
+        complete.creation_stage = factory_core::LbpCreationStage::Complete;
+        pool.funded = true;
+        assert_eq!(
+            claim_allocation(&input, &complete, &pool, 200, 200).err(),
+            Some(Error::InvalidCustody)
+        );
+    }
+}
+
+#[test]
+fn fixed_allocation_and_retries_keep_the_selected_ending_bound() {
+    let (input, original) = completed();
+    for ending in [
+        factory_core::EndingPolicy::Scheduled,
+        factory_core::EndingPolicy::Depletion,
+        factory_core::EndingPolicy::Either,
+    ] {
+        let mut state = original.clone();
+        state.ending_policy = ending;
+        state.end_timestamp = if ending == factory_core::EndingPolicy::Depletion {
+            None
+        } else {
+            Some(200)
+        };
+        let mut pool = active_pool(&state, input.receiver);
+        pool.remaining_inventory = 0;
+        for released in [false, true] {
+            state.creator_allocation_released = released;
+            let response =
+                claim_allocation(&input, &state, &pool, 100, if released { 0 } else { 200 })
+                    .unwrap();
+            assert_eq!(
+                response.validity.timestamps.start(),
+                if ending == factory_core::EndingPolicy::Scheduled {
+                    Some(200_000)
+                } else {
+                    None
+                }
+            );
+            assert_eq!(response.sync_messages.len(), usize::from(!released));
+        }
+    }
+}
+
+#[test]
+fn released_after_setup_allocation_retry_stays_available_while_fixed_sale_is_open() {
+    let (input, mut state) = completed();
+    state.allocation_release = CreatorAllocationRelease::AfterSetup;
+    state.creator_allocation_released = true;
+    state.ending_policy = factory_core::EndingPolicy::Depletion;
+    state.end_timestamp = None;
+    let pool = active_pool(&state, input.receiver);
+    assert_eq!(
+        pool.close_time_bound().err(),
+        Some(lbp_core::Error::NotClosed)
+    );
+    let mut request = input.clone();
+    request.from = None;
+    request.pre_state = borsh::to_vec(&state).unwrap().into();
+    request.message = borsh::to_vec(&Message::ClaimCreatorAllocation {
+        creator: id(42),
+        now: 100,
+    })
+    .unwrap();
+    let response = handle(&request).unwrap();
+    let mut callback = authorized(&request, &response, id(42));
+    callback.from = None;
+    assert_eq!(handle(&callback).err(), Some(Error::Unauthorized));
+    let repeated = handle(&authorized(&request, &response, id(42))).unwrap();
+    assert!(repeated.sync_messages.is_empty());
+    assert_eq!(repeated.validity.timestamps.start(), None);
+    assert_eq!(
+        factory_core::LbpLaunchState::decode(repeated.post_state.as_ref().unwrap()).unwrap(),
+        state
+    );
 }
