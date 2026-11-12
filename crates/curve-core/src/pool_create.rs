@@ -9,6 +9,7 @@ use lee_core::{
 };
 use lez_compat_core::token;
 use pool::{Pool, PoolCreateParams, TokenSide};
+use sale_policy::events::{ClosureReasonV1, SaleEventKindV1};
 
 pub(crate) fn side(side: Option<u8>) -> Result<Option<TokenSide>, Error> {
     match side {
@@ -124,6 +125,7 @@ pub fn begin(input: &ReceiveInput, message: Message) -> Result<Response, Error> 
         trade_control: crate::TradeControl::new(pause_policy),
         allowed_input_token: side(allowed_input_token)?,
         funded: !defer_funding,
+        closure_observed: false,
         namespace,
         token0_definition_id,
         token1_definition_id,
@@ -187,15 +189,37 @@ pub(crate) fn finish(mut pending: Pending, receiver: Actor) -> Result<Response, 
         if expired.is_some() {
             pending.state.pool.lifecycle = pool::PoolLifecycle::Closed;
         }
-        let mut response = crate::with_time_bounds(
-            Response::set_state(borsh::to_vec(&pending.state).unwrap()),
-            expired,
-            pending
+        let bounds = crate::TimeBounds {
+            at_least: expired,
+            before: pending
                 .state
                 .pool
                 .close_timestamp
                 .filter(|_| expired.is_none()),
+        };
+        let closure = expired.and_then(|timestamp| {
+            pending.state.observe_closure(
+                receiver,
+                ClosureReasonV1::ScheduledEnd { timestamp },
+                bounds,
+            )
+        });
+        let mut response = crate::with_time_bounds(
+            Response::set_state(borsh::to_vec(&pending.state).unwrap()),
+            bounds.at_least,
+            bounds.before,
         )?;
+        response = response.event(pending.state.event(
+            receiver,
+            SaleEventKindV1::Activated {
+                reserve0: pending.state.pool.real_reserve0,
+                reserve1: pending.state.pool.real_reserve1,
+                collateral_seed: 0,
+            },
+        ));
+        if let Some(event) = closure {
+            response = response.event(event);
+        }
         if pending.state.owner_program.is_none() {
             response = transfer(
                 response,
@@ -249,6 +273,27 @@ pub(crate) fn finish(mut pending: Pending, receiver: Actor) -> Result<Response, 
         None,
         before,
     )?;
+    response = response.event(pending.state.event(
+        receiver,
+        SaleEventKindV1::Prepared {
+            owner: *pending.state.owner.value(),
+            token0_definition: *pending.state.token0_definition_id.value(),
+            token1_definition: *pending.state.token1_definition_id.value(),
+            reserve0: pending.state.pool.real_reserve0,
+            reserve1: pending.state.pool.real_reserve1,
+            policies: pending.state.event_policies(),
+        },
+    ));
+    if !defer_funding {
+        response = response.event(pending.state.event(
+            receiver,
+            SaleEventKindV1::Activated {
+                reserve0: pending.state.pool.real_reserve0,
+                reserve1: pending.state.pool.real_reserve1,
+                collateral_seed: 0,
+            },
+        ));
+    }
     for (definition, amount) in [
         (
             pending.state.token0_definition_id,

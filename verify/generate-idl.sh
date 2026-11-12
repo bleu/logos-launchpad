@@ -17,6 +17,7 @@ cargo +"$ACTOR_RUST_VERSION" run --quiet --manifest-path packages/lez-compat/Car
   eligibility_policy=crates/eligibility-policy/src/lib.rs \
   sale_policy=crates/sale-policy/src/lib.rs \
   controls=crates/sale-policy/src/controls.rs \
+  events=crates/sale-policy/src/events.rs \
   settlement=crates/sale-policy/src/settlement.rs \
   terms=crates/sale-policy/src/terms.rs \
   curve=crates/curve-core/src/lib.rs \

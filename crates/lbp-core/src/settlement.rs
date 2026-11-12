@@ -175,6 +175,7 @@ pub(super) fn apply(
         seed_payment: plan.seed,
         progress: plan.progress,
     };
+    let closure_event = state.observe_closure(receiver)?;
     state.recorded_collateral = 0;
     state.accrued_fees = 0;
     state.seed_returned = true;
@@ -191,6 +192,11 @@ pub(super) fn apply(
         None,
     )
     .map_err(|_| Error::InvalidTerms)?;
+    let response = if let Some(event) = closure_event {
+        response.event(event)
+    } else {
+        response
+    };
     let response = crate::trading::custody_effects(
         response,
         &pending.state,
@@ -266,7 +272,15 @@ pub(super) fn resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
         curve_core::with_time_bounds(state.response(), pending.expiry, None)
             .map_err(|_| Error::InvalidTerms)
             .map(|r| {
-                r.send_sync(
+                r.event(state.event(
+                    input.receiver,
+                    curve_core::events::SaleEventKindV1::Settlement {
+                        step: curve_core::events::SettlementStepV1::Completed,
+                        route: Some(crate::events::settlement_route(expected_progress)),
+                        effects: vec![],
+                    },
+                ))
+                .send_sync(
                     factory,
                     &SettlementReply::Completed {
                         receipt_hash,
@@ -309,6 +323,7 @@ mod tests {
                 PoolMode::FixedPrice
             },
             funded: true,
+            closure_observed: false,
             namespace: id(40),
             namespace_program_id: id(6),
             factory_owner: id(7),
@@ -457,7 +472,7 @@ mod tests {
                 assert!(
                     matches!(borsh::from_slice::<SettlementReply>(&done.sync_messages[0].message).unwrap(), SettlementReply::Completed { receipt_hash, progress } if receipt_hash == receipt.hash() && progress == receipt.progress)
                 );
-                assert!(response.events.is_empty());
+                assert!(!response.events.is_empty());
             }
         }
     }

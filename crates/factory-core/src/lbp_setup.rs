@@ -146,6 +146,7 @@ enum LbpSettlementPhase {
     PoolCompleted {
         receipt_hash: [u8; 32],
         progress: SettlementProgress,
+        graduation_amounts: Option<SettlementAmounts>,
     },
 }
 
@@ -379,7 +380,30 @@ fn create(input: &ReceiveInput, inputs: SetupInputs, command: Message) -> Result
             values: vec![],
         }),
     };
-    Ok(state.next())
+    Ok(state.next().event(state.event(
+        input.receiver.account_id,
+        SaleEventKindV1::Created {
+            creator: *inputs.creator.value(),
+            creator_role: *state.creator_role_id.value(),
+            token_definition: *state.token_definition_id.value(),
+            collateral_definition: *state.collateral_definition_id.value(),
+            sale_inventory: state.sale_inventory,
+            creator_allocation: state.creator_allocation,
+            curve_reserve: 0,
+            collateral_seed: match state.mode {
+                LbpSetupMode::FixedPrice => 0,
+                LbpSetupMode::Weighted {
+                    collateral_seed, ..
+                } => collateral_seed,
+            },
+            start_timestamp: Some(state.start_timestamp),
+            end_timestamp: state.end_timestamp,
+            policies: EventPoliciesV1 {
+                ending: state.ending_policy,
+                pause: state.pause_policy,
+            },
+        },
+    )))
 }
 pub(super) fn begin(
     input: &ReceiveInput,
@@ -710,13 +734,17 @@ pub(super) fn resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
             state.creator_allocation_released = true;
             let response = curve_core::with_time_bounds(state.response(), expiry, None)
                 .map_err(|_| Error::InvalidTerms)?;
-            return Ok(transfer(
-                response,
-                state.creator_escrow_id,
-                compute_escrow_seed(state.namespace, state.launch_salt),
-                state.token_definition_id,
+            return Ok(state.allocation_event(
+                transfer(
+                    response,
+                    state.creator_escrow_id,
+                    compute_escrow_seed(state.namespace, state.launch_salt),
+                    state.token_definition_id,
+                    creator,
+                    state.creator_allocation,
+                ),
+                input.receiver.account_id,
                 creator,
-                state.creator_allocation,
             ));
         }
         if let Message::ContinueFixedPriceCreation {
@@ -852,13 +880,17 @@ pub(super) fn resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
                     .send_sync(Actor::new(state.pool_id, state.lbp_program_id), &activation);
                 let response = state.with_setup_deadline(response)?;
                 return Ok(if state.creator_allocation_released {
-                    transfer(
-                        response,
-                        state.creator_escrow_id,
-                        compute_escrow_seed(state.namespace, state.launch_salt),
-                        state.token_definition_id,
+                    state.allocation_event(
+                        transfer(
+                            response,
+                            state.creator_escrow_id,
+                            compute_escrow_seed(state.namespace, state.launch_salt),
+                            state.token_definition_id,
+                            creator,
+                            state.creator_allocation,
+                        ),
+                        input.receiver.account_id,
                         creator,
-                        state.creator_allocation,
                     )
                 } else {
                     response
@@ -1072,6 +1104,37 @@ pub(super) fn resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
     })())
 }
 impl LbpLaunchState {
+    fn engine(&self) -> PricingEngineV1 {
+        match self.mode {
+            LbpSetupMode::FixedPrice => PricingEngineV1::FixedPrice,
+            LbpSetupMode::Weighted { .. } => PricingEngineV1::Weighted,
+        }
+    }
+    fn event(&self, factory: AccountId, kind: SaleEventKindV1) -> lee_core::program::ProgramEvent {
+        launch_event(self.namespace, factory, self.pool_id, self.engine(), kind)
+    }
+    fn allocation_event(
+        &self,
+        response: Response,
+        factory: AccountId,
+        creator: AccountId,
+    ) -> Response {
+        if self.creator_allocation == 0 || creator == self.creator_escrow_id {
+            return response;
+        }
+        response.event(self.event(
+            factory,
+            SaleEventKindV1::AllocationReleased {
+                definition: *self.token_definition_id.value(),
+                recipient: *creator.value(),
+                amount: self.creator_allocation,
+                release: match self.allocation_release {
+                    CreatorAllocationRelease::AfterSetup => AllocationReleaseV1::AfterSetup,
+                    CreatorAllocationRelease::AfterEnd => AllocationReleaseV1::AfterEnd,
+                },
+            },
+        ))
+    }
     fn validate_terms(&self) -> Result<(), Error> {
         validate_lbp_policies(
             self.mode,
@@ -1568,6 +1631,7 @@ fn resume_settlement(input: &ReceiveInput, mut state: LbpLaunchState) -> Result<
                 state.settlement_pending = Some(LbpSettlementPhase::PoolCompleted {
                     receipt_hash,
                     progress: receipt.progress,
+                    graduation_amounts: None,
                 });
                 Ok(state.response().send_sync(
                     receipt.pool,
@@ -1601,6 +1665,7 @@ fn resume_settlement(input: &ReceiveInput, mut state: LbpLaunchState) -> Result<
             state.settlement_pending = Some(LbpSettlementPhase::PoolCompleted {
                 receipt_hash,
                 progress: receipt.progress,
+                graduation_amounts: Some(receipt.amounts),
             });
             Ok(state.response().send_sync(
                 receipt.pool,
@@ -1610,6 +1675,7 @@ fn resume_settlement(input: &ReceiveInput, mut state: LbpLaunchState) -> Result<
         LbpSettlementPhase::PoolCompleted {
             receipt_hash,
             progress,
+            graduation_amounts,
         } => {
             if input.from != Some(Actor::new(state.pool_id, state.lbp_program_id)) {
                 return Err(Error::Unauthorized);
@@ -1625,7 +1691,23 @@ fn resume_settlement(input: &ReceiveInput, mut state: LbpLaunchState) -> Result<
                 return Err(Error::InvalidState);
             }
             state.settlement_progress = progress;
-            Ok(state.response())
+            let response = state.response();
+            Ok(if let Some(amounts) = graduation_amounts {
+                let adapter = state
+                    .adapter(input.receiver)
+                    .ok_or(Error::HookNotConfigured)?;
+                response.event(state.event(
+                    input.receiver.account_id,
+                    SaleEventKindV1::Graduated {
+                        adapter_program: *adapter.program_account_id.value(),
+                        adapter_custody: *adapter.account_id.value(),
+                        launch_tokens: amounts.launch_tokens,
+                        collateral: amounts.collateral,
+                    },
+                ))
+            } else {
+                response
+            })
         }
     }
 }

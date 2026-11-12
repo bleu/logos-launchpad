@@ -1865,14 +1865,25 @@ fn checkpoint(state: &lbp_core::PoolAccount) -> (u64, u128) {
     (checkpoint_time, checkpoint_token_weight)
 }
 
+fn checkpoint_events(
+    response: &lee_core::program::Response,
+) -> Vec<&lee_core::program::ProgramEvent> {
+    response
+        .events
+        .iter()
+        .filter(|event| event.selector == [0xae, 0x2f, 0x6d, 0x45, 0x7f, 0xb3, 0x79, 0xcf])
+        .collect()
+}
 fn assert_checkpoint_events_match(
     actual: &lee_core::program::Response,
     expected: &lee_core::program::Response,
 ) {
-    assert_eq!(actual.events.len(), 1);
-    assert_eq!(expected.events.len(), 1);
-    assert_eq!(actual.events[0].selector, expected.events[0].selector);
-    assert_eq!(actual.events[0].data, expected.events[0].data);
+    let actual = checkpoint_events(actual);
+    let expected = checkpoint_events(expected);
+    assert_eq!(actual.len(), 1);
+    assert_eq!(expected.len(), 1);
+    assert_eq!(actual[0].selector, expected[0].selector);
+    assert_eq!(actual[0].data, expected[0].data);
 }
 
 #[test]
@@ -1888,13 +1899,16 @@ fn poke_is_permissionless_and_records_checkpoint() {
     let expected = interpolate_weight(weight(95), weight(50), 1000, 3000, 1500);
     assert_eq!(token_w, expected);
     // Should emit a checkpoint event
-    assert_eq!(response.events.len(), 1);
+    assert_eq!(checkpoint_events(&response).len(), 1);
     use risc0_zkvm::sha::{Impl, Sha256 as _};
     let hash = Impl::hash_bytes(b"lbp::WeightedCheckpoint");
-    assert_eq!(response.events[0].selector, hash.as_bytes()[..8]);
+    assert_eq!(
+        checkpoint_events(&response)[0].selector,
+        hash.as_bytes()[..8]
+    );
     let mut payload = 1500u64.to_le_bytes().to_vec();
     payload.extend_from_slice(&expected.to_le_bytes());
-    assert_eq!(response.events[0].data, payload);
+    assert_eq!(checkpoint_events(&response)[0].data, payload);
 }
 
 #[test]
@@ -1920,11 +1934,11 @@ fn poke_at_end_records_end_weight() {
 fn repeated_poke_at_same_time_is_idempotent_no_event() {
     let (input, state) = funded();
     let first = poke_at(1_500_000, &input, &state).unwrap();
-    assert_eq!(first.events.len(), 1);
+    assert_eq!(checkpoint_events(&first).len(), 1);
     let after_first = state_of(&first);
     let second = poke_at(1_500_000, &input, &after_first).unwrap();
     // Same checkpoint — no event
-    assert_eq!(second.events.len(), 0);
+    assert_eq!(checkpoint_events(&second).len(), 0);
     assert_eq!(checkpoint(&state_of(&second)), checkpoint(&after_first));
 }
 
@@ -1970,7 +1984,7 @@ fn buy_updates_checkpoint_on_new_timestamp() {
     let poked = poke_at(1_500_000, &input, &state).unwrap();
     assert_checkpoint_events_match(&response, &poked);
     let repeated = poke_at(1_500_000, &input, &after).unwrap();
-    assert!(repeated.events.is_empty());
+    assert!(checkpoint_events(&repeated).is_empty());
 }
 
 #[test]
@@ -2009,7 +2023,7 @@ fn buy_at_same_timestamp_does_not_change_checkpoint() {
     .unwrap();
     let cp2 = checkpoint(&state_of(&second));
     assert_eq!(cp1, cp2);
-    assert!(second.events.is_empty());
+    assert!(checkpoint_events(&second).is_empty());
 }
 
 #[test]
@@ -2158,15 +2172,21 @@ fn common_weighted_controls_match_legacy_events_and_keep_the_scheduled_end() {
         assert_eq!(common.post_state, legacy.post_state);
         assert_eq!(common.events.len(), legacy.events.len());
         let changed = state.trade_control.is_paused() != paused;
-        assert_eq!(common.events.len(), usize::from(changed));
+        assert_eq!(common.events.len(), 2 * usize::from(changed));
         if changed {
-            assert_eq!(
-                common.events[0].selector,
-                [109, 140, 24, 3, 232, 43, 58, 157]
-            );
-            assert_eq!(common.events[0].data, borsh::to_vec(&paused).unwrap());
-            assert_eq!(common.events[0].selector, legacy.events[0].selector);
-            assert_eq!(common.events[0].data, legacy.events[0].data);
+            let selector = [109, 140, 24, 3, 232, 43, 58, 157];
+            let common_event = common
+                .events
+                .iter()
+                .find(|e| e.selector == selector)
+                .unwrap();
+            let legacy_event = legacy
+                .events
+                .iter()
+                .find(|e| e.selector == selector)
+                .unwrap();
+            assert_eq!(common_event.data, borsh::to_vec(&paused).unwrap());
+            assert_eq!(common_event.data, legacy_event.data);
         }
         assert_eq!(common.validity.timestamps.start(), None);
         assert_eq!(common.validity.timestamps.end(), Some(3_000_000));
@@ -2564,6 +2584,7 @@ fn weighted_atomic_settlement_excludes_seed_fees_and_burn_from_route_selection()
         let mut expected = state.clone();
         expected.recorded_collateral = 0;
         expected.accrued_fees = 0;
+        expected.closure_observed = true;
         expected.seed_returned = true;
         expected.settlement_progress = SettlementProgress::ManualComplete;
         assert_eq!(state_of(&response), expected);
@@ -2810,4 +2831,333 @@ fn receipt_settlement_keeps_selected_ending_and_net_collateral_for_both_routes()
             }
         }
     }
+}
+
+fn sale_events(response: &lee_core::program::Response) -> Vec<curve_core::events::SaleEventV1> {
+    use risc0_zkvm::sha::{Impl, Sha256 as _};
+    let hash = Impl::hash_bytes(curve_core::events::SaleEventV1::SELECTOR_NAME.as_bytes());
+    response
+        .events
+        .iter()
+        .filter(|e| e.selector == hash.as_bytes()[..8])
+        .map(|e| borsh::from_slice(&e.data).unwrap())
+        .collect()
+}
+
+#[test]
+fn weighted_trade_events_use_net_pricing_input_and_trusted_time_for_both_forms() {
+    use curve_core::events::*;
+    let (input, state) = funded();
+    for (message, form) in [
+        (
+            Message::BuyWeightedExactInput {
+                membership: None,
+                amount_in: 50,
+                min_amount_out: 1,
+            },
+            TradeFormV1::ExactInput,
+        ),
+        (
+            Message::BuyWeightedExactOutput {
+                membership: None,
+                amount_out: 500,
+                max_amount_in: 1000,
+            },
+            TradeFormV1::ExactOutput,
+        ),
+    ] {
+        let response = operation_at(
+            1_500_999,
+            &input,
+            &state,
+            message,
+            config(100, id(43), false),
+            [100, state.remaining_inventory, 1000],
+        )
+        .unwrap();
+        let next = state_of(&response);
+        let events = sale_events(&response);
+        assert_eq!(events.len(), 1);
+        let fees = next.accrued_fees - state.accrued_fees;
+        let gross = next.recorded_collateral - state.recorded_collateral + fees;
+        assert_eq!(events[0].engine, PricingEngineV1::Weighted);
+        assert_eq!(
+            events[0].kind,
+            SaleEventKindV1::Trade {
+                trader: *id(50).value(),
+                form,
+                token_in: *id(42).value(),
+                token_out: *id(41).value(),
+                amount_in: gross,
+                pricing_input: gross - fees,
+                gross_output: state.remaining_inventory - next.remaining_inventory,
+                amount_out: state.remaining_inventory - next.remaining_inventory,
+                fee_definition: *id(42).value(),
+                fee_amount: fees,
+
+                fee_bps: 100,
+                pricing_time: Some(1500)
+            }
+        );
+        assert_eq!(checkpoint_events(&response).len(), 1);
+        assert!(!next.closure_observed);
+    }
+}
+
+#[test]
+fn weighted_settlement_events_separate_seed_proceeds_and_scheduled_closure() {
+    use curve_core::events::*;
+    let (input, original) = funded();
+    for proceeds in [100, 149] {
+        let mut state = original.clone();
+        state.recorded_collateral = proceeds;
+        state.accrued_fees = 2;
+        if let lbp_core::PoolMode::Weighted {
+            pricing_collateral, ..
+        } = &mut state.mode
+        {
+            *pricing_collateral = proceeds;
+        }
+        let response = settle(
+            &input,
+            &state,
+            Message::SettleWeighted { creator: id(50) },
+            config(100, id(43), false),
+            [1000, state.remaining_inventory],
+        )
+        .unwrap();
+        let next = state_of(&response);
+        assert!(next.closure_observed);
+        assert_eq!(response.validity.timestamps.start(), Some(3_000_000));
+        let mut expected = vec![
+            SaleEventKindV1::Closed {
+                reason: ClosureReasonV1::ScheduledEnd { timestamp: 3000 },
+                inclusion_bounds: EventTimeBoundsV1 {
+                    at_least: Some(3000),
+                    before: None,
+                },
+            },
+            SaleEventKindV1::FeesCollected {
+                definition: *id(42).value(),
+                treasury: *id(43).value(),
+                liability_discharged: 2,
+                tokens_transferred: 2,
+            },
+            SaleEventKindV1::Settlement {
+                step: SettlementStepV1::UnsoldBurned,
+                route: None,
+                effects: vec![SettlementEffectV1::Burn {
+                    definition: *id(41).value(),
+                    amount: state.remaining_inventory,
+                }],
+            },
+            SaleEventKindV1::Settlement {
+                step: SettlementStepV1::SeedReturned,
+                route: None,
+                effects: vec![SettlementEffectV1::Payout {
+                    definition: *id(42).value(),
+                    recipient: *id(50).value(),
+                    purpose: PayoutPurposeV1::CreatorSeed,
+                    liability_discharged: 100,
+                    tokens_transferred: 100,
+                }],
+            },
+        ];
+        if proceeds != 100 {
+            expected.push(SaleEventKindV1::Settlement {
+                step: SettlementStepV1::Payout,
+                route: Some(SettlementRouteV1::Manual),
+                effects: vec![SettlementEffectV1::Payout {
+                    definition: *id(42).value(),
+                    recipient: *id(50).value(),
+                    purpose: PayoutPurposeV1::CreatorProceeds,
+                    liability_discharged: 49,
+                    tokens_transferred: 49,
+                }],
+            });
+        }
+        expected.push(SaleEventKindV1::Settlement {
+            step: SettlementStepV1::Completed,
+            route: Some(SettlementRouteV1::Manual),
+            effects: vec![],
+        });
+        assert_eq!(
+            sale_events(&response)
+                .into_iter()
+                .map(|e| e.kind)
+                .collect::<Vec<_>>(),
+            expected
+        );
+        assert_eq!(next.remaining_inventory, state.remaining_inventory);
+        assert!(next.seed_returned);
+    }
+}
+
+#[test]
+fn weighted_depletion_waits_for_schedule_and_zero_manual_completion_blocks_hooks() {
+    use curve_core::events::*;
+    let (input, mut state) = funded();
+    state.remaining_inventory = 0;
+    state.graduation_adapter = Some(Actor::new(id(70), id(71)));
+    let response = settle(
+        &input,
+        &state,
+        Message::SettleWeighted { creator: id(50) },
+        config(100, id(43), false),
+        [100, 0],
+    )
+    .unwrap();
+    let next = state_of(&response);
+    assert!(matches!(
+        &sale_events(&response)[0].kind,
+        SaleEventKindV1::Closed {
+            reason: ClosureReasonV1::ScheduledEnd { timestamp: 3000 },
+            ..
+        }
+    ));
+    assert_eq!(response.validity.timestamps.start(), Some(3_000_000));
+    assert_eq!(
+        next.settlement_progress,
+        lbp_core::SettlementProgress::ManualComplete
+    );
+    assert_eq!(
+        sale_events(&response).last().unwrap().kind,
+        SaleEventKindV1::Settlement {
+            step: SettlementStepV1::Completed,
+            route: Some(SettlementRouteV1::Manual),
+            effects: vec![],
+        }
+    );
+    assert_eq!(
+        settle(
+            &input,
+            &next,
+            Message::Settle {
+                route: lbp_core::SettlementRoute::Graduation,
+                creator: id(50),
+                adapter: next.graduation_adapter,
+            },
+            config(100, id(43), false),
+            [900, 0],
+        )
+        .err(),
+        Some(lbp_core::Error::InvalidState)
+    );
+    let manual_retry = handle(&ReceiveInput {
+        receiver: input.receiver,
+        from: Some(Actor::new(next.factory_owner, next.factory_program_id)),
+        is_authorized: false,
+        pre_state: borsh::to_vec(&next).unwrap().into(),
+        message: borsh::to_vec(&Message::SettleWeighted { creator: id(50) }).unwrap(),
+    })
+    .unwrap();
+    assert!(sale_events(&manual_retry).is_empty());
+    assert_eq!(state_of(&manual_retry), next);
+    let hook = settle(
+        &input,
+        &state,
+        Message::Settle {
+            route: lbp_core::SettlementRoute::Graduation,
+            creator: id(50),
+            adapter: state.graduation_adapter,
+        },
+        config(100, id(43), false),
+        [100, 0],
+    )
+    .unwrap();
+    assert_eq!(
+        sale_events(&hook),
+        sale_events(&response)[..sale_events(&response).len() - 1]
+    );
+    assert_eq!(hook.validity.timestamps.start(), Some(3_000_000));
+    let lbp_core::SettlementReply::Applied { receipt } =
+        borsh::from_slice(&hook.sync_messages.last().unwrap().message).unwrap()
+    else {
+        panic!("expected receipt")
+    };
+    let done = handle(&ReceiveInput {
+        receiver: input.receiver,
+        from: Some(receipt.factory),
+        is_authorized: false,
+        pre_state: hook.post_state.unwrap(),
+        message: borsh::to_vec(&Message::FinalizeSettlement {
+            receipt_hash: receipt.hash(),
+        })
+        .unwrap(),
+    })
+    .unwrap();
+    assert_eq!(sale_events(&done).len(), 1);
+    assert_eq!(
+        sale_events(&done)[0].kind,
+        SaleEventKindV1::Settlement {
+            step: SettlementStepV1::Completed,
+            route: Some(SettlementRouteV1::Graduation),
+            effects: vec![]
+        }
+    );
+    let completed = state_of(&done);
+    let repeated = handle(&ReceiveInput {
+        receiver: input.receiver,
+        from: Some(Actor::new(
+            completed.factory_owner,
+            completed.factory_program_id,
+        )),
+        is_authorized: false,
+        pre_state: borsh::to_vec(&completed).unwrap().into(),
+        message: borsh::to_vec(&Message::SettleWeighted { creator: id(51) }).unwrap(),
+    })
+    .unwrap();
+    assert!(sale_events(&repeated).is_empty());
+}
+
+#[test]
+fn weighted_setup_events_preserve_configured_seed_and_activated_accounting() {
+    use curve_core::events::*;
+    let (mut input, prepared) = prepared();
+    let state = state_of(&prepared);
+    let events = sale_events(&prepared);
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].engine, PricingEngineV1::Weighted);
+    assert_eq!(
+        events[0].kind,
+        SaleEventKindV1::Prepared {
+            owner: *state.factory_owner.value(),
+            token0_definition: *id(41).value(),
+            token1_definition: *id(42).value(),
+            reserve0: 1_000_000,
+            reserve1: 100,
+            policies: EventPoliciesV1 {
+                ending: lbp_core::EndingPolicy::Scheduled,
+                pause: lbp_core::PausePolicy::AuthorityControlled
+            }
+        }
+    );
+    assert!(!state.closure_observed);
+    input.pre_state = prepared.post_state.unwrap();
+    input.from = Some(Actor::new(state.factory_owner, state.factory_program_id));
+    input.message = borsh::to_vec(&Message::ActivateWeighted).unwrap();
+    let mut response = handle(&input).unwrap();
+    assert!(sale_events(&response).is_empty());
+    for bytes in [
+        namespace_state(),
+        definition(),
+        definition(),
+        holding(state.factory_owner, id(41), 0),
+        holding(input.receiver.account_id, id(41), 1_000_000),
+        holding(input.receiver.account_id, id(42), 100),
+    ] {
+        let source = response.sync_messages.last().unwrap().to;
+        input = reply(&input, &response, source, bytes);
+        response = handle(&input).unwrap();
+    }
+    assert_eq!(sale_events(&response).len(), 1);
+    assert_eq!(
+        sale_events(&response)[0].kind,
+        SaleEventKindV1::Activated {
+            reserve0: 1_000_000,
+            reserve1: 100,
+            collateral_seed: 100
+        }
+    );
+    assert!(!state_of(&response).closure_observed);
 }

@@ -231,6 +231,27 @@ fn execute_with_evidence(
     evidence: Vec<lee::PublicAccountEvidence>,
     inclusion_timestamp_ms: u64,
 ) -> Result<(), lee::error::LeeError> {
+    execute_with_evidence_events(
+        state,
+        receiver,
+        actors,
+        instruction,
+        keys,
+        evidence,
+        inclusion_timestamp_ms,
+    )
+    .map(|_| ())
+}
+
+fn execute_with_evidence_events(
+    state: &mut V03State,
+    receiver: Actor,
+    actors: Vec<Actor>,
+    instruction: impl borsh::BorshSerialize,
+    keys: &[&PrivateKey],
+    evidence: Vec<lee::PublicAccountEvidence>,
+    inclusion_timestamp_ms: u64,
+) -> Result<Vec<lee_core::program::TransactionEvent>, lee::error::LeeError> {
     let nonces = keys
         .iter()
         .map(|key| (id(key), state.get_account_by_id(id(key)).nonce))
@@ -238,13 +259,11 @@ fn execute_with_evidence(
     let mut message = Message::try_new(receiver, actors, nonces, instruction).unwrap();
     message.admission_evidence.extend(evidence);
     let witnesses = WitnessSet::for_message(&message, keys);
-    state
-        .transition_from_public_transaction(
-            &PublicTransaction::new(message, witnesses),
-            1,
-            inclusion_timestamp_ms,
-        )
-        .map(|_| ())
+    state.transition_from_public_transaction(
+        &PublicTransaction::new(message, witnesses),
+        1,
+        inclusion_timestamp_ms,
+    )
 }
 
 struct FactoryFixture {
@@ -263,27 +282,26 @@ impl FactoryFixture {
         signer: &PrivateKey,
         command: factory_core::Message,
     ) -> Result<(), lee::error::LeeError> {
-        let mut message = Message::try_new(
+        self.call_with_events(signer, command).map(|_| ())
+    }
+
+    fn call_with_events(
+        &mut self,
+        signer: &PrivateKey,
+        command: factory_core::Message,
+    ) -> Result<Vec<lee_core::program::TransactionEvent>, lee::error::LeeError> {
+        execute_with_evidence_events(
+            &mut self.state,
             Actor::new(self.factory, FACTORY),
             self.actors.clone(),
-            BTreeMap::from([(id(signer), self.state.get_account_by_id(id(signer)).nonce)]),
             command,
-        )
-        .unwrap();
-        message
-            .admission_evidence
-            .push(lee::PublicAccountEvidence::Pda {
+            &[signer],
+            vec![lee::PublicAccountEvidence::Pda {
                 program: FACTORY,
                 seed: factory_core::compute_factory_seed(self.namespace, SALT),
-            });
-        let witnesses = WitnessSet::for_message(&message, &[signer]);
-        self.state
-            .transition_from_public_transaction(
-                &PublicTransaction::new(message, witnesses),
-                1,
-                self.inclusion_timestamp_ms,
-            )
-            .map(|_| ())
+            }],
+            self.inclusion_timestamp_ms,
+        )
     }
 }
 

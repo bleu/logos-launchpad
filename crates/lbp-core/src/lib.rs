@@ -6,6 +6,7 @@ pub use sale_policy::{
     EndingPolicy, PausePolicy, SettlementAmounts, SettlementProgress, SettlementRoute, TradeControl,
 };
 
+mod events;
 #[path = "settlement.rs"]
 mod lbp_settlement;
 mod pricing;
@@ -206,6 +207,7 @@ pub struct PoolAccount {
     pub graduation_adapter: Option<Actor>,
     pub mode: PoolMode,
     pub funded: bool,
+    pub closure_observed: bool,
     pub namespace: AccountId,
     pub namespace_program_id: AccountId,
     pub factory_owner: AccountId,
@@ -488,10 +490,37 @@ fn advance_setup_steps(
                     *pricing_collateral = *collateral_seed;
                 }
             }
+            let kind = if pending.activate {
+                curve_core::events::SaleEventKindV1::Activated {
+                    reserve0: state.remaining_inventory,
+                    reserve1: state.recorded_collateral,
+                    collateral_seed: match state.mode {
+                        PoolMode::FixedPrice => 0,
+                        PoolMode::Weighted {
+                            collateral_seed, ..
+                        } => collateral_seed,
+                    },
+                }
+            } else {
+                curve_core::events::SaleEventKindV1::Prepared {
+                    owner: *state.factory_owner.value(),
+                    token0_definition: *state.token_definition_id.value(),
+                    token1_definition: *state.collateral_definition_id.value(),
+                    reserve0: state.sale_inventory,
+                    reserve1: match state.mode {
+                        PoolMode::FixedPrice => 0,
+                        PoolMode::Weighted {
+                            collateral_seed, ..
+                        } => collateral_seed,
+                    },
+                    policies: state.event_policies(),
+                }
+            };
             state.pending = None;
             let response =
                 curve_core::with_time_bounds(state.response(), None, state.end_timestamp)
-                    .map_err(|_| Error::InvalidTerms)?;
+                    .map_err(|_| Error::InvalidTerms)?
+                    .event(state.event(input.receiver, kind));
             let response = if matches!(state.mode, PoolMode::Weighted { .. }) {
                 response.send_sync(
                     Actor::new(
@@ -641,6 +670,7 @@ pub fn handle(input: &ReceiveInput) -> Result<Response, Error> {
                 graduation_adapter: inputs.graduation_adapter,
                 mode: PoolMode::FixedPrice,
                 funded: false,
+                closure_observed: false,
                 namespace: inputs.namespace,
                 namespace_program_id: inputs.namespace_program_id,
                 factory_owner: factory,
@@ -768,6 +798,7 @@ pub fn handle(input: &ReceiveInput) -> Result<Response, Error> {
                     checkpoint_token_weight: 0,
                 },
                 funded: false,
+                closure_observed: false,
                 namespace: inputs.namespace,
                 namespace_program_id: inputs.namespace_program_id,
                 factory_owner: factory,

@@ -96,6 +96,7 @@ pub fn assert_creator_authority_and_pool_forwarding(
         forged.receiver.account_id = id(90);
         assert_eq!(handle(&forged).err(), Some(Error::WrongAccount));
         let forwarded = handle(&valid).unwrap();
+        assert!(forwarded.events.is_empty());
         assert_eq!(forwarded.sync_messages.len(), 1);
         let call = &forwarded.sync_messages[0];
         assert_eq!(call.to, Actor::new(state.pool_id, state.lbp_program_id));

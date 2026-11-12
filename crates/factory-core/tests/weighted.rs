@@ -1,6 +1,7 @@
 #[path = "support/lbp_pause_forwarding.rs"]
 mod lbp_pause_forwarding;
 
+use factory_core::events::*;
 use factory_core::{
     CreatorAllocationRelease, Error, LbpCreationStage, LbpLaunchState, LbpSetupMode, Message,
     WeightedInputs, handle,
@@ -333,6 +334,21 @@ fn weighted_final_setup_requires_creator_seed_and_keeps_surplus_separate() {
             Some(Error::Overflow)
         );
         let response = advance(&input, &previous, extra(100, 41)).unwrap();
+        if release == CreatorAllocationRelease::AfterEnd {
+            assert!(response.events.is_empty());
+        } else {
+            assert!(matches!(
+                &launch_events(&response)[..],
+                [SaleEventV1 {
+                    kind: SaleEventKindV1::AllocationReleased {
+                        amount: 200,
+                        release: AllocationReleaseV1::AfterSetup,
+                        ..
+                    },
+                    ..
+                }]
+            ));
+        }
         let next = LbpLaunchState::decode(response.post_state.as_ref().unwrap()).unwrap();
         assert_eq!(next.creation_stage, LbpCreationStage::Complete);
         assert_eq!(
@@ -690,6 +706,21 @@ fn scheduled_weighted_allocation_keeps_deadline_and_settlement_delegates_to_pool
         assert!(!response.validity.timestamps.is_valid_for(299_999));
         assert!(response.validity.timestamps.is_valid_for(300_000));
         assert_eq!(response.sync_messages.len(), usize::from(!released));
+        if released {
+            assert!(response.events.is_empty());
+        } else {
+            assert!(matches!(
+                &launch_events(&response)[..],
+                [SaleEventV1 {
+                    kind: SaleEventKindV1::AllocationReleased {
+                        amount: 200,
+                        release: AllocationReleaseV1::AfterEnd,
+                        ..
+                    },
+                    ..
+                }]
+            ));
+        }
     }
     let mut request = input;
     request.from = None;
@@ -900,6 +931,8 @@ fn weighted_hook_saves_adapter_binding_and_keeps_seed_outside_the_intent() {
         },
     );
     let callback = handle(&input).unwrap();
+    assert!(pending.events.is_empty());
+    assert!(callback.events.is_empty());
     assert!(callback.sync_messages[0].pda_seeds.is_empty());
     let AdapterMessage::Graduate { request } =
         borsh::from_slice(&callback.sync_messages[0].message).unwrap()
@@ -925,6 +958,7 @@ fn weighted_hook_saves_adapter_binding_and_keeps_seed_outside_the_intent() {
         },
     );
     let finalize = handle(&input).unwrap();
+    assert!(finalize.events.is_empty());
     assert_eq!(
         borsh::from_slice::<lbp_core::Message>(&finalize.sync_messages[0].message).unwrap(),
         lbp_core::Message::FinalizeSettlement {
@@ -940,6 +974,23 @@ fn weighted_hook_saves_adapter_binding_and_keeps_seed_outside_the_intent() {
         },
     );
     let completed = handle(&input).unwrap();
+    assert_eq!(
+        launch_events(&completed),
+        vec![SaleEventV1::new(
+            *state.namespace.value(),
+            PricingEngineV1::Weighted,
+            EventSubjectV1::Launch {
+                factory: *input.receiver.account_id.value(),
+                pool: *state.pool_id.value()
+            },
+            SaleEventKindV1::Graduated {
+                adapter_program: *adapter.program_account_id.value(),
+                adapter_custody: *adapter.account_id.value(),
+                launch_tokens: 0,
+                collateral: 25
+            }
+        )]
+    );
     assert_eq!(
         LbpLaunchState::decode(completed.post_state.as_ref().unwrap())
             .unwrap()
@@ -989,6 +1040,7 @@ fn weighted_seed_only_manual_completion_is_final_and_acknowledged_once() {
         },
     );
     let finalize = handle(&input).unwrap();
+    assert!(finalize.events.is_empty());
     assert_eq!(
         LbpLaunchState::decode(finalize.post_state.as_ref().unwrap())
             .unwrap()
@@ -1004,6 +1056,7 @@ fn weighted_seed_only_manual_completion_is_final_and_acknowledged_once() {
         },
     );
     let completed = handle(&input).unwrap();
+    assert!(completed.events.is_empty());
     let state = LbpLaunchState::decode(completed.post_state.as_ref().unwrap()).unwrap();
     assert_eq!(
         state.settlement_progress,
@@ -1020,6 +1073,7 @@ fn weighted_seed_only_manual_completion_is_final_and_acknowledged_once() {
     let response = handle(&input).unwrap();
     input = reply(&input, &response, borsh::to_vec(&pool).unwrap());
     let noop = handle(&input).unwrap();
+    assert!(noop.events.is_empty());
     assert!(noop.sync_messages.is_empty());
     assert_eq!(noop.validity.timestamps.start(), Some(300_000));
 }
@@ -1109,4 +1163,58 @@ fn released_after_setup_allocation_retry_stays_available_while_weighted_sale_is_
         LbpLaunchState::decode(repeated.post_state.as_ref().unwrap()).unwrap(),
         state
     );
+}
+
+fn launch_events(response: &Response) -> Vec<SaleEventV1> {
+    response
+        .events
+        .iter()
+        .map(|event| {
+            let payload: SaleEventV1 = borsh::from_slice(&event.data).unwrap();
+            assert_eq!(
+                event.selector,
+                curve_core::sale_event(payload.clone()).selector
+            );
+            payload
+        })
+        .collect()
+}
+
+#[test]
+fn weighted_created_event_names_the_launch_and_original_seed_once() {
+    let input = creation(inputs());
+    let response = handle(&input).unwrap();
+    let state = LbpLaunchState::decode(response.post_state.as_ref().unwrap()).unwrap();
+    assert_eq!(
+        launch_events(&response),
+        vec![SaleEventV1::new(
+            *state.namespace.value(),
+            PricingEngineV1::Weighted,
+            EventSubjectV1::Launch {
+                factory: *input.receiver.account_id.value(),
+                pool: *state.pool_id.value()
+            },
+            SaleEventKindV1::Created {
+                creator: *id(42).value(),
+                creator_role: *state.creator_role_id.value(),
+                token_definition: *state.token_definition_id.value(),
+                collateral_definition: *state.collateral_definition_id.value(),
+                sale_inventory: 800,
+                creator_allocation: 200,
+                curve_reserve: 0,
+                collateral_seed: 100,
+                start_timestamp: Some(150),
+                end_timestamp: Some(300),
+                policies: EventPoliciesV1 {
+                    ending: state.ending_policy,
+                    pause: state.pause_policy
+                }
+            }
+        )]
+    );
+    let (_, minted) = minted(CreatorAllocationRelease::AfterEnd);
+    assert!(minted.events.is_empty());
+    let mut replay = input;
+    replay.pre_state = minted.post_state.unwrap();
+    assert_eq!(handle(&replay).err(), Some(Error::AlreadyInitialized));
 }

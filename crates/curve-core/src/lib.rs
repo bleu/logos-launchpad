@@ -6,6 +6,7 @@ use lee_core::{
     account::{AccountId, Actor},
     program::{PdaSeed, ReceiveInput, Response, SyncMessage},
 };
+pub use sale_policy::events;
 pub use sale_policy::{
     EndingDecision, EndingError, EndingPolicy, EndingReason, PausePolicy, SettlementAmounts,
     SettlementError, SettlementProgress, SettlementRoute, TimeBounds, TradeControl,
@@ -261,6 +262,8 @@ pub fn compute_pool_owner_role(
 mod authority;
 mod dispatch;
 mod emergency;
+mod program_events;
+pub use program_events::sale_event;
 mod pool_create;
 mod pool_lifecycle;
 mod pool_swap;
@@ -449,6 +452,7 @@ pub struct PoolAccount {
     pub trade_control: TradeControl,
     pub allowed_input_token: Option<pool::TokenSide>,
     pub funded: bool,
+    pub closure_observed: bool,
     pub namespace: AccountId,
     pub token0_definition_id: AccountId,
     pub token1_definition_id: AccountId,
