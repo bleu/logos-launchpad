@@ -779,6 +779,8 @@ fn settlement_nested_adapter_calls_roll_back_and_repaired_retry_pays_once() {
             "InvalidMessage",
         ));
     }
+    // The valid nested acknowledgment is accepted first. The queued normal acknowledgment
+    // then fails as a duplicate and rolls back the transaction.
     attempts.push((
         nested_configuration(factory_actor, factory_core::GraduationResult { factory }),
         "InvalidMessage",
@@ -809,7 +811,7 @@ fn settlement_nested_adapter_calls_roll_back_and_repaired_retry_pays_once() {
             true,
             "LAUNCHPAD_GRADUATION_FAULT_ELF",
         );
-        // The creator signs so ambient signer access cannot explain rejection.
+        // The creator signs so ambient signer access cannot explain the transaction failure.
         rejected(&mut fixture, creator_hook, reason);
         assert_hook_custody(&fixture, false);
         // Replace only test code, not the saved adapter identity or configuration.
@@ -830,7 +832,7 @@ fn settlement_nested_adapter_calls_roll_back_and_repaired_retry_pays_once() {
 
 #[test]
 #[ignore = "requires fresh application, fault adapter and compatibility ELFs and the pinned clock ELF"]
-fn settlement_nested_permissionless_fee_collection_cannot_redirect_or_repeat_fees() {
+fn settlement_nested_zero_fee_collection_permits_graduation() {
     let namespace = id(&key(47));
     let factory = factory_core::compute_factory_pda(namespace, FACTORY, SALT);
     let definition = factory_core::compute_definition_pda(namespace, FACTORY, SALT);
