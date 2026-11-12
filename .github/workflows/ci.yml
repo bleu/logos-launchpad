@@ -129,7 +129,13 @@ jobs:
           bash verify/tests/application-idl.sh
           bash verify/tests/application-idl-drift.sh
           bash verify/tests/actor-tools.sh
-      - name: Run actor repository locked builds and tests
+      - name: Check normal weighted clock rejection
+        run: |
+          source verify/actor-tools.env
+          env -u LAUNCHPAD_MOCK_CLOCK cargo +"$ACTOR_RUST_VERSION" test -p lbp-core --release --locked --test clock_availability
+      - name: Run actor repository locked builds and mock-clock execution
+        env:
+          LAUNCHPAD_MOCK_CLOCK: "1"
         run: bash verify/check-builds.sh --execution
       - name: Check generated actor program interfaces
         run: bash verify/check-idl.sh

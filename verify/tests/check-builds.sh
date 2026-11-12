@@ -25,6 +25,9 @@ if [[ "$*" == *"metadata --format-version 1 --locked"* ]]; then
 fi
 if [[ -n "${FAIL_COMMAND:-}" && "$*" == *"$FAIL_COMMAND"* ]]; then exit 19; fi
 if [[ -n "${DRIFT_LOCK:-}" ]]; then printf "changed\n" >> "$DRIFT_LOCK"; fi
+if [[ "$*" == *"build --manifest-path methods/Cargo.toml"* ]]; then
+  printf "guest-clock %s\n" "${LAUNCHPAD_MOCK_CLOCK:-unset}" >> "$COMMAND_LOG"
+fi
 if [[ "${NO_ARTIFACTS:-}" != 1 && "$*" == *"build --manifest-path methods/Cargo.toml"* ]]; then
   mkdir -p methods/target/riscv-guest/fixture/release
   printf binary > methods/target/riscv-guest/fixture/release/curve.bin
@@ -90,6 +93,17 @@ execution_lane() {
   unset LAUNCHPAD_CLOCK_ELF
   printf 'execution-lane: passed\n'
 }
+clock_lanes() (
+  unset LAUNCHPAD_MOCK_CLOCK
+  run_check
+  [ "$status" = 0 ] || exit 1
+  assert_contains "$(< "$COMMAND_LOG")" 'guest-clock unset'
+  export LAUNCHPAD_MOCK_CLOCK=1
+  run_check --execution
+  [ "$status" = 0 ] || exit 1
+  assert_contains "$(< "$COMMAND_LOG")" 'guest-clock 1'
+  printf 'clock-lanes: passed\n'
+)
 regressions() {
   local variable command lock
   status=0
@@ -138,8 +152,9 @@ regressions() {
 }
 case "${1:-all}" in
   default-repository) default_repository ;;
-  all) default_repository; execution_lane; regressions ;;
+  all) default_repository; execution_lane; clock_lanes; regressions ;;
   execution-lane) execution_lane ;;
+  clock-lanes) clock_lanes ;;
   regressions) regressions ;;
   missing-artifacts) missing_artifacts ;;
   *) printf 'Unknown test: %s\n' "$1" >&2; exit 2 ;;
