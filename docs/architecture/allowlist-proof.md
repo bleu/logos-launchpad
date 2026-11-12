@@ -89,7 +89,7 @@ Account approval does not prove that each account belongs to a different person.
 
 ## What is still missing?
 
-Public pools now store immutable policy and check admission for all three engines. Signed development tests cover actual-trader authority through native `Execute`, replay rejection and complete public buys, including fresh staged setup that preserves the policy. See the [program integration plan](../../plans/allowlist-program-integration.md#public-execution-evidence) for evidence and limits. Weighted execution tests use a mock clock; normal weighted buys remain unsupported without a trusted timestamp provider. Safe wallet account preparation and recovery still need implementation. These checks do not establish real proofs or deployment readiness.
+Public pools now store immutable policy and check admission for all three engines. Signed development tests cover actual-trader authority through native `Execute`, replay rejection and complete public buys, including fresh staged setup that preserves the policy. See the [program integration plan](../../plans/allowlist-program-integration.md#public-execution-evidence) for evidence and limits. Weighted builds use the existing fake clock by default, with the limits in [ADR 0026](../adr/0026-lbp-clock-and-poke.md). Safe wallet account preparation and recovery still need implementation. These checks do not establish real proofs or deployment readiness.
 
 The private route still needs a native privacy proof. We do not claim that public-funded buys need the old private eligibility guest or that this change reduces native privacy proof time.
 

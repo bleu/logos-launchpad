@@ -131,7 +131,6 @@ pub(super) fn poke(input: &ReceiveInput) -> Result<Response, Error> {
     if !state.funded {
         return Err(Error::PendingFunding);
     }
-    crate::pricing_clock::require_available()?;
     let pending = PokePending {
         tag: POKE_TAG,
         state,

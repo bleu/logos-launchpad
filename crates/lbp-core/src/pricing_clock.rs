@@ -1,6 +1,5 @@
-//! TEMPORARY timestamp-read protocol. Replace with the verified LEZ clock API.
-//! The pinned LEZ clock cannot return time. Enable only for local fixtures with
-//! LAUNCHPAD_MOCK_CLOCK=1; normal builds reject weighted buys.
+//! Temporary fixture pricing clock used by all builds. Replace before real sales.
+//! Tests set its saved milliseconds; the clock does not advance itself.
 use crate::Error;
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
@@ -21,15 +20,7 @@ pub enum Request {
 pub struct Reply {
     pub timestamp_ms: u64,
 }
-pub fn require_available() -> Result<(), Error> {
-    if cfg!(local_mock_clock) {
-        Ok(())
-    } else {
-        Err(Error::ClockUnavailable)
-    }
-}
 pub fn read(input: &ReceiveInput) -> Result<u64, Error> {
-    require_available()?;
     if input.from != Some(actor()) {
         return Err(Error::Unauthorized);
     }
@@ -39,7 +30,6 @@ pub fn read(input: &ReceiveInput) -> Result<u64, Error> {
 /// TEMPORARY fake actor: fixture state is milliseconds, not trusted chain time.
 /// No message can set its time. Only the test harness seeds/advances its state.
 pub fn mock_handle(input: &ReceiveInput) -> Result<Response, Error> {
-    require_available()?;
     if input.receiver != actor() {
         return Err(Error::WrongAccount);
     }

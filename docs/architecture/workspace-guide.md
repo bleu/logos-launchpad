@@ -94,10 +94,14 @@ The curve packages use the root [MIT license](../../LICENSE). Weighted math reta
 
 ## Temporary weighted pricing clock
 
-Weighted buy messages no longer contain pricing windows. The sale requests one timestamp through a temporary read-and-reply interface. Normal builds reject weighted buys with `ClockUnavailable`. Build with `LAUNCHPAD_MOCK_CLOCK=1` only for local tests. The fake clock uses fixture state at a separate actor address. It does not replace the canonical clock used for setup. Changes to this variable rebuild the sale guests.
+Weighted buy messages no longer contain pricing windows. The sale requests one timestamp through a temporary read-and-reply interface. The existing fake clock is the default provider; no build-time switch is needed. It uses fixture state at a separate actor address and does not replace the canonical clock used for setup.
 
-Run `bash verify/check-weighted-clock.sh` for host and guest checks with the fake clock. To include these buys in the full execution gate, run `LAUNCHPAD_MOCK_CLOCK=1 bash verify/check-builds.sh --execution` with the normal emergency-authority setup. Keep that variable unset for normal builds. The earlier window-based evidence above describes the previous implementation; current pricing follows [ADR 0026](../adr/0026-lbp-clock-and-poke.md#clock-read-amendment-2026-11-05).
+Run `bash verify/check-weighted-clock.sh` for focused host and guest checks. The light development gate already covers weighted host tests in its root run. Use `bash verify/check-builds.sh --execution` with the normal emergency-authority setup for the full execution gate. The earlier window-based evidence above describes the previous implementation; current pricing follows [ADR 0026](../adr/0026-lbp-clock-and-poke.md#clock-read-amendment-2026-11-05).
 
-The local fixture models previous-block milliseconds. It can hold that value while inclusion time advances. These checks do not prove real clock reads, live clock updates, private execution or production readiness. A future LEZ clock API must replace the temporary provider and pass these checks again.
+The local fixture models previous-block milliseconds. Fixture time does not advance automatically when inclusion time advances. These checks do not prove real clock reads, live clock updates, private execution or production readiness. Replace the fake clock with a verified LEZ timestamp provider and repeat these checks before real sales.
+
+## Historical clock evidence
+
+The following result records the earlier opt-in provider. Its disabled-provider check does not describe current default behavior.
 
 On 5 November 2026, the host development gate, 24 weighted host tests, 30 client wire tests and IDL checks passed. All 13 existing sale guest tests passed with the fake clock. Two focused clock guest tests then passed, including the new malformed-clock and freeze test. The normal-build provider check also passed with the mock disabled. Lockfiles did not change.

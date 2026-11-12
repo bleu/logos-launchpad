@@ -1,4 +1,3 @@
-#![cfg(local_mock_clock)]
 use lbp_core::{CreatorAllocationRelease, Message, WeightedPoolInputs, compute_pool_pda, handle};
 use lee_core::{
     account::{AccountId, Actor},
