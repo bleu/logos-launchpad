@@ -65,6 +65,7 @@ fn full_width_collateral_does_not_need_a_full_width_product() {
 fn invalid_rates_and_fee_consumed_inputs_remain_distinct() {
     assert_eq!(FeeRate::new(10_001), Err(FeeError::RateAboveDenominator));
     let rate = FeeRate::new(10_000).unwrap();
+    assert_eq!(rate.gross_up(0), Err(FeeError::InputConsumedByFees));
     assert_eq!(rate.gross_up(1), Err(FeeError::InputConsumedByFees));
     assert_eq!(
         rate.split(1),

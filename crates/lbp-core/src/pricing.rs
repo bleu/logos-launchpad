@@ -1,31 +1,34 @@
+use sale_policy::arithmetic::{ArithmeticError, Rounding, mul_div};
+
 use crate::{Error, FixedPrice};
 
 impl FixedPrice {
     pub(crate) fn amount_out(self, collateral: u128) -> Result<u128, Error> {
-        mul_div(collateral, self.token_units, self.collateral_units, false)
+        mul_div(
+            collateral,
+            self.token_units,
+            self.collateral_units,
+            Rounding::Floor,
+        )
+        .map_err(pricing_error)
     }
 
     pub(crate) fn amount_in(self, tokens: u128) -> Result<u128, Error> {
-        mul_div(tokens, self.collateral_units, self.token_units, true)
+        mul_div(
+            tokens,
+            self.collateral_units,
+            self.token_units,
+            Rounding::Ceil,
+        )
+        .map_err(pricing_error)
     }
 }
 
-fn mul_div(value: u128, multiplier: u128, divisor: u128, ceil: bool) -> Result<u128, Error> {
-    if divisor == 0 {
-        return Err(Error::InvalidTerms);
+fn pricing_error(error: ArithmeticError) -> Error {
+    match error {
+        ArithmeticError::DivisionByZero => Error::InvalidTerms,
+        ArithmeticError::Overflow => Error::Arithmetic,
     }
-    let whole = (value / divisor)
-        .checked_mul(multiplier)
-        .ok_or(Error::Arithmetic)?;
-    let numerator = (value % divisor)
-        .checked_mul(multiplier)
-        .ok_or(Error::Arithmetic)?;
-    let floor = whole
-        .checked_add(numerator / divisor)
-        .ok_or(Error::Arithmetic)?;
-    floor
-        .checked_add(u128::from(ceil && numerator % divisor != 0))
-        .ok_or(Error::Arithmetic)
 }
 
 #[cfg(test)]
@@ -58,10 +61,23 @@ mod tests {
         };
         assert_eq!(price.amount_in(u128::MAX), Err(Error::Arithmetic));
         let price = FixedPrice {
+            collateral_units: 1,
+            token_units: 2,
+        };
+        assert_eq!(price.amount_out(u128::MAX), Err(Error::Arithmetic));
+        let price = FixedPrice {
+            collateral_units: u128::MAX,
+            token_units: u128::MAX,
+        };
+        assert_eq!(price.amount_out(u128::MAX - 1), Err(Error::Arithmetic));
+        assert_eq!(price.amount_in(u128::MAX - 1), Err(Error::Arithmetic));
+        let price = FixedPrice {
             collateral_units: 0,
             token_units: 0,
         };
         assert_eq!(price.amount_out(1), Err(Error::InvalidTerms));
         assert_eq!(price.amount_in(1), Err(Error::InvalidTerms));
+        assert_eq!(price.amount_out(0), Err(Error::InvalidTerms));
+        assert_eq!(price.amount_in(0), Err(Error::InvalidTerms));
     }
 }
