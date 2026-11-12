@@ -898,8 +898,13 @@ async fn graduate(namespace: lee::AccountId, json: bool, args: GraduationArgs) -
         sale.collateral_definition,
     )
     .await?;
-    let mut invocation =
-        launchpad_client::build_graduation_invocation(sale, &state, treasury, current_time()?)?;
+    let mut invocation = launchpad_client::build_graduation_invocation(
+        launchpad_client::GraduationTarget::Curve {
+            sale,
+            state: &state,
+        },
+        treasury,
+    )?;
     invocation.fee_payer = Some(args.fee_payer);
     let transaction_hash = submit_public_invocation(&wallet, &factory, invocation).await?;
     print_submission(

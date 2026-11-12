@@ -437,13 +437,13 @@ fn factory_creator_calls_keep_distinct_tags_creator_and_clock_on_wire() {
 #[test]
 fn graduation_execution_cannot_override_the_saved_adapter_on_wire() {
     assert_wire(
-        factory_core::Message::ExecuteGraduationHook { now: 9 },
-        "040900000000000000",
+        factory_core::Message::ExecuteGraduationHook { creator_hint: None },
+        "0400",
     );
     assert_eq!(
         variant("factory", "Message", "ExecuteGraduationHook"),
         json!({
-            "tag":4,"name":"ExecuteGraduationHook","fields":[{"name":"now","type":"u64"}]
+            "tag":4,"name":"ExecuteGraduationHook","fields":[{"name":"creator_hint","type":"Option<AccountId>"}]
         })
     );
 }
@@ -613,14 +613,14 @@ fn graduation_custody_initialization_keeps_saved_sale_identity_on_wire() {
             factory_program_id: AccountId::new([1; 32]),
             namespace: AccountId::new([2; 32]),
             launch_salt: [3; 32],
-            ready: true,
+            accepted_intent: Some(factory_core::GraduationIntentKind::CurveReserves),
         },
         concat!(
             "00",
             "0101010101010101010101010101010101010101010101010101010101010101",
             "0202020202020202020202020202020202020202020202020202020202020202",
             "0303030303030303030303030303030303030303030303030303030303030303",
-            "01"
+            "0100"
         ),
     );
     assert_eq!(
@@ -628,7 +628,7 @@ fn graduation_custody_initialization_keeps_saved_sale_identity_on_wire() {
         json!({
             "tag":0,"name":"Initialize","fields":[
                 {"name":"factory_program_id","type":"AccountId"},{"name":"namespace","type":"AccountId"},
-                {"name":"launch_salt","type":"[u8;32]"},{"name":"ready","type":"bool"}
+                {"name":"launch_salt","type":"[u8;32]"},{"name":"accepted_intent","type":"Option<GraduationIntentKind>"}
             ]
         })
     );
@@ -788,8 +788,10 @@ fn graduation_callback_has_a_typed_request_without_an_account_extension() {
             launch_salt: [3; 32],
             token_definition_id: AccountId::new([4; 32]),
             collateral_definition_id: AccountId::new([5; 32]),
-            dex_seed_reserve: 6,
-            collateral_amount: 7,
+            intent: factory_core::GraduationIntent::CurveReserves {
+                launch_tokens: 6,
+                collateral: 7,
+            },
             configuration: vec![8, 9],
         },
     };
@@ -800,6 +802,7 @@ fn graduation_callback_has_a_typed_request_without_an_account_extension() {
         "0303030303030303030303030303030303030303030303030303030303030303",
         "0404040404040404040404040404040404040404040404040404040404040404",
         "0505050505050505050505050505050505050505050505050505050505050505",
+        "00",
         "06000000000000000000000000000000",
         "07000000000000000000000000000000",
         "020000000809"
@@ -819,8 +822,8 @@ fn graduation_callback_has_a_typed_request_without_an_account_extension() {
         json!([
             {"name":"factory_program_id","type":"AccountId"},{"name":"namespace","type":"AccountId"},
             {"name":"launch_salt","type":"[u8;32]"},{"name":"token_definition_id","type":"AccountId"},
-            {"name":"collateral_definition_id","type":"AccountId"},{"name":"dex_seed_reserve","type":"u128"},
-            {"name":"collateral_amount","type":"u128"},{"name":"configuration","type":"Vec<u8>"}
+            {"name":"collateral_definition_id","type":"AccountId"},{"name":"intent","type":"GraduationIntent"},
+            {"name":"configuration","type":"Vec<u8>"}
         ])
     );
 }
@@ -1226,6 +1229,7 @@ fn weighted_factory_messages_keep_distinct_tags_and_normalized_weights() {
         buy_policy: curve_core::BuyPolicy::Open,
         pause_policy: curve_core::PausePolicy::AuthorityControlled,
         ending_policy: curve_core::EndingPolicy::Scheduled,
+        graduation_hook: None,
         namespace: creator,
         launch_salt: [6; 32],
         name: "W".into(),
@@ -1246,7 +1250,7 @@ fn weighted_factory_messages_keep_distinct_tags_and_normalized_weights() {
     let message = factory_core::Message::CreateWeightedLbp {
         inputs: inputs.clone(),
     };
-    let mut expected = vec![8, 0, 1, 1];
+    let mut expected = vec![8, 0, 1, 1, 0];
     expected.extend_from_slice(creator.value());
     expected.extend_from_slice(&[6; 32]);
     expected.extend_from_slice(&[1, 0, 0, 0, b'W', 1, 0, 0, 0, b'u']);
@@ -1430,6 +1434,7 @@ fn fixed_pool_state_tuple_places_policies_after_trade_control() {
         curve_core::BuyPolicy::Open,
         curve_core::TradeControl::Unrestricted,
         lbp_core::EndingPolicy::Either,
+        None::<lee_core::account::Actor>,
         lbp_core::PoolMode::FixedPrice,
         true,
         (
@@ -1445,13 +1450,15 @@ fn fixed_pool_state_tuple_places_policies_after_trade_control() {
             Some(100u64),
             lbp_core::CreatorAllocationRelease::AfterEnd,
         ),
-        (0u128, 0u128, lbp_core::SettlementProgress::Unselected),
+        (0u128, 0u128, lbp_core::SettlementProgress::Unselected, true),
     ))
     .unwrap();
     bytes.push(0); // No pending operation.
     let pool = lbp_core::PoolAccount::decode(&bytes).unwrap();
     assert_eq!(pool.ending_policy, lbp_core::EndingPolicy::Either);
     assert_eq!(pool.remaining_inventory, 800);
+    assert_eq!(pool.graduation_adapter, None);
+    assert!(pool.seed_returned);
     assert_eq!(
         pool.settlement_progress,
         lbp_core::SettlementProgress::Unselected
@@ -1513,7 +1520,11 @@ fn settlement_progress_has_explicit_wire_tags_and_a_shared_schema() {
         fields[index + 1],
         json!({"name":"settlement_progress","type":"SettlementProgress"})
     );
-    assert_eq!(fields[index + 2]["name"], "pending");
+    assert_eq!(
+        fields[index + 2],
+        json!({"name":"seed_returned","type":"bool"})
+    );
+    assert_eq!(fields[index + 3]["name"], "pending");
 }
 
 #[test]
@@ -1527,6 +1538,7 @@ fn fixed_pool_terminal_states_use_progress_tags_instead_of_boolean_completion() 
             curve_core::BuyPolicy::Open,
             curve_core::TradeControl::Unrestricted,
             lbp_core::EndingPolicy::Either,
+            None::<lee_core::account::Actor>,
             lbp_core::PoolMode::FixedPrice,
             true,
             (
@@ -1542,14 +1554,15 @@ fn fixed_pool_terminal_states_use_progress_tags_instead_of_boolean_completion() 
                 Some(100u64),
                 lbp_core::CreatorAllocationRelease::AfterEnd,
             ),
-            (0u128, 0u128, progress),
+            (0u128, 0u128, progress, true),
         ))
         .unwrap();
         bytes.push(0);
         let pool = lbp_core::PoolAccount::decode(&bytes).unwrap();
         assert_eq!(pool.settlement_progress, progress);
         assert_eq!(pool.remaining_inventory, 0);
-        assert_eq!(bytes[bytes.len() - 2], tag);
+        assert_eq!(bytes[bytes.len() - 3], tag);
+        assert!(pool.seed_returned);
         assert_eq!(borsh::to_vec(&pool).unwrap(), bytes);
     }
 }
@@ -1601,4 +1614,267 @@ fn curve_settlement_stage_keeps_its_existing_wire_bytes() {
         8
     );
     assert!(borsh::from_slice::<SettlementStage>(&[8]).is_err());
+}
+
+#[test]
+fn graduation_intent_kinds_and_amounts_have_independent_wire_tags() {
+    use factory_core::{GraduationIntent, GraduationIntentKind};
+    for (kind, intent, tag, name, fields, payload) in [
+        (
+            GraduationIntentKind::CurveReserves,
+            GraduationIntent::CurveReserves {
+                launch_tokens: 6,
+                collateral: 7,
+            },
+            0,
+            "CurveReserves",
+            json!([{"name":"launch_tokens","type":"u128"},{"name":"collateral","type":"u128"}]),
+            "0600000000000000000000000000000007000000000000000000000000000000",
+        ),
+        (
+            GraduationIntentKind::FixedPriceProceeds,
+            GraduationIntent::FixedPriceProceeds { collateral: 7 },
+            1,
+            "FixedPriceProceeds",
+            json!([{"name":"collateral","type":"u128"}]),
+            "07000000000000000000000000000000",
+        ),
+        (
+            GraduationIntentKind::WeightedBuyerProceeds,
+            GraduationIntent::WeightedBuyerProceeds { collateral: 7 },
+            2,
+            "WeightedBuyerProceeds",
+            json!([{"name":"collateral","type":"u128"}]),
+            "07000000000000000000000000000000",
+        ),
+    ] {
+        assert_eq!(intent.kind(), kind);
+        assert_eq!(intent.amounts(), (if tag == 0 { 6 } else { 0 }, 7));
+        assert_wire(kind, &format!("{tag:02x}"));
+        assert_wire(intent, &format!("{tag:02x}{payload}"));
+        assert_eq!(
+            variant("hook", "GraduationIntentKind", name),
+            json!({"tag":tag,"name":name,"fields":[]})
+        );
+        assert_eq!(
+            variant("hook", "GraduationIntent", name),
+            json!({"tag":tag,"name":name,"fields":fields})
+        );
+        let message = factory_core::AdapterMessage::Initialize {
+            factory_program_id: AccountId::new([1; 32]),
+            namespace: AccountId::new([2; 32]),
+            launch_salt: [3; 32],
+            accepted_intent: Some(kind),
+        };
+        assert_wire(
+            message,
+            &format!(
+                "00{}{}{}01{tag:02x}",
+                "01".repeat(32),
+                "02".repeat(32),
+                "03".repeat(32)
+            ),
+        );
+    }
+    assert_wire(
+        factory_core::AdapterMessage::Initialize {
+            factory_program_id: AccountId::new([1; 32]),
+            namespace: AccountId::new([2; 32]),
+            launch_salt: [3; 32],
+            accepted_intent: None,
+        },
+        &format!(
+            "00{}{}{}00",
+            "01".repeat(32),
+            "02".repeat(32),
+            "03".repeat(32)
+        ),
+    );
+}
+
+#[test]
+fn graduation_result_binds_the_factory_to_the_exact_typed_request_hash() {
+    let request = factory_core::GraduationRequest {
+        factory_program_id: AccountId::new([1; 32]),
+        namespace: AccountId::new([2; 32]),
+        launch_salt: [3; 32],
+        token_definition_id: AccountId::new([4; 32]),
+        collateral_definition_id: AccountId::new([5; 32]),
+        intent: factory_core::GraduationIntent::FixedPriceProceeds { collateral: 7 },
+        configuration: vec![8, 9],
+    };
+    let expected_hash =
+        hex::decode("e2b1a3f68e7418bbd5881c5c9d31a7a32859fb5fd6db157adae35cb518df2cca").unwrap();
+    assert_eq!(request.hash().as_slice(), expected_hash);
+    let result = factory_core::GraduationResult {
+        factory: AccountId::new([6; 32]),
+        request_hash: request.hash(),
+    };
+    assert_wire(
+        result,
+        &format!("{}{}", "06".repeat(32), hex::encode(&expected_hash)),
+    );
+    assert_eq!(
+        schema()["modules"]["hook"]["GraduationResult"]["fields"],
+        json!([
+            {"name":"factory","type":"AccountId"},{"name":"request_hash","type":"[u8;32]"}
+        ])
+    );
+}
+
+#[test]
+fn lbp_graduation_hint_is_optional_data_at_the_existing_factory_tag() {
+    assert_wire(
+        factory_core::Message::ExecuteGraduationHook {
+            creator_hint: Some(AccountId::new([5; 32])),
+        },
+        &format!("0401{}", "05".repeat(32)),
+    );
+}
+
+#[test]
+fn immutable_graduation_terms_follow_the_ending_policy_on_wire() {
+    let schema = schema();
+    for (module, name, next, ty) in [
+        (
+            "lbp_setup",
+            "FixedPriceInputs",
+            "graduation_hook",
+            "Option<GraduationHook>",
+        ),
+        (
+            "lbp_setup",
+            "WeightedInputs",
+            "graduation_hook",
+            "Option<GraduationHook>",
+        ),
+        (
+            "lbp_setup",
+            "LbpLaunchState",
+            "graduation_hook",
+            "Option<GraduationHook>",
+        ),
+        (
+            "lbp",
+            "FixedPricePoolInputs",
+            "graduation_adapter",
+            "Option<Actor>",
+        ),
+        (
+            "lbp",
+            "WeightedPoolInputs",
+            "graduation_adapter",
+            "Option<Actor>",
+        ),
+        ("lbp", "PoolAccount", "graduation_adapter", "Option<Actor>"),
+    ] {
+        let fields = schema["modules"][module][name]["fields"]
+            .as_array()
+            .unwrap();
+        let index = fields
+            .iter()
+            .position(|field| field["name"] == "ending_policy")
+            .unwrap();
+        assert_eq!(
+            fields[index + 1],
+            json!({"name":next,"type":ty}),
+            "{module}::{name}"
+        );
+    }
+    let fields = schema["modules"]["lbp_setup"]["LbpLaunchState"]["fields"]
+        .as_array()
+        .unwrap();
+    let index = fields
+        .iter()
+        .position(|field| field["name"] == "creation_stage")
+        .unwrap();
+    assert_eq!(
+        fields[index + 1],
+        json!({"name":"settlement_progress","type":"SettlementProgress"})
+    );
+}
+
+#[test]
+fn lbp_settlement_and_finalize_append_message_tags_without_clock_or_signer_fields() {
+    let adapter = lee_core::account::Actor::new(AccountId::new([6; 32]), AccountId::new([7; 32]));
+    assert_wire(
+        lbp_core::Message::Settle {
+            route: lbp_core::SettlementRoute::Graduation,
+            creator: AccountId::new([5; 32]),
+            adapter: Some(adapter),
+        },
+        &format!(
+            "1001{}01{}{}",
+            "05".repeat(32),
+            "06".repeat(32),
+            "07".repeat(32)
+        ),
+    );
+    assert_wire(
+        lbp_core::Message::FinalizeSettlement {
+            receipt_hash: [8; 32],
+        },
+        &format!("11{}", "08".repeat(32)),
+    );
+    assert_eq!(
+        variant("lbp", "Message", "Settle"),
+        json!({"tag":16,"name":"Settle","fields":[
+            {"name":"route","type":"SettlementRoute"},{"name":"creator","type":"AccountId"},{"name":"adapter","type":"Option<Actor>"}
+        ]})
+    );
+    assert_eq!(
+        variant("lbp", "Message", "FinalizeSettlement"),
+        json!({"tag":17,"name":"FinalizeSettlement","fields":[
+            {"name":"receipt_hash","type":"[u8;32]"}
+        ]})
+    );
+}
+
+#[test]
+fn weighted_pool_keeps_the_adapter_and_outstanding_seed_separate_from_progress() {
+    let account = AccountId::new([5; 32]);
+    let adapter = lee_core::account::Actor::new(AccountId::new([6; 32]), AccountId::new([7; 32]));
+    let mut bytes = borsh::to_vec(&(
+        curve_core::BuyPolicy::Open,
+        curve_core::TradeControl::Unrestricted,
+        lbp_core::EndingPolicy::Scheduled,
+        Some(adapter),
+        lbp_core::PoolMode::Weighted {
+            token_weight_start: lbp_core::WEIGHT_TOTAL / 2 + 1,
+            token_weight_end: lbp_core::WEIGHT_TOTAL / 2 - 1,
+            collateral_seed: 100,
+            pricing_collateral: 140,
+            checkpoint_time: 9,
+            checkpoint_token_weight: lbp_core::WEIGHT_TOTAL / 2 + 1,
+        },
+        true,
+        (
+            account, account, account, account, [6u8; 32], account, account,
+        ),
+        (800u128, 700u128, 200u128),
+        lbp_core::FixedPrice {
+            collateral_units: 0,
+            token_units: 0,
+        },
+        (
+            9u64,
+            Some(100u64),
+            lbp_core::CreatorAllocationRelease::AfterEnd,
+        ),
+        (
+            140u128,
+            0u128,
+            lbp_core::SettlementProgress::Unselected,
+            false,
+        ),
+    ))
+    .unwrap();
+    bytes.push(0);
+    let pool = lbp_core::PoolAccount::decode(&bytes).unwrap();
+    assert_eq!(&bytes[..4], &[0, 0, 1, 1]);
+    assert_eq!(pool.graduation_adapter, Some(adapter));
+    assert!(!pool.seed_returned);
+    assert_eq!(pool.outstanding_seed().unwrap(), 100);
+    assert_eq!(pool.buyer_proceeds().unwrap(), 40);
+    assert_eq!(borsh::to_vec(&pool).unwrap(), bytes);
 }

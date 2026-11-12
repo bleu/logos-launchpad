@@ -17,7 +17,11 @@ pub use curve_core::{
     AUTHORITY_PROGRAM_ACCOUNT_ID, EndingPolicy, PausePolicy, SettlementAmounts, SettlementError,
     SettlementProgress, SettlementRoute, TOKEN_PROGRAM_ACCOUNT_ID,
 };
-pub use hook::{AdapterMessage, AdapterState, GraduationRequest, GraduationResult, handle_adapter};
+pub use hook::{
+    AdapterMessage, AdapterState, GraduationIntent, GraduationIntentKind, GraduationRequest,
+    GraduationResult, handle_adapter,
+};
+pub use lbp_core::{SettlementReceipt, SettlementReply};
 pub use lbp_setup::{
     CreatorAllocationRelease, FixedPrice, FixedPriceInputs, LbpCreationStage, LbpLaunchState,
     LbpSetupMode, SaleStart, WeightedInputs,
@@ -199,7 +203,7 @@ pub enum Message {
         now: u64,
     },
     ExecuteGraduationHook {
-        now: u64,
+        creator_hint: Option<AccountId>,
     },
     CreateFixedPriceLbp {
         inputs: FixedPriceInputs,
@@ -832,6 +836,7 @@ fn curve_resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
             let result: GraduationResult =
                 borsh::from_slice(&input.message).map_err(|_| Error::InvalidMessage)?;
             if result.factory != input.receiver.account_id
+                || pending.values.as_slice() != [result.request_hash.to_vec()]
                 || !matches!(state.settlement_stage, SettlementStage::HookReady { .. })
             {
                 return Err(Error::InvalidState);
@@ -940,7 +945,7 @@ fn curve_resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
             | Message::ExecuteGraduationHook { .. }) => {
                 let (now, creator, is_hook) = match command {
                     Message::WithdrawFactoryProceeds { now, creator } => (now, creator, false),
-                    Message::ExecuteGraduationHook { now } => (now, AccountId::default(), true),
+                    Message::ExecuteGraduationHook { .. } => (0, AccountId::default(), true),
                     _ => unreachable!(),
                 };
                 let saved = curve_core::PoolAccount::decode(&pending.values[0])
@@ -970,7 +975,7 @@ fn curve_resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
                     if adapter.factory != input.receiver || adapter.receipt.is_some() {
                         return Err(Error::InvalidCustody);
                     }
-                    if !adapter.ready {
+                    if adapter.accepted_intent != Some(GraduationIntentKind::CurveReserves) {
                         return Err(Error::AdapterNotReady);
                     }
                     let SettlementStage::HookReady { collateral_due } = state.settlement_stage
@@ -1004,15 +1009,17 @@ fn curve_resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
                         launch_salt: state.launch_salt,
                         token_definition_id: state.token_definition_id,
                         collateral_definition_id: state.collateral_definition_id,
-                        dex_seed_reserve: state.dex_seed_reserve,
-                        collateral_amount: collateral_due,
+                        intent: GraduationIntent::CurveReserves {
+                            launch_tokens: state.dex_seed_reserve,
+                            collateral: collateral_due,
+                        },
                         configuration: hook.configuration.clone(),
                     };
                     state.pending = Some(Pending {
-                        command: Message::ExecuteGraduationHook { now },
+                        command: Message::ExecuteGraduationHook { creator_hint: None },
                         proof: false,
                         reads: vec![],
-                        values: vec![],
+                        values: vec![request.hash().to_vec()],
                     });
                     let response = transfer(
                         state.response(),
@@ -1421,6 +1428,11 @@ pub fn handle(input: &ReceiveInput) -> Result<Response, Error> {
             } else {
                 begin_pause(input, command)
             }
+        }
+        message @ Message::ExecuteGraduationHook { .. }
+            if LbpLaunchState::decode(&input.pre_state).is_ok() =>
+        {
+            lbp_setup::begin_hook(input, message)
         }
         message @ (Message::ClaimCreatorAllocation { .. }
         | Message::WithdrawFactoryProceeds { .. })

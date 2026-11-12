@@ -19,6 +19,7 @@ fn weighted_inputs() -> WeightedPoolInputs {
         buy_policy: curve_core::BuyPolicy::Open,
         pause_policy: lbp_core::PausePolicy::AuthorityControlled,
         ending_policy: lbp_core::EndingPolicy::Scheduled,
+        graduation_adapter: None,
         namespace: id(40),
         namespace_program_id: id(6),
         factory_program_id: id(7),
@@ -2563,6 +2564,7 @@ fn weighted_atomic_settlement_excludes_seed_fees_and_burn_from_route_selection()
         let mut expected = state.clone();
         expected.recorded_collateral = 0;
         expected.accrued_fees = 0;
+        expected.seed_returned = true;
         expected.settlement_progress = SettlementProgress::ManualComplete;
         assert_eq!(state_of(&response), expected);
         assert_eq!(
@@ -2716,6 +2718,96 @@ fn weighted_completed_progress_blocks_controls_and_both_buy_forms() {
                 .err(),
                 Some(lbp_core::Error::Closed)
             );
+        }
+    }
+}
+
+#[test]
+fn receipt_settlement_keeps_selected_ending_and_net_collateral_for_both_routes() {
+    let (input, original) = funded();
+    for ending in [
+        lbp_core::EndingPolicy::Scheduled,
+        lbp_core::EndingPolicy::Either,
+    ] {
+        for remaining in [0, 1] {
+            for route in [
+                lbp_core::SettlementRoute::Manual,
+                lbp_core::SettlementRoute::Graduation,
+            ] {
+                let mut state = original.clone();
+                state.ending_policy = ending;
+                state.remaining_inventory = remaining;
+                state.recorded_collateral = 149;
+                state.accrued_fees = 1;
+                state.graduation_adapter = Some(Actor::new(id(70), id(71)));
+                if let lbp_core::PoolMode::Weighted {
+                    pricing_collateral, ..
+                } = &mut state.mode
+                {
+                    *pricing_collateral = 149;
+                }
+                let adapter = if route == lbp_core::SettlementRoute::Graduation {
+                    state.graduation_adapter
+                } else {
+                    None
+                };
+                let message = Message::Settle {
+                    route,
+                    creator: id(50),
+                    adapter,
+                };
+                let response = settle(
+                    &input,
+                    &state,
+                    message.clone(),
+                    config(100, id(43), false),
+                    [150, remaining],
+                )
+                .unwrap();
+                let expected = if ending == lbp_core::EndingPolicy::Either && remaining == 0 {
+                    None
+                } else {
+                    Some(3_000_000)
+                };
+                assert_eq!(response.validity.timestamps.start(), expected);
+                let lbp_core::SettlementReply::Applied { receipt } =
+                    borsh::from_slice(&response.sync_messages.last().unwrap().message).unwrap()
+                else {
+                    panic!("expected applied receipt")
+                };
+                assert_eq!(receipt.amounts.collateral, 49);
+                assert_eq!(receipt.seed_payment, 100);
+                let mut finalize = input.clone();
+                finalize.from = Some(receipt.factory);
+                finalize.pre_state = response.post_state.unwrap();
+                finalize.message = borsh::to_vec(&Message::FinalizeSettlement {
+                    receipt_hash: receipt.hash(),
+                })
+                .unwrap();
+                let completed = handle(&finalize).unwrap();
+                let next = state_of(&completed);
+                assert_eq!(next.remaining_inventory, remaining);
+                assert_eq!(next.settlement_progress, receipt.progress);
+                assert!(next.seed_returned);
+                assert_eq!(completed.validity.timestamps.start(), expected);
+                if let lbp_core::PoolMode::Weighted {
+                    pricing_collateral, ..
+                } = &mut state.mode
+                {
+                    *pricing_collateral = 150;
+                }
+                assert_eq!(
+                    settle(
+                        &input,
+                        &state,
+                        message,
+                        config(100, id(43), false),
+                        [150, remaining]
+                    )
+                    .err(),
+                    Some(lbp_core::Error::InvalidState)
+                );
+            }
         }
     }
 }

@@ -17,6 +17,7 @@ fn weighted_inputs() -> WeightedPoolInputs {
         buy_policy: curve_core::BuyPolicy::Open,
         pause_policy: lbp_core::PausePolicy::AuthorityControlled,
         ending_policy: lbp_core::EndingPolicy::Scheduled,
+        graduation_adapter: None,
         namespace: id(40),
         namespace_program_id: id(6),
         factory_program_id: id(7),
@@ -397,6 +398,7 @@ fn weighted_policy_survives_every_prepare_and_activation_callback() {
         root: [9; 32],
     });
     inputs.buy_policy = policy.clone();
+    inputs.graduation_adapter = Some(Actor::new(id(70), id(71)));
     input.message = borsh::to_vec(&Message::PrepareWeighted { inputs }).unwrap();
     let factory = input.from;
     let mut response = handle(&input).unwrap();
@@ -433,6 +435,8 @@ fn weighted_policy_survives_every_prepare_and_activation_callback() {
             let saved =
                 lbp_core::PoolAccount::decode(response.post_state.as_ref().unwrap()).unwrap();
             assert_eq!(saved.buy_policy, policy);
+            assert!(!saved.seed_returned);
+            assert_eq!(saved.graduation_adapter, Some(Actor::new(id(70), id(71))));
             assert_eq!(
                 saved.settlement_progress,
                 lbp_core::SettlementProgress::Unselected

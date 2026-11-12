@@ -359,7 +359,7 @@ fn settlement_allocation_credit_failure_preserves_escrow_and_retry_pays_once() {
 fn hook(fixture: &mut FactoryFixture) -> Result<(), lee::error::LeeError> {
     fixture.call(
         &key(49),
-        factory_core::Message::ExecuteGraduationHook { now: 2 },
+        factory_core::Message::ExecuteGraduationHook { creator_hint: None },
     )
 }
 
@@ -466,7 +466,7 @@ fn initialize_adapter(fixture: &mut FactoryFixture, ready: bool) {
             factory_program_id: FACTORY,
             namespace: fixture.namespace,
             launch_salt: SALT,
-            ready,
+            accepted_intent: ready.then_some(factory_core::GraduationIntentKind::CurveReserves),
         },
     )
     .unwrap();
@@ -541,8 +541,10 @@ fn settlement_permissionless_callback_records_graduated_without_dex_claim_and_re
             launch_salt: SALT,
             token_definition_id: fixture.definition,
             collateral_definition_id: COLLATERAL,
-            dex_seed_reserve: 100,
-            collateral_amount: 112,
+            intent: factory_core::GraduationIntent::CurveReserves {
+                launch_tokens: 100,
+                collateral: 112,
+            },
             configuration: b"saved-route".to_vec(),
         })
     );
@@ -709,7 +711,7 @@ fn nested_configuration(target: Actor, message: impl borsh::BorshSerialize) -> V
 fn creator_hook(fixture: &mut FactoryFixture) -> Result<(), lee::error::LeeError> {
     fixture.call(
         &key(48),
-        factory_core::Message::ExecuteGraduationHook { now: 2 },
+        factory_core::Message::ExecuteGraduationHook { creator_hint: None },
     )
 }
 
@@ -769,7 +771,7 @@ fn settlement_nested_adapter_calls_roll_back_and_repaired_retry_pays_once() {
     let factory_actor = Actor::new(factory, FACTORY);
     let mut attempts = vec![];
     for message in [
-        factory_core::Message::ExecuteGraduationHook { now: 2 },
+        factory_core::Message::ExecuteGraduationHook { creator_hint: None },
         factory_core::Message::WithdrawFactoryProceeds {
             creator: id(&key(48)),
             now: 2,
@@ -791,8 +793,14 @@ fn settlement_nested_adapter_calls_roll_back_and_repaired_retry_pays_once() {
     // The valid nested acknowledgment is accepted first. The queued normal acknowledgment
     // then fails as a duplicate and rolls back the transaction.
     attempts.push((
-        nested_configuration(factory_actor, factory_core::GraduationResult { factory }),
-        "InvalidMessage",
+        nested_configuration(
+            factory_actor,
+            factory_core::GraduationResult {
+                factory,
+                request_hash: [0; 32],
+            },
+        ),
+        "InvalidState",
     ));
     for message in [
         curve_core::Message::ClosePool { now: 2 },
@@ -968,8 +976,13 @@ fn settlement_zero_hook_can_graduate_before_manual_completion() {
         factory_core::SettlementStage::Graduated
     );
     let receipt = adapter_state(&fixture).receipt.unwrap();
-    assert_eq!(receipt.dex_seed_reserve, 0);
-    assert_eq!(receipt.collateral_amount, 0);
+    assert_eq!(
+        receipt.intent,
+        factory_core::GraduationIntent::CurveReserves {
+            launch_tokens: 0,
+            collateral: 0,
+        }
+    );
     assert_eq!(receipt.configuration, b"zero-payout");
     assert_eq!(
         balance(&fixture.state, custody(&fixture), fixture.definition),

@@ -1681,6 +1681,7 @@ dependencies = [
  "integer-math",
  "lee_core",
  "lez-compat-core",
+ "risc0-zkvm",
  "sale-policy",
  "serde",
  "weighted-math-core",

@@ -24,7 +24,8 @@ cargo +"$ACTOR_RUST_VERSION" run --quiet --manifest-path packages/lez-compat/Car
   factory=crates/factory-core/src/lib.rs \
   lbp_setup=crates/factory-core/src/lbp_setup.rs \
   hook=crates/factory-core/src/hook.rs \
-  lbp=crates/lbp-core/src/lib.rs > "$temporary/launchpad.json"
+  lbp=crates/lbp-core/src/lib.rs \
+  lbp_settlement=crates/lbp-core/src/settlement.rs > "$temporary/launchpad.json"
 cargo +"$ACTOR_RUST_VERSION" run --quiet --manifest-path packages/lez-compat/Cargo.toml -p lez-compat-tools --locked -- idl > "$temporary/compat.json"
 if [ -n "$output" ]; then
   mkdir -p "$output"

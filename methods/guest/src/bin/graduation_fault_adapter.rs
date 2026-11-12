@@ -18,7 +18,10 @@ fn handle(input: &ReceiveInput) -> Response {
     if let Some(state) = response.post_state.as_ref()
         && let Ok(state) = AdapterState::decode(state)
         && let Some(receipt) = state.receipt
-        && receipt.configuration == b"corrupt-final-ack"
+        && matches!(
+            receipt.configuration.as_slice(),
+            b"corrupt-final-ack" | b"corrupt-request-hash"
+        )
     {
         let acknowledgment = response
             .sync_messages
@@ -27,7 +30,16 @@ fn handle(input: &ReceiveInput) -> Response {
         acknowledgment.message = SyncMessage::new(
             acknowledgment.to,
             &GraduationResult {
-                factory: AccountId::new([0; 32]),
+                factory: if receipt.configuration == b"corrupt-final-ack" {
+                    AccountId::new([0; 32])
+                } else {
+                    state.factory.account_id
+                },
+                request_hash: if receipt.configuration == b"corrupt-request-hash" {
+                    [0; 32]
+                } else {
+                    receipt.hash()
+                },
             },
         )
         .message;

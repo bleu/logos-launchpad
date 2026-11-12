@@ -55,3 +55,25 @@ fn authority_transfer_and_renounce_match_the_documented_borsh_layout() {
         [vec![7], vec![1; 32]].concat()
     );
 }
+
+#[test]
+fn authority_resolution_appends_a_tag_and_returns_two_account_ids() {
+    assert_eq!(
+        borsh::to_vec(&authority::Message::Resolve).unwrap(),
+        vec![13]
+    );
+    assert_eq!(
+        borsh::from_slice::<authority::Message>(&[13]).unwrap(),
+        authority::Message::Resolve
+    );
+    let reply = authority::CurrentAuthority {
+        role: AccountId::new([1; 32]),
+        authority: AccountId::new([2; 32]),
+    };
+    let expected = [vec![1; 32], vec![2; 32]].concat();
+    assert_eq!(borsh::to_vec(&reply).unwrap(), expected);
+    assert_eq!(
+        borsh::from_slice::<authority::CurrentAuthority>(&expected).unwrap(),
+        reply
+    );
+}

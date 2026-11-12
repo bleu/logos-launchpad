@@ -15,6 +15,7 @@ fn prepare() -> ReceiveInput {
         buy_policy: curve_core::BuyPolicy::Open,
         pause_policy: lbp_core::PausePolicy::Disabled,
         ending_policy: lbp_core::EndingPolicy::Either,
+        graduation_adapter: None,
         namespace: id(40),
         namespace_program_id: id(6),
         factory_program_id: id(7),
@@ -1801,6 +1802,7 @@ fn fixed_price_policy_survives_every_prepare_and_activation_callback() {
         root: [9; 32],
     });
     inputs.buy_policy = policy.clone();
+    inputs.graduation_adapter = Some(Actor::new(id(70), id(71)));
     input.message = borsh::to_vec(&Message::PrepareFixedPrice { inputs }).unwrap();
     let factory = input.from;
     let mut response = handle(&input).unwrap();
@@ -1833,6 +1835,8 @@ fn fixed_price_policy_survives_every_prepare_and_activation_callback() {
             let saved =
                 lbp_core::PoolAccount::decode(response.post_state.as_ref().unwrap()).unwrap();
             assert_eq!(saved.buy_policy, policy);
+            assert!(saved.seed_returned);
+            assert_eq!(saved.graduation_adapter, Some(Actor::new(id(70), id(71))));
             assert_eq!(
                 saved.settlement_progress,
                 lbp_core::SettlementProgress::Unselected
@@ -2481,4 +2485,63 @@ fn fixed_completed_progress_blocks_controls_and_both_buy_forms() {
             );
         }
     }
+}
+
+#[test]
+fn receipt_settlement_requires_saved_namespace_and_canonical_vault_replies() {
+    let (mut input, mut state) = funded();
+    state.graduation_adapter = Some(Actor::new(id(70), id(71)));
+    state.recorded_collateral = 49;
+    state.accrued_fees = 2;
+    input.from = Some(Actor::new(state.factory_owner, state.factory_program_id));
+    input.pre_state = borsh::to_vec(&state).unwrap().into();
+    input.message = borsh::to_vec(&Message::Settle {
+        route: lbp_core::SettlementRoute::Graduation,
+        creator: id(60),
+        adapter: state.graduation_adapter,
+    })
+    .unwrap();
+    let mut response = handle(&input).unwrap();
+    for (step, bytes) in [
+        config(100, id(43), false),
+        holding(input.receiver.account_id, id(42), 1000),
+        holding(input.receiver.account_id, id(41), 900),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let source = response.sync_messages.last().unwrap().to;
+        input = reply(&input, &response, source, bytes);
+        for from in [
+            None,
+            Some(Actor::new(id(99), source.program_account_id)),
+            Some(Actor::new(source.account_id, id(99))),
+        ] {
+            let mut wrong = input.clone();
+            wrong.from = from;
+            assert_eq!(handle(&wrong).err(), Some(lbp_core::Error::Unauthorized));
+        }
+        if step > 0 {
+            for (owner, definition) in [
+                (id(99), if step == 1 { id(42) } else { id(41) }),
+                (input.receiver.account_id, id(99)),
+            ] {
+                let wrong = reply(&input, &response, source, holding(owner, definition, 1000));
+                assert_eq!(
+                    handle(&wrong).err(),
+                    Some(lbp_core::Error::InvalidDefinition)
+                );
+            }
+        }
+        response = handle(&input).unwrap();
+    }
+    assert!(lbp_core::PoolAccount::decode(response.post_state.as_ref().unwrap()).is_err());
+    let lbp_core::SettlementReply::Applied { receipt } =
+        borsh::from_slice(&response.sync_messages.last().unwrap().message).unwrap()
+    else {
+        panic!("expected receipt")
+    };
+    assert_eq!(receipt.amounts.collateral, 49);
+    assert_eq!(receipt.pool, input.receiver);
+    assert_eq!(receipt.adapter, state.graduation_adapter);
 }
