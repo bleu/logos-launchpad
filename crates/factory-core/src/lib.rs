@@ -14,7 +14,8 @@ use serde::{Deserialize, Serialize};
 mod hook;
 mod lbp_setup;
 pub use curve_core::{
-    AUTHORITY_PROGRAM_ACCOUNT_ID, EndingPolicy, PausePolicy, TOKEN_PROGRAM_ACCOUNT_ID,
+    AUTHORITY_PROGRAM_ACCOUNT_ID, EndingPolicy, PausePolicy, SettlementAmounts, SettlementError,
+    SettlementProgress, SettlementRoute, TOKEN_PROGRAM_ACCOUNT_ID,
 };
 pub use hook::{AdapterMessage, AdapterState, GraduationRequest, GraduationResult, handle_adapter};
 pub use lbp_setup::{
@@ -57,11 +58,22 @@ pub enum SettlementStage {
     Complete,
     HookReady { collateral_due: u128 },
     Graduated,
-    NoPayout,
 }
 impl SettlementStage {
+    pub fn progress(self) -> SettlementProgress {
+        match self {
+            Self::Unstarted
+            | Self::Ready
+            | Self::Withdrawn { .. }
+            | Self::Burned { .. }
+            | Self::HookReady { .. } => SettlementProgress::Unselected,
+            Self::TokenPaid { .. } => SettlementProgress::ManualStarted,
+            Self::Complete => SettlementProgress::ManualComplete,
+            Self::Graduated => SettlementProgress::Graduated,
+        }
+    }
     pub fn is_manual_settlement_complete(self) -> bool {
-        matches!(self, Self::Complete | Self::NoPayout | Self::Graduated)
+        self.progress().is_complete()
     }
 }
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize, Serialize, Deserialize)]
@@ -264,6 +276,14 @@ impl std::fmt::Display for Error {
     }
 }
 impl std::error::Error for Error {}
+impl From<SettlementError> for Error {
+    fn from(error: SettlementError) -> Self {
+        match error {
+            SettlementError::AlreadySettled => Self::AlreadySettled,
+            SettlementError::ManualPayoutStarted => Self::ManualPayoutStarted,
+        }
+    }
+}
 impl From<lez_compat_core::Error> for Error {
     fn from(_: lez_compat_core::Error) -> Self {
         Self::Unauthorized
@@ -731,18 +751,15 @@ fn begin_settlement(input: &ReceiveInput, command: Message) -> Result<Response, 
             .graduation_hook
             .as_ref()
             .ok_or(Error::HookNotConfigured)?;
-        if matches!(
-            state.settlement_stage,
-            SettlementStage::TokenPaid { .. } | SettlementStage::Complete
-        ) {
-            return Err(Error::ManualPayoutStarted);
-        }
-        if state.settlement_stage == SettlementStage::Graduated {
-            return Err(Error::AlreadySettled);
-        }
-    } else if state.settlement_stage.is_manual_settlement_complete() {
-        return Err(Error::AlreadySettled);
     }
+    state
+        .settlement_stage
+        .progress()
+        .ensure_available(if is_hook {
+            SettlementRoute::Graduation
+        } else {
+            SettlementRoute::Manual
+        })?;
     state.pending = Some(Pending {
         command,
         proof: !is_hook,
@@ -759,9 +776,7 @@ fn begin_settlement(input: &ReceiveInput, command: Message) -> Result<Response, 
     if is_hook
         && matches!(
             state.settlement_stage,
-            SettlementStage::Burned { .. }
-                | SettlementStage::HookReady { .. }
-                | SettlementStage::NoPayout
+            SettlementStage::Burned { .. } | SettlementStage::HookReady { .. }
         )
     {
         let program = state.graduation_hook.as_ref().unwrap().program_id;
@@ -821,6 +836,8 @@ fn curve_resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
             {
                 return Err(Error::InvalidState);
             }
+            let mut progress = state.settlement_stage.progress();
+            progress.finish_graduation()?;
             state.settlement_stage = SettlementStage::Graduated;
             return Ok(state.response());
         }
@@ -1020,19 +1037,12 @@ fn curve_resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
                     ));
                 }
                 if is_hook
-                    && matches!(
-                        state.settlement_stage,
-                        SettlementStage::Burned { .. } | SettlementStage::NoPayout
-                    )
+                    && let SettlementStage::Burned { collateral_due } = state.settlement_stage
                 {
                     let adapter = AdapterState::decode(&pending.values[3])?;
                     if adapter.factory != input.receiver || adapter.receipt.is_some() {
                         return Err(Error::InvalidCustody);
                     }
-                    let collateral_due = match state.settlement_stage {
-                        SettlementStage::Burned { collateral_due } => collateral_due,
-                        _ => 0,
-                    };
                     let program = state
                         .graduation_hook
                         .as_ref()
@@ -1089,17 +1099,21 @@ fn curve_resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
                     {
                         return Err(Error::InvalidCustody);
                     }
-                    let had_token_payout =
-                        matches!(state.settlement_stage, SettlementStage::TokenPaid { .. });
+                    let mut progress = state.settlement_stage.progress();
                     let (definition, amount) = if token_due != 0 {
+                        progress.record_manual_payout(SettlementAmounts {
+                            launch_tokens: token_due,
+                            collateral: 0,
+                        })?;
                         state.settlement_stage = SettlementStage::TokenPaid { collateral_due };
                         (state.token_definition_id, token_due)
                     } else {
-                        state.settlement_stage = if collateral_due == 0 && !had_token_payout {
-                            SettlementStage::NoPayout
-                        } else {
-                            SettlementStage::Complete
-                        };
+                        progress.record_manual_payout(SettlementAmounts {
+                            launch_tokens: 0,
+                            collateral: collateral_due,
+                        })?;
+                        progress.finish_manual()?;
+                        state.settlement_stage = SettlementStage::Complete;
                         (state.collateral_definition_id, collateral_due)
                     };
                     return Ok(transfer(

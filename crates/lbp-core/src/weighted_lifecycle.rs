@@ -33,7 +33,7 @@ pub(super) fn set_paused(input: &ReceiveInput, paused: bool) -> Result<Response,
     if input.from != Some(Actor::new(state.factory_owner, state.factory_program_id)) {
         return Err(Error::Unauthorized);
     }
-    if state.proceeds_settled {
+    if state.settlement_progress.is_complete() {
         return Err(Error::Closed);
     }
     let bounds = state.trade_bounds()?;

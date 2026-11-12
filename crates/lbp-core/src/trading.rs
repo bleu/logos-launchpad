@@ -6,7 +6,7 @@ use lee_core::{
     program::{ReceiveInput, Response, StateReply, SyncMessage},
 };
 use lez_compat_core::token::{self, TokenKind, TokenState};
-use sale_policy::{FeeError, FeeRate};
+use sale_policy::{FeeError, FeeRate, SettlementAmounts};
 use weighted_math_core::{QuoteError, try_calc_in_given_out, try_calc_out_given_in};
 
 #[derive(BorshSerialize, BorshDeserialize)]
@@ -98,7 +98,7 @@ impl Pending {
         if self.balances[0] < liabilities {
             return Err(Error::Underfunded);
         }
-        if !self.state.proceeds_settled
+        if !self.state.settlement_progress.is_complete()
             && let PoolMode::Weighted {
                 collateral_seed,
                 pricing_collateral,
@@ -158,7 +158,7 @@ impl Pending {
             return Err(Error::Paused);
         }
         validate_buy_window(&self.state, &self.message)?;
-        if self.state.proceeds_settled || self.state.remaining_inventory == 0 {
+        if self.state.settlement_progress.is_complete() || self.state.remaining_inventory == 0 {
             return Err(Error::Closed);
         }
         if matches!(self.state.mode, PoolMode::Weighted { .. }) {
@@ -472,7 +472,7 @@ pub(super) fn begin(input: &ReceiveInput, message: Message) -> Result<Response, 
         {
             return Err(Error::Unauthorized);
         }
-        if state.proceeds_settled {
+        if state.settlement_progress.is_complete() {
             return Ok(state.response());
         }
         creator
@@ -481,7 +481,7 @@ pub(super) fn begin(input: &ReceiveInput, message: Message) -> Result<Response, 
         if creator == AccountId::default() {
             return Err(Error::Unauthorized);
         }
-        if state.proceeds_settled {
+        if state.settlement_progress.is_complete() {
             return curve_core::with_time_bounds(state.response(), state.close_time_bound()?, None)
                 .map_err(|_| Error::InvalidTerms);
         }
@@ -652,9 +652,27 @@ fn settlement_payout(
     }
     let fees = state.accrued_fees;
     let proceeds = state.recorded_collateral;
+    let route_collateral = match state.mode {
+        PoolMode::FixedPrice => proceeds,
+        PoolMode::Weighted {
+            collateral_seed, ..
+        } => proceeds
+            .checked_sub(collateral_seed)
+            .ok_or(Error::InvalidState)?,
+    };
+    state
+        .settlement_progress
+        .record_manual_payout(SettlementAmounts {
+            launch_tokens: 0,
+            collateral: route_collateral,
+        })
+        .map_err(|_| Error::InvalidState)?;
+    state
+        .settlement_progress
+        .finish_manual()
+        .map_err(|_| Error::InvalidState)?;
     state.accrued_fees = 0;
     state.recorded_collateral = 0;
-    state.proceeds_settled = true;
     let response = curve_core::with_time_bounds(state.response(), expiry, None)
         .map_err(|_| Error::InvalidTerms)?;
     let response = payout(
@@ -751,7 +769,7 @@ mod tests {
             creator_allocation_release: CreatorAllocationRelease::AfterSetup,
             recorded_collateral: 0,
             accrued_fees: 0,
-            proceeds_settled: false,
+            settlement_progress: crate::SettlementProgress::Unselected,
             pending: None,
         };
         (state, config)
@@ -936,6 +954,31 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    #[test]
+    fn shared_manual_completion_errors_map_to_invalid_state() {
+        let (state, _) = fixture();
+        let receiver = Actor::new(AccountId::new([9; 32]), AccountId::new([8; 32]));
+        for progress in [
+            crate::SettlementProgress::ManualComplete,
+            crate::SettlementProgress::Graduated,
+        ] {
+            let mut completed = state.clone();
+            completed.settlement_progress = progress;
+            assert_eq!(
+                settlement_payout(
+                    completed,
+                    receiver,
+                    AccountId::new([50; 32]),
+                    AccountId::new([43; 32]),
+                    [0, 800, 0],
+                    Some(200)
+                )
+                .err(),
+                Some(Error::InvalidState)
+            );
         }
     }
 }

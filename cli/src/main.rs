@@ -620,7 +620,6 @@ fn settlement_stage_name(stage: launchpad_client::SettlementStage) -> &'static s
         SettlementStage::Complete => "complete",
         SettlementStage::HookReady { .. } => "hook_ready",
         SettlementStage::Graduated => "graduated",
-        SettlementStage::NoPayout => "no_payout",
     }
 }
 
@@ -2315,7 +2314,6 @@ mod tests {
                 "hook_ready",
             ),
             (SettlementStage::Graduated, "graduated"),
-            (SettlementStage::NoPayout, "no_payout"),
         ] {
             assert_eq!(
                 serde_json::to_value(settlement_stage_name(stage)).unwrap(),

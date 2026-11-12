@@ -974,7 +974,6 @@ fn creator_claim_uses_factory_escrow_and_derived_recipient_ata() {
 fn saved_settlement_stages_identify_completed_manual_work() {
     for (stage, complete) in [
         (SettlementStage::Complete, true),
-        (SettlementStage::NoPayout, true),
         (SettlementStage::Graduated, true),
         (SettlementStage::Unstarted, false),
         (SettlementStage::Ready, false),

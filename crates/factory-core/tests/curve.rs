@@ -942,7 +942,7 @@ fn expiry_is_proved_separately_from_the_supplied_zero_lower_bound() {
 }
 
 #[test]
-fn zero_manual_payout_keeps_one_saved_zero_hook_available() {
+fn zero_manual_completion_blocks_hooks_but_a_zero_hook_can_finish_first() {
     let mut input = creation();
     let mut command: Message = borsh::from_slice(&input.message).unwrap();
     if let Message::CreateFactoryPool {
@@ -977,14 +977,22 @@ fn zero_manual_payout_keeps_one_saved_zero_hook_available() {
     let (input, withdrawn) = settlement(&input, &ready, saved.clone(), 0, 0, false);
     saved.pool.real_reserve0 = 0;
     let (input, burned) = settlement(&input, &withdrawn, saved.clone(), 800, 0, false);
-    let (input, no_payout) = settlement(&input, &burned, saved.clone(), 0, 0, false);
+    let (mut manual_input, complete) = settlement(&input, &burned, saved.clone(), 0, 0, false);
     assert_eq!(
-        FactoryState::decode(no_payout.post_state.as_ref().unwrap())
+        FactoryState::decode(complete.post_state.as_ref().unwrap())
             .unwrap()
             .settlement_stage,
-        SettlementStage::NoPayout
+        SettlementStage::Complete
     );
-    let (mut input, mut response) = settlement(&input, &no_payout, saved.clone(), 0, 0, true);
+    assert!(complete.sync_messages.is_empty());
+    manual_input.pre_state = complete.post_state.unwrap();
+    manual_input.from = None;
+    manual_input.message = borsh::to_vec(&Message::ExecuteGraduationHook { now: 200 }).unwrap();
+    assert!(matches!(
+        handle(&manual_input),
+        Err(Error::ManualPayoutStarted)
+    ));
+    let (mut input, mut response) = settlement(&input, &burned, saved.clone(), 0, 0, true);
     input = reply(&input, &response, adapter_state(input.receiver, true));
     response = handle(&input).unwrap();
     let (mut input, mut response) = settlement(&input, &response, saved, 0, 0, true);
@@ -1889,4 +1897,211 @@ fn curve_setup_keeps_each_selected_ending_and_its_depletion_side() {
         assert_eq!(active.dex_seed_reserve, 100);
         assert_eq!(active.creator_allocation, 100);
     }
+}
+
+#[test]
+fn curve_settlement_progress_projects_existing_stages_without_changing_wire_tags() {
+    for (stage, progress, tag, payload) in [
+        (
+            SettlementStage::Unstarted,
+            SettlementProgress::Unselected,
+            0,
+            vec![],
+        ),
+        (
+            SettlementStage::Ready,
+            SettlementProgress::Unselected,
+            1,
+            vec![],
+        ),
+        (
+            SettlementStage::Withdrawn {
+                unsold: 17,
+                collateral_due: 29,
+            },
+            SettlementProgress::Unselected,
+            2,
+            vec![17_u128, 29],
+        ),
+        (
+            SettlementStage::Burned { collateral_due: 29 },
+            SettlementProgress::Unselected,
+            3,
+            vec![29],
+        ),
+        (
+            SettlementStage::TokenPaid { collateral_due: 29 },
+            SettlementProgress::ManualStarted,
+            4,
+            vec![29],
+        ),
+        (
+            SettlementStage::Complete,
+            SettlementProgress::ManualComplete,
+            5,
+            vec![],
+        ),
+        (
+            SettlementStage::HookReady { collateral_due: 29 },
+            SettlementProgress::Unselected,
+            6,
+            vec![29],
+        ),
+        (
+            SettlementStage::Graduated,
+            SettlementProgress::Graduated,
+            7,
+            vec![],
+        ),
+    ] {
+        assert_eq!(stage.progress(), progress);
+        assert_eq!(
+            stage.is_manual_settlement_complete(),
+            progress.is_complete()
+        );
+        let mut expected = vec![tag];
+        for amount in payload {
+            expected.extend_from_slice(&amount.to_le_bytes());
+        }
+        assert_eq!(borsh::to_vec(&stage).unwrap(), expected);
+        assert_eq!(
+            borsh::from_slice::<SettlementStage>(&expected).unwrap(),
+            stage
+        );
+    }
+}
+
+#[test]
+fn curve_settlement_entrypoints_keep_route_errors_and_hook_configuration_precedence() {
+    let (input, active) = active();
+    let original = FactoryState::decode(active.post_state.as_ref().unwrap()).unwrap();
+    for (stage, manual_error, hook_error) in [
+        (SettlementStage::Unstarted, None, None),
+        (SettlementStage::Ready, None, None),
+        (
+            SettlementStage::Withdrawn {
+                unsold: 17,
+                collateral_due: 29,
+            },
+            None,
+            None,
+        ),
+        (SettlementStage::Burned { collateral_due: 29 }, None, None),
+        (
+            SettlementStage::HookReady { collateral_due: 29 },
+            None,
+            None,
+        ),
+        (
+            SettlementStage::TokenPaid { collateral_due: 29 },
+            None,
+            Some(Error::ManualPayoutStarted),
+        ),
+        (
+            SettlementStage::Complete,
+            Some(Error::AlreadySettled),
+            Some(Error::ManualPayoutStarted),
+        ),
+        (
+            SettlementStage::Graduated,
+            Some(Error::AlreadySettled),
+            Some(Error::AlreadySettled),
+        ),
+    ] {
+        for hook in [false, true] {
+            let mut state = original.clone();
+            state.settlement_stage = stage;
+            let mut request = input.clone();
+            request.pre_state = borsh::to_vec(&state).unwrap().into();
+            request.from = None;
+            request.message = borsh::to_vec(&if hook {
+                Message::ExecuteGraduationHook { now: 200 }
+            } else {
+                Message::WithdrawFactoryProceeds {
+                    creator: id(42),
+                    now: 200,
+                }
+            })
+            .unwrap();
+            let result = handle(&request);
+            if let Some(error) = if hook { hook_error } else { manual_error } {
+                assert_eq!(result.err(), Some(error));
+            } else {
+                let response = result.unwrap();
+                assert_eq!(
+                    FactoryState::decode(response.post_state.as_ref().unwrap())
+                        .unwrap()
+                        .settlement_stage,
+                    stage
+                );
+                if !hook {
+                    assert_eq!(
+                        response.sync_messages.last().unwrap().to,
+                        Actor::new(id(42), AUTHORITY_PROGRAM_ACCOUNT_ID)
+                    );
+                }
+            }
+            if hook {
+                state.graduation_hook = None;
+                request.pre_state = borsh::to_vec(&state).unwrap().into();
+                assert_eq!(handle(&request).err(), Some(Error::HookNotConfigured));
+            }
+        }
+    }
+}
+
+#[test]
+fn curve_preparation_leaves_both_routes_available_until_a_manual_asset_payout() {
+    let (input, active) = active();
+    let state = FactoryState::decode(active.post_state.as_ref().unwrap()).unwrap();
+    let mut pool = pool_state(&state, input.receiver, true);
+    pool.pool.real_reserve1 = 50;
+    let (input, ready) = settlement(&input, &active, pool.clone(), 100, 0, false);
+    let (input, withdrawn) = settlement(&input, &ready, pool.clone(), 100, 0, false);
+    pool.pool.real_reserve0 = 0;
+    pool.pool.real_reserve1 = 0;
+    let (input, burned) = settlement(&input, &withdrawn, pool.clone(), 900, 50, false);
+    for response in [&active, &ready, &withdrawn, &burned] {
+        let progress = FactoryState::decode(response.post_state.as_ref().unwrap())
+            .unwrap()
+            .settlement_stage
+            .progress();
+        assert_eq!(progress, SettlementProgress::Unselected);
+        assert_eq!(progress.route(), None);
+        assert!(progress.ensure_available(SettlementRoute::Manual).is_ok());
+        assert!(
+            progress
+                .ensure_available(SettlementRoute::Graduation)
+                .is_ok()
+        );
+    }
+    let (mut input, mut response) = settlement(&input, &burned, pool.clone(), 100, 50, true);
+    input = reply(&input, &response, adapter_state(input.receiver, true));
+    response = handle(&input).unwrap();
+    let state = FactoryState::decode(response.post_state.as_ref().unwrap()).unwrap();
+    assert_eq!(
+        state.settlement_stage,
+        SettlementStage::HookReady { collateral_due: 50 }
+    );
+    assert_eq!(
+        state.settlement_stage.progress(),
+        SettlementProgress::Unselected
+    );
+    let (input, paid) = settlement(&input, &response, pool.clone(), 100, 50, false);
+    let state = FactoryState::decode(paid.post_state.as_ref().unwrap()).unwrap();
+    assert_eq!(
+        state.settlement_stage.progress(),
+        SettlementProgress::ManualStarted
+    );
+    assert_eq!(
+        state.settlement_stage.progress().route(),
+        Some(SettlementRoute::Manual)
+    );
+    let (_, complete) = settlement(&input, &paid, pool, 0, 50, false);
+    let state = FactoryState::decode(complete.post_state.as_ref().unwrap()).unwrap();
+    assert_eq!(
+        state.settlement_stage.progress(),
+        SettlementProgress::ManualComplete
+    );
+    assert!(state.settlement_stage.is_manual_settlement_complete());
 }

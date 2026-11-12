@@ -29,6 +29,7 @@
     ],
     "sale_policy": [
       "controls",
+      "settlement",
       "terms"
     ]
   },
@@ -1037,11 +1038,6 @@
             "fields": [],
             "name": "Graduated",
             "tag": 7
-          },
-          {
-            "fields": [],
-            "name": "NoPayout",
-            "tag": 8
           }
         ]
       },
@@ -1544,8 +1540,8 @@
             "type": "u128"
           },
           {
-            "name": "proceeds_settled",
-            "type": "bool"
+            "name": "settlement_progress",
+            "type": "SettlementProgress"
           },
           {
             "name": "pending",
@@ -2094,6 +2090,58 @@
       }
     },
     "sale_policy": {},
+    "settlement": {
+      "SettlementAmounts": {
+        "fields": [
+          {
+            "name": "launch_tokens",
+            "type": "u128"
+          },
+          {
+            "name": "collateral",
+            "type": "u128"
+          }
+        ]
+      },
+      "SettlementProgress": {
+        "variants": [
+          {
+            "fields": [],
+            "name": "Unselected",
+            "tag": 0
+          },
+          {
+            "fields": [],
+            "name": "ManualStarted",
+            "tag": 1
+          },
+          {
+            "fields": [],
+            "name": "ManualComplete",
+            "tag": 2
+          },
+          {
+            "fields": [],
+            "name": "Graduated",
+            "tag": 3
+          }
+        ]
+      },
+      "SettlementRoute": {
+        "variants": [
+          {
+            "fields": [],
+            "name": "Manual",
+            "tag": 0
+          },
+          {
+            "fields": [],
+            "name": "Graduation",
+            "tag": 1
+          }
+        ]
+      }
+    },
     "terms": {
       "EndingPolicy": {
         "variants": [

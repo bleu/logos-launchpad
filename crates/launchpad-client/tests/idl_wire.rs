@@ -1366,10 +1366,10 @@ fn pause_policy_and_trade_control_have_independent_wire_tags() {
 
 #[test]
 fn ending_policies_have_independent_wire_tags() {
-    assert_eq!(
-        schema()["imports"]["sale_policy"],
-        json!(["controls", "terms"])
-    );
+    let schema = schema();
+    let imports = schema["imports"]["sale_policy"].as_array().unwrap();
+    assert!(imports.contains(&json!("controls")));
+    assert!(imports.contains(&json!("terms")));
     for (policy, tag, name) in [
         (curve_core::EndingPolicy::Manual, 0, "Manual"),
         (curve_core::EndingPolicy::Scheduled, 1, "Scheduled"),
@@ -1445,13 +1445,160 @@ fn fixed_pool_state_tuple_places_policies_after_trade_control() {
             Some(100u64),
             lbp_core::CreatorAllocationRelease::AfterEnd,
         ),
-        (0u128, 0u128, false),
+        (0u128, 0u128, lbp_core::SettlementProgress::Unselected),
     ))
     .unwrap();
     bytes.push(0); // No pending operation.
     let pool = lbp_core::PoolAccount::decode(&bytes).unwrap();
     assert_eq!(pool.ending_policy, lbp_core::EndingPolicy::Either);
     assert_eq!(pool.remaining_inventory, 800);
+    assert_eq!(
+        pool.settlement_progress,
+        lbp_core::SettlementProgress::Unselected
+    );
     assert_eq!(&bytes[..3], &[0, 0, 3]);
     assert_eq!(borsh::to_vec(&pool).unwrap(), bytes);
+}
+
+#[test]
+fn settlement_progress_has_explicit_wire_tags_and_a_shared_schema() {
+    let schema = schema();
+    assert!(
+        schema["imports"]["sale_policy"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("settlement"))
+    );
+    for (progress, tag, name) in [
+        (lbp_core::SettlementProgress::Unselected, 0, "Unselected"),
+        (
+            lbp_core::SettlementProgress::ManualStarted,
+            1,
+            "ManualStarted",
+        ),
+        (
+            lbp_core::SettlementProgress::ManualComplete,
+            2,
+            "ManualComplete",
+        ),
+        (lbp_core::SettlementProgress::Graduated, 3, "Graduated"),
+    ] {
+        assert_wire(progress, &format!("{tag:02x}"));
+        assert_eq!(
+            variant("settlement", "SettlementProgress", name),
+            json!({"tag":tag,"name":name,"fields":[]})
+        );
+    }
+    assert_eq!(
+        schema["modules"]["settlement"]["SettlementProgress"]["variants"]
+            .as_array()
+            .unwrap()
+            .len(),
+        4
+    );
+    assert!(borsh::from_slice::<lbp_core::SettlementProgress>(&[4]).is_err());
+    let fields = schema["modules"]["lbp"]["PoolAccount"]["fields"]
+        .as_array()
+        .unwrap();
+    assert!(
+        fields
+            .iter()
+            .all(|field| field["name"] != "proceeds_settled")
+    );
+    let index = fields
+        .iter()
+        .position(|field| field["name"] == "accrued_fees")
+        .unwrap();
+    assert_eq!(
+        fields[index + 1],
+        json!({"name":"settlement_progress","type":"SettlementProgress"})
+    );
+    assert_eq!(fields[index + 2]["name"], "pending");
+}
+
+#[test]
+fn fixed_pool_terminal_states_use_progress_tags_instead_of_boolean_completion() {
+    let account = AccountId::new([5; 32]);
+    for (progress, tag) in [
+        (lbp_core::SettlementProgress::ManualComplete, 2),
+        (lbp_core::SettlementProgress::Graduated, 3),
+    ] {
+        let mut bytes = borsh::to_vec(&(
+            curve_core::BuyPolicy::Open,
+            curve_core::TradeControl::Unrestricted,
+            lbp_core::EndingPolicy::Either,
+            lbp_core::PoolMode::FixedPrice,
+            true,
+            (
+                account, account, account, account, [6u8; 32], account, account,
+            ),
+            (800u128, 0u128, 200u128),
+            lbp_core::FixedPrice {
+                collateral_units: 25,
+                token_units: 10,
+            },
+            (
+                9u64,
+                Some(100u64),
+                lbp_core::CreatorAllocationRelease::AfterEnd,
+            ),
+            (0u128, 0u128, progress),
+        ))
+        .unwrap();
+        bytes.push(0);
+        let pool = lbp_core::PoolAccount::decode(&bytes).unwrap();
+        assert_eq!(pool.settlement_progress, progress);
+        assert_eq!(pool.remaining_inventory, 0);
+        assert_eq!(bytes[bytes.len() - 2], tag);
+        assert_eq!(borsh::to_vec(&pool).unwrap(), bytes);
+    }
+}
+
+#[test]
+fn curve_settlement_stage_keeps_its_existing_wire_bytes() {
+    use factory_core::SettlementStage;
+    for (stage, tag, name, payload_len) in [
+        (SettlementStage::Unstarted, 0, "Unstarted", 0),
+        (SettlementStage::Ready, 1, "Ready", 0),
+        (
+            SettlementStage::Withdrawn {
+                unsold: 0,
+                collateral_due: 0,
+            },
+            2,
+            "Withdrawn",
+            32,
+        ),
+        (
+            SettlementStage::Burned { collateral_due: 0 },
+            3,
+            "Burned",
+            16,
+        ),
+        (
+            SettlementStage::TokenPaid { collateral_due: 0 },
+            4,
+            "TokenPaid",
+            16,
+        ),
+        (SettlementStage::Complete, 5, "Complete", 0),
+        (
+            SettlementStage::HookReady { collateral_due: 0 },
+            6,
+            "HookReady",
+            16,
+        ),
+        (SettlementStage::Graduated, 7, "Graduated", 0),
+    ] {
+        assert_wire(stage, &format!("{tag:02x}{}", "00".repeat(payload_len)));
+        assert_eq!(variant("factory", "SettlementStage", name)["tag"], tag);
+    }
+    assert_eq!(
+        schema()["modules"]["factory"]["SettlementStage"]["variants"]
+            .as_array()
+            .unwrap()
+            .len(),
+        8
+    );
+    assert!(borsh::from_slice::<SettlementStage>(&[8]).is_err());
 }

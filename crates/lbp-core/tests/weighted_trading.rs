@@ -1319,7 +1319,7 @@ fn weighted_fees_collectible_when_paused() {
 #[test]
 fn weighted_pause_rejects_after_settlement() {
     let (mut input, mut state) = funded();
-    state.proceeds_settled = true;
+    state.settlement_progress = lbp_core::SettlementProgress::ManualComplete;
     input.from = Some(Actor::new(state.factory_owner, state.factory_program_id));
     input.pre_state = borsh::to_vec(&state).unwrap().into();
     input.message = borsh::to_vec(&Message::SetWeightedPaused { paused: true }).unwrap();
@@ -1378,7 +1378,7 @@ fn weighted_settlement_pays_seed_and_proceeds_burns_unsold_and_collects_fees() {
     )
     .unwrap();
     let next = state_of(&response);
-    assert!(next.proceeds_settled);
+    assert!(next.settlement_progress.is_complete());
     assert_eq!(next.recorded_collateral, 0);
     assert_eq!(next.accrued_fees, 0);
 
@@ -1430,7 +1430,7 @@ fn weighted_settlement_is_idempotent() {
     )
     .unwrap();
     let settled = state_of(&response);
-    assert!(settled.proceeds_settled);
+    assert!(settled.settlement_progress.is_complete());
 
     // Second settlement returns state unchanged (no-op)
     let mut input2 = input.clone();
@@ -1443,7 +1443,7 @@ fn weighted_settlement_is_idempotent() {
     let response2 = handle(&input2).unwrap();
     // Idempotent: no transfers, state preserved
     let still_settled = state_of(&response2);
-    assert!(still_settled.proceeds_settled);
+    assert!(still_settled.settlement_progress.is_complete());
     assert_eq!(still_settled.recorded_collateral, 0);
 }
 
@@ -1484,7 +1484,7 @@ fn weighted_settlement_with_zero_fees_and_no_unsold() {
     )
     .unwrap();
     let next = state_of(&response);
-    assert!(next.proceeds_settled);
+    assert!(next.settlement_progress.is_complete());
     // No burn needed when remaining_inventory is 0
     // No fee payout when accrued_fees is 0
 }
@@ -1565,7 +1565,7 @@ fn weighted_settlement_surplus_not_paid_to_creator() {
     )
     .unwrap();
     let next = state_of(&response);
-    assert!(next.proceeds_settled);
+    assert!(next.settlement_progress.is_complete());
     // recorded_collateral is zeroed — only the original 100 is paid, not 500
     assert_eq!(next.recorded_collateral, 0);
 }
@@ -2135,7 +2135,7 @@ fn failed_buy_does_not_change_checkpoint() {
 #[test]
 fn poke_on_settled_pool_still_works() {
     let (input, mut state) = funded();
-    state.proceeds_settled = true;
+    state.settlement_progress = lbp_core::SettlementProgress::ManualComplete;
     state.recorded_collateral = 0;
     // Poke on a settled pool should still record checkpoint
     let response = poke_at(1_500_000, &input, &state).unwrap();
@@ -2220,7 +2220,7 @@ fn weighted_controls_reject_disabled_unfunded_settled_and_overflow_even_on_noops
                         lbp_core::Error::PendingFunding
                     }
                     2 => {
-                        state.proceeds_settled = true;
+                        state.settlement_progress = lbp_core::SettlementProgress::ManualComplete;
                         lbp_core::Error::Closed
                     }
                     _ => {
@@ -2476,7 +2476,7 @@ fn weighted_either_settlement_requires_depletion_or_the_schedule_and_keeps_retry
             .unwrap();
             assert_eq!(response.validity.timestamps.start(), expected);
             let next = state_of(&response);
-            assert!(next.proceeds_settled);
+            assert!(next.settlement_progress.is_complete());
             assert_eq!(next.remaining_inventory, remaining);
             assert_eq!(
                 next.close_time_bound().unwrap(),
@@ -2527,5 +2527,195 @@ fn weighted_collection_and_settlement_reject_unbacked_pricing_or_reduced_seed() 
             .err(),
             Some(lbp_core::Error::InvalidState)
         );
+    }
+}
+
+#[test]
+fn weighted_atomic_settlement_excludes_seed_fees_and_burn_from_route_selection() {
+    use lbp_core::SettlementProgress;
+    use lez_compat_core::token::Message as TokenMessage;
+    let (input, original) = funded();
+    for (proceeds, fees, inventory) in [
+        (100, 0, 1_000_000),
+        (100, 1, 999_500),
+        (149, 1, 999_500),
+        (100, 0, 0),
+        (149, 1, 0),
+    ] {
+        let mut state = original.clone();
+        state.recorded_collateral = proceeds;
+        state.accrued_fees = fees;
+        state.remaining_inventory = inventory;
+        if let lbp_core::PoolMode::Weighted {
+            pricing_collateral, ..
+        } = &mut state.mode
+        {
+            *pricing_collateral = proceeds;
+        }
+        let response = settle(
+            &input,
+            &state,
+            Message::SettleWeighted { creator: id(50) },
+            config(9999, id(43), true),
+            [proceeds + fees + 17, inventory + 7],
+        )
+        .unwrap();
+        let mut expected = state.clone();
+        expected.recorded_collateral = 0;
+        expected.accrued_fees = 0;
+        expected.settlement_progress = SettlementProgress::ManualComplete;
+        assert_eq!(state_of(&response), expected);
+        assert_eq!(
+            response.post_state.as_ref().unwrap().to_vec(),
+            borsh::to_vec(&expected).unwrap()
+        );
+        assert_eq!(response.validity.timestamps.start(), Some(3_000_000));
+        assert_eq!(response.validity.timestamps.end(), None);
+        let mut calls = vec![];
+        if fees != 0 {
+            calls.push(TokenMessage::Transfer {
+                definition: id(42),
+                recipient: id(43),
+                amount: fees,
+            });
+        }
+        if inventory != 0 {
+            calls.push(TokenMessage::Burn {
+                definition: id(41),
+                amount: inventory,
+            });
+        }
+        calls.push(TokenMessage::Transfer {
+            definition: id(42),
+            recipient: id(50),
+            amount: proceeds,
+        });
+        assert_eq!(
+            response
+                .sync_messages
+                .iter()
+                .map(|call| borsh::from_slice::<TokenMessage>(&call.message).unwrap())
+                .collect::<Vec<_>>(),
+            calls
+        );
+        let mut retry = input.clone();
+        retry.from = Some(Actor::new(state.factory_owner, state.factory_program_id));
+        retry.pre_state = response.post_state.clone().unwrap();
+        retry.message = borsh::to_vec(&Message::SettleWeighted { creator: id(50) }).unwrap();
+        let repeated = handle(&retry).unwrap();
+        assert_eq!(repeated.post_state, response.post_state);
+        assert_eq!(repeated.validity.timestamps.start(), Some(3_000_000));
+        assert!(repeated.sync_messages.is_empty());
+        assert!(repeated.events.is_empty());
+    }
+}
+
+#[test]
+fn weighted_settlement_rejects_recorded_seed_shortfall_even_with_vault_surplus() {
+    let (input, original) = funded();
+    for recorded in [0, 1, 99] {
+        for inventory in [0, original.remaining_inventory] {
+            let mut state = original.clone();
+            state.recorded_collateral = recorded;
+            state.remaining_inventory = inventory;
+            assert_eq!(
+                settle(
+                    &input,
+                    &state,
+                    Message::SettleWeighted { creator: id(50) },
+                    config(100, id(43), false),
+                    [1000, inventory + 7]
+                )
+                .err(),
+                Some(lbp_core::Error::InvalidState)
+            );
+        }
+    }
+}
+
+#[test]
+fn weighted_completed_retries_still_check_factory_mode_and_recipient() {
+    use lbp_core::SettlementProgress;
+    let (mut input, mut state) = funded();
+    for progress in [
+        SettlementProgress::ManualComplete,
+        SettlementProgress::Graduated,
+    ] {
+        state.settlement_progress = progress;
+        state.recorded_collateral = 0;
+        state.remaining_inventory = 0;
+        input.pre_state = borsh::to_vec(&state).unwrap().into();
+        input.message = borsh::to_vec(&Message::SettleWeighted { creator: id(50) }).unwrap();
+        for from in [
+            None,
+            Some(Actor::new(id(50), id(8))),
+            Some(Actor::new(id(99), state.factory_program_id)),
+            Some(Actor::new(state.factory_owner, id(99))),
+        ] {
+            input.from = from;
+            assert_eq!(handle(&input).err(), Some(lbp_core::Error::Unauthorized));
+        }
+        input.from = Some(Actor::new(state.factory_owner, state.factory_program_id));
+        let retry = handle(&input).unwrap();
+        assert_eq!(state_of(&retry), state);
+        assert!(retry.sync_messages.is_empty());
+        assert_eq!(retry.validity.timestamps.start(), Some(3_000_000));
+        input.message = borsh::to_vec(&Message::SettleWeighted {
+            creator: AccountId::default(),
+        })
+        .unwrap();
+        assert_eq!(handle(&input).err(), Some(lbp_core::Error::Unauthorized));
+        input.message = borsh::to_vec(&Message::SettleFixedPrice {
+            creator: id(50),
+            now: 3000,
+        })
+        .unwrap();
+        assert_eq!(handle(&input).err(), Some(lbp_core::Error::InvalidMessage));
+    }
+}
+
+#[test]
+fn weighted_completed_progress_blocks_controls_and_both_buy_forms() {
+    use lbp_core::SettlementProgress;
+    let (mut input, mut state) = funded();
+    for progress in [
+        SettlementProgress::ManualComplete,
+        SettlementProgress::Graduated,
+    ] {
+        state.settlement_progress = progress;
+        input.from = Some(Actor::new(state.factory_owner, state.factory_program_id));
+        input.pre_state = borsh::to_vec(&state).unwrap().into();
+        for message in [
+            Message::SetPaused { paused: false },
+            Message::SetWeightedPaused { paused: false },
+        ] {
+            input.message = borsh::to_vec(&message).unwrap();
+            assert_eq!(handle(&input).err(), Some(lbp_core::Error::Closed));
+        }
+        input.from = Some(Actor::new(id(50), id(8)));
+        for message in [
+            Message::BuyWeightedExactInput {
+                membership: None,
+                amount_in: 50,
+                min_amount_out: 1,
+            },
+            Message::BuyWeightedExactOutput {
+                membership: None,
+                amount_out: 500,
+                max_amount_in: 1000,
+            },
+        ] {
+            assert_eq!(
+                operation(
+                    &input,
+                    &state,
+                    message,
+                    config(100, id(43), false),
+                    [100, state.remaining_inventory, 1000]
+                )
+                .err(),
+                Some(lbp_core::Error::Closed)
+            );
+        }
     }
 }

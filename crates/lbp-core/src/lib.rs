@@ -2,7 +2,7 @@
 
 pub use curve_core::{AllowlistPolicy, BuyPolicy, MembershipPath};
 use sale_policy::{EndingError, TimeBounds};
-pub use sale_policy::{EndingPolicy, PausePolicy, TradeControl};
+pub use sale_policy::{EndingPolicy, PausePolicy, SettlementProgress, TradeControl};
 
 mod pricing;
 pub mod pricing_clock;
@@ -206,7 +206,7 @@ pub struct PoolAccount {
     pub creator_allocation_release: CreatorAllocationRelease,
     pub recorded_collateral: u128,
     pub accrued_fees: u128,
-    pub proceeds_settled: bool,
+    pub settlement_progress: SettlementProgress,
     pending: Option<Pending>,
 }
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -636,7 +636,7 @@ pub fn handle(input: &ReceiveInput) -> Result<Response, Error> {
                 creator_allocation_release: inputs.creator_allocation_release,
                 recorded_collateral: 0,
                 accrued_fees: 0,
-                proceeds_settled: false,
+                settlement_progress: crate::SettlementProgress::Unselected,
                 pending: Some(Pending {
                     activate: false,
                     step: 0,
@@ -765,7 +765,7 @@ pub fn handle(input: &ReceiveInput) -> Result<Response, Error> {
                 creator_allocation_release: inputs.creator_allocation_release,
                 recorded_collateral: 0,
                 accrued_fees: 0,
-                proceeds_settled: false,
+                settlement_progress: crate::SettlementProgress::Unselected,
                 pending: Some(Pending {
                     activate: false,
                     step: 0,

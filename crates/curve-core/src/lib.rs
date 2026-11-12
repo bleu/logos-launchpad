@@ -7,7 +7,8 @@ use lee_core::{
     program::{PdaSeed, ReceiveInput, Response, SyncMessage},
 };
 pub use sale_policy::{
-    EndingDecision, EndingError, EndingPolicy, EndingReason, PausePolicy, TimeBounds, TradeControl,
+    EndingDecision, EndingError, EndingPolicy, EndingReason, PausePolicy, SettlementAmounts,
+    SettlementError, SettlementProgress, SettlementRoute, TimeBounds, TradeControl,
 };
 
 include!(concat!(env!("OUT_DIR"), "/emergency_authority.rs"));

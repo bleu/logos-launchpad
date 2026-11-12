@@ -399,14 +399,17 @@ fn settlement_manual_reserve_credit_retry_selects_route_only_after_payment() {
 
 #[test]
 #[ignore = "requires fresh application and compatibility ELFs and the pinned clock ELF"]
-fn settlement_manual_collateral_credit_failure_preserves_paid_reserve_without_double_payment() {
+fn settlement_manual_collateral_credit_failure_preserves_paid_reserve_and_vault_surplus_on_retry() {
     let mut fixture = closed_sale(None, vec![], 100, true);
     for _ in 0..4 {
         manual(&mut fixture).unwrap();
     }
+    let factory = fixture.factory;
+    set_holding(&mut fixture, factory, COLLATERAL, COLLATERAL, 129);
     let creator = id(&key(48));
     set_holding(&mut fixture, creator, COLLATERAL, LAUNCH, 1_000);
     rejected(&mut fixture, manual, "WrongDefinition");
+    assert_eq!(balance(&fixture.state, factory, COLLATERAL), 129);
     assert_eq!(balance(&fixture.state, creator, fixture.definition), 100);
     assert_eq!(
         saved(&fixture).settlement_stage,
@@ -418,12 +421,14 @@ fn settlement_manual_collateral_credit_failure_preserves_paid_reserve_without_do
     manual(&mut fixture).unwrap();
     assert_eq!(balance(&fixture.state, creator, fixture.definition), 100);
     assert_eq!(balance(&fixture.state, creator, COLLATERAL), 1_112);
-    assert_eq!(balance(&fixture.state, fixture.factory, COLLATERAL), 0);
+    assert_eq!(balance(&fixture.state, fixture.factory, COLLATERAL), 17);
     assert_eq!(
         saved(&fixture).settlement_stage,
         factory_core::SettlementStage::Complete
     );
     rejected(&mut fixture, manual, "AlreadySettled");
+    assert_eq!(balance(&fixture.state, fixture.factory, COLLATERAL), 17);
+    assert_eq!(balance(&fixture.state, creator, COLLATERAL), 1_112);
 }
 
 fn custody(fixture: &FactoryFixture) -> AccountId {
@@ -893,18 +898,31 @@ fn settlement_failed_callback_allows_manual_recovery_without_replacing_adapter()
 
 #[test]
 #[ignore = "requires fresh application, adapter and compatibility ELFs and the pinned clock ELF"]
-fn settlement_zero_manual_payout_and_allocation_claim_leave_one_permissionless_hook() {
+fn settlement_zero_manual_completion_blocks_hooks_and_keeps_allocation_claims() {
     let mut fixture = closed_sale(Some(ADAPTER), b"zero-payout".to_vec(), 0, false);
     fixture.state = fixture
         .state
         .with_named_programs([(ADAPTER, guest("LAUNCHPAD_ADAPTER_ELF"))]);
     initialize_adapter(&mut fixture, true);
+    let adapter_actors = [
+        Actor::new(custody(&fixture), ADAPTER),
+        holding(custody(&fixture), fixture.definition),
+        holding(custody(&fixture), COLLATERAL),
+    ];
+    let adapter_before = adapter_actors.map(|actor| {
+        fixture
+            .state
+            .get_account_by_id(actor.account_id)
+            .data
+            .actor_state(actor.program_account_id)
+            .to_vec()
+    });
     for _ in 0..4 {
         manual(&mut fixture).unwrap();
     }
     assert_eq!(
         saved(&fixture).settlement_stage,
-        factory_core::SettlementStage::NoPayout
+        factory_core::SettlementStage::Complete
     );
     assert_eq!(supply(&fixture), 50);
     claim(&mut fixture).unwrap();
@@ -914,13 +932,36 @@ fn settlement_zero_manual_payout_and_allocation_claim_leave_one_permissionless_h
     );
     assert_eq!(
         saved(&fixture).settlement_stage,
-        factory_core::SettlementStage::NoPayout
+        factory_core::SettlementStage::Complete
     );
-    hook(&mut fixture).unwrap();
+    rejected(&mut fixture, hook, "ManualPayoutStarted");
+    rejected(&mut fixture, manual, "AlreadySettled");
+    assert!(adapter_state(&fixture).receipt.is_none());
+    for (actor, before) in adapter_actors.into_iter().zip(adapter_before) {
+        assert_eq!(
+            fixture
+                .state
+                .get_account_by_id(actor.account_id)
+                .data
+                .actor_state(actor.program_account_id)
+                .to_vec(),
+            before
+        );
+    }
     assert_eq!(
-        saved(&fixture).settlement_stage,
-        factory_core::SettlementStage::HookReady { collateral_due: 0 }
+        balance(&fixture.state, id(&key(48)), fixture.definition),
+        50
     );
+    assert_eq!(balance(&fixture.state, id(&key(48)), COLLATERAL), 1_000);
+    assert_eq!(supply(&fixture), 50);
+    rejected(&mut fixture, hook, "ManualPayoutStarted");
+    rejected(&mut fixture, claim, "AlreadyClaimed");
+}
+
+#[test]
+#[ignore = "requires fresh application, adapter and compatibility ELFs and the pinned clock ELF"]
+fn settlement_zero_hook_can_graduate_before_manual_completion() {
+    let mut fixture = hook_ready(b"zero-payout".to_vec(), 0, false, "LAUNCHPAD_ADAPTER_ELF");
     hook(&mut fixture).unwrap();
     assert_eq!(
         saved(&fixture).settlement_stage,
@@ -935,14 +976,9 @@ fn settlement_zero_manual_payout_and_allocation_claim_leave_one_permissionless_h
         0
     );
     assert_eq!(balance(&fixture.state, custody(&fixture), COLLATERAL), 0);
-    assert_eq!(
-        balance(&fixture.state, id(&key(48)), fixture.definition),
-        50
-    );
-    assert_eq!(balance(&fixture.state, id(&key(48)), COLLATERAL), 1_000);
     assert_eq!(supply(&fixture), 50);
     rejected(&mut fixture, hook, "AlreadySettled");
-    rejected(&mut fixture, claim, "AlreadyClaimed");
+    rejected(&mut fixture, manual, "AlreadySettled");
 }
 
 #[test]
