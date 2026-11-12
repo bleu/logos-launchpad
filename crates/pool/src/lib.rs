@@ -11,6 +11,7 @@
 #![deny(clippy::arithmetic_side_effects)]
 
 use borsh::{BorshDeserialize, BorshSerialize};
+use sale_policy::{FeeError, FeeRate};
 
 /// Why a pool could not be created.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -244,16 +245,14 @@ impl Pool {
         if pool_fee_bps != 0 {
             return Err(SwapError::PoolFeeUnsupported);
         }
-        validate_fee_rate(protocol_fee_bps)?;
+        let fee_rate = FeeRate::new(protocol_fee_bps).map_err(map_fee_error)?;
         let is_buy = token_in == TokenSide::Token1;
-        let protocol_fee = if is_buy {
-            fee_ceil(amount_in, protocol_fee_bps)?
+        let (effective_input, protocol_fee) = if is_buy {
+            let split = fee_rate.split(amount_in).map_err(map_fee_error)?;
+            (split.net, split.fee)
         } else {
-            0
+            (amount_in, 0)
         };
-        let effective_input = amount_in
-            .checked_sub(protocol_fee)
-            .ok_or(SwapError::Arithmetic)?;
         if effective_input == 0 {
             return Err(SwapError::InputConsumedByFees);
         }
@@ -271,12 +270,11 @@ impl Pool {
         let (recipient_amount_out, protocol_fee, protocol_fee_side) = if is_buy {
             (amount_out, protocol_fee, FeeSide::Input)
         } else {
-            let fee = fee_ceil(amount_out, protocol_fee_bps)?;
-            let net = amount_out.checked_sub(fee).ok_or(SwapError::Arithmetic)?;
-            if net == 0 {
+            let split = fee_rate.split(amount_out).map_err(map_fee_error)?;
+            if split.net == 0 {
                 return Err(SwapError::OutputTooSmall);
             }
-            (net, fee, FeeSide::Output)
+            (split.net, split.fee, FeeSide::Output)
         };
         if recipient_amount_out < min_amount_out {
             return Err(SwapError::SlippageExceeded);
@@ -362,23 +360,13 @@ impl Pool {
         if required_effective_input == 0 {
             return Err(SwapError::InputTooSmall);
         }
-        validate_fee_rate(protocol_fee_bps)?;
-        if protocol_fee_bps == 10_000 {
-            return Err(SwapError::InputConsumedByFees);
-        }
-        let amount_in = mul_div_ceil(
-            required_effective_input,
-            10_000,
-            u128::from(
-                10_000_u16
-                    .checked_sub(protocol_fee_bps)
-                    .ok_or(SwapError::Arithmetic)?,
-            ),
-        )?;
-        let protocol_fee = fee_ceil(amount_in, protocol_fee_bps)?;
-        let effective_input = amount_in
-            .checked_sub(protocol_fee)
-            .ok_or(SwapError::Arithmetic)?;
+        let split = FeeRate::new(protocol_fee_bps)
+            .map_err(map_fee_error)?
+            .gross_up(required_effective_input)
+            .map_err(map_fee_error)?;
+        let amount_in = split.gross;
+        let protocol_fee = split.fee;
+        let effective_input = split.net;
         if amount_in > max_amount_in {
             return Err(SwapError::SlippageExceeded);
         }
@@ -535,47 +523,12 @@ impl Pool {
     }
 }
 
-fn mul_div_floor(value: u128, multiplier: u128, divisor: u128) -> Result<u128, SwapError> {
-    let quotient = value.checked_div(divisor).ok_or(SwapError::Arithmetic)?;
-    let remainder = value.checked_rem(divisor).ok_or(SwapError::Arithmetic)?;
-    let whole = quotient
-        .checked_mul(multiplier)
-        .ok_or(SwapError::Arithmetic)?;
-    let fraction = remainder
-        .checked_mul(multiplier)
-        .ok_or(SwapError::Arithmetic)?
-        .checked_div(divisor)
-        .ok_or(SwapError::Arithmetic)?;
-    whole.checked_add(fraction).ok_or(SwapError::Arithmetic)
-}
-
-fn mul_div_ceil(value: u128, multiplier: u128, divisor: u128) -> Result<u128, SwapError> {
-    let floor = mul_div_floor(value, multiplier, divisor)?;
-    let remainder = value.checked_rem(divisor).ok_or(SwapError::Arithmetic)?;
-    let fractional_numerator = remainder
-        .checked_mul(multiplier)
-        .ok_or(SwapError::Arithmetic)?;
-    if fractional_numerator
-        .checked_rem(divisor)
-        .ok_or(SwapError::Arithmetic)?
-        == 0
-    {
-        Ok(floor)
-    } else {
-        floor.checked_add(1).ok_or(SwapError::Arithmetic)
+fn map_fee_error(error: FeeError) -> SwapError {
+    match error {
+        FeeError::RateAboveDenominator => SwapError::FeeAboveDenominator,
+        FeeError::InputConsumedByFees => SwapError::InputConsumedByFees,
+        FeeError::Arithmetic => SwapError::Arithmetic,
     }
-}
-
-fn validate_fee_rate(protocol_fee_bps: u16) -> Result<(), SwapError> {
-    if protocol_fee_bps > 10_000 {
-        Err(SwapError::FeeAboveDenominator)
-    } else {
-        Ok(())
-    }
-}
-
-fn fee_ceil(amount: u128, protocol_fee_bps: u16) -> Result<u128, SwapError> {
-    mul_div_ceil(amount, u128::from(protocol_fee_bps), 10_000)
 }
 
 #[cfg(test)]
@@ -877,8 +830,83 @@ mod tests {
     }
 
     #[test]
+    fn exact_input_fee_errors_preserve_direction_and_leave_state_unchanged() {
+        for (token_in, amount_in, fee_bps, expected) in [
+            (TokenSide::Token1, 0, 10_001, SwapError::ZeroAmount),
+            (TokenSide::Token1, 1, 10_001, SwapError::FeeAboveDenominator),
+            (TokenSide::Token0, 1, 10_001, SwapError::FeeAboveDenominator),
+            (TokenSide::Token1, 1, 1, SwapError::InputConsumedByFees),
+            (
+                TokenSide::Token1,
+                25,
+                10_000,
+                SwapError::InputConsumedByFees,
+            ),
+            (TokenSide::Token0, 250, 9_999, SwapError::OutputTooSmall),
+            (TokenSide::Token0, 250, 10_000, SwapError::OutputTooSmall),
+        ] {
+            let mut pool = Pool::create(PoolCreateParams {
+                token0_amount: 800,
+                token1_amount: 100,
+                virtual_reserve0: 1_000,
+                virtual_reserve1: 100,
+                close_timestamp: None,
+                close_on_depletion: None,
+            })
+            .expect("valid pool");
+            let before = pool.clone();
+            assert_eq!(
+                pool.swap_exact_input(ExactInputSwap {
+                    token_in,
+                    amount_in,
+                    min_amount_out: u128::MAX,
+                    pool_fee_bps: 0,
+                    protocol_fee_bps: fee_bps,
+                    now: 1,
+                }),
+                Err(expected)
+            );
+            assert_eq!(pool, before);
+        }
+    }
+
+    #[test]
+    fn exact_output_fee_errors_follow_quote_checks_and_leave_state_unchanged() {
+        for (amount_out, fee_bps, expected) in [
+            (0, 10_001, SwapError::ZeroAmount),
+            (801, 10_001, SwapError::InsufficientRealOutputReserve),
+            (100, 10_001, SwapError::FeeAboveDenominator),
+            (100, 10_000, SwapError::InputConsumedByFees),
+            (100, 1_000, SwapError::SlippageExceeded),
+        ] {
+            let mut pool = Pool::create(PoolCreateParams {
+                token0_amount: 800,
+                token1_amount: 100,
+                virtual_reserve0: 1_000,
+                virtual_reserve1: 100,
+                close_timestamp: None,
+                close_on_depletion: None,
+            })
+            .expect("valid pool");
+            let before = pool.clone();
+            assert_eq!(
+                pool.swap_exact_output(ExactOutputSwap {
+                    token_in: TokenSide::Token1,
+                    amount_out,
+                    max_amount_in: 0,
+                    pool_fee_bps: 0,
+                    protocol_fee_bps: fee_bps,
+                    now: 1,
+                }),
+                Err(expected)
+            );
+            assert_eq!(pool, before);
+        }
+    }
+
+    #[test]
     fn exact_output_uses_the_smallest_fee_inclusive_gross_input() {
-        for fee_bps in [1, 2_500, 9_999] {
+        for fee_bps in [0, 1, 2_500, 9_999] {
             let mut pool = Pool::create(PoolCreateParams {
                 token0_amount: 800,
                 token1_amount: 100,
@@ -905,7 +933,11 @@ mod tests {
             );
             assert!(outcome.effective_amount_in >= required_net);
             let previous = outcome.amount_in.checked_sub(1).expect("positive input");
-            let previous_effective = previous - fee_ceil(previous, fee_bps).expect("fee fits");
+            let previous_fee = previous
+                .checked_mul(u128::from(fee_bps))
+                .expect("small test input")
+                .div_ceil(10_000);
+            let previous_effective = previous - previous_fee;
             assert!(previous_effective < required_net);
         }
     }

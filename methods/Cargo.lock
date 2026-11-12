@@ -1672,6 +1672,7 @@ dependencies = [
  "curve-core",
  "lee_core",
  "lez-compat-core",
+ "sale-policy",
  "serde",
  "weighted-math-core",
 ]
@@ -2011,6 +2012,7 @@ version = "0.1.0"
 dependencies = [
  "borsh",
  "curve-math",
+ "sale-policy",
 ]
 
 [[package]]
@@ -2622,6 +2624,10 @@ dependencies = [
  "toml",
  "yaml-rust2",
 ]
+
+[[package]]
+name = "sale-policy"
+version = "0.1.0"
 
 [[package]]
 name = "schemars"

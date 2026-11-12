@@ -2,6 +2,7 @@
 
 pub use curve_core::{AllowlistPolicy, BuyPolicy, MembershipPath};
 
+mod pricing;
 pub mod pricing_clock;
 mod trading;
 mod weighted_lifecycle;

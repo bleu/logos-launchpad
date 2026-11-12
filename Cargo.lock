@@ -3745,6 +3745,7 @@ dependencies = [
  "lee_core",
  "lez-compat-core",
  "risc0-zkvm",
+ "sale-policy",
  "serde",
  "weighted-math-core",
 ]
@@ -5936,6 +5937,7 @@ dependencies = [
  "borsh",
  "curve-math",
  "proptest",
+ "sale-policy",
 ]
 
 [[package]]
@@ -7128,6 +7130,10 @@ dependencies = [
  "toml",
  "yaml-rust2",
 ]
+
+[[package]]
+name = "sale-policy"
+version = "0.1.0"
 
 [[package]]
 name = "same-file"
