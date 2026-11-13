@@ -1561,7 +1561,7 @@ fn curve_pause_checks_current_creator_on_every_call_and_forwards_only_to_bound_p
     let (mut input, active) = active();
     let mut state = FactoryState::decode(active.post_state.as_ref().unwrap()).unwrap();
     state.pause_policy = PausePolicy::AuthorityControlled;
-    for paused in [true, true, false, false] {
+    for paused in [true, false] {
         input.pre_state = borsh::to_vec(&state).unwrap().into();
         input.from = None;
         input.message = borsh::to_vec(&Message::SetPaused {

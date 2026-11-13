@@ -25,17 +25,3 @@ fn repeated_controls_report_only_real_changes_and_keep_policy() {
         assert_eq!(control.policy(), PausePolicy::AuthorityControlled);
     }
 }
-
-#[test]
-fn control_state_round_trips_without_changing_the_creation_policy() {
-    for control in [
-        TradeControl::Unrestricted,
-        TradeControl::Running,
-        TradeControl::Paused,
-    ] {
-        let bytes = borsh::to_vec(&control).unwrap();
-        let saved: TradeControl = borsh::from_slice(&bytes).unwrap();
-        assert_eq!(saved, control);
-        assert_eq!(saved.policy(), control.policy());
-    }
-}

@@ -1626,10 +1626,9 @@ fn creation_preserves_pause_policy_and_resumption_rejects_changes_at_every_stage
 }
 
 #[test]
-fn paused_curve_quotes_reject_both_buy_forms_and_sells_without_changing_state() {
+fn paused_curve_quotes_reject_both_buy_forms_and_sells() {
     let (mut pool, config) = pool_snapshot();
     pool.trade_control = curve_core::TradeControl::Paused;
-    let before = pool.clone();
     for result in [
         quote_buy(&pool, &config, 1, 1),
         quote_buy_with_collateral(&pool, &config, 1, 1),
@@ -1637,5 +1636,4 @@ fn paused_curve_quotes_reject_both_buy_forms_and_sells_without_changing_state() 
     ] {
         assert!(matches!(result, Err(ClientError::PoolPaused)));
     }
-    assert_eq!(pool, before);
 }

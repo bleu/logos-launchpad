@@ -4157,6 +4157,22 @@ fn shared_lbp_controls_authenticate_no_ops_and_reject_direct_pool_bypass() {
             )
         };
         let creator = AccountId::from(&PublicKey::new_from_private_key(&key));
+        // The participant Execute wrapper rejects controls before calling the pool.
+        let before = state.clone();
+        let nonce = state.get_account_by_id(creator).nonce;
+        let result = fixed_execute_at(
+            &mut state,
+            pool,
+            &key,
+            lbp_core::Message::SetPaused { paused: true },
+            150_000,
+        );
+        assert!(
+            matches!(&result, Err(lee::error::LeeError::ProgramExecutionFailed(error)) if error.contains("Unauthorized")),
+            "participant-wrapper rejection: {result:?}"
+        );
+        assert!(state == before, "participant wrapper changed runtime state");
+        assert_eq!(state.get_account_by_id(creator).nonce, nonce);
         for paused in [false, true] {
             factory_execute_at(
                 &mut state,
@@ -4170,6 +4186,7 @@ fn shared_lbp_controls_authenticate_no_ops_and_reject_direct_pool_bypass() {
                 150_000,
             )
             .unwrap();
+            assert_eq!(fixed_pool(&state, pool).trade_control.is_paused(), paused);
             for (seed, role) in [
                 (97, None),
                 (
@@ -4214,25 +4231,37 @@ fn shared_lbp_controls_authenticate_no_ops_and_reject_direct_pool_bypass() {
                 );
                 assert!(rejected == before, "rejected no-op changed runtime state");
             }
-            let before = state.clone();
-            let result = fixed_execute_at(
-                &mut state,
-                pool,
-                &key,
-                lbp_core::Message::SetPaused { paused },
-                150_000,
-            );
-            assert!(result.is_err(), "creator bypassed the factory actor");
-            assert!(state == before);
+            for requested_pause in [false, true] {
+                let instruction = lbp_core::Message::SetPaused {
+                    paused: requested_pause,
+                };
+                let mut direct = fixed_transaction(&state, pool, &key, instruction.clone()).message;
+                direct.execution.root.to = Actor::new(pool, LBP);
+                direct.execution.root.message = borsh::to_vec(&instruction).unwrap();
+                let witnesses = WitnessSet::for_message(&direct, &[&key]);
+                let before = state.clone();
+                let nonce = state.get_account_by_id(creator).nonce;
+                let result = state.transition_from_public_transaction(
+                    &PublicTransaction::new(direct, witnesses),
+                    1,
+                    150_000,
+                );
+                assert!(
+                    matches!(&result, Err(lee::error::LeeError::ProgramExecutionFailed(error)) if error.contains("Unauthorized")),
+                    "pool bypass with paused={paused}, requested_pause={requested_pause}: {result:?}"
+                );
+                assert!(state == before, "pool bypass changed runtime state");
+                assert_eq!(state.get_account_by_id(creator).nonce, nonce);
+            }
         }
     }
 }
 
 #[test]
-fn weighted_shared_controls_keep_legacy_alias_and_frozen_resume_independent() {
+fn weighted_shared_controls_keep_pause_and_frozen_resume_independent() {
     let (mut state, factory, pool, launch, _escrow, key, actors, salt) = weighted_factory_env();
     let creator = AccountId::from(&PublicKey::new_from_private_key(&key));
-    for paused in [false, true, true, false] {
+    for paused in [false, true, true, false, true] {
         factory_execute_at(
             &mut state,
             factory,
@@ -4247,21 +4276,7 @@ fn weighted_shared_controls_keep_legacy_alias_and_frozen_resume_independent() {
         .unwrap();
         assert_eq!(fixed_pool(&state, pool).trade_control.is_paused(), paused);
     }
-    factory_execute_at(
-        &mut state,
-        factory,
-        &actors,
-        &key,
-        salt,
-        launch,
-        pool,
-        factory_core::Message::SetWeightedPaused {
-            creator,
-            paused: true,
-        },
-        150_000,
-    )
-    .unwrap();
+    assert!(fixed_pool(&state, pool).trade_control.is_paused());
     for operation in [
         lbp_core::Message::BuyWeightedExactInput {
             membership: None,

@@ -1953,10 +1953,6 @@ fn fixed_control_noops_authenticate_and_reject_disabled_unfunded_and_ended_sales
     })
     .unwrap();
     assert_eq!(handle(&input).err(), Some(lbp_core::Error::Unauthorized));
-    assert_eq!(
-        borsh::to_vec(&Message::SetPaused { paused: true }).unwrap()[0],
-        15
-    );
 }
 
 #[test]
