@@ -5,5 +5,8 @@ edition.workspace = true
 rust-version.workspace = true
 license = "MIT"
 
+[dependencies]
+integer-math.workspace = true
+
 [lints]
 workspace = true

@@ -7,7 +7,7 @@ import json, sys
 metadata = json.load(sys.stdin)
 defaults = set(metadata["workspace_default_members"])
 names = {p["name"] for p in metadata["packages"] if p["id"] in defaults}
-expected = {"curve-core", "curve-math", "eligibility-policy", "factory-core", "lbp-core", "pool", "private-flow-core", "sale-policy"}
+expected = {"curve-core", "curve-math", "eligibility-policy", "factory-core", "integer-math", "lbp-core", "pool", "private-flow-core", "sale-policy"}
 assert names == expected, f"unexpected default packages: {names}"
 '
 python3 - "$root/.github/workflows/ci.yml" <<'PY'

@@ -1518,6 +1518,9 @@ dependencies = [
 [[package]]
 name = "curve-math"
 version = "0.1.0"
+dependencies = [
+ "integer-math",
+]
 
 [[package]]
 name = "curve25519-dalek"
@@ -3197,6 +3200,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "integer-math"
+version = "0.1.0"
+
+[[package]]
 name = "ipconfig"
 version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3742,6 +3749,7 @@ dependencies = [
  "borsh",
  "clock_core",
  "curve-core",
+ "integer-math",
  "lee_core",
  "lez-compat-core",
  "risc0-zkvm",
@@ -7134,6 +7142,9 @@ dependencies = [
 [[package]]
 name = "sale-policy"
 version = "0.1.0"
+dependencies = [
+ "integer-math",
+]
 
 [[package]]
 name = "same-file"

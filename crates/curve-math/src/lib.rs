@@ -12,10 +12,12 @@
 //! Creation validates virtual reserves below `2^64`, so the creation-time product
 //! fits `u128`. Each operation remains checked because trade amounts are untrusted.
 //!
-//! Errors use hand-written implementations to keep this arithmetic crate dependency-free.
+//! Shared integer arithmetic keeps division rounding separate from curve errors.
 
 #![cfg_attr(not(test), warn(unused_crate_dependencies))]
 #![deny(clippy::arithmetic_side_effects)]
+
+use integer_math::{ArithmeticError, div_ceil};
 
 /// Why a pricing call could not produce a number.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -50,7 +52,7 @@ pub fn exact_input_amount_out_floor(
     let new_reserve_in = reserve_in
         .checked_add(amount_in)
         .ok_or(MathError::Overflow)?;
-    let quotient = div_ceil(k, new_reserve_in)?;
+    let quotient = div_ceil(k, new_reserve_in).map_err(pricing_error)?;
     reserve_out
         .checked_sub(quotient)
         .ok_or(MathError::ExceedsVirtualReserves)
@@ -66,23 +68,16 @@ pub fn exact_output_amount_in_ceil(
     let remaining = reserve_out
         .checked_sub(amount_out)
         .ok_or(MathError::ExceedsVirtualReserves)?;
-    let target = div_ceil(k, remaining)?;
+    let target = div_ceil(k, remaining).map_err(pricing_error)?;
     target
         .checked_sub(reserve_in)
         .ok_or(MathError::ExceedsVirtualReserves)
 }
 
-/// `n / d` rounded up. Flooring `V - k/x` means ceiling `k/x`.
-///
-/// `d` is always a reserve plus or minus a trade amount, so `d == 0` means the
-/// reserves cannot back the trade, not an arithmetic accident.
-fn div_ceil(n: u128, d: u128) -> Result<u128, MathError> {
-    let floored = n.checked_div(d).ok_or(MathError::ExceedsVirtualReserves)?;
-    let remainder = n.checked_rem(d).ok_or(MathError::ExceedsVirtualReserves)?;
-    if remainder == 0 {
-        Ok(floored)
-    } else {
-        floored.checked_add(1).ok_or(MathError::Overflow)
+fn pricing_error(error: ArithmeticError) -> MathError {
+    match error {
+        ArithmeticError::DivisionByZero => MathError::ExceedsVirtualReserves,
+        ArithmeticError::Overflow => MathError::Overflow,
     }
 }
 
@@ -91,6 +86,34 @@ mod tests {
     use super::*;
 
     // Creation-shaped state throughout: k = Vt * Vc.
+
+    #[test]
+    fn zero_denominators_remain_reserve_errors_even_with_zero_invariant() {
+        for k in [0, 1] {
+            assert_eq!(
+                exact_input_amount_out_floor(0, 1, k, 0),
+                Err(MathError::ExceedsVirtualReserves)
+            );
+            assert_eq!(
+                exact_output_amount_in_ceil(1, 1, k, 1),
+                Err(MathError::ExceedsVirtualReserves)
+            );
+        }
+    }
+
+    #[test]
+    fn full_width_trade_amounts_preserve_curve_rounding() {
+        let reserve = u128::from(u64::MAX);
+        let k = reserve.checked_mul(reserve).unwrap();
+        assert_eq!(
+            exact_input_amount_out_floor(reserve, reserve, k, u128::MAX - reserve),
+            Ok(reserve - 1)
+        );
+        assert_eq!(
+            exact_output_amount_in_ceil(reserve, reserve, k, reserve - 1),
+            Ok(k - reserve)
+        );
+    }
 
     #[test]
     fn exact_input_returns_the_formula_amount_when_the_division_is_exact() {

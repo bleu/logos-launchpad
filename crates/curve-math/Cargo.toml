@@ -5,8 +5,8 @@ edition.workspace = true
 rust-version.workspace = true
 license = "MIT"
 
-# Keep the arithmetic dependency-free.
 [dependencies]
+integer-math.workspace = true
 
 [lints]
 workspace = true

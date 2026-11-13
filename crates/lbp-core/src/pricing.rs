@@ -1,4 +1,4 @@
-use sale_policy::arithmetic::{ArithmeticError, Rounding, mul_div};
+use integer_math::{ArithmeticError, Rounding, mul_div};
 
 use crate::{Error, FixedPrice};
 

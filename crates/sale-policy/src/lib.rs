@@ -2,9 +2,7 @@
 
 #![deny(clippy::arithmetic_side_effects)]
 
-pub mod arithmetic;
-
-use arithmetic::{Rounding, mul_div};
+use integer_math::{Rounding, mul_div};
 
 const BASIS_POINTS: u128 = 10_000;
 

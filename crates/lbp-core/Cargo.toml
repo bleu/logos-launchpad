@@ -13,6 +13,7 @@ curve-core.workspace = true
 lez-compat-core.workspace = true
 clock_core.workspace = true
 weighted-math-core.workspace = true
+integer-math.workspace = true
 sale-policy.workspace = true
 
 [dev-dependencies]
