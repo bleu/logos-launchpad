@@ -2,7 +2,7 @@
 //! See `docs/error-analysis.md`. Fees and sale policy are not part of this API.
 
 use crate::checked_uint::mul_div;
-use crate::weighted::{ratio_down, ratio_up};
+use crate::weighted::{max_exact_output, ratio_down, ratio_up};
 use crate::{Fixed, ONE, SCALE, pow};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -123,7 +123,7 @@ pub fn try_calc_in_given_out(
     if amount_out == 0 {
         return Err(QuoteError::InvalidAmount);
     }
-    let cap = balance_out / 10 * 3 + balance_out % 10 * 3 / 10;
+    let cap = max_exact_output(balance_out);
     if amount_out > cap {
         return Err(QuoteError::AmountOutOfBounds);
     }
@@ -218,6 +218,32 @@ fn payment_loss_bound(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn exact_output_above_cap_keeps_checked_error() {
+        for balance in (1..=100).chain([u128::MAX]) {
+            assert_eq!(
+                try_calc_in_given_out(1, 1, balance, 1, max_exact_output(balance) + 1),
+                Err(QuoteError::AmountOutOfBounds)
+            );
+        }
+    }
+
+    #[test]
+    fn exact_output_validation_precedence_is_unchanged() {
+        assert_eq!(
+            try_calc_in_given_out(0, 0, 1, 0, 1),
+            Err(QuoteError::EmptyReserve)
+        );
+        assert_eq!(
+            try_calc_in_given_out(1, 0, 1, 0, 1),
+            Err(QuoteError::InvalidWeights)
+        );
+        assert_eq!(
+            try_calc_in_given_out(1, 1, 1, 1, 0),
+            Err(QuoteError::InvalidAmount)
+        );
+    }
 
     #[test]
     fn zero_or_negative_power_is_a_defined_error() {
