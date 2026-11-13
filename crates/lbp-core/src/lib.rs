@@ -58,6 +58,7 @@ pub struct FixedPricePoolInputs {
     pub pause_policy: PausePolicy,
     pub ending_policy: EndingPolicy,
     pub trade_mode: TradeMode,
+    pub sell_fee_bps: u16,
     pub graduation_adapter: Option<Actor>,
     pub namespace: AccountId,
     pub namespace_program_id: AccountId,
@@ -87,6 +88,7 @@ pub struct WeightedPoolInputs {
     pub pause_policy: PausePolicy,
     pub ending_policy: EndingPolicy,
     pub trade_mode: TradeMode,
+    pub sell_fee_bps: u16,
     pub graduation_adapter: Option<Actor>,
     pub namespace: AccountId,
     pub namespace_program_id: AccountId,
@@ -204,7 +206,7 @@ pub enum PoolMode {
         token_weight_end: u128,
         /// Immutable creator seed. Surplus does not change this value.
         collateral_seed: u128,
-        /// Seed plus net buys minus gross sells. Fees and custody are separate.
+        /// Seed plus net buys minus gross sells plus retained fees. Custody is separate.
         pricing_collateral: u128,
         /// Last observed pricing second. Zero means no checkpoint recorded.
         checkpoint_time: u64,
@@ -219,6 +221,7 @@ pub struct PoolAccount {
     pub trade_control: TradeControl,
     pub ending_policy: EndingPolicy,
     pub trade_mode: TradeMode,
+    pub sell_fee_bps: u16,
     pub graduation_adapter: Option<Actor>,
     pub mode: PoolMode,
     pub funded: bool,
@@ -305,6 +308,7 @@ impl PoolAccount {
             .map_err(ending_error)
     }
     fn validate_policies(&self) -> Result<(), Error> {
+        sale_policy::SellFeeRate::new(self.sell_fee_bps).map_err(|_| Error::InvalidState)?;
         if !supported_ending(
             matches!(self.mode, PoolMode::Weighted { .. }),
             self.ending_policy,
@@ -651,6 +655,7 @@ pub fn handle(input: &ReceiveInput) -> Result<Response, Error> {
             {
                 return Err(Error::InvalidTerms);
             }
+            sale_policy::SellFeeRate::new(inputs.sell_fee_bps).map_err(|_| Error::InvalidTerms)?;
             validate_policy_terms(
                 false,
                 inputs.ending_policy,
@@ -684,6 +689,7 @@ pub fn handle(input: &ReceiveInput) -> Result<Response, Error> {
                 trade_control: TradeControl::new(inputs.pause_policy),
                 ending_policy: inputs.ending_policy,
                 trade_mode: inputs.trade_mode,
+                sell_fee_bps: inputs.sell_fee_bps,
                 graduation_adapter: inputs.graduation_adapter,
                 mode: PoolMode::FixedPrice,
                 funded: false,
@@ -773,6 +779,7 @@ pub fn handle(input: &ReceiveInput) -> Result<Response, Error> {
             {
                 return Err(Error::InvalidTerms);
             }
+            sale_policy::SellFeeRate::new(inputs.sell_fee_bps).map_err(|_| Error::InvalidTerms)?;
             validate_policy_terms(
                 true,
                 inputs.ending_policy,
@@ -806,6 +813,7 @@ pub fn handle(input: &ReceiveInput) -> Result<Response, Error> {
                 trade_control: TradeControl::new(inputs.pause_policy),
                 ending_policy: inputs.ending_policy,
                 trade_mode: inputs.trade_mode,
+                sell_fee_bps: inputs.sell_fee_bps,
                 graduation_adapter: inputs.graduation_adapter,
                 mode: PoolMode::Weighted {
                     token_weight_start: inputs.token_weight_start,

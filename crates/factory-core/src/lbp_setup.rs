@@ -14,6 +14,7 @@ pub struct FixedPriceInputs {
     pub pause_policy: PausePolicy,
     pub ending_policy: EndingPolicy,
     pub trade_mode: TradeMode,
+    pub sell_fee_bps: u16,
     pub graduation_hook: Option<GraduationHook>,
     pub namespace: AccountId,
     pub launch_salt: [u8; 32],
@@ -37,6 +38,7 @@ pub struct WeightedInputs {
     pub pause_policy: PausePolicy,
     pub ending_policy: EndingPolicy,
     pub trade_mode: TradeMode,
+    pub sell_fee_bps: u16,
     pub graduation_hook: Option<GraduationHook>,
     pub namespace: AccountId,
     pub launch_salt: [u8; 32],
@@ -100,6 +102,7 @@ pub struct LbpLaunchState {
     pub pause_policy: PausePolicy,
     pub ending_policy: EndingPolicy,
     pub trade_mode: TradeMode,
+    pub sell_fee_bps: u16,
     pub graduation_hook: Option<GraduationHook>,
     format: [u8; 8],
     version: u16,
@@ -158,6 +161,7 @@ struct SetupInputs {
     pause_policy: PausePolicy,
     ending_policy: EndingPolicy,
     trade_mode: TradeMode,
+    sell_fee_bps: u16,
     graduation_hook: Option<GraduationHook>,
     namespace: AccountId,
     launch_salt: [u8; 32],
@@ -189,6 +193,7 @@ pub(super) fn create_fixed(
             pause_policy: inputs.pause_policy,
             ending_policy: inputs.ending_policy,
             trade_mode: inputs.trade_mode,
+            sell_fee_bps: inputs.sell_fee_bps,
             graduation_hook: inputs.graduation_hook,
             namespace: inputs.namespace,
             launch_salt: inputs.launch_salt,
@@ -228,6 +233,7 @@ pub(super) fn create_weighted(
             pause_policy: inputs.pause_policy,
             ending_policy: inputs.ending_policy,
             trade_mode: inputs.trade_mode,
+            sell_fee_bps: inputs.sell_fee_bps,
             graduation_hook: inputs.graduation_hook,
             namespace: inputs.namespace,
             launch_salt: inputs.launch_salt,
@@ -309,6 +315,7 @@ fn create(input: &ReceiveInput, inputs: SetupInputs, command: Message) -> Result
     {
         return Err(Error::InvalidTerms);
     }
+    SellFeeRate::new(inputs.sell_fee_bps).map_err(|_| Error::InvalidTerms)?;
     validate_lbp_policies(
         inputs.mode,
         inputs.ending_policy,
@@ -331,6 +338,7 @@ fn create(input: &ReceiveInput, inputs: SetupInputs, command: Message) -> Result
         pause_policy: inputs.pause_policy,
         ending_policy: inputs.ending_policy,
         trade_mode: inputs.trade_mode,
+        sell_fee_bps: inputs.sell_fee_bps,
         graduation_hook: inputs.graduation_hook,
         format: match inputs.mode {
             LbpSetupMode::FixedPrice => *b"LZFXLAUN",
@@ -408,6 +416,7 @@ fn create(input: &ReceiveInput, inputs: SetupInputs, command: Message) -> Result
             policies: EventPoliciesV1 {
                 ending: state.ending_policy,
                 pause: state.pause_policy,
+                sell_fee_bps: state.sell_fee_bps,
             },
         },
     )))
@@ -696,6 +705,7 @@ pub(super) fn resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
             if pool.graduation_adapter != state.adapter(input.receiver)
                 || pool.ending_policy != state.ending_policy
                 || pool.trade_mode != state.trade_mode
+                || pool.sell_fee_bps != state.sell_fee_bps
             {
                 return Err(Error::InvalidCustody);
             }
@@ -804,6 +814,7 @@ pub(super) fn resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
                 if pool.graduation_adapter != state.adapter(input.receiver)
                     || pool.ending_policy != state.ending_policy
                     || pool.trade_mode != state.trade_mode
+                    || pool.sell_fee_bps != state.sell_fee_bps
                 {
                     return Err(Error::InvalidCustody);
                 }
@@ -929,6 +940,7 @@ pub(super) fn resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
                             pause_policy: state.pause_policy,
                             ending_policy: state.ending_policy,
                             trade_mode: state.trade_mode,
+                            sell_fee_bps: state.sell_fee_bps,
                             graduation_adapter: state.adapter(input.receiver),
                             namespace: state.namespace,
                             namespace_program_id: state.namespace_program_id,
@@ -955,6 +967,7 @@ pub(super) fn resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
                             pause_policy: state.pause_policy,
                             ending_policy: state.ending_policy,
                             trade_mode: state.trade_mode,
+                            sell_fee_bps: state.sell_fee_bps,
                             graduation_adapter: state.adapter(input.receiver),
                             namespace: state.namespace,
                             namespace_program_id: state.namespace_program_id,
@@ -1147,6 +1160,7 @@ impl LbpLaunchState {
         ))
     }
     fn validate_terms(&self) -> Result<(), Error> {
+        SellFeeRate::new(self.sell_fee_bps).map_err(|_| Error::InvalidState)?;
         validate_lbp_policies(
             self.mode,
             self.ending_policy,
@@ -1287,6 +1301,7 @@ impl LbpLaunchState {
         if pool.graduation_adapter != self.adapter(factory)
             || pool.ending_policy != self.ending_policy
             || pool.trade_mode != self.trade_mode
+            || pool.sell_fee_bps != self.sell_fee_bps
         {
             return Err(Error::InvalidCustody);
         }

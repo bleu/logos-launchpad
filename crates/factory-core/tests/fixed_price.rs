@@ -19,6 +19,7 @@ fn inputs() -> FixedPriceInputs {
         pause_policy: curve_core::PausePolicy::Disabled,
         ending_policy: factory_core::EndingPolicy::Either,
         trade_mode: factory_core::TradeMode::BuyOnly,
+        sell_fee_bps: 0,
         graduation_hook: None,
         namespace: id(40),
         launch_salt: [3; 32],
@@ -397,6 +398,7 @@ fn prepared_pool(state: &factory_core::FixedPriceLaunchState, factory: Actor) ->
         pause_policy: state.pause_policy,
         ending_policy: state.ending_policy,
         trade_mode: state.trade_mode,
+        sell_fee_bps: state.sell_fee_bps,
         graduation_adapter: state.graduation_hook.as_ref().map(|hook| {
             Actor::new(
                 factory_core::compute_graduation_pda(hook.program_id, factory.account_id),
@@ -1253,7 +1255,7 @@ fn allocation_callbacks_reject_substituted_pool_and_escrow_actors_or_holdings() 
 fn allocation_rejects_pool_terms_that_do_not_match_the_saved_sale() {
     let (input, state) = completed();
     let pool = active_pool(&state, input.receiver);
-    for case in 0..15 {
+    for case in 0..16 {
         let mut changed = pool.clone();
         match case {
             0 => changed.namespace = id(99),
@@ -1270,9 +1272,10 @@ fn allocation_rejects_pool_terms_that_do_not_match_the_saved_sale() {
             11 => changed.end_timestamp = None,
             12 => changed.creator_allocation_release = CreatorAllocationRelease::AfterSetup,
             13 => changed.funded = false,
-            _ => changed.trade_mode = factory_core::TradeMode::BuyAndSell,
+            14 => changed.trade_mode = factory_core::TradeMode::BuyAndSell,
+            _ => changed.sell_fee_bps = 1,
         }
-        let expected = if case == 14 {
+        let expected = if case >= 14 {
             Error::InvalidCustody
         } else if case == 13 {
             Error::CreationPending
@@ -1777,6 +1780,7 @@ fn fixed_price_rejects_malformed_saved_terms_and_the_old_record_version() {
         state.pause_policy,
         state.ending_policy,
         state.trade_mode,
+        state.sell_fee_bps,
         state.graduation_hook,
     ))
     .unwrap()
@@ -2609,7 +2613,8 @@ fn fixed_created_event_names_the_launch_and_saved_terms_once() {
                 end_timestamp: Some(200),
                 policies: EventPoliciesV1 {
                     ending: state.ending_policy,
-                    pause: state.pause_policy
+                    pause: state.pause_policy,
+                    sell_fee_bps: state.sell_fee_bps
                 }
             }
         )]
@@ -2715,6 +2720,100 @@ fn fixed_price_trade_mode_survives_every_setup_stage_and_rejects_substitution() 
                         factory_core::LbpCreationStage::Complete
                     );
                     assert_eq!(complete.trade_mode, mode);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn fixed_price_sell_fee_survives_every_setup_stage_and_rejects_substitution() {
+    for rate in [0, 125, 9999] {
+        let mut input = creation();
+        let mut terms = inputs();
+        terms.sell_fee_bps = rate;
+        input.message = borsh::to_vec(&Message::CreateFixedPriceLbp { inputs: terms }).unwrap();
+        let mut mint = handle(&input).unwrap();
+        for bytes in [namespace_state(), collateral()] {
+            assert_eq!(
+                factory_core::LbpLaunchState::decode(mint.post_state.as_ref().unwrap())
+                    .unwrap()
+                    .sell_fee_bps,
+                rate
+            );
+            input = reply(&input, &mint, bytes);
+            mint = handle(&input).unwrap();
+        }
+        let (input, allocated) = continue_sale(
+            &input,
+            &mint,
+            factory_core::LbpCreationStage::Minted,
+            1000,
+            0,
+            0,
+        );
+        assert_eq!(
+            factory_core::LbpLaunchState::decode(allocated.post_state.as_ref().unwrap())
+                .unwrap()
+                .sell_fee_bps,
+            rate
+        );
+        let (input, prepared) = continue_sale(
+            &input,
+            &allocated,
+            factory_core::LbpCreationStage::Allocated,
+            0,
+            800,
+            200,
+        );
+        let state =
+            factory_core::LbpLaunchState::decode(prepared.post_state.as_ref().unwrap()).unwrap();
+        assert_eq!(state.sell_fee_bps, rate);
+        let call = prepared
+            .sync_messages
+            .iter()
+            .find(|call| call.to.account_id == state.pool_id)
+            .unwrap();
+        let lbp_core::Message::PrepareFixedPrice { inputs } =
+            borsh::from_slice(&call.message).unwrap()
+        else {
+            panic!("prepare")
+        };
+        assert_eq!(inputs.sell_fee_bps, rate);
+        for pool_rate in [0, 125, 9999] {
+            let (mut input, mut response) = continue_sale(
+                &input,
+                &prepared,
+                factory_core::LbpCreationStage::PoolPrepared,
+                0,
+                800,
+                200,
+            );
+            let mut pool =
+                lbp_core::PoolAccount::decode(&prepared_pool(&state, input.receiver)).unwrap();
+            pool.sell_fee_bps = pool_rate;
+            let values = [
+                borsh::to_vec(&pool).unwrap(),
+                holding(state.pool_id, state.token_definition_id, 0),
+                holding(state.pool_id, state.collateral_definition_id, 0),
+            ];
+            for (slot, bytes) in values.into_iter().enumerate() {
+                input = reply(&input, &response, bytes);
+                let result = handle(&input);
+                if slot == 2 && pool_rate != rate {
+                    assert_eq!(result.err(), Some(Error::InvalidCustody));
+                    break;
+                }
+                response = result.unwrap();
+                if slot == 2 {
+                    let complete =
+                        factory_core::LbpLaunchState::decode(response.post_state.as_ref().unwrap())
+                            .unwrap();
+                    assert_eq!(
+                        complete.creation_stage,
+                        factory_core::LbpCreationStage::Complete
+                    );
+                    assert_eq!(complete.sell_fee_bps, rate);
                 }
             }
         }

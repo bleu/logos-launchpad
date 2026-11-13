@@ -24,6 +24,7 @@ pub fn begin(input: &ReceiveInput, message: Message) -> Result<Response, Error> 
         buy_policy,
         pause_policy,
         ending_policy,
+        sell_fee_bps,
         namespace,
         token0_definition_id,
         token1_definition_id,
@@ -76,6 +77,7 @@ pub fn begin(input: &ReceiveInput, message: Message) -> Result<Response, Error> 
         virtual_reserve0,
         virtual_reserve1,
         ending_policy,
+        sell_fee_bps,
         close_timestamp,
         close_on_depletion: side(close_on_depletion)?,
     })
@@ -242,6 +244,7 @@ pub(crate) fn finish(mut pending: Pending, receiver: Actor) -> Result<Response, 
         defer_funding,
         pause_policy,
         ending_policy,
+        sell_fee_bps,
         close_timestamp,
         close_on_depletion,
         ..
@@ -251,6 +254,7 @@ pub(crate) fn finish(mut pending: Pending, receiver: Actor) -> Result<Response, 
     };
     if pending.state.trade_control.policy() != pause_policy
         || pending.state.pool.ending_policy != ending_policy
+        || pending.state.pool.sell_fee_bps != sell_fee_bps
         || pending.state.pool.close_timestamp != close_timestamp
         || pending.state.pool.close_on_depletion != side(close_on_depletion)?
     {

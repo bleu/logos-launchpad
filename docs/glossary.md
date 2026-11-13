@@ -15,7 +15,7 @@ This page explains technical shorthand used in this repository. [CONTEXT.md](../
 | Token0 / token1 | The ordered token roles in a curve pool. A curve factory sale uses the launch token as token0 and collateral as token1. |
 | Collateral | The token used to buy the sale token and pay protocol fees. |
 | Real reserve / virtual reserve | Real reserves are tokens that can fund swap output. Virtual reserves are pricing-only values. |
-| Invariant / `k` | A formula value that pricing must preserve under its stated rules. The curve's creation-time virtual-reserve product is `k`. |
+| Invariant / `k` | A formula value that pricing must preserve under its stated rules. The curve's creation-time product is immutable `initial_k`. Quotes use current `k`, which grows with retained sell collateral under [ADR 0009](adr/0009-curve-arithmetic.md). |
 | `D` / `R` | `D` is the purchasable curve allocation. `R` is the curve allocation reserved for possible DEX seeding after close. |
 | Allocation / supply | Tokens assigned to a purpose in a sale, or the total tokens available for that purpose. |
 | Fixed-price sale | A sale with a strictly positive exact price in collateral and launch-token smallest units; token decimals are for display. Locked local verification of its four-stage setup passed using development receipts; trading, real proofs and deployment readiness remain pending. See [ADR 0032](adr/0032-fixed-price-lbp-setup.md). |

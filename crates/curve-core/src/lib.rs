@@ -8,8 +8,9 @@ use lee_core::{
 };
 pub use sale_policy::events;
 pub use sale_policy::{
-    EndingDecision, EndingError, EndingPolicy, EndingReason, PausePolicy, SettlementAmounts,
-    SettlementError, SettlementProgress, SettlementRoute, TimeBounds, TradeControl, TradeMode,
+    EndingDecision, EndingError, EndingPolicy, EndingReason, PausePolicy, SellFeeRate,
+    SettlementAmounts, SettlementError, SettlementProgress, SettlementRoute, TimeBounds,
+    TradeControl, TradeMode,
 };
 
 include!(concat!(env!("OUT_DIR"), "/emergency_authority.rs"));
@@ -80,6 +81,7 @@ pub enum Message {
         buy_policy: BuyPolicy,
         pause_policy: PausePolicy,
         ending_policy: EndingPolicy,
+        sell_fee_bps: u16,
         namespace: AccountId,
         token0_definition_id: AccountId,
         token1_definition_id: AccountId,

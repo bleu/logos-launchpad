@@ -289,6 +289,10 @@
                 "type": "EndingPolicy"
               },
               {
+                "name": "sell_fee_bps",
+                "type": "u16"
+              },
+              {
                 "name": "namespace",
                 "type": "AccountId"
               },
@@ -639,6 +643,10 @@
           {
             "name": "pause",
             "type": "PausePolicy"
+          },
+          {
+            "name": "sell_fee_bps",
+            "type": "u16"
           }
         ]
       },
@@ -869,6 +877,14 @@
               },
               {
                 "name": "fee_bps",
+                "type": "u16"
+              },
+              {
+                "name": "retained_fee",
+                "type": "u128"
+              },
+              {
+                "name": "sell_fee_bps",
                 "type": "u16"
               },
               {
@@ -1184,6 +1200,10 @@
             "type": "TradeMode"
           },
           {
+            "name": "sell_fee_bps",
+            "type": "u16"
+          },
+          {
             "name": "graduation_hook",
             "type": "Option<GraduationHook>"
           },
@@ -1304,6 +1324,10 @@
               {
                 "name": "trade_mode",
                 "type": "u8"
+              },
+              {
+                "name": "sell_fee_bps",
+                "type": "u16"
               },
               {
                 "name": "graduation_hook_program_id",
@@ -1843,6 +1867,10 @@
             "type": "TradeMode"
           },
           {
+            "name": "sell_fee_bps",
+            "type": "u16"
+          },
+          {
             "name": "graduation_adapter",
             "type": "Option<Actor>"
           },
@@ -2174,6 +2202,10 @@
             "type": "TradeMode"
           },
           {
+            "name": "sell_fee_bps",
+            "type": "u16"
+          },
+          {
             "name": "graduation_adapter",
             "type": "Option<Actor>"
           },
@@ -2323,6 +2355,10 @@
           {
             "name": "trade_mode",
             "type": "TradeMode"
+          },
+          {
+            "name": "sell_fee_bps",
+            "type": "u16"
           },
           {
             "name": "graduation_adapter",
@@ -2497,6 +2533,10 @@
             "type": "TradeMode"
           },
           {
+            "name": "sell_fee_bps",
+            "type": "u16"
+          },
+          {
             "name": "graduation_hook",
             "type": "Option<GraduationHook>"
           },
@@ -2603,6 +2643,10 @@
           {
             "name": "trade_mode",
             "type": "TradeMode"
+          },
+          {
+            "name": "sell_fee_bps",
+            "type": "u16"
           },
           {
             "name": "graduation_hook",
@@ -2862,6 +2906,10 @@
             "type": "TradeMode"
           },
           {
+            "name": "sell_fee_bps",
+            "type": "u16"
+          },
+          {
             "name": "graduation_hook",
             "type": "Option<GraduationHook>"
           },
@@ -2944,6 +2992,10 @@
             "type": "u128"
           },
           {
+            "name": "initial_k",
+            "type": "u128"
+          },
+          {
             "name": "k",
             "type": "u128"
           },
@@ -2966,6 +3018,10 @@
           {
             "name": "ending_policy",
             "type": "EndingPolicy"
+          },
+          {
+            "name": "sell_fee_bps",
+            "type": "u16"
           },
           {
             "name": "close_timestamp",

@@ -33,6 +33,7 @@ impl PoolAccount {
         EventPoliciesV1 {
             ending: self.pool.ending_policy,
             pause: self.trade_control.policy(),
+            sell_fee_bps: self.pool.sell_fee_bps,
         }
     }
 

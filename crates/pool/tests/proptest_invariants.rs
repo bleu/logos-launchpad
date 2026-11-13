@@ -98,14 +98,16 @@ fn pool_strategy() -> impl Strategy<Value = Pool> {
             1_u128..1_000_000,
             1_u128..1_000_000,
             1_u128..1_000_000,
+            0_u16..10_000,
         )
-            .prop_map(|(real0, real1, virtual0, virtual1)| {
+            .prop_map(|(real0, real1, virtual0, virtual1, sell_fee_bps)| {
                 Pool::create(PoolCreateParams {
                     token0_amount: real0,
                     token1_amount: real1,
                     virtual_reserve0: virtual0,
                     virtual_reserve1: virtual1,
                     ending_policy: EndingPolicy::Manual,
+                    sell_fee_bps,
                     close_timestamp: None,
                     close_on_depletion: None,
                 })
@@ -118,6 +120,7 @@ fn pool_strategy() -> impl Strategy<Value = Pool> {
                 virtual_reserve0: 1,
                 virtual_reserve1: (1_u128 << 64) - 1,
                 ending_policy: EndingPolicy::Manual,
+                sell_fee_bps: 0,
                 close_timestamp: None,
                 close_on_depletion: None,
             })
@@ -128,6 +131,7 @@ fn pool_strategy() -> impl Strategy<Value = Pool> {
                 virtual_reserve0: (1_u128 << 64) - 1,
                 virtual_reserve1: (1_u128 << 64) - 1,
                 ending_policy: EndingPolicy::Manual,
+                sell_fee_bps: 0,
                 close_timestamp: None,
                 close_on_depletion: None,
             })
@@ -173,7 +177,10 @@ fn assert_successful_swap(before: &Pool, after: &Pool, side: TokenSide, outcome:
         assert_eq!(outcome.amount_in, outcome.effective_amount_in);
         assert_eq!(
             outcome.raw_amount_out,
-            checked_add(outcome.amount_out, outcome.protocol_fee)
+            checked_add(
+                checked_add(outcome.amount_out, outcome.protocol_fee),
+                outcome.retained_fee
+            )
         );
     } else {
         assert_eq!(
@@ -188,7 +195,7 @@ fn assert_successful_swap(before: &Pool, after: &Pool, side: TokenSide, outcome:
     );
     assert_eq!(
         checked_add(new_virtual_out, outcome.raw_amount_out),
-        old_virtual_out
+        checked_add(old_virtual_out, outcome.retained_fee)
     );
     assert_eq!(
         new_real_in,
@@ -196,13 +203,20 @@ fn assert_successful_swap(before: &Pool, after: &Pool, side: TokenSide, outcome:
     );
     assert_eq!(
         checked_add(new_real_out, outcome.raw_amount_out),
-        old_real_out
+        checked_add(old_real_out, outcome.retained_fee)
     );
-    assert_eq!(after.k, before.k);
-
-    // The price source is the immutable creation-time invariant. Live virtual
-    // reserves may accumulate rounding drift and need not multiply in u128.
-    assert_eq!(after.k, before.k);
+    assert_eq!(after.initial_k, before.initial_k);
+    let growth = if side == TokenSide::Token0 {
+        after
+            .virtual_reserve0
+            .checked_mul(outcome.retained_fee)
+            .unwrap()
+    } else {
+        assert_eq!(outcome.retained_fee, 0);
+        0
+    };
+    assert_eq!(after.k, checked_add(before.k, growth));
+    assert!(after.virtual_reserve1 >= after.k.div_ceil(after.virtual_reserve0));
 }
 
 #[test]
@@ -213,6 +227,7 @@ fn collateral_buy_fee_rounds_up_before_pricing() {
         virtual_reserve0: 1_000,
         virtual_reserve1: 1_000,
         ending_policy: EndingPolicy::Manual,
+        sell_fee_bps: 0,
         close_timestamp: None,
         close_on_depletion: None,
     })
@@ -241,6 +256,7 @@ fn manual_close_and_withdraw_are_permanent_and_post_close_swaps_fail_atomically(
         virtual_reserve0: 1_000,
         virtual_reserve1: 100,
         ending_policy: EndingPolicy::Manual,
+        sell_fee_bps: 0,
         close_timestamp: None,
         close_on_depletion: None,
     })
@@ -274,6 +290,7 @@ fn fee_counter_overflow_rejects_both_buy_forms_without_mutation() {
             virtual_reserve0: 1000,
             virtual_reserve1: 100,
             ending_policy: EndingPolicy::Manual,
+            sell_fee_bps: 0,
             close_timestamp: None,
             close_on_depletion: None,
         })
@@ -382,7 +399,11 @@ proptest! {
                 },
             }
 
-            prop_assert_eq!(pool.k, initial_k);
+            prop_assert_eq!(pool.initial_k, initial_k);
+            prop_assert!(pool.k >= initial_k);
+            if pool.sell_fee_bps == 0 {
+                prop_assert_eq!(pool.k, initial_k);
+            }
         }
     }
 }
