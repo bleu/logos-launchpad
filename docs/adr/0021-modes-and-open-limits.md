@@ -12,7 +12,7 @@ Keep the three pricing engines with shared immutable factory trade modes. On 202
 
 All factory engines require immutable `TradeMode::{BuyOnly, BuyAndSell}`. `BuyOnly` permits exact-input and exact-output buys with collateral and rejects sells. `BuyAndSell` also permits exact-input sells with a minimum net collateral output. Exact-output buys are unchanged; exact-output sells are unsupported. UI defaults remain open. Direct curve pools retain the separate `allowed_input_token` primitive, including token0-only input; it is not a factory trade mode.
 
-Shared pricing quotes check factory direction for actor execution and SDK callers. SDK weighted time is advisory; it does not prove a supported timestamp provider or transaction inclusion time. Execution still checks authority, custody, provider time and inclusion bounds. A quote reserves no price. See [implementation evidence](../product/curve-contract.md#acceptance-evidence). [ADR 0025](0025-sale-closing.md) owns closing rules and the pending expiry-duration review.
+[ADR 0017](0017-quotes-and-slippage.md) defines quote checks and provider-time limits. See [implementation evidence](../product/curve-contract.md#acceptance-evidence). [ADR 0025](0025-sale-closing.md) owns closing rules and the pending expiry-duration review.
 
 ## Fixed-price and weighted sales
 

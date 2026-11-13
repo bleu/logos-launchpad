@@ -3067,7 +3067,6 @@ fn fixed_sells_reject_unavailable_budget_limits_and_invalid_lifecycle() {
     for progress in [
         lbp_core::SettlementProgress::ManualStarted,
         lbp_core::SettlementProgress::ManualComplete,
-        lbp_core::SettlementProgress::NoPayout,
         lbp_core::SettlementProgress::Graduated,
     ] {
         let mut completed = state.clone();

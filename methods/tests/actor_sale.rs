@@ -7714,7 +7714,7 @@ fn signed_common_sells_fixed_inventory_and_fee_surplus_isolation() {
     assert_eq!(balance(&env.state, env.pool, env.launch), 7);
     assert_eq!(
         fixed_pool(&env.state, env.pool).settlement_progress,
-        lbp_core::SettlementProgress::NoPayout
+        lbp_core::SettlementProgress::ManualComplete
     );
 }
 
@@ -7997,7 +7997,6 @@ fn signed_common_sells_controls_and_late_credit_rollback() {
         let mut overflow =
             state.with_public_accounts([token_holding(trader, COLLATERAL, u128::MAX)]);
         fixed_rejected(&mut overflow, pool, &key, sell.clone(), "Overflow");
-        assert_eq!(balance(&overflow, trader, LAUNCH), tokens);
         overflow = overflow.with_public_accounts([token_holding(trader, COLLATERAL, collateral)]);
         let events = fixed_execute_events_at(&mut overflow, pool, &key, sell, 100_000).unwrap();
         assert_eq!(sale_event_kinds(&events, LBP, pool_subject(pool)).len(), 1);

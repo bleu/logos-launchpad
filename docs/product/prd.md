@@ -62,7 +62,7 @@ These rules describe the selected sale designs. The [sale overview](lbp-contract
 | Protocol fee | Deducted before pricing; exact output grosses up required net collateral ([0035](../adr/0035-fixed-price-swap-fees.md)) | Collateral deducted from buy input or sell output | Deducted before pricing; exact output grosses up required net collateral ([0031](../adr/0031-shared-launch-factory.md)) |
 | Fee collection | Permissionless, anytime, to current treasury; fixed price unchanged | Permissionless, anytime, to current treasury | Permissionless, anytime, to current treasury; pricing reserves unchanged |
 
-Selected depletion is final. `Scheduled` ignores depletion for settlement and allocation claims; empty inventory still prevents buys. Settlement burns cannot create depletion evidence. `Manual` is direct-only. See [ADR 0025](../adr/0025-sale-closing.md). Namespace fees always use collateral buy input or sell output; shared immutable trade modes permit exact-input sells in all factory engines under [ADR 0021](../adr/0021-modes-and-open-limits.md). Retained creator fees remain future work.
+Selected depletion is final. `Scheduled` ignores depletion for settlement and allocation claims; empty inventory still prevents buys. Settlement burns cannot create depletion evidence. `Manual` is direct-only. See [ADR 0025](../adr/0025-sale-closing.md). Namespace fees always use collateral buy input or sell output. Retained creator fees remain future work.
 
 `R` is the curve's DEX-seed reserve. It stays untouched until close. The creator can withdraw it after close when it is not used for graduation.
 

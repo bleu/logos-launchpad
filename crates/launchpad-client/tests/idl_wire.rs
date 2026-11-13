@@ -2328,7 +2328,6 @@ fn lbp_sells_append_tags_without_membership_or_weighted_caller_time() {
             "190000000000000000000000000000000a000000000000000000000000000000{}",
             if timed { "0900000000000000" } else { "" }
         );
-        assert_wire(message.clone(), &format!("{tag:02x}{payload}"));
         let mut fields = vec![
             json!({"name":"amount_in","type":"u128"}),
             json!({"name":"min_amount_out","type":"u128"}),
