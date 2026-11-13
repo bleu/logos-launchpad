@@ -9,7 +9,7 @@ use lee_core::{
 pub use sale_policy::events;
 pub use sale_policy::{
     EndingDecision, EndingError, EndingPolicy, EndingReason, PausePolicy, SettlementAmounts,
-    SettlementError, SettlementProgress, SettlementRoute, TimeBounds, TradeControl,
+    SettlementError, SettlementProgress, SettlementRoute, TimeBounds, TradeControl, TradeMode,
 };
 
 include!(concat!(env!("OUT_DIR"), "/emergency_authority.rs"));

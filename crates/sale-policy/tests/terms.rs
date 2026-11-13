@@ -1,4 +1,20 @@
-use sale_policy::{EndingDecision, EndingError, EndingPolicy, EndingReason, TimeBounds};
+use sale_policy::{
+    EndingDecision, EndingError, EndingPolicy, EndingReason, InvalidTradeMode, TimeBounds,
+    TradeMode,
+};
+
+#[test]
+fn trade_modes_keep_the_existing_tags_and_reject_unknown_values() {
+    for (tag, mode) in [(0, TradeMode::BuyOnly), (1, TradeMode::BuyAndSell)] {
+        assert_eq!(TradeMode::try_from(tag), Ok(mode));
+        assert_eq!(borsh::to_vec(&mode).unwrap(), [tag]);
+        assert_eq!(borsh::from_slice::<TradeMode>(&[tag]).unwrap(), mode);
+    }
+    for tag in 2..=u8::MAX {
+        assert_eq!(TradeMode::try_from(tag), Err(InvalidTradeMode));
+        assert!(borsh::from_slice::<TradeMode>(&[tag]).is_err());
+    }
+}
 
 const ENDINGS: [EndingPolicy; 4] = [
     EndingPolicy::Manual,

@@ -4,6 +4,37 @@ use serde::{Deserialize, Serialize};
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, BorshSerialize, BorshDeserialize, Serialize, Deserialize,
 )]
+pub enum TradeMode {
+    BuyOnly,
+    BuyAndSell,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InvalidTradeMode;
+
+impl std::fmt::Display for InvalidTradeMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("the trade mode must be BuyOnly or BuyAndSell")
+    }
+}
+
+impl std::error::Error for InvalidTradeMode {}
+
+impl TryFrom<u8> for TradeMode {
+    type Error = InvalidTradeMode;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(Self::BuyOnly),
+            1 => Ok(Self::BuyAndSell),
+            _ => Err(InvalidTradeMode),
+        }
+    }
+}
+
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, BorshSerialize, BorshDeserialize, Serialize, Deserialize,
+)]
 pub enum EndingPolicy {
     /// No automatic ending; direct pool owner permissions stay with the engine.
     Manual,

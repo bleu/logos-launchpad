@@ -18,6 +18,7 @@ fn inputs() -> FixedPriceInputs {
         buy_policy: curve_core::BuyPolicy::Open,
         pause_policy: curve_core::PausePolicy::Disabled,
         ending_policy: factory_core::EndingPolicy::Either,
+        trade_mode: factory_core::TradeMode::BuyOnly,
         graduation_hook: None,
         namespace: id(40),
         launch_salt: [3; 32],
@@ -395,6 +396,7 @@ fn prepared_pool(state: &factory_core::FixedPriceLaunchState, factory: Actor) ->
         buy_policy: state.buy_policy.clone(),
         pause_policy: state.pause_policy,
         ending_policy: state.ending_policy,
+        trade_mode: state.trade_mode,
         graduation_adapter: state.graduation_hook.as_ref().map(|hook| {
             Actor::new(
                 factory_core::compute_graduation_pda(hook.program_id, factory.account_id),
@@ -1251,7 +1253,7 @@ fn allocation_callbacks_reject_substituted_pool_and_escrow_actors_or_holdings() 
 fn allocation_rejects_pool_terms_that_do_not_match_the_saved_sale() {
     let (input, state) = completed();
     let pool = active_pool(&state, input.receiver);
-    for case in 0..14 {
+    for case in 0..15 {
         let mut changed = pool.clone();
         match case {
             0 => changed.namespace = id(99),
@@ -1267,9 +1269,12 @@ fn allocation_rejects_pool_terms_that_do_not_match_the_saved_sale() {
             10 => changed.start_timestamp += 1,
             11 => changed.end_timestamp = None,
             12 => changed.creator_allocation_release = CreatorAllocationRelease::AfterSetup,
-            _ => changed.funded = false,
+            13 => changed.funded = false,
+            _ => changed.trade_mode = factory_core::TradeMode::BuyAndSell,
         }
-        let expected = if case == 13 {
+        let expected = if case == 14 {
+            Error::InvalidCustody
+        } else if case == 13 {
             Error::CreationPending
         } else {
             Error::InvalidState
@@ -1771,6 +1776,7 @@ fn fixed_price_rejects_malformed_saved_terms_and_the_old_record_version() {
         state.buy_policy,
         state.pause_policy,
         state.ending_policy,
+        state.trade_mode,
         state.graduation_hook,
     ))
     .unwrap()
@@ -2381,7 +2387,7 @@ fn fixed_settlement_rejects_stale_progress_adapter_and_immutable_pool_terms() {
         configuration: vec![],
     });
     let original = active_pool(&state, input.receiver);
-    for case in 0..6 {
+    for case in 0..7 {
         let mut pool = original.clone();
         match case {
             0 => pool.settlement_progress = factory_core::SettlementProgress::ManualComplete,
@@ -2389,7 +2395,8 @@ fn fixed_settlement_rejects_stale_progress_adapter_and_immutable_pool_terms() {
             2 => pool.factory_program_id = id(99),
             3 => pool.start_timestamp += 1,
             4 => pool.namespace_program_id = id(99),
-            _ => pool.sale_inventory += 1,
+            5 => pool.sale_inventory += 1,
+            _ => pool.trade_mode = factory_core::TradeMode::BuyAndSell,
         }
         input.pre_state = borsh::to_vec(&state).unwrap().into();
         input.from = None;
@@ -2404,7 +2411,7 @@ fn fixed_settlement_rejects_stale_progress_adapter_and_immutable_pool_terms() {
         input = reply(&input, &response, borsh::to_vec(&pool).unwrap());
         assert_eq!(
             handle(&input).err(),
-            Some(if case == 1 {
+            Some(if case == 1 || case == 6 {
                 Error::InvalidCustody
             } else {
                 Error::InvalidState
@@ -2612,4 +2619,104 @@ fn fixed_created_event_names_the_launch_and_saved_terms_once() {
     let mut replay = input;
     replay.pre_state = minted.post_state.unwrap();
     assert_eq!(handle(&replay).err(), Some(Error::AlreadyInitialized));
+}
+
+#[test]
+fn fixed_price_trade_mode_survives_every_setup_stage_and_rejects_substitution() {
+    for mode in [
+        factory_core::TradeMode::BuyOnly,
+        factory_core::TradeMode::BuyAndSell,
+    ] {
+        let mut input = creation();
+        let mut terms = inputs();
+        terms.trade_mode = mode;
+        input.message = borsh::to_vec(&Message::CreateFixedPriceLbp { inputs: terms }).unwrap();
+        let mut mint = handle(&input).unwrap();
+        for bytes in [namespace_state(), collateral()] {
+            assert_eq!(
+                factory_core::LbpLaunchState::decode(mint.post_state.as_ref().unwrap())
+                    .unwrap()
+                    .trade_mode,
+                mode
+            );
+            input = reply(&input, &mint, bytes);
+            mint = handle(&input).unwrap();
+        }
+        let (input, allocated) = continue_sale(
+            &input,
+            &mint,
+            factory_core::LbpCreationStage::Minted,
+            1000,
+            0,
+            0,
+        );
+        assert_eq!(
+            factory_core::LbpLaunchState::decode(allocated.post_state.as_ref().unwrap())
+                .unwrap()
+                .trade_mode,
+            mode
+        );
+        let (input, prepared) = continue_sale(
+            &input,
+            &allocated,
+            factory_core::LbpCreationStage::Allocated,
+            0,
+            800,
+            200,
+        );
+        let state =
+            factory_core::LbpLaunchState::decode(prepared.post_state.as_ref().unwrap()).unwrap();
+        assert_eq!(state.trade_mode, mode);
+        let call = prepared
+            .sync_messages
+            .iter()
+            .find(|call| call.to.account_id == state.pool_id)
+            .unwrap();
+        let lbp_core::Message::PrepareFixedPrice { inputs } =
+            borsh::from_slice(&call.message).unwrap()
+        else {
+            panic!("prepare")
+        };
+        assert_eq!(inputs.trade_mode, mode);
+        for pool_mode in [
+            factory_core::TradeMode::BuyOnly,
+            factory_core::TradeMode::BuyAndSell,
+        ] {
+            let (mut input, mut response) = continue_sale(
+                &input,
+                &prepared,
+                factory_core::LbpCreationStage::PoolPrepared,
+                0,
+                800,
+                200,
+            );
+            let mut pool =
+                lbp_core::PoolAccount::decode(&prepared_pool(&state, input.receiver)).unwrap();
+            pool.trade_mode = pool_mode;
+            let values = [
+                borsh::to_vec(&pool).unwrap(),
+                holding(state.pool_id, state.token_definition_id, 0),
+                holding(state.pool_id, state.collateral_definition_id, 0),
+            ];
+            for (slot, bytes) in values.into_iter().enumerate() {
+                input = reply(&input, &response, bytes);
+                let result = handle(&input);
+                if slot == 2 && pool_mode != mode {
+                    assert_eq!(result.err(), Some(Error::InvalidCustody));
+                    break;
+                }
+                response = result.unwrap();
+                if slot == 2 {
+                    let complete =
+                        factory_core::LbpLaunchState::decode(response.post_state.as_ref().unwrap())
+                            .unwrap();
+                    assert_eq!(
+                        complete.creation_stage,
+                        factory_core::LbpCreationStage::Complete
+                    );
+                    assert_eq!(complete.trade_mode, mode);
+                }
+            }
+        }
+    }
 }

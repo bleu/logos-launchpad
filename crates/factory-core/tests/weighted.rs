@@ -20,6 +20,7 @@ fn inputs() -> WeightedInputs {
         buy_policy: curve_core::BuyPolicy::Open,
         pause_policy: curve_core::PausePolicy::AuthorityControlled,
         ending_policy: factory_core::EndingPolicy::Scheduled,
+        trade_mode: factory_core::TradeMode::BuyOnly,
         graduation_hook: None,
         namespace: id(40),
         launch_salt: [3; 32],
@@ -184,6 +185,7 @@ fn prepared_with_terms(terms: WeightedInputs) -> (ReceiveInput, Response, Vec<u8
     let policy = terms.buy_policy.clone();
     let pause_policy = terms.pause_policy;
     let policies = terms.ending_policy;
+    let trade_mode = terms.trade_mode;
     let (input, response) = minted_with_terms(terms);
     assert_eq!(
         LbpLaunchState::decode(response.post_state.as_ref().unwrap())
@@ -220,6 +222,7 @@ fn prepared_with_terms(terms: WeightedInputs) -> (ReceiveInput, Response, Vec<u8
     for response in [&response, &allocated, &prepared] {
         let state = LbpLaunchState::decode(response.post_state.as_ref().unwrap()).unwrap();
         assert_eq!(state.ending_policy, policies);
+        assert_eq!(state.trade_mode, trade_mode);
     }
     let call = prepared
         .sync_messages
@@ -1217,4 +1220,89 @@ fn weighted_created_event_names_the_launch_and_original_seed_once() {
     let mut replay = input;
     replay.pre_state = minted.post_state.unwrap();
     assert_eq!(handle(&replay).err(), Some(Error::AlreadyInitialized));
+}
+
+#[test]
+fn weighted_trade_mode_survives_setup_and_rejects_substitution() {
+    for mode in [
+        factory_core::TradeMode::BuyOnly,
+        factory_core::TradeMode::BuyAndSell,
+    ] {
+        let mut terms = inputs();
+        terms.trade_mode = mode;
+        let (input, prepared, bytes) = prepared_with_terms(terms);
+        let state = LbpLaunchState::decode(prepared.post_state.as_ref().unwrap()).unwrap();
+        assert_eq!(state.trade_mode, mode);
+        let pool = lbp_core::PoolAccount::decode(&bytes).unwrap();
+        assert_eq!(pool.trade_mode, mode);
+        for pool_mode in [
+            factory_core::TradeMode::BuyOnly,
+            factory_core::TradeMode::BuyAndSell,
+        ] {
+            let mut pool = pool.clone();
+            pool.trade_mode = pool_mode;
+            let result = advance(
+                &input,
+                &prepared,
+                vec![
+                    borsh::to_vec(&pool).unwrap(),
+                    holding(state.pool_id, state.token_definition_id, 0),
+                    holding(state.pool_id, state.collateral_definition_id, 0),
+                    holding(id(42), state.collateral_definition_id, 100),
+                ],
+            );
+            if pool_mode != mode {
+                assert_eq!(result.err(), Some(Error::InvalidCustody));
+            } else {
+                let complete =
+                    LbpLaunchState::decode(result.unwrap().post_state.as_ref().unwrap()).unwrap();
+                assert_eq!(complete.trade_mode, mode);
+                assert_eq!(complete.creation_stage, LbpCreationStage::Complete);
+            }
+        }
+    }
+}
+
+#[test]
+fn weighted_payouts_and_hook_reject_a_substituted_trade_mode() {
+    let mut terms = inputs();
+    terms.graduation_hook = Some(factory_core::GraduationHook {
+        program_id: id(9),
+        configuration: vec![],
+    });
+    let (input, prepared, bytes) = prepared_with_terms(terms);
+    let mut state = LbpLaunchState::decode(prepared.post_state.as_ref().unwrap()).unwrap();
+    state.creation_stage = LbpCreationStage::Complete;
+    let mut pool = lbp_core::PoolAccount::decode(&bytes).unwrap();
+    pool.funded = true;
+    pool.trade_mode = factory_core::TradeMode::BuyAndSell;
+    for command in [
+        Message::ClaimWeightedAllocation { creator: id(42) },
+        Message::WithdrawWeightedProceeds { creator: id(42) },
+        Message::ExecuteGraduationHook {
+            creator_hint: Some(id(42)),
+        },
+    ] {
+        let hook = matches!(command, Message::ExecuteGraduationHook { .. });
+        let allocation = matches!(command, Message::ClaimWeightedAllocation { .. });
+        let mut request = input.clone();
+        request.from = None;
+        request.pre_state = borsh::to_vec(&state).unwrap().into();
+        request.message = borsh::to_vec(&command).unwrap();
+        let mut response = handle(&request).unwrap();
+        if !hook {
+            request = weighted_authorized(&request, &response);
+            response = handle(&request).unwrap();
+        }
+        request = reply(&request, &response, borsh::to_vec(&pool).unwrap());
+        if allocation {
+            response = handle(&request).unwrap();
+            request = reply(
+                &request,
+                &response,
+                holding(state.creator_escrow_id, state.token_definition_id, 200),
+            );
+        }
+        assert_eq!(handle(&request).err(), Some(Error::InvalidCustody));
+    }
 }

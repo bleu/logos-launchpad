@@ -1,4 +1,5 @@
 use crate::{Error, Message, PoolAccount, PoolMode, compute_pool_pda_seed};
+use crate::{QuoteRequest, quote_trade};
 use borsh::{BorshDeserialize, BorshSerialize};
 use curve_core::events::{SaleEventKindV1, SettlementStepV1, TradeFormV1};
 use curve_core::{Config, TOKEN_PROGRAM_ACCOUNT_ID};
@@ -7,8 +8,6 @@ use lee_core::{
     program::{ReceiveInput, Response, StateReply, SyncMessage},
 };
 use lez_compat_core::token::{self, TokenKind, TokenState};
-use sale_policy::{FeeError, FeeRate};
-use weighted_math_core::{QuoteError, try_calc_in_given_out, try_calc_out_given_in};
 
 #[derive(BorshSerialize, BorshDeserialize)]
 struct Pending {
@@ -17,7 +16,7 @@ struct Pending {
     message: Message,
     buyer: AccountId,
     step: u8,
-    // One reply per buy, in Unix seconds. Never persisted in the final pool state.
+    // One reply per weighted trade, in Unix seconds. Never persisted in the final pool state.
     pricing_time: Option<u64>,
     config: Option<Config>,
     balances: [u128; 3],
@@ -27,7 +26,14 @@ impl Pending {
         match self.step {
             1 => (receiver.account_id, self.state.collateral_definition_id),
             2 => (receiver.account_id, self.state.token_definition_id),
-            _ => (self.buyer, self.state.collateral_definition_id),
+            _ => (
+                self.buyer,
+                if is_sell(&self.message) {
+                    self.state.token_definition_id
+                } else {
+                    self.state.collateral_definition_id
+                },
+            ),
         }
     }
     fn expected(&self, receiver: Actor) -> Actor {
@@ -54,7 +60,9 @@ impl Pending {
             && self.pricing_time.is_none()
             && matches!(
                 self.message,
-                Message::BuyWeightedExactInput { .. } | Message::BuyWeightedExactOutput { .. }
+                Message::BuyWeightedExactInput { .. }
+                    | Message::BuyWeightedExactOutput { .. }
+                    | Message::SellWeightedExactInput { .. }
             )
         {
             crate::pricing_clock::require_available()?;
@@ -175,110 +183,70 @@ impl Pending {
         if config.emergency.is_frozen {
             return Err(Error::Frozen);
         }
-        if config.protocol_fee_bps >= 10_000 {
-            return Err(Error::InvalidFee);
-        }
-
         if self.state.trade_control.is_paused() {
             return Err(Error::Paused);
         }
-        validate_buy_window(&self.state, &self.message)?;
-        if self.state.settlement_progress.is_complete() || self.state.remaining_inventory == 0 {
-            return Err(Error::Closed);
-        }
-        if matches!(self.state.mode, PoolMode::Weighted { .. }) {
-            if self.state.remaining_inventory > self.state.sale_inventory {
-                return Err(Error::InvalidState);
-            }
-            if self.balances[1] < self.state.remaining_inventory {
-                return Err(Error::Underfunded);
-            }
-        }
-
-        let weights = self
-            .pricing_time
-            .map(|time| crate::weighted_lifecycle::weights_at(&self.state, time))
-            .transpose()?;
-        let (amount_in, amount_out) = match self.state.mode {
-            PoolMode::FixedPrice => {
-                fixed_price_amounts(&self.state, &self.message, config.protocol_fee_bps)?
-            }
-            PoolMode::Weighted {
-                pricing_collateral, ..
-            } => weighted_amounts(
-                &self.state,
-                &self.message,
-                pricing_collateral,
-                self.pricing_time.ok_or(Error::InvalidState)?,
-                weights.ok_or(Error::InvalidState)?,
-                config.protocol_fee_bps,
-            )?,
+        validate_trade_window(&self.state, &self.message)?;
+        let request = quote_request(&self.message)?;
+        let sell = request.is_sell();
+        let pricing_time = match self.message {
+            Message::BuyExactInput { now, .. }
+            | Message::BuyExactOutput { now, .. }
+            | Message::SellExactInput { now, .. } => now,
+            _ => self.pricing_time.ok_or(Error::InvalidState)?,
         };
-
-        if amount_in == 0 || amount_out == 0 || amount_out > self.state.remaining_inventory {
-            return Err(Error::InvalidAmount);
-        }
-        if self.balances[1] < amount_out || self.balances[2] < amount_in {
+        let quote = quote_trade(&self.state, request, config.protocol_fee_bps, pricing_time)?;
+        let amount_in = quote.amount_in;
+        let amount_out = quote.amount_out;
+        if self.balances[2] < amount_in {
             return Err(Error::Underfunded);
         }
-
-        let rate = FeeRate::new(config.protocol_fee_bps).map_err(fee_error)?;
-        let collateral = rate.split(amount_in).map_err(fee_error)?;
-        let fee = collateral.fee;
-        let net_in = collateral.net;
-        if net_in == 0 {
-            return Err(Error::InvalidAmount);
-        }
-
-        let next_pricing = match self.state.mode {
-            PoolMode::Weighted {
-                pricing_collateral, ..
-            } => Some(
-                pricing_collateral
-                    .checked_add(net_in)
-                    .ok_or(Error::Arithmetic)?,
-            ),
-            PoolMode::FixedPrice => None,
-        };
-        let next_recorded = self
-            .state
-            .recorded_collateral
-            .checked_add(net_in)
-            .ok_or(Error::Arithmetic)?;
-        let next_fees = self
-            .state
-            .accrued_fees
-            .checked_add(fee)
-            .ok_or(Error::Arithmetic)?;
-        let next_inventory = self
-            .state
-            .remaining_inventory
-            .checked_sub(amount_out)
-            .ok_or(Error::Arithmetic)?;
-
-        let next_liabilities = next_recorded
-            .checked_add(next_fees)
-            .ok_or(Error::Arithmetic)?;
-        if self.balances[0]
-            .checked_add(amount_in)
-            .ok_or(Error::Arithmetic)?
-            < next_liabilities
+        if (sell || matches!(self.state.mode, PoolMode::Weighted { .. }))
+            && self.balances[1] < self.state.remaining_inventory
         {
             return Err(Error::Underfunded);
         }
+        if !sell && self.balances[1] < amount_out {
+            return Err(Error::Underfunded);
+        }
+        let (next_recorded, next_fees, next_inventory) =
+            crate::quote::accounting(&self.state, &quote, sell)?;
+        let next_liabilities = next_recorded
+            .checked_add(next_fees)
+            .ok_or(Error::Arithmetic)?;
+        let vault = if sell {
+            self.balances[1]
+                .checked_add(amount_in)
+                .ok_or(Error::Arithmetic)?;
+            self.balances[0]
+                .checked_sub(amount_out)
+                .ok_or(Error::Underfunded)?
+        } else {
+            self.balances[0]
+                .checked_add(amount_in)
+                .ok_or(Error::Arithmetic)?
+        };
+        if vault < next_liabilities {
+            return Err(Error::Underfunded);
+        }
+        let weights = if matches!(self.state.mode, PoolMode::Weighted { .. }) {
+            Some(crate::weighted_lifecycle::weights_at(
+                &self.state,
+                pricing_time,
+            )?)
+        } else {
+            None
+        };
         let bounds = self.state.trade_bounds()?;
         // Save trade records only after all math, coverage and fit checks pass.
         self.state.recorded_collateral = next_recorded;
         self.state.accrued_fees = next_fees;
         self.state.remaining_inventory = next_inventory;
-        if let (
-            PoolMode::Weighted {
-                pricing_collateral, ..
-            },
-            Some(next),
-        ) = (&mut self.state.mode, next_pricing)
+        if let PoolMode::Weighted {
+            pricing_collateral, ..
+        } = &mut self.state.mode
         {
-            *pricing_collateral = next;
+            *pricing_collateral = next_recorded;
         }
         // Record an observer checkpoint when the trusted timestamp changes.
         let checkpoint_event = if let (
@@ -320,28 +288,48 @@ impl Pending {
         } else {
             response
         };
-        let response = response.event(self.state.event(
-            receiver,
-            SaleEventKindV1::Trade {
-                trader: *self.buyer.value(),
-                form: match self.message {
-                    Message::BuyExactOutput { .. } | Message::BuyWeightedExactOutput { .. } => {
-                        TradeFormV1::ExactOutput
+        let response = response.event(
+            self.state.event(
+                receiver,
+                SaleEventKindV1::Trade {
+                    trader: *self.buyer.value(),
+                    form: match self.message {
+                        Message::BuyExactOutput { .. } | Message::BuyWeightedExactOutput { .. } => {
+                            TradeFormV1::ExactOutput
+                        }
+                        _ => TradeFormV1::ExactInput,
+                    },
+                    token_in: *if sell {
+                        self.state.token_definition_id
+                    } else {
+                        self.state.collateral_definition_id
                     }
-                    _ => TradeFormV1::ExactInput,
+                    .value(),
+                    token_out: *if sell {
+                        self.state.collateral_definition_id
+                    } else {
+                        self.state.token_definition_id
+                    }
+                    .value(),
+                    amount_in,
+                    pricing_input: if sell {
+                        amount_in
+                    } else {
+                        quote.net_collateral
+                    },
+                    gross_output: if sell {
+                        quote.gross_collateral
+                    } else {
+                        amount_out
+                    },
+                    amount_out,
+                    fee_definition: *self.state.collateral_definition_id.value(),
+                    fee_amount: quote.protocol_fee,
+                    fee_bps: config.protocol_fee_bps,
+                    pricing_time: self.pricing_time,
                 },
-                token_in: *self.state.collateral_definition_id.value(),
-                token_out: *self.state.token_definition_id.value(),
-                amount_in,
-                pricing_input: net_in,
-                gross_output: amount_out,
-                amount_out,
-                fee_definition: *self.state.collateral_definition_id.value(),
-                fee_amount: fee,
-                fee_bps: config.protocol_fee_bps,
-                pricing_time: self.pricing_time,
-            },
-        ));
+            ),
+        );
         let response = if let Some(event) = closure_event {
             response.event(event)
         } else {
@@ -350,7 +338,11 @@ impl Pending {
         let response = response.send_sync(
             Actor::new(self.buyer, TOKEN_PROGRAM_ACCOUNT_ID),
             &token::Message::Transfer {
-                definition: self.state.collateral_definition_id,
+                definition: if sell {
+                    self.state.token_definition_id
+                } else {
+                    self.state.collateral_definition_id
+                },
                 recipient: receiver.account_id,
                 amount: amount_in,
             },
@@ -359,142 +351,65 @@ impl Pending {
             response,
             &self.state,
             receiver,
-            self.state.token_definition_id,
+            if sell {
+                self.state.collateral_definition_id
+            } else {
+                self.state.token_definition_id
+            },
             self.buyer,
             amount_out,
         ))
     }
 }
 
-// ---------------------------------------------------------------------------
-// Amount computation helpers
-// ---------------------------------------------------------------------------
+fn is_sell(message: &Message) -> bool {
+    matches!(
+        message,
+        Message::SellExactInput { .. } | Message::SellWeightedExactInput { .. }
+    )
+}
 
-/// Compute (amount_in, amount_out) for a fixed-price pool.
-fn fixed_price_amounts(
-    state: &PoolAccount,
-    message: &Message,
-    fee_bps: u16,
-) -> Result<(u128, u128), Error> {
-    match message {
+fn quote_request(message: &Message) -> Result<QuoteRequest, Error> {
+    match *message {
         Message::BuyExactInput {
             amount_in,
             min_amount_out,
             ..
-        } => {
-            let net = FeeRate::new(fee_bps)
-                .and_then(|rate| rate.split(*amount_in))
-                .map_err(fee_error)?
-                .net;
-            if net == 0 {
-                return Err(Error::InvalidAmount);
-            }
-            let out = state.price.amount_out(net)?;
-            if out < *min_amount_out {
-                return Err(Error::Slippage);
-            }
-            Ok((*amount_in, out))
         }
+        | Message::BuyWeightedExactInput {
+            amount_in,
+            min_amount_out,
+            ..
+        } => Ok(QuoteRequest::BuyExactInput {
+            collateral_in: amount_in,
+            min_tokens_out: min_amount_out,
+        }),
         Message::BuyExactOutput {
             amount_out,
             max_amount_in,
             ..
-        } => {
-            let input = state.price.amount_in(*amount_out)?;
-            let input = FeeRate::new(fee_bps)
-                .and_then(|rate| rate.gross_up(input))
-                .map_err(fee_error)?
-                .gross;
-            if input > *max_amount_in {
-                return Err(Error::Slippage);
-            }
-            Ok((input, *amount_out))
         }
-        _ => Err(Error::InvalidMessage),
-    }
-}
-
-/// Price net collateral against recorded reserves. Fee collection leaves pricing unchanged.
-fn weighted_amounts(
-    state: &PoolAccount,
-    message: &Message,
-    pricing_collateral: u128,
-    pricing_time: u64,
-    (coll_w, token_w): (u128, u128),
-    fee_bps: u16,
-) -> Result<(u128, u128), Error> {
-    let end_ts = state.end_timestamp.ok_or(Error::InvalidState)?;
-    if pricing_time < state.start_timestamp || pricing_time >= end_ts {
-        return Err(Error::Closed);
-    }
-
-    let coll_bal = pricing_collateral;
-    let token_bal = state.remaining_inventory;
-
-    if coll_bal == 0 || token_bal == 0 {
-        return Err(Error::Underfunded);
-    }
-
-    match message {
-        Message::BuyWeightedExactInput {
-            amount_in,
-            min_amount_out,
-            ..
-        } => {
-            let net = FeeRate::new(fee_bps)
-                .and_then(|rate| rate.split(*amount_in))
-                .map_err(fee_error)?
-                .net;
-            if net == 0 {
-                return Err(Error::InvalidAmount);
-            }
-            let out = try_calc_out_given_in(coll_bal, coll_w, token_bal, token_w, net)
-                .map_err(math_error)?;
-            if out < *min_amount_out {
-                return Err(Error::Slippage);
-            }
-            Ok((*amount_in, out))
-        }
-        Message::BuyWeightedExactOutput {
+        | Message::BuyWeightedExactOutput {
             amount_out,
             max_amount_in,
             ..
-        } => {
-            let amount_in =
-                try_calc_in_given_out(coll_bal, coll_w, token_bal, token_w, *amount_out)
-                    .map_err(math_error)?;
-            let amount_in = FeeRate::new(fee_bps)
-                .and_then(|rate| rate.gross_up(amount_in))
-                .map_err(fee_error)?
-                .gross;
-            if amount_in > *max_amount_in {
-                return Err(Error::Slippage);
-            }
-            Ok((amount_in, *amount_out))
+        } => Ok(QuoteRequest::BuyExactOutput {
+            tokens_out: amount_out,
+            max_collateral_in: max_amount_in,
+        }),
+        Message::SellExactInput {
+            amount_in,
+            min_amount_out,
+            ..
         }
+        | Message::SellWeightedExactInput {
+            amount_in,
+            min_amount_out,
+        } => Ok(QuoteRequest::SellExactInput {
+            tokens_in: amount_in,
+            min_collateral_out: min_amount_out,
+        }),
         _ => Err(Error::InvalidMessage),
-    }
-}
-
-fn fee_error(error: FeeError) -> Error {
-    match error {
-        FeeError::RateAboveDenominator => Error::InvalidFee,
-        FeeError::InputConsumedByFees => Error::InvalidAmount,
-        FeeError::Arithmetic => Error::Arithmetic,
-    }
-}
-
-fn math_error(error: QuoteError) -> Error {
-    match error {
-        QuoteError::EmptyReserve => Error::Underfunded,
-        QuoteError::InvalidWeights => Error::InvalidTerms,
-        QuoteError::InvalidAmount | QuoteError::AmountOutOfBounds | QuoteError::Dust => {
-            Error::InvalidAmount
-        }
-        QuoteError::Arithmetic => Error::Arithmetic,
-        QuoteError::PowerUnderflow => Error::PowerUnderflow,
-        QuoteError::Accuracy => Error::MathAccuracy,
-        QuoteError::UnqualifiedScale => Error::InvalidState,
     }
 }
 
@@ -514,6 +429,8 @@ pub(super) fn begin(input: &ReceiveInput, message: Message) -> Result<Response, 
             | Message::BuyExactOutput { .. }
             | Message::BuyWeightedExactInput { .. }
             | Message::BuyWeightedExactOutput { .. }
+            | Message::SellExactInput { .. }
+            | Message::SellWeightedExactInput { .. }
     ) && state.trade_control.is_paused()
     {
         return Err(Error::Paused);
@@ -525,7 +442,7 @@ pub(super) fn begin(input: &ReceiveInput, message: Message) -> Result<Response, 
             | Message::SettleWeighted { .. }
             | Message::Settle { .. }
     ) {
-        validate_buy_window(&state, &message)?;
+        validate_trade_window(&state, &message)?;
     }
     let buyer = if let Message::Settle {
         route,
@@ -679,11 +596,16 @@ fn payout(
 }
 
 /// Validate admission bounds. Weighted pricing time arrives later in a clock reply.
-fn validate_buy_window(state: &PoolAccount, message: &Message) -> Result<(), Error> {
+fn validate_trade_window(state: &PoolAccount, message: &Message) -> Result<(), Error> {
+    if is_sell(message) && state.trade_mode != crate::TradeMode::BuyAndSell {
+        return Err(Error::TradeDirectionUnsupported);
+    }
     match (state.mode, message) {
         (
             PoolMode::FixedPrice,
-            Message::BuyExactInput { now, .. } | Message::BuyExactOutput { now, .. },
+            Message::BuyExactInput { now, .. }
+            | Message::BuyExactOutput { now, .. }
+            | Message::SellExactInput { now, .. },
         ) => {
             if *now < state.start_timestamp || state.end_timestamp.is_some_and(|end| *now >= end) {
                 return Err(Error::Closed);
@@ -698,7 +620,9 @@ fn validate_buy_window(state: &PoolAccount, message: &Message) -> Result<(), Err
         }
         (
             PoolMode::Weighted { .. },
-            Message::BuyWeightedExactInput { .. } | Message::BuyWeightedExactOutput { .. },
+            Message::BuyWeightedExactInput { .. }
+            | Message::BuyWeightedExactOutput { .. }
+            | Message::SellWeightedExactInput { .. },
         ) => {
             crate::pricing_clock::require_available()?;
             let _ = curve_core::with_time_bounds(
@@ -854,6 +778,7 @@ mod tests {
             buy_policy: crate::BuyPolicy::Open,
             trade_control: TradeControl::Paused,
             ending_policy: crate::EndingPolicy::Either,
+            trade_mode: crate::TradeMode::BuyOnly,
             graduation_adapter: None,
             mode: PoolMode::FixedPrice,
             funded: true,

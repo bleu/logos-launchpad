@@ -83,6 +83,8 @@ pub enum ClientError {
     #[error("cannot quote collateral purchase: {0}")]
     #[strum(serialize = "quote_buy_with_collateral")]
     QuoteBuyWithCollateral(#[source] pool::SwapError),
+    #[error("cannot quote LBP trade: {0}")]
+    QuoteLbpTrade(#[source] lbp_core::Error),
     #[error("invalid factory curve parameters: {0}")]
     #[strum(serialize = "factory_parameters")]
     FactoryParameters(#[from] factory_core::CreateError),
@@ -258,6 +260,10 @@ mod tests {
             ),
             (ClientError::QuoteBuy(pool::SwapError::Closed), "quote_buy"),
             (
+                ClientError::QuoteLbpTrade(lbp_core::Error::Closed),
+                "quote_lbp_trade",
+            ),
+            (
                 ClientError::QuoteBuy(pool::SwapError::SlippageExceeded),
                 "quote_buy",
             ),
@@ -308,6 +314,11 @@ mod tests {
                 .unwrap()
                 .downcast_ref::<factory_core::Error>(),
             Some(factory_core::Error::InvalidTerms)
+        ));
+        let error = ClientError::QuoteLbpTrade(lbp_core::Error::Closed);
+        assert!(matches!(
+            error.source().unwrap().downcast_ref::<lbp_core::Error>(),
+            Some(lbp_core::Error::Closed)
         ));
         let error = ClientError::QuoteSell(pool::SwapError::InsufficientRealOutputReserve);
         assert!(matches!(

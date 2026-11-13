@@ -17,6 +17,7 @@ fn weighted_inputs() -> WeightedPoolInputs {
         buy_policy: curve_core::BuyPolicy::Open,
         pause_policy: lbp_core::PausePolicy::AuthorityControlled,
         ending_policy: lbp_core::EndingPolicy::Scheduled,
+        trade_mode: lbp_core::TradeMode::BuyOnly,
         graduation_adapter: None,
         namespace: id(40),
         namespace_program_id: id(6),
@@ -398,6 +399,7 @@ fn weighted_policy_survives_every_prepare_and_activation_callback() {
         root: [9; 32],
     });
     inputs.buy_policy = policy.clone();
+    inputs.trade_mode = lbp_core::TradeMode::BuyAndSell;
     inputs.graduation_adapter = Some(Actor::new(id(70), id(71)));
     input.message = borsh::to_vec(&Message::PrepareWeighted { inputs }).unwrap();
     let factory = input.from;
@@ -435,6 +437,7 @@ fn weighted_policy_survives_every_prepare_and_activation_callback() {
             let saved =
                 lbp_core::PoolAccount::decode(response.post_state.as_ref().unwrap()).unwrap();
             assert_eq!(saved.buy_policy, policy);
+            assert_eq!(saved.trade_mode, lbp_core::TradeMode::BuyAndSell);
             assert!(!saved.seed_returned);
             assert_eq!(saved.graduation_adapter, Some(Actor::new(id(70), id(71))));
             assert_eq!(
@@ -579,5 +582,48 @@ fn malformed_weighted_policies_cannot_bypass_pool_entry_or_setup_replies() {
             input.message = borsh::to_vec(&message).unwrap();
             assert_eq!(handle(&input).err(), Some(expected));
         }
+    }
+}
+
+#[test]
+fn snapshot_quotes_work_without_a_provider_but_weighted_sells_require_one() {
+    let (mut input, response) = activation(1_000_000, 100);
+    let mut state = lbp_core::PoolAccount::decode(response.post_state.as_ref().unwrap()).unwrap();
+    state.trade_mode = lbp_core::TradeMode::BuyAndSell;
+    state.recorded_collateral = 1_000_000;
+    if let lbp_core::PoolMode::Weighted {
+        pricing_collateral,
+        token_weight_start,
+        token_weight_end,
+        ..
+    } = &mut state.mode
+    {
+        *pricing_collateral = 1_000_000;
+        *token_weight_start = weight(50);
+        *token_weight_end = weight(50);
+    }
+    let quoted = lbp_core::quote_trade(
+        &state,
+        lbp_core::QuoteRequest::SellExactInput {
+            tokens_in: 1000,
+            min_collateral_out: 0,
+        },
+        100,
+        150,
+    )
+    .unwrap();
+    assert!(quoted.amount_out > 0);
+    if !cfg!(local_mock_clock) {
+        input.from = Some(Actor::new(id(50), input.receiver.program_account_id));
+        input.pre_state = borsh::to_vec(&state).unwrap().into();
+        input.message = borsh::to_vec(&Message::SellWeightedExactInput {
+            amount_in: 1000,
+            min_amount_out: 0,
+        })
+        .unwrap();
+        assert_eq!(
+            handle(&input).err(),
+            Some(lbp_core::Error::ClockUnavailable)
+        );
     }
 }

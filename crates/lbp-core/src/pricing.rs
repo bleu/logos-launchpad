@@ -13,6 +13,16 @@ impl FixedPrice {
         .map_err(pricing_error)
     }
 
+    pub(crate) fn sell_amount_out(self, tokens: u128) -> Result<u128, Error> {
+        mul_div(
+            tokens,
+            self.collateral_units,
+            self.token_units,
+            Rounding::Floor,
+        )
+        .map_err(pricing_error)
+    }
+
     pub(crate) fn amount_in(self, tokens: u128) -> Result<u128, Error> {
         mul_div(
             tokens,

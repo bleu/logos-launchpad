@@ -1631,20 +1631,6 @@
             "tag": 7
           }
         ]
-      },
-      "TradeMode": {
-        "variants": [
-          {
-            "fields": [],
-            "name": "BuyOnly",
-            "tag": 0
-          },
-          {
-            "fields": [],
-            "name": "BuyAndSell",
-            "tag": 1
-          }
-        ]
       }
     },
     "hook": {
@@ -1851,6 +1837,10 @@
           {
             "name": "ending_policy",
             "type": "EndingPolicy"
+          },
+          {
+            "name": "trade_mode",
+            "type": "TradeMode"
           },
           {
             "name": "graduation_adapter",
@@ -2118,6 +2108,38 @@
             ],
             "name": "FinalizeSettlement",
             "tag": 17
+          },
+          {
+            "fields": [
+              {
+                "name": "amount_in",
+                "type": "u128"
+              },
+              {
+                "name": "min_amount_out",
+                "type": "u128"
+              },
+              {
+                "name": "now",
+                "type": "u64"
+              }
+            ],
+            "name": "SellExactInput",
+            "tag": 18
+          },
+          {
+            "fields": [
+              {
+                "name": "amount_in",
+                "type": "u128"
+              },
+              {
+                "name": "min_amount_out",
+                "type": "u128"
+              }
+            ],
+            "name": "SellWeightedExactInput",
+            "tag": 19
           }
         ]
       },
@@ -2146,6 +2168,10 @@
           {
             "name": "ending_policy",
             "type": "EndingPolicy"
+          },
+          {
+            "name": "trade_mode",
+            "type": "TradeMode"
           },
           {
             "name": "graduation_adapter",
@@ -2293,6 +2319,10 @@
           {
             "name": "ending_policy",
             "type": "EndingPolicy"
+          },
+          {
+            "name": "trade_mode",
+            "type": "TradeMode"
           },
           {
             "name": "graduation_adapter",
@@ -2463,6 +2493,10 @@
             "type": "EndingPolicy"
           },
           {
+            "name": "trade_mode",
+            "type": "TradeMode"
+          },
+          {
             "name": "graduation_hook",
             "type": "Option<GraduationHook>"
           },
@@ -2565,6 +2599,10 @@
           {
             "name": "ending_policy",
             "type": "EndingPolicy"
+          },
+          {
+            "name": "trade_mode",
+            "type": "TradeMode"
           },
           {
             "name": "graduation_hook",
@@ -2820,6 +2858,10 @@
             "type": "EndingPolicy"
           },
           {
+            "name": "trade_mode",
+            "type": "TradeMode"
+          },
+          {
             "name": "graduation_hook",
             "type": "Option<GraduationHook>"
           },
@@ -3048,6 +3090,20 @@
             "fields": [],
             "name": "Either",
             "tag": 3
+          }
+        ]
+      },
+      "TradeMode": {
+        "variants": [
+          {
+            "fields": [],
+            "name": "BuyOnly",
+            "tag": 0
+          },
+          {
+            "fields": [],
+            "name": "BuyAndSell",
+            "tag": 1
           }
         ]
       }

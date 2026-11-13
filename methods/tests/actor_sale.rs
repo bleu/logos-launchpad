@@ -232,6 +232,7 @@ fn fixed_state(buyer: AccountId, end: Option<u64>) -> (V03State, AccountId) {
             } else {
                 lbp_core::EndingPolicy::Depletion
             },
+            lbp_core::TradeMode::BuyOnly,
             None::<Actor>,
             lbp_core::PoolMode::FixedPrice,
             true,
@@ -1394,7 +1395,7 @@ fn curve_factory_locks_allowlist_before_setup_and_buys_with_the_same_policy() {
                 buy_policy: policy.clone(),
                 pause_policy: curve_core::PausePolicy::Disabled,
                 ending_policy,
-                trade_mode: 1,
+                trade_mode: 0,
                 graduation_hook_program_id: None,
                 graduation_hook_configuration: vec![],
                 namespace: NAMESPACE,
@@ -1735,6 +1736,24 @@ fn fixed_factory_env_with_options(
     ending_policy: lbp_core::EndingPolicy,
     graduation_hook: Option<factory_core::GraduationHook>,
 ) -> FixedFactoryEnv {
+    fixed_factory_env_with_trade_mode(
+        end,
+        release,
+        pause_policy,
+        ending_policy,
+        graduation_hook,
+        lbp_core::TradeMode::BuyOnly,
+    )
+}
+
+fn fixed_factory_env_with_trade_mode(
+    end: Option<u64>,
+    release: factory_core::CreatorAllocationRelease,
+    pause_policy: curve_core::PausePolicy,
+    ending_policy: lbp_core::EndingPolicy,
+    graduation_hook: Option<factory_core::GraduationHook>,
+    trade_mode: lbp_core::TradeMode,
+) -> FixedFactoryEnv {
     const FACTORY: AccountId = AccountId::new([17; 32]);
     let key = PrivateKey::try_new([23; 32]).unwrap();
     let creator = AccountId::from(&PublicKey::new_from_private_key(&key));
@@ -1844,6 +1863,7 @@ fn fixed_factory_env_with_options(
                 buy_policy: policy.clone(),
                 pause_policy,
                 ending_policy,
+                trade_mode,
                 graduation_hook,
                 namespace: NAMESPACE,
                 launch_salt: salt,
@@ -2300,6 +2320,7 @@ fn weighted_factory_executes_all_stages_and_rolls_back_failed_funding() {
                 buy_policy: policy.clone(),
                 pause_policy: curve_core::PausePolicy::AuthorityControlled,
                 ending_policy,
+                trade_mode: lbp_core::TradeMode::BuyOnly,
                 graduation_hook: None,
                 namespace: NAMESPACE,
                 launch_salt: salt,
@@ -2616,6 +2637,23 @@ fn weighted_factory_env_with_hook(
     Vec<Actor>, // actors for factory transactions
     [u8; 32],   // salt
 ) {
+    weighted_factory_env_with_trade_mode(execute_buy, graduation_hook, lbp_core::TradeMode::BuyOnly)
+}
+
+fn weighted_factory_env_with_trade_mode(
+    execute_buy: bool,
+    graduation_hook: Option<factory_core::GraduationHook>,
+    trade_mode: lbp_core::TradeMode,
+) -> (
+    V03State,
+    AccountId, // factory
+    AccountId, // pool
+    AccountId, // launch (token definition)
+    AccountId, // escrow
+    PrivateKey,
+    Vec<Actor>, // actors for factory transactions
+    [u8; 32],   // salt
+) {
     use factory_core::{CreatorAllocationRelease, LbpCreationStage, WeightedInputs};
     const FACTORY: AccountId = AccountId::new([17; 32]);
     let key = PrivateKey::try_new([23; 32]).unwrap();
@@ -2767,6 +2805,7 @@ fn weighted_factory_env_with_hook(
                 buy_policy: curve_core::BuyPolicy::Open,
                 pause_policy: curve_core::PausePolicy::AuthorityControlled,
                 ending_policy: lbp_core::EndingPolicy::Scheduled,
+                trade_mode,
                 graduation_hook,
                 namespace: NAMESPACE,
                 launch_salt: salt,
@@ -4760,6 +4799,7 @@ fn factory_creation_rejects_invalid_ending_matrix_without_state_changes() {
                         buy_policy: curve_core::BuyPolicy::Open,
                         pause_policy: PausePolicy::Disabled,
                         ending_policy,
+                        trade_mode: lbp_core::TradeMode::BuyOnly,
                         graduation_hook: None,
                         namespace: NAMESPACE,
                         launch_salt: salt,
@@ -4788,6 +4828,7 @@ fn factory_creation_rejects_invalid_ending_matrix_without_state_changes() {
                         buy_policy: curve_core::BuyPolicy::Open,
                         pause_policy: PausePolicy::Disabled,
                         ending_policy,
+                        trade_mode: lbp_core::TradeMode::BuyOnly,
                         graduation_hook: None,
                         namespace: NAMESPACE,
                         launch_salt: salt,
@@ -7542,4 +7583,434 @@ fn signed_scheduled_sellout_does_not_emit_early_closure() {
             ..
         })
     ));
+}
+
+#[test]
+fn signed_common_sells_fixed_inventory_and_fee_surplus_isolation() {
+    let mut env = fixed_factory_env_with_trade_mode(
+        Some(200),
+        factory_core::CreatorAllocationRelease::AfterSetup,
+        curve_core::PausePolicy::AuthorityControlled,
+        lbp_core::EndingPolicy::Scheduled,
+        None,
+        lbp_core::TradeMode::BuyAndSell,
+    );
+    let creator = env.creator();
+    let seller_key = PrivateKey::try_new([22; 32]).unwrap();
+    let seller = AccountId::from(&PublicKey::new_from_private_key(&seller_key));
+    fixed_execute(
+        &mut env.state,
+        env.pool,
+        &env.key,
+        lbp_core::Message::BuyExactInput {
+            membership: Some(env.path.clone()),
+            amount_in: 101,
+            min_amount_out: 64,
+            now: 100,
+        },
+    )
+    .unwrap();
+    let bought = fixed_pool(&env.state, env.pool);
+    assert_eq!(bought.recorded_collateral, 97);
+    assert_eq!(bought.accrued_fees, 4);
+    // The seller holds tokens from the creator allocation and has no buy membership.
+    env.state = env.state.with_public_accounts([
+        token_holding(creator, env.launch, 199),
+        token_holding(seller, env.launch, 65),
+        token_holding(seller, COLLATERAL, 0),
+        token_holding(env.pool, COLLATERAL, 142),
+        token_holding(env.pool, env.launch, 743),
+    ]);
+    fixed_rejected(
+        &mut env.state,
+        env.pool,
+        &seller_key,
+        lbp_core::Message::BuyExactInput {
+            membership: None,
+            amount_in: 1,
+            min_amount_out: 1,
+            now: 100,
+        },
+        "Unauthorized",
+    );
+    let sell = lbp_core::Message::SellExactInput {
+        amount_in: 65,
+        min_amount_out: 93,
+        now: 100,
+    };
+    fixed_rejected(
+        &mut env.state,
+        env.pool,
+        &seller_key,
+        lbp_core::Message::SellExactInput {
+            amount_in: 65,
+            min_amount_out: 94,
+            now: 100,
+        },
+        "Slippage",
+    );
+    let events =
+        fixed_execute_events_at(&mut env.state, env.pool, &seller_key, sell, 100_000).unwrap();
+    assert_eq!(
+        sale_events(&events, LBP, pool_subject(env.pool))[0].engine,
+        PricingEngineV1::FixedPrice
+    );
+    let sale = fixed_pool(&env.state, env.pool);
+    assert_eq!(sale.trade_mode, lbp_core::TradeMode::BuyAndSell);
+    assert_eq!(sale.remaining_inventory, 801);
+    assert!(sale.remaining_inventory > sale.sale_inventory);
+    assert_eq!(sale.recorded_collateral, 0);
+    assert_eq!(sale.accrued_fees, 8);
+    assert_eq!(balance(&env.state, seller, env.launch), 0);
+    assert_eq!(balance(&env.state, seller, COLLATERAL), 93);
+    assert_eq!(balance(&env.state, env.pool, COLLATERAL), 49);
+    assert_eq!(balance(&env.state, env.pool, env.launch), 808);
+    assert_eq!(
+        sale_event_kinds(&events, LBP, pool_subject(env.pool)),
+        vec![SaleEventKindV1::Trade {
+            trader: seller.to_bytes(),
+            form: TradeFormV1::ExactInput,
+            token_in: env.launch.to_bytes(),
+            token_out: COLLATERAL.to_bytes(),
+            amount_in: 65,
+            pricing_input: 65,
+            gross_output: 97,
+            amount_out: 93,
+            fee_definition: COLLATERAL.to_bytes(),
+            fee_amount: 4,
+            fee_bps: 333,
+            pricing_time: None,
+        }]
+    );
+    env.state = env
+        .state
+        .with_public_accounts([token_holding(seller, env.launch, 2)]);
+    fixed_rejected(
+        &mut env.state,
+        env.pool,
+        &seller_key,
+        lbp_core::Message::SellExactInput {
+            amount_in: 2,
+            min_amount_out: 0,
+            now: 100,
+        },
+        "Underfunded",
+    );
+    fixed_execute(
+        &mut env.state,
+        env.pool,
+        &seller_key,
+        lbp_core::Message::CollectFees,
+    )
+    .unwrap();
+    assert_eq!(balance(&env.state, TREASURY, COLLATERAL), 8);
+    assert_eq!(balance(&env.state, env.pool, COLLATERAL), 41);
+    env.execute(
+        factory_core::Message::WithdrawFactoryProceeds { creator, now: 200 },
+        200_000,
+    )
+    .unwrap();
+    assert_eq!(balance(&env.state, env.pool, COLLATERAL), 41);
+    assert_eq!(balance(&env.state, env.pool, env.launch), 7);
+    assert_eq!(
+        fixed_pool(&env.state, env.pool).settlement_progress,
+        lbp_core::SettlementProgress::NoPayout
+    );
+}
+
+#[test]
+fn signed_common_sells_weighted_seed_fee_surplus_isolation() {
+    let (mut state, factory, pool, launch, _escrow, key, actors, salt) =
+        weighted_factory_env_with_trade_mode(true, None, lbp_core::TradeMode::BuyAndSell);
+    let creator = AccountId::from(&PublicKey::new_from_private_key(&key));
+    let before = fixed_pool(&state, pool);
+    state = state.with_public_accounts([token_holding(
+        pool,
+        COLLATERAL,
+        before.recorded_collateral + before.accrued_fees + 41,
+    )]);
+    let quote = lbp_core::quote_trade(
+        &before,
+        lbp_core::QuoteRequest::SellExactInput {
+            tokens_in: 100,
+            min_collateral_out: 0,
+        },
+        100,
+        150,
+    )
+    .unwrap();
+    assert!(quote.protocol_fee > 0);
+    let collateral = balance(&state, creator, COLLATERAL);
+    let tokens = balance(&state, creator, launch);
+    let pool_tokens = balance(&state, pool, launch);
+    let sell = lbp_core::Message::SellWeightedExactInput {
+        amount_in: 100,
+        min_amount_out: quote.amount_out,
+    };
+    let rejected = lbp_core::Message::SellWeightedExactInput {
+        amount_in: 100,
+        min_amount_out: quote.amount_out + 1,
+    };
+    let saved = state.clone();
+    assert!(
+        matches!(fixed_execute_events_at(&mut state, pool, &key, rejected, 150_000),
+        Err(lee::error::LeeError::ProgramExecutionFailed(error)) if error.contains("Slippage"))
+    );
+    assert!(state == saved);
+    let events = fixed_execute_events_at(&mut state, pool, &key, sell, 150_000).unwrap();
+    assert_eq!(
+        sale_events(&events, LBP, pool_subject(pool))[0].engine,
+        PricingEngineV1::Weighted
+    );
+    let sale = fixed_pool(&state, pool);
+    assert_eq!(
+        sale.recorded_collateral,
+        before.recorded_collateral - quote.gross_collateral
+    );
+    assert!(sale.recorded_collateral >= 100);
+    assert_eq!(sale.accrued_fees, before.accrued_fees + quote.protocol_fee);
+    assert_eq!(sale.remaining_inventory, before.remaining_inventory + 100);
+    assert!(
+        matches!(sale.mode, lbp_core::PoolMode::Weighted { pricing_collateral, .. } if pricing_collateral == sale.recorded_collateral)
+    );
+    assert_eq!(
+        balance(&state, creator, COLLATERAL),
+        collateral + quote.amount_out
+    );
+    assert_eq!(balance(&state, creator, launch), tokens - 100);
+    assert_eq!(balance(&state, pool, launch), pool_tokens + 100);
+    assert_eq!(
+        balance(&state, pool, COLLATERAL),
+        sale.recorded_collateral + sale.accrued_fees + 41
+    );
+    assert_eq!(
+        sale_event_kinds(&events, LBP, pool_subject(pool)),
+        vec![SaleEventKindV1::Trade {
+            trader: creator.to_bytes(),
+            form: TradeFormV1::ExactInput,
+            token_in: launch.to_bytes(),
+            token_out: COLLATERAL.to_bytes(),
+            amount_in: 100,
+            pricing_input: 100,
+            gross_output: quote.gross_collateral,
+            amount_out: quote.amount_out,
+            fee_definition: COLLATERAL.to_bytes(),
+            fee_amount: quote.protocol_fee,
+            fee_bps: 100,
+            pricing_time: Some(150),
+        }]
+    );
+    let mut drain = state
+        .clone()
+        .with_public_accounts([token_holding(creator, launch, 1_000)]);
+    let saved = drain.clone();
+    assert!(matches!(fixed_execute_events_at(&mut drain, pool, &key,
+        lbp_core::Message::SellWeightedExactInput { amount_in: 1_000, min_amount_out: 0 }, 150_000),
+        Err(lee::error::LeeError::ProgramExecutionFailed(error)) if error.contains("Underfunded")));
+    assert!(drain == saved);
+    fixed_execute_at(
+        &mut state,
+        pool,
+        &key,
+        lbp_core::Message::CollectFees,
+        150_000,
+    )
+    .unwrap();
+    assert_eq!(balance(&state, TREASURY, COLLATERAL), sale.accrued_fees);
+    assert_eq!(
+        balance(&state, pool, COLLATERAL),
+        sale.recorded_collateral + 41
+    );
+    let collateral = balance(&state, creator, COLLATERAL);
+    state = clock_state(state, 300_000);
+    factory_execute_at(
+        &mut state,
+        factory,
+        &actors,
+        &key,
+        salt,
+        launch,
+        pool,
+        factory_core::Message::WithdrawWeightedProceeds { creator },
+        300_000,
+    )
+    .unwrap();
+    assert_eq!(
+        balance(&state, creator, COLLATERAL),
+        collateral + sale.recorded_collateral
+    );
+    assert_eq!(balance(&state, pool, COLLATERAL), 41);
+    assert_eq!(balance(&state, pool, launch), 0);
+    assert!(fixed_pool(&state, pool).seed_returned);
+}
+
+#[test]
+fn signed_common_sells_selected_depletion_and_scheduled_refill() {
+    for ending in [
+        lbp_core::EndingPolicy::Scheduled,
+        lbp_core::EndingPolicy::Depletion,
+        lbp_core::EndingPolicy::Either,
+    ] {
+        let mut env = fixed_factory_env_with_trade_mode(
+            if ending == lbp_core::EndingPolicy::Depletion {
+                None
+            } else {
+                Some(200)
+            },
+            factory_core::CreatorAllocationRelease::AfterEnd,
+            curve_core::PausePolicy::Disabled,
+            ending,
+            None,
+            lbp_core::TradeMode::BuyAndSell,
+        );
+        let creator = env.creator();
+        env.state = env
+            .state
+            .with_public_accounts([token_holding(creator, COLLATERAL, 2_000)]);
+        env.buy(800, 1_242);
+        let sell = lbp_core::Message::SellExactInput {
+            amount_in: 100,
+            min_amount_out: 145,
+            now: 100,
+        };
+        if ending == lbp_core::EndingPolicy::Scheduled {
+            assert!(!fixed_pool(&env.state, env.pool).closure_observed);
+            let events =
+                fixed_execute_events_at(&mut env.state, env.pool, &env.key, sell, 100_000).unwrap();
+            assert_eq!(
+                sale_event_kinds(&events, LBP, pool_subject(env.pool)).len(),
+                1
+            );
+            assert_eq!(
+                sale_events(&events, LBP, pool_subject(env.pool))[0].engine,
+                PricingEngineV1::FixedPrice
+            );
+            assert_eq!(fixed_pool(&env.state, env.pool).remaining_inventory, 100);
+            assert!(!fixed_pool(&env.state, env.pool).closure_observed);
+            env.buy(100, 156);
+            assert!(!fixed_pool(&env.state, env.pool).closure_observed);
+        } else {
+            assert!(fixed_pool(&env.state, env.pool).closure_observed);
+            fixed_rejected(&mut env.state, env.pool, &env.key, sell, "Closed");
+        }
+    }
+}
+
+#[test]
+fn signed_common_sells_buy_only_wrapper_and_bare_pool_rejection() {
+    let key = PrivateKey::try_new([23; 32]).unwrap();
+    let trader = AccountId::from(&PublicKey::new_from_private_key(&key));
+    for weighted in [false, true] {
+        let (mut state, pool) = if weighted {
+            weighted_state(trader)
+        } else {
+            fixed_state(trader, Some(200))
+        };
+        let sell = if weighted {
+            lbp_core::Message::SellWeightedExactInput {
+                amount_in: 1,
+                min_amount_out: 0,
+            }
+        } else {
+            lbp_core::Message::SellExactInput {
+                amount_in: 1,
+                min_amount_out: 0,
+                now: 100,
+            }
+        };
+        fixed_rejected(
+            &mut state,
+            pool,
+            &key,
+            sell.clone(),
+            "TradeDirectionUnsupported",
+        );
+        let transaction = fixed_transaction(&state, pool, &key, sell.clone());
+        let mut direct = transaction.message.clone();
+        direct.execution.root.to = Actor::new(pool, LBP);
+        direct.execution.root.message = borsh::to_vec(&sell).unwrap();
+        let witnesses = WitnessSet::for_message(&direct, &[&key]);
+        let saved = state.clone();
+        assert!(
+            matches!(state.transition_from_public_transaction(&PublicTransaction::new(direct, witnesses), 1, 100_000),
+            Err(lee::error::LeeError::ProgramExecutionFailed(error)) if error.contains("TradeDirectionUnsupported"))
+        );
+        assert!(state == saved);
+    }
+}
+
+#[test]
+fn signed_common_sells_controls_and_late_credit_rollback() {
+    let key = PrivateKey::try_new([23; 32]).unwrap();
+    let trader = AccountId::from(&PublicKey::new_from_private_key(&key));
+    for weighted in [false, true] {
+        let (state, pool) = if weighted {
+            weighted_state(trader)
+        } else {
+            fixed_state(trader, Some(200))
+        };
+        let mut sale = fixed_pool(&state, pool);
+        sale.trade_mode = lbp_core::TradeMode::BuyAndSell;
+        let mut state = state.with_public_accounts([account(
+            Actor::new(pool, LBP),
+            borsh::to_vec(&sale).unwrap(),
+        )]);
+        let buy = if weighted {
+            lbp_core::Message::BuyWeightedExactInput {
+                membership: None,
+                amount_in: 101,
+                min_amount_out: 1,
+            }
+        } else {
+            lbp_core::Message::BuyExactInput {
+                membership: None,
+                amount_in: 101,
+                min_amount_out: 1,
+                now: 100,
+            }
+        };
+        fixed_execute(&mut state, pool, &key, buy).unwrap();
+        let sell = if weighted {
+            lbp_core::Message::SellWeightedExactInput {
+                amount_in: 10,
+                min_amount_out: 1,
+            }
+        } else {
+            lbp_core::Message::SellExactInput {
+                amount_in: 10,
+                min_amount_out: 1,
+                now: 100,
+            }
+        };
+        let mut sale = fixed_pool(&state, pool);
+        sale.trade_control = lbp_core::TradeControl::Paused;
+        let mut paused = state.clone().with_public_accounts([account(
+            Actor::new(pool, LBP),
+            borsh::to_vec(&sale).unwrap(),
+        )]);
+        fixed_rejected(&mut paused, pool, &key, sell.clone(), "Paused");
+        let mut frozen = fixed_config(state.clone(), 333, TREASURY, true);
+        fixed_rejected(&mut frozen, pool, &key, sell.clone(), "Frozen");
+        let tokens = balance(&state, trader, LAUNCH);
+        let pool_tokens = balance(&state, pool, LAUNCH);
+        let collateral = balance(&state, trader, COLLATERAL);
+        let mut overflow =
+            state.with_public_accounts([token_holding(trader, COLLATERAL, u128::MAX)]);
+        fixed_rejected(&mut overflow, pool, &key, sell.clone(), "Overflow");
+        assert_eq!(balance(&overflow, trader, LAUNCH), tokens);
+        overflow = overflow.with_public_accounts([token_holding(trader, COLLATERAL, collateral)]);
+        let events = fixed_execute_events_at(&mut overflow, pool, &key, sell, 100_000).unwrap();
+        assert_eq!(sale_event_kinds(&events, LBP, pool_subject(pool)).len(), 1);
+        assert_eq!(
+            sale_events(&events, LBP, pool_subject(pool))[0].engine,
+            if weighted {
+                PricingEngineV1::Weighted
+            } else {
+                PricingEngineV1::FixedPrice
+            }
+        );
+        assert_eq!(balance(&overflow, trader, LAUNCH), tokens - 10);
+        assert_eq!(balance(&overflow, pool, LAUNCH), pool_tokens + 10);
+        assert!(balance(&overflow, trader, COLLATERAL) > collateral);
+    }
 }

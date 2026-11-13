@@ -11,6 +11,7 @@ pub use curve_core::{
 };
 pub use error::{ClientError, Result};
 pub use factory_core::{CreationStage, GraduationHook, SettlementStage, TradeMode};
+pub use lbp_core::{QuoteRequest as LbpQuoteRequest, TradeQuote as LbpTradeQuote};
 pub use lifecycle::{FactorySession, LifecycleReceipt, next_creation_invocation};
 pub use types::{
     AccountLocation, ExactInputTradeTerms, ExactOutputTradeTerms, FactorySale, LbpSale,
@@ -1060,6 +1061,7 @@ fn lbp_trade_invocation(
         &instruction,
         lbp_core::Message::BuyWeightedExactInput { .. }
             | lbp_core::Message::BuyWeightedExactOutput { .. }
+            | lbp_core::Message::SellWeightedExactInput { .. }
     ) {
         actors.push(lbp_core::pricing_clock::actor());
     }
@@ -1148,6 +1150,38 @@ pub fn build_fixed_price_buy_invocation(
             amount_out: terms.amount_out,
             max_amount_in: terms.max_amount_in,
             now,
+        },
+    )
+}
+
+pub fn build_fixed_price_sell_invocation(
+    sale: LbpSale,
+    participant: AccountId,
+    terms: ExactInputTradeTerms,
+    now: u64,
+) -> PublicInvocation<lbp_core::Message> {
+    lbp_trade_invocation(
+        sale,
+        participant,
+        lbp_core::Message::SellExactInput {
+            amount_in: terms.amount_in,
+            min_amount_out: terms.min_amount_out,
+            now,
+        },
+    )
+}
+
+pub fn build_weighted_sell_invocation(
+    sale: LbpSale,
+    participant: AccountId,
+    terms: ExactInputTradeTerms,
+) -> PublicInvocation<lbp_core::Message> {
+    lbp_trade_invocation(
+        sale,
+        participant,
+        lbp_core::Message::SellWeightedExactInput {
+            amount_in: terms.amount_in,
+            min_amount_out: terms.min_amount_out,
         },
     )
 }
@@ -1510,6 +1544,36 @@ pub async fn collect_pool_fees(
         hashes.push(submit_public_invocation(wallet, curve, call).await?);
     }
     Ok(hashes)
+}
+
+/// Quotes against pool and live namespace snapshots. Weighted pricing time is not inclusion proof.
+pub fn quote_lbp_trade(
+    sale: LbpSale,
+    pool_account: &lbp_core::PoolAccount,
+    config: &Config,
+    request: LbpQuoteRequest,
+    pricing_time: u64,
+) -> Result<LbpTradeQuote> {
+    let addresses = lbp_addresses(sale);
+    if config.namespace != sale.namespace {
+        return Err(ClientError::PoolSelectionMismatch);
+    }
+    if pool_account.namespace != sale.namespace
+        || pool_account.namespace_program_id != sale.namespace_program_id
+        || pool_account.factory_owner != addresses.factory
+        || pool_account.factory_program_id != sale.factory_program_id
+        || pool_account.factory_seed
+            != *factory_core::compute_factory_seed(sale.namespace, sale.launch_salt).as_bytes()
+        || pool_account.token_definition_id != addresses.token_definition
+        || pool_account.collateral_definition_id != sale.collateral_definition
+    {
+        return Err(ClientError::FactorySaleMismatch);
+    }
+    if config.emergency.is_frozen {
+        return Err(ClientError::NamespaceFrozen);
+    }
+    lbp_core::quote_trade(pool_account, request, config.protocol_fee_bps, pricing_time)
+        .map_err(ClientError::QuoteLbpTrade)
 }
 
 /// Quotes an exact-output purchase against a snapshot of the current pool and fee config.

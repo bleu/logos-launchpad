@@ -32,21 +32,7 @@ pub use lbp_setup::{
     LbpCreationStage as FixedPriceCreationStage, LbpLaunchState as FixedPriceLaunchState,
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
-pub enum TradeMode {
-    BuyOnly,
-    BuyAndSell,
-}
-impl TryFrom<u8> for TradeMode {
-    type Error = CreateError;
-    fn try_from(value: u8) -> Result<Self, Self::Error> {
-        match value {
-            0 => Ok(Self::BuyOnly),
-            1 => Ok(Self::BuyAndSell),
-            _ => Err(CreateError::InvalidTradeMode),
-        }
-    }
-}
+pub use curve_core::TradeMode;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum CreationStage {
     Minted,
