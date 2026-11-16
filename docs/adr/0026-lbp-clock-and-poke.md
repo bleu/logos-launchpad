@@ -26,13 +26,13 @@ This earlier design removed the buyer's choice of pricing time. It made weighted
 
 ## Upstream clock amendment: 2026-11-09
 
-This amendment replaces the temporary provider in the 5 November implementation. Use LEZ revision `f94ca8a7550fa0012222b9fb5990dfe44c54a3dc` from `schouhy/single-clock-actor`. It is a development pin. The upstream clock PR remains open.
+This amendment replaces the temporary provider in the 5 November implementation. Use LEZ revision `cb075d5777cb812ba44216429d4f2837ea8518bd` from `dev`, selected on 16 November 2026. It is a development pin. The upstream clock PR merged into `dev` on 10 November 2026.
 
 Send `ReadTimestamp { granularity: 1 }` to `clock_core::clock_actor()`. Verify both sender addresses. Accept only `Reply::Timestamp` during the pending read. Decode fallibly and reject a block-ID reply. Values are Unix milliseconds. Divide by 1000 only for weighted pricing. Each buy and poke reads once. Buys use the same timestamp and weight calculation for pricing and the observer checkpoint. Keep participant limits and sale inclusion bounds.
 
-The clock ticks at the end of each block. Programs read the previous block's saved time. Local guest ticks can check state updates. They do not prove sequencer ordering or timestamp trust. Factory setup and pool activation replace removed `AssertTimestamp` calls with authenticated replies and the same inclusive millisecond comparisons. Keep their inclusion bounds.
+The merged clock API and block application code were checked on 16 November 2026. The clock ticks at the end of each block. Programs read the previous block's saved time. The API does not expose the current inclusion-block timestamp. Local guest ticks can check state updates. They do not prove sequencer ordering or timestamp trust. Factory setup and pool activation replace removed `AssertTimestamp` calls with authenticated replies and the same inclusive millisecond comparisons. Keep their inclusion bounds.
 
-A prepared private proof can require an exact return message. The local native-token probe found that a changed public clock reply alone can pass when the private return stays fixed. A return that changes from 100 to 99 fails with `CrossMessageMismatch` even when the minimum is 98. A fresh proof succeeds. Slippage does not change that proof requirement. This probe uses development receipts and does not complete the launchpad private route.
+A prepared private proof can require an exact return message. The local native-token probe at the earlier feature-branch pin found that a changed public clock reply alone can pass when the private return stays fixed. A return that changes from 100 to 99 fails with `CrossMessageMismatch` even when the minimum is 98. A fresh proof succeeds. Slippage does not change that proof requirement. This probe uses development receipts and does not complete the launchpad private route. It has not been repeated on the current `dev` pin.
 
 The temporary guest, mock build flag and normal-build availability error are removed. Poke and observer checkpoints use the same upstream adapter. Same-second observations emit no duplicate checkpoint event. Failed calls commit no checkpoint or event changes. Poke remains available at the schedule endpoint and after settlement; buy time bounds do not restrict observation calls.
 
@@ -62,7 +62,7 @@ Host tests cover window bounds, time conversion, both buy forms, both schedule d
 
 ## Sources
 
-- [Selected LEZ clock interface](https://github.com/logos-blockchain/logos-execution-zone/blob/f94ca8a7550fa0012222b9fb5990dfe44c54a3dc/lez/programs/clock/core/src/lib.rs)
-- [Selected LEZ clock handler](https://github.com/logos-blockchain/logos-execution-zone/blob/f94ca8a7550fa0012222b9fb5990dfe44c54a3dc/lez/programs/clock/src/main.rs)
-- [Upstream clock proposal](https://github.com/logos-blockchain/logos-execution-zone/pull/988): supplies timestamp reads on the selected development revision; it is not merged into `dev`.
+- [Selected LEZ clock interface](https://github.com/logos-blockchain/logos-execution-zone/blob/cb075d5777cb812ba44216429d4f2837ea8518bd/lez/programs/clock/core/src/lib.rs)
+- [Selected LEZ clock handler](https://github.com/logos-blockchain/logos-execution-zone/blob/cb075d5777cb812ba44216429d4f2837ea8518bd/lez/programs/clock/src/main.rs)
+- [Upstream clock proposal](https://github.com/logos-blockchain/logos-execution-zone/pull/988): supplies timestamp reads on the selected development revision; it merged into `dev` on 10 November 2026.
 - [RFP-016 fixed-price and weighted sales](https://github.com/logos-co/rfp/blob/master/RFPs/RFP-016-lbp-launchpad.md)

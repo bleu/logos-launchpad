@@ -18,17 +18,17 @@ all = { level = "deny", priority = -1 }
 workspace = true
 
 [build-dependencies]
-risc0-build = "3.0.5"
+risc0-build = "3.0.7"
 
 [dev-dependencies]
-risc0-build = { version = "3.0.5", features = ["unstable"] }
-risc0-binfmt = "3.0.5"
-risc0-zkvm = { version = "3.0.5", default-features = false, features = ["client"] }
+risc0-build = { version = "3.0.7", features = ["unstable"] }
+risc0-binfmt = "3.0.6"
+risc0-zkvm = { version = "3.1.0", default-features = false, features = ["client"] }
 borsh = "1.6"
-clock_core = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", rev = "f94ca8a7550fa0012222b9fb5990dfe44c54a3dc" }
-programs = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", rev = "f94ca8a7550fa0012222b9fb5990dfe44c54a3dc", features = ["artifacts"] }
-lee = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", rev = "f94ca8a7550fa0012222b9fb5990dfe44c54a3dc" }
-lee_core = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", rev = "f94ca8a7550fa0012222b9fb5990dfe44c54a3dc" }
+clock_core = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", rev = "cb075d5777cb812ba44216429d4f2837ea8518bd" }
+programs = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", rev = "cb075d5777cb812ba44216429d4f2837ea8518bd", features = ["artifacts"] }
+lee = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", rev = "cb075d5777cb812ba44216429d4f2837ea8518bd" }
+lee_core = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", rev = "cb075d5777cb812ba44216429d4f2837ea8518bd" }
 curve-core = { path = "../crates/curve-core" }
 factory-core = { path = "../crates/factory-core" }
 lbp-core = { path = "../crates/lbp-core" }
@@ -41,7 +41,7 @@ methods = ["guest"]
 
 [features]
 overflow-tests = []
-actor-execution-tests = []
+actor-execution-tests = ["lee/test-utils"]
 
 [[test]]
 name = "actor_sale"

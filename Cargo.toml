@@ -33,13 +33,14 @@ edition = "2024"
 rust-version = "1.94"
 
 [workspace.dependencies]
-lee = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", rev = "f94ca8a7550fa0012222b9fb5990dfe44c54a3dc" }
+lee = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", rev = "cb075d5777cb812ba44216429d4f2837ea8518bd" }
 # Guests must not inherit the host feature.
-lee_core = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", rev = "f94ca8a7550fa0012222b9fb5990dfe44c54a3dc" }
-wallet = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", rev = "f94ca8a7550fa0012222b9fb5990dfe44c54a3dc" }
-common = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", rev = "f94ca8a7550fa0012222b9fb5990dfe44c54a3dc" }
-sequencer_service_rpc = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", rev = "f94ca8a7550fa0012222b9fb5990dfe44c54a3dc", default-features = false, features = ["client"] }
-clock_core = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", rev = "f94ca8a7550fa0012222b9fb5990dfe44c54a3dc" }
+lee_core = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", rev = "cb075d5777cb812ba44216429d4f2837ea8518bd" }
+wallet = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", rev = "cb075d5777cb812ba44216429d4f2837ea8518bd" }
+common = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", rev = "cb075d5777cb812ba44216429d4f2837ea8518bd" }
+sequencer_service_rpc = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", rev = "cb075d5777cb812ba44216429d4f2837ea8518bd", default-features = false, features = ["client"] }
+clock_core = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", rev = "cb075d5777cb812ba44216429d4f2837ea8518bd" }
+program_loader_core = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", rev = "cb075d5777cb812ba44216429d4f2837ea8518bd" }
 lez-compat-core = { path = "packages/lez-compat/core" }
 
 curve-math = { path = "crates/curve-math" }
@@ -57,7 +58,7 @@ strum = { version = "0.27", features = ["derive"] }
 borsh = { version = "1.8", features = ["derive"] }
 clap = { version = "4", features = ["derive"] }
 hex = "0.4"
-risc0-zkvm = { version = "3.0.5", default-features = false, features = ["std"] }
+risc0-zkvm = { version = "3.1.0", default-features = false, features = ["std"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

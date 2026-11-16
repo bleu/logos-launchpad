@@ -27,6 +27,7 @@ use factory_core::{
 use lee::{AccountId, program::Program};
 use lee_core::{account::Actor, program::ProgramId};
 use lez_compat_core::token;
+use program_loader_core::LoaderActorState as _;
 use std::path::Path;
 use wallet::AccountIdentity;
 
@@ -893,7 +894,7 @@ pub async fn submit_public_invocation<I: BorshSerialize>(
     let header_bytes = read_actor(wallet, header_actor)
         .await
         .map_err(ClientError::ReadProgramHeader)?;
-    let header = lee_core::program::ProgramHeader::from_bytes(&header_bytes)
+    let header = lee_core::program::ProgramHeader::from_loader_actor_state(&header_bytes)
         .ok_or(ClientError::DecodeProgramHeader)?;
     if header.image_id != program.image_id() {
         return Err(ClientError::InvocationImageMismatch);

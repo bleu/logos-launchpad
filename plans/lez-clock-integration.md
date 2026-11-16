@@ -1,6 +1,6 @@
 # Integrate LEZ timestamp reads
 
-Status: Implemented on the branch with current main merged. PR #35 is part of main. Its poke and checkpoint paths use the upstream adapter. The combined full local gate passed.
+Status: Implemented. PR #35 is included. Its poke and checkpoint paths use the upstream adapter. The `dev` pin and local checks were updated on 16 November 2026.
 
 Date: 2026-11-09
 
@@ -8,9 +8,9 @@ Date: 2026-11-09
 
 Replace the temporary weighted-sale clock from [PR #33](https://github.com/bleu/logos-launchpad/pull/33) with the upstream clock. Include weighted buys and existing setup. Main now includes the poke and checkpoint feature from PR #35. Retain it and adapt its clock calls. PR #33 is merged. The [earlier plan](weighted-clock-read.md) records the mock implementation.
 
-Use LEZ revision `f94ca8a7550fa0012222b9fb5990dfe44c54a3dc`. This is the checked head of `schouhy/single-clock-actor`. [Upstream PR #988](https://github.com/logos-blockchain/logos-execution-zone/pull/988) is open. Pin the commit, not the branch name. Check the official release later under [ADR 0034](../docs/adr/0034-lez-v04-migration.md).
+Use LEZ revision `cb075d5777cb812ba44216429d4f2837ea8518bd` from `dev`, selected on 16 November 2026. [Upstream PR #988](https://github.com/logos-blockchain/logos-execution-zone/pull/988) merged into `dev` on 10 November 2026. Pin the commit, not the branch name. Check the official release later under [ADR 0034](../docs/adr/0034-lez-v04-migration.md).
 
-The current [clock API](https://github.com/logos-blockchain/logos-execution-zone/blob/f94ca8a7550fa0012222b9fb5990dfe44c54a3dc/lez/programs/clock/core/src/lib.rs) provides `ReadTimestamp` and `Reply::Timestamp`. Values are Unix milliseconds. A tick occurs at the end of each block. Programs therefore read saved previous-block time. The branch changes the clock account and removes `AssertTimestamp`.
+The current [clock API](https://github.com/logos-blockchain/logos-execution-zone/blob/cb075d5777cb812ba44216429d4f2837ea8518bd/lez/programs/clock/core/src/lib.rs) provides `ReadTimestamp` and `Reply::Timestamp`. Values are Unix milliseconds. A tick occurs at the end of each block. Programs therefore read saved previous-block time. The merged API changes the clock account and removes `AssertTimestamp`.
 
 ## Implemented behavior
 
@@ -35,8 +35,8 @@ Verify the selected artifacts before using them:
 
 | Artifact | SHA-256 at the selected revision |
 | --- | --- |
-| `artifacts/lez/programs/clock.bin` | `0375703a2405cc0403a5cf181777444b6432ffc8bcb028eeea2817d65540bd43` |
-| `artifacts/lee/privacy_preserving_circuit/privacy_preserving_circuit.bin` | `741b7fdf815a660c39895719f019f2965a167fae761931fba60de16a95528881` |
+| `artifacts/lez/programs/clock.bin` | `631d75de50601d722eb13bb21fb97cf9fbf770849a6a36293789fbe60dca082a` |
+| `artifacts/lee/privacy_preserving_circuit/privacy_preserving_circuit.bin` | `c23092963933897fe45992488c06b59a6e177e0979f65d9b16ac390e4441a331` |
 
 Run a small timestamp-read test with the pinned clock artifact. A rebuilt copy of the source alone is not this check. Rebuild application and compatibility guests together after the pin change. Use disposable local state.
 
@@ -105,7 +105,7 @@ Run the existing pin and shell checks, host development gate, focused clock gate
 
 ## 6. Record private execution limits
 
-The local native-token probe passed five tests on this revision. A changed public clock reply succeeds when the private return is unchanged. A return that changes from 100 to 99 fails with `CrossMessageMismatch`, although the minimum is 98. A fresh proof succeeds. Rejections preserve all fixture state.
+The local native-token probe passed five tests on the earlier feature-branch revision `f94ca8a7550fa0012222b9fb5990dfe44c54a3dc`. This probe has not been repeated on the current `dev` pin. A changed public clock reply succeeds when the private return is unchanged. A return that changes from 100 to 99 fails with `CrossMessageMismatch`, although the minimum is 98. A fresh proof succeeds. Rejections preserve all fixture state.
 
 Retain this result and its development-receipt limits in the verification record. Recheck it if the selected revision changes. The fixture uses native tokens and a small payout program. It does not prove the full launchpad private route.
 
@@ -123,4 +123,6 @@ The integration is complete when normal builds execute weighted buys with the pi
 
 ## Local result
 
-The full local gate passed with unchanged lockfiles on 9 November 2026. The host development gate, IDL and wire checks, shell regressions, strict host lints and formatting also passed. See the [workspace evidence](../docs/architecture/workspace-guide.md#weighted-pricing-clock). The initial run preceded the merge of PR #35. The combined gate then passed all 28 sale guest tests and 31 curve, role-authority and settlement guest tests with unchanged lockfiles. See the workspace evidence for scope and limits.
+The full local gate passed with unchanged lockfiles on 9 November 2026 at the earlier feature-branch pin `f94ca8a7550fa0012222b9fb5990dfe44c54a3dc`. The host development gate, IDL and wire checks, shell regressions, strict host lints and formatting also passed. See the [workspace evidence](../docs/architecture/workspace-guide.md#weighted-pricing-clock). The initial run preceded the merge of PR #35. The combined gate then passed all 28 sale guest tests and 31 curve, role-authority and settlement guest tests with unchanged lockfiles. See the workspace evidence for scope and limits.
+
+On 16 November 2026, the full locked gate passed on the selected `dev` pin. See the [verification record](../docs/architecture/workspace-guide.md#dev-pin-verification-2026-11-16). The SDK uses the upstream loader-state decoder. Execution fixtures use the renamed program-seeding API and its test-only feature in debug host builds. Guest and production builds retain their release profile.

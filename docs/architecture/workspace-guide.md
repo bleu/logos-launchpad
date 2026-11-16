@@ -10,7 +10,7 @@ Plain `cargo test --locked` selects only the root core crates. Client and CLI te
 
 ## Build contexts
 
-Full checks use LEZ `f94ca8a7550fa0012222b9fb5990dfe44c54a3dc`, host Rust 1.98.1, guest Rust 1.94.1, RISC0 3.0.5 and zkOS wrapper 2.2.2. The [development base guide](../../packages/lez-compat/README.md) gives installation requirements. Check local tools with `bash verify/check-builds.sh --preflight`. Scaffold and SPEL CLI are not required.
+Full checks use LEZ `cb075d5777cb812ba44216429d4f2837ea8518bd`, host Rust 1.98.1, guest Rust 1.94.1, RISC0 3.1.0 and zkOS wrapper 2.2.3. The [development base guide](../../packages/lez-compat/README.md) gives installation requirements. Check local tools with `bash verify/check-builds.sh --preflight`. Scaffold and SPEL CLI are not required.
 
 Curve host and guest builds require `CURVE_EMERGENCY_AUTHORITY`, a nonzero 64-character hex account ID. For local tests, run this from the repository root:
 
@@ -73,7 +73,7 @@ The [settlement tests](../../crates/launchpad-client/tests/role_authority_guest/
 The seeded fixed-price trade checks do not exercise fresh setup or settlement. Weighted setup has the separate factory test above. To run those trade fixtures directly:
 
 ```sh
-RISC0_BUILD_LOCKED=1 cargo +1.98.1 test --manifest-path methods/Cargo.toml --release --locked --features actor-execution-tests --test actor_sale
+RISC0_BUILD_LOCKED=1 cargo +1.98.1 test --manifest-path methods/Cargo.toml --locked --features actor-execution-tests --test actor_sale
 ```
 
 The local `bash verify/check-builds.sh --execution` gate passed with unchanged lockfiles. It checks release host tests, application and compatibility guests, weighted-math parity, release-overflow checks, token execution, seeded sale tests and the signed curve contract guest tests. IDL and wire checks, formatting, pins and shell regressions are separate checks. Linux CI has not run for the expanded curve evidence.
@@ -96,14 +96,20 @@ The curve packages use the root [MIT license](../../LICENSE). Weighted math reta
 
 Normal builds use the pinned upstream clock. Weighted buys send `ReadTimestamp { granularity: 1 }` to the canonical actor. The reply contains Unix milliseconds. Pricing divides by 1000. There is no mock guest or build flag. See [ADR 0026](../adr/0026-lbp-clock-and-poke.md#upstream-clock-amendment-2026-11-09).
 
+Actor execution fixtures use the upstream `test-utils` feature in debug host builds. LEZ rejects that feature in release builds. Guest binaries and production host checks still use release builds. Release-overflow checks keep their release profile.
+
 Run `bash verify/check-weighted-clock.sh` for focused host and sale guest checks. Run `bash verify/check-builds.sh --execution` with the emergency-authority fixture set for the full local gate. Commands use locked dependencies. The focused tests execute the pinned clock artifact. They retain explicit stale-state fixtures as separate cases.
 
 The clock is updated at the end of a block. A node-free `Tick` test checks the real guest's state update and a later weighted price. It also holds saved time before expiry while inclusion reaches expiry. The transaction is rejected without state or nonce changes. This does not prove sequencer ordering, timestamp trust, network operation or proof generation time.
 
-The earlier fake-clock evidence above is historical. It does not establish behavior on this revision. The current results are recorded below.
+The earlier fake-clock evidence above is historical. The 9 November results below used feature-branch pin `f94ca8a7550fa0012222b9fb5990dfe44c54a3dc`. They do not establish behavior on the current `dev` pin.
 
-A separate local native-token probe checked private funding, a public clock read and atomic private returns. A changed clock reply passed when the return stayed fixed. A changed return failed with `CrossMessageMismatch` despite an acceptable minimum output. A fresh proof passed. Failed attempts preserved all state. The five-test probe used development receipts and a small payout guest. It did not run launchpad token programs or complete a launchpad private route.
+A separate local native-token probe at the earlier feature-branch pin checked private funding, a public clock read and atomic private returns. This probe has not been repeated on the current `dev` pin. A changed clock reply passed when the return stayed fixed. A changed return failed with `CrossMessageMismatch` despite an acceptable minimum output. A fresh proof passed. Failed attempts preserved all state. The five-test probe used development receipts and a small payout guest. It did not run launchpad token programs or complete a launchpad private route.
 
 Before the checkpoint merge on 9 November 2026, `bash verify/check-builds.sh --execution` passed on the pinned clock revision with unchanged lockfiles. It includes 22 sale guest tests and 31 curve, role-authority and settlement guest tests. The sale tests cover real clock reads and a real `Tick`, saved-clock and inclusion bounds, both weighted buy forms, full weighted setup and rollback. Setup rejects saved time past its bound even when inclusion would pass. The host development gate, IDL and wire checks, all shell regressions, strict host lints and formatting also passed locally. Linux CI has not run for this change. Service integration, full private routes and real proofs remain separate checks.
 
 After the checkpoint merge on 9 November 2026, the full locked execution gate passed with unchanged lockfiles. All 28 sale guest tests and 31 curve, role-authority and settlement guest tests passed. The sale suite retains settlement and allocation rollback checks. It also checks real clock ticks, same-second checkpoint event suppression, later checkpoints, and poke at the sale end and after settlement. Host tests reject forged, malformed, block-ID and replayed poke replies. The host development gate, generated IDL and wire checks, shell regressions, formatting and strict host lints passed. These local checks use development execution. Live sequencer timing, full private routes, real proofs and deployment readiness remain unverified.
+
+## Dev pin verification: 2026-11-16
+
+The selected `dev` revision is `cb075d5777cb812ba44216429d4f2837ea8518bd`. The full locked execution gate passed with unchanged lockfiles. All 28 sale guest tests and 31 curve, role-authority and settlement guest tests passed. The gate also passed release host tests, guest builds, weighted-math parity, release-overflow checks and token execution. The development gate passed 327 host tests. IDL and wire checks, all shell regressions, workspace formatting and strict workspace lints passed. Generated interfaces did not change. The merged clock still returns saved previous-block time; current inclusion-block timestamp reads are unavailable through this API. Live sequencer checks, the earlier private-return probe on this pin, real proofs and deployment readiness remain unverified.

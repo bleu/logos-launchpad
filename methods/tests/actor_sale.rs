@@ -96,11 +96,14 @@ fn seeded_state(
     }
     (
         V03State::new()
-            .with_named_programs([
-                (CURVE, curve),
-                (TOKEN_PROGRAM_ACCOUNT_ID, token),
-                (clock_core::clock_account_id(), programs::clock()),
-            ])
+            .with_programs_at(
+                [
+                    (CURVE, curve),
+                    (TOKEN_PROGRAM_ACCOUNT_ID, token),
+                    (clock_core::clock_account_id(), programs::clock()),
+                ]
+                .map(|(address, program)| (address, program, true)),
+            )
             .with_public_accounts(accounts),
         pool,
     )
@@ -257,21 +260,24 @@ fn fixed_state(buyer: AccountId, end: Option<u64>) -> (V03State, AccountId) {
         ));
     }
     let state = V03State::new()
-        .with_named_programs([
-            (
-                LBP,
-                Program::new(Cow::Borrowed(launchpad_methods::LBP_ELF)).unwrap(),
-            ),
-            (
-                CURVE,
-                Program::new(Cow::Borrowed(launchpad_methods::CURVE_ELF)).unwrap(),
-            ),
-            (
-                TOKEN_PROGRAM_ACCOUNT_ID,
-                Program::new(Cow::Borrowed(lez_compat_methods::COMPAT_TOKEN_ELF)).unwrap(),
-            ),
-            (clock_core::clock_account_id(), programs::clock()),
-        ])
+        .with_programs_at(
+            [
+                (
+                    LBP,
+                    Program::new(Cow::Borrowed(launchpad_methods::LBP_ELF)).unwrap(),
+                ),
+                (
+                    CURVE,
+                    Program::new(Cow::Borrowed(launchpad_methods::CURVE_ELF)).unwrap(),
+                ),
+                (
+                    TOKEN_PROGRAM_ACCOUNT_ID,
+                    Program::new(Cow::Borrowed(lez_compat_methods::COMPAT_TOKEN_ELF)).unwrap(),
+                ),
+                (clock_core::clock_account_id(), programs::clock()),
+            ]
+            .map(|(address, program)| (address, program, true)),
+        )
         .with_public_accounts(accounts);
     (
         clock_state(fixed_config(state, 333, TREASURY, false), 100_000),
@@ -1006,29 +1012,33 @@ fn weighted_factory_executes_all_stages_and_rolls_back_failed_funding() {
         let pool = lbp_core::compute_pool_pda(NAMESPACE, LBP, launch, COLLATERAL, factory);
         let authority = factory_core::AUTHORITY_PROGRAM_ACCOUNT_ID;
         let mut state = V03State::new()
-            .with_named_programs([
-                (
-                    FACTORY,
-                    Program::new(Cow::Borrowed(launchpad_methods::FACTORY_ELF)).unwrap(),
-                ),
-                (
-                    LBP,
-                    Program::new(Cow::Borrowed(launchpad_methods::LBP_ELF)).unwrap(),
-                ),
-                (
-                    CURVE,
-                    Program::new(Cow::Borrowed(launchpad_methods::CURVE_ELF)).unwrap(),
-                ),
-                (
-                    TOKEN_PROGRAM_ACCOUNT_ID,
-                    Program::new(Cow::Borrowed(lez_compat_methods::COMPAT_TOKEN_ELF)).unwrap(),
-                ),
-                (
-                    authority,
-                    Program::new(Cow::Borrowed(lez_compat_methods::COMPAT_AUTHORITY_ELF)).unwrap(),
-                ),
-                (clock_core::clock_account_id(), programs::clock()),
-            ])
+            .with_programs_at(
+                [
+                    (
+                        FACTORY,
+                        Program::new(Cow::Borrowed(launchpad_methods::FACTORY_ELF)).unwrap(),
+                    ),
+                    (
+                        LBP,
+                        Program::new(Cow::Borrowed(launchpad_methods::LBP_ELF)).unwrap(),
+                    ),
+                    (
+                        CURVE,
+                        Program::new(Cow::Borrowed(launchpad_methods::CURVE_ELF)).unwrap(),
+                    ),
+                    (
+                        TOKEN_PROGRAM_ACCOUNT_ID,
+                        Program::new(Cow::Borrowed(lez_compat_methods::COMPAT_TOKEN_ELF)).unwrap(),
+                    ),
+                    (
+                        authority,
+                        Program::new(Cow::Borrowed(lez_compat_methods::COMPAT_AUTHORITY_ELF))
+                            .unwrap(),
+                    ),
+                    (clock_core::clock_account_id(), programs::clock()),
+                ]
+                .map(|(address, program)| (address, program, true)),
+            )
             .with_public_accounts([
                 account(
                     Actor::new(COLLATERAL, TOKEN_PROGRAM_ACCOUNT_ID),
@@ -1390,29 +1400,32 @@ fn weighted_factory_env() -> (
     let pool = lbp_core::compute_pool_pda(NAMESPACE, LBP, launch, COLLATERAL, factory);
     let authority = factory_core::AUTHORITY_PROGRAM_ACCOUNT_ID;
     let mut state = V03State::new()
-        .with_named_programs([
-            (
-                FACTORY,
-                Program::new(Cow::Borrowed(launchpad_methods::FACTORY_ELF)).unwrap(),
-            ),
-            (
-                LBP,
-                Program::new(Cow::Borrowed(launchpad_methods::LBP_ELF)).unwrap(),
-            ),
-            (
-                CURVE,
-                Program::new(Cow::Borrowed(launchpad_methods::CURVE_ELF)).unwrap(),
-            ),
-            (
-                TOKEN_PROGRAM_ACCOUNT_ID,
-                Program::new(Cow::Borrowed(lez_compat_methods::COMPAT_TOKEN_ELF)).unwrap(),
-            ),
-            (
-                authority,
-                Program::new(Cow::Borrowed(lez_compat_methods::COMPAT_AUTHORITY_ELF)).unwrap(),
-            ),
-            (clock_core::clock_account_id(), programs::clock()),
-        ])
+        .with_programs_at(
+            [
+                (
+                    FACTORY,
+                    Program::new(Cow::Borrowed(launchpad_methods::FACTORY_ELF)).unwrap(),
+                ),
+                (
+                    LBP,
+                    Program::new(Cow::Borrowed(launchpad_methods::LBP_ELF)).unwrap(),
+                ),
+                (
+                    CURVE,
+                    Program::new(Cow::Borrowed(launchpad_methods::CURVE_ELF)).unwrap(),
+                ),
+                (
+                    TOKEN_PROGRAM_ACCOUNT_ID,
+                    Program::new(Cow::Borrowed(lez_compat_methods::COMPAT_TOKEN_ELF)).unwrap(),
+                ),
+                (
+                    authority,
+                    Program::new(Cow::Borrowed(lez_compat_methods::COMPAT_AUTHORITY_ELF)).unwrap(),
+                ),
+                (clock_core::clock_account_id(), programs::clock()),
+            ]
+            .map(|(address, program)| (address, program, true)),
+        )
         .with_public_accounts([
             account(
                 Actor::new(COLLATERAL, TOKEN_PROGRAM_ACCOUNT_ID),

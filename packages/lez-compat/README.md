@@ -1,23 +1,24 @@
 # LEZ actor development base
 
-This temporary development base targets LEZ actor revision `f94ca8a7550fa0012222b9fb5990dfe44c54a3dc`. It supplies token, ATA and role-authority handlers, thin guests and repository tools. It has no sale rules. The root application is migrated to the same revision. There is no second supported platform implementation. Nothing is deployed to testnet or production.
+This temporary development base targets LEZ actor revision `cb075d5777cb812ba44216429d4f2837ea8518bd`. It supplies token, ATA and role-authority handlers, thin guests and repository tools. It has no sale rules. The root application is migrated to the same revision. There is no second supported platform implementation. Nothing is deployed to testnet or production.
 
 ## Build requirements
 
 | Requirement | Selected version |
 | --- | --- |
 | Host Rust and Cargo | `1.98.1` |
-| RISC0 build library, zkVM library, `cargo-risczero` and `r0vm` | `3.0.5` |
+| RISC0 zkVM library, `cargo-risczero` and `r0vm` | `3.1.0` |
+| RISC0 build library | `3.0.7` |
 | RISC0 guest Rust | `1.94.1` |
 | RISC0 C++ | `2024.1.5` |
 | `rzup` command | `0.5.0` |
-| zkOS wrapper | `2.2.2`, matching the LEZ program loader |
+| zkOS wrapper | `2.2.3`, matching the LEZ program loader |
 
 Install host Rust with `rustup toolchain install 1.98.1 --profile minimal --component rustfmt --component clippy`. Install and select the listed RISC0 components with `rzup`. Run the preflight below to check them. `RISC0_SERVER_PATH` can select an executor. Scaffold, SPEL CLI, a node, a sequencer and wallet state are not required. The shell checks use Python 3 and standard command-line tools.
 
 The root, `methods/`, `methods/guest/` and `execution/` directories in this package have separate lockfiles. The core supports guest Rust 1.94; the host tools use Rust 1.98.1. Root launchpad and weighted-math lockfiles are outside this foundation check.
 
-Host execution uses the selected LEZ revision's checked-in `artifacts/lee/privacy_preserving_circuit/privacy_preserving_circuit.bin`. Its SHA-256 is `741b7fdf815a660c39895719f019f2965a167fae761931fba60de16a95528881`. This lane does not build circuits or generate proofs. The upstream wallet's wider build uses the [upstream circuit set](https://github.com/logos-blockchain/logos-execution-zone/blob/f94ca8a7550fa0012222b9fb5990dfe44c54a3dc/flake.nix), including Logos blockchain circuits revision `2846ee7a4cfa24458bb8063412ab2e753b344d2f`; that wallet build is outside this package's evidence.
+Host execution uses the selected LEZ revision's checked-in `artifacts/lee/privacy_preserving_circuit/privacy_preserving_circuit.bin`. Its SHA-256 is `c23092963933897fe45992488c06b59a6e177e0979f65d9b16ac390e4441a331`. This lane does not build circuits or generate proofs. The upstream wallet's wider build uses the [upstream circuit set](https://github.com/logos-blockchain/logos-execution-zone/blob/cb075d5777cb812ba44216429d4f2837ea8518bd/flake.nix), including Logos blockchain circuits revision `2846ee7a4cfa24458bb8063412ab2e753b344d2f`; that wallet build is outside this package's evidence.
 
 ## Commands
 
@@ -45,7 +46,7 @@ Commands with or without `--actor` select the same actor platform. The CI workfl
 
 ## Interfaces and addresses
 
-The [actor interface](https://github.com/logos-blockchain/logos-execution-zone/blob/f94ca8a7550fa0012222b9fb5990dfe44c54a3dc/lee/state_machine/core/src/program/mod.rs) uses `ReceiveInput`, `Response` and Borsh messages. Both handlers accept the runtime's input and return `Result<Response, Error>`. The guest entry points turn an error into a transaction failure. Do not construct authorization or sender evidence from client message fields.
+The [actor interface](https://github.com/logos-blockchain/logos-execution-zone/blob/cb075d5777cb812ba44216429d4f2837ea8518bd/lee/state_machine/core/src/program/mod.rs) uses `ReceiveInput`, `Response` and Borsh messages. Both handlers accept the runtime's input and return `Result<Response, Error>`. The guest entry points turn an error into a transaction failure. Do not construct authorization or sender evidence from client message fields.
 
 A program account address identifies a deployment. An image ID identifies its binary. Pass the program account address to PDA derivation and callbacks. The execution fixture alone uses `AccountId::from_builtin_program` to register a disposable test program. The generated `COMPAT_TOKEN_ID` and `COMPAT_AUTHORITY_ID` constants are image IDs, not deployment addresses. Guest binaries and IDs can depend on the build path; this foundation does not establish release identity across paths or operating systems.
 
@@ -79,7 +80,7 @@ With existing Cargo source and RISC0 tool caches, the first guest-workspace buil
 
 The token and authority handlers are repository code that adapts reviewed behavior. They do not claim upstream wire or implementation equivalence. No third-party source files were copied into this package. Dependencies retain their licenses and notices. Reviewed references are the [legacy token types](https://github.com/logos-blockchain/logos-execution-zone/blob/a58fbce2ff48c58b7bb5001b1a27e64b9596ee3a/lez/programs/token/core/src/lib.rs), [admin-authority lifecycle](https://github.com/mmlado/spel-admin-authority/tree/479adf86f85b664073f359cfd2fd0087489f63a0), actor [wrapped-token authorization](https://github.com/logos-blockchain/logos-execution-zone/blob/f94ca8a7550fa0012222b9fb5990dfe44c54a3dc/lez/programs/wrapped_token/src/main.rs) and [flash-swap execution tests](https://github.com/logos-blockchain/logos-execution-zone/blob/f94ca8a7550fa0012222b9fb5990dfe44c54a3dc/lee/state_machine/src/state/tests/flash_swap.rs).
 
-Use the selected upstream [wallet](https://github.com/logos-blockchain/logos-execution-zone/blob/f94ca8a7550fa0012222b9fb5990dfe44c54a3dc/lez/wallet/src/lib.rs), [native fees](https://github.com/logos-blockchain/logos-execution-zone/blob/f94ca8a7550fa0012222b9fb5990dfe44c54a3dc/lez/programs/fee/core/src/lib.rs), [clock](https://github.com/logos-blockchain/logos-execution-zone/blob/f94ca8a7550fa0012222b9fb5990dfe44c54a3dc/lez/programs/clock/core/src/lib.rs) and [event](https://github.com/logos-blockchain/logos-execution-zone/blob/f94ca8a7550fa0012222b9fb5990dfe44c54a3dc/lee/state_machine/core/src/program/mod.rs) interfaces for application integration. This package does not replace them or supply an execution engine.
+Use the selected upstream [wallet](https://github.com/logos-blockchain/logos-execution-zone/blob/cb075d5777cb812ba44216429d4f2837ea8518bd/lez/wallet/src/lib.rs), [native fees](https://github.com/logos-blockchain/logos-execution-zone/blob/cb075d5777cb812ba44216429d4f2837ea8518bd/lez/programs/fee/core/src/lib.rs), [clock](https://github.com/logos-blockchain/logos-execution-zone/blob/cb075d5777cb812ba44216429d4f2837ea8518bd/lez/programs/clock/core/src/lib.rs) and [event](https://github.com/logos-blockchain/logos-execution-zone/blob/cb075d5777cb812ba44216429d4f2837ea8518bd/lee/state_machine/core/src/program/mod.rs) interfaces for application integration. This package does not replace them or supply an execution engine.
 
 Replace local token/ATA support when an actor-compatible upstream package covers the required operations and authorization checks. Replace role-authority support when an upstream package covers the adopted lifecycle. Compare behavior and wire formats, switch callers and guests together, remove superseded code and repeat the relevant checks. Keep the repository build, pin and IDL tools where useful. The [migration checklist](../../plans/lez-v04-migration.md#follow-up-tasks) tracks removal and the official-release compatibility check. See [ADR 0034](../../docs/adr/0034-lez-v04-migration.md) for the decision.
 

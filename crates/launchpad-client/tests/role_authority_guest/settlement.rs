@@ -383,7 +383,9 @@ fn initialize_adapter(fixture: &mut FactoryFixture, ready: bool) {
 
 fn hook_ready(configuration: Vec<u8>, reserve: u128, buy: bool, elf: &str) -> FactoryFixture {
     let mut fixture = closed_sale(Some(ADAPTER), configuration, reserve, buy);
-    fixture.state = fixture.state.with_named_programs([(ADAPTER, guest(elf))]);
+    fixture.state = fixture.state.with_programs_at(
+        [(ADAPTER, guest(elf))].map(|(address, program)| (address, program, true)),
+    );
     initialize_adapter(&mut fixture, true);
     for _ in 0..4 {
         hook(&mut fixture).unwrap();
@@ -574,9 +576,10 @@ fn settlement_final_ack_failure_rolls_back_adapter_receipt_payouts_and_graduated
     );
     assert_eq!(balance(&fixture.state, fixture.factory, COLLATERAL), 112);
     // Remove the test-only fault; this does not prove a production adapter upgrade route.
-    fixture.state = fixture
-        .state
-        .with_named_programs([(ADAPTER, guest("LAUNCHPAD_ADAPTER_ELF"))]);
+    fixture.state = fixture.state.with_programs_at(
+        [(ADAPTER, guest("LAUNCHPAD_ADAPTER_ELF"))]
+            .map(|(address, program)| (address, program, true)),
+    );
     hook(&mut fixture).unwrap();
     assert!(adapter_state(&fixture).receipt.is_some());
     assert_eq!(
@@ -635,9 +638,10 @@ fn settlement_failed_callback_allows_manual_recovery_without_replacing_adapter()
 #[ignore = "requires fresh application, adapter and compatibility ELFs and the pinned clock ELF"]
 fn settlement_zero_manual_payout_and_allocation_claim_leave_one_permissionless_hook() {
     let mut fixture = closed_sale(Some(ADAPTER), b"zero-payout".to_vec(), 0, false);
-    fixture.state = fixture
-        .state
-        .with_named_programs([(ADAPTER, guest("LAUNCHPAD_ADAPTER_ELF"))]);
+    fixture.state = fixture.state.with_programs_at(
+        [(ADAPTER, guest("LAUNCHPAD_ADAPTER_ELF"))]
+            .map(|(address, program)| (address, program, true)),
+    );
     initialize_adapter(&mut fixture, true);
     for _ in 0..4 {
         manual(&mut fixture).unwrap();
