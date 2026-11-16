@@ -1,8 +1,17 @@
 use borsh::{BorshDeserialize, BorshSerialize};
 use sale_policy::events::{
-    EventSubjectV1, EventTimeBoundsV1, PricingEngineV1, SaleEventKindV1, SaleEventV1,
-    WeightedCheckpoint, WeightedPauseChanged,
+    EventPoliciesV1, EventSubjectV1, EventTimeBoundsV1, PricingEngineV1, SaleEventKindV1,
+    SaleEventV1, TradeFormV1, WeightedCheckpoint, WeightedPauseChanged,
 };
+use sale_policy::{EndingPolicy, PausePolicy};
+
+fn policies() -> EventPoliciesV1 {
+    EventPoliciesV1 {
+        ending: EndingPolicy::Depletion,
+        pause: PausePolicy::AuthorityControlled,
+        sell_fee_bps: 200,
+    }
+}
 
 fn roundtrip<T>(value: &T)
 where
@@ -51,6 +60,37 @@ fn envelope_has_a_fixed_borsh_field_order() {
     expected.extend_from_slice(&[3; 32]);
     expected.extend_from_slice(&[4, 1]);
     assert_eq!(borsh::to_vec(&event).unwrap(), expected);
+}
+
+#[test]
+fn retained_fee_fields_have_distinct_wire_slots() {
+    assert_eq!(
+        borsh::to_vec(&policies()).unwrap(),
+        borsh::to_vec(&(2u8, 1u8, 200u16)).unwrap()
+    );
+    let trade = SaleEventKindV1::Trade {
+        trader: [1; 32],
+        form: TradeFormV1::ExactInput,
+        token_in: [2; 32],
+        token_out: [3; 32],
+        amount_in: 17,
+        pricing_input: 17,
+        gross_output: 101,
+        amount_out: 96,
+        fee_definition: [3; 32],
+        fee_amount: 2,
+        fee_bps: 100,
+        retained_fee: 3,
+        sell_fee_bps: 200,
+        pricing_time: Some(400),
+    };
+    let mut expected = vec![3];
+    expected.extend(borsh::to_vec(&([1u8; 32], 0u8, [2u8; 32], [3u8; 32])).unwrap());
+    expected.extend(borsh::to_vec(&(17u128, 17u128, 101u128, 96u128)).unwrap());
+    expected
+        .extend(borsh::to_vec(&([3u8; 32], 2u128, 100u16, 3u128, 200u16, Some(400u64))).unwrap());
+    assert_eq!(borsh::to_vec(&trade).unwrap(), expected);
+    roundtrip(&trade);
 }
 
 #[test]

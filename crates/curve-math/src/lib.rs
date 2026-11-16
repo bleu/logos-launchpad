@@ -5,9 +5,9 @@
 //! direction at every call site is visible at the call rather than inferred from
 //! context.
 //!
-//! These are honest quotes over the immutable creation-time invariant product
-//! supplied by the caller. The state machine in `crates/pool` retains that `k` for
-//! its lifetime and rejects zero-cost exact-output transitions before settlement.
+//! Quotes use the current pricing invariant supplied by the caller. The pool
+//! increases it when sell fees retain collateral and rejects zero-cost
+//! exact-output transitions before settlement.
 //!
 //! Creation validates virtual reserves below `2^64`, so the creation-time product
 //! fits `u128`. Each operation remains checked because trade amounts are untrusted.

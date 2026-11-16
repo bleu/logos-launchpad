@@ -1,5 +1,5 @@
 use crate::{Error, PoolAccount, PoolMode, TradeMode};
-use sale_policy::{FeeError, FeeRate};
+use sale_policy::{FeeError, FeeRate, SellFeeRate};
 use weighted_math_core::{QuoteError, try_calc_in_given_out, try_calc_out_given_in};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -25,6 +25,7 @@ pub struct TradeQuote {
     pub gross_collateral: u128,
     pub net_collateral: u128,
     pub protocol_fee: u128,
+    pub retained_fee: u128,
 }
 
 impl QuoteRequest {
@@ -83,7 +84,7 @@ pub fn quote_trade(
         }
         None
     };
-    let (amount_in, amount_out, collateral) = match request {
+    let quote = match request {
         QuoteRequest::BuyExactInput {
             collateral_in,
             min_tokens_out,
@@ -104,7 +105,14 @@ pub fn quote_trade(
             if out < min_tokens_out {
                 return Err(Error::Slippage);
             }
-            (collateral_in, out, collateral)
+            TradeQuote {
+                amount_in: collateral_in,
+                amount_out: out,
+                gross_collateral: collateral.gross,
+                net_collateral: collateral.net,
+                protocol_fee: collateral.fee,
+                retained_fee: 0,
+            }
         }
         QuoteRequest::BuyExactOutput {
             tokens_out,
@@ -126,7 +134,14 @@ pub fn quote_trade(
             if collateral.gross > max_collateral_in {
                 return Err(Error::Slippage);
             }
-            (collateral.gross, tokens_out, collateral)
+            TradeQuote {
+                amount_in: collateral.gross,
+                amount_out: tokens_out,
+                gross_collateral: collateral.gross,
+                net_collateral: collateral.net,
+                protocol_fee: collateral.fee,
+                retained_fee: 0,
+            }
         }
         QuoteRequest::SellExactInput {
             tokens_in,
@@ -144,26 +159,29 @@ pub fn quote_trade(
             } else {
                 state.price.sell_amount_out(tokens_in)?
             };
-            let collateral = rate.split(gross).map_err(fee_error)?;
+            let collateral = SellFeeRate::new(state.sell_fee_bps)
+                .map_err(fee_error)?
+                .split(gross, namespace_bps)
+                .map_err(fee_error)?;
             if collateral.net < min_collateral_out {
                 return Err(Error::Slippage);
             }
-            (tokens_in, collateral.net, collateral)
+            TradeQuote {
+                amount_in: tokens_in,
+                amount_out: collateral.net,
+                gross_collateral: collateral.gross,
+                net_collateral: collateral.net,
+                protocol_fee: collateral.protocol_fee,
+                retained_fee: collateral.retained_fee,
+            }
         }
     };
-    if amount_in == 0 || amount_out == 0 || collateral.net == 0 {
+    if quote.amount_in == 0 || quote.amount_out == 0 || quote.net_collateral == 0 {
         return Err(Error::InvalidAmount);
     }
-    if !sell && amount_out > state.remaining_inventory {
+    if !sell && quote.amount_out > state.remaining_inventory {
         return Err(Error::InvalidAmount);
     }
-    let quote = TradeQuote {
-        amount_in,
-        amount_out,
-        gross_collateral: collateral.gross,
-        net_collateral: collateral.net,
-        protocol_fee: collateral.fee,
-    };
     accounting(state, &quote, sell)?;
     Ok(quote)
 }
@@ -178,15 +196,28 @@ pub(super) fn accounting(
         .checked_add(state.accrued_fees)
         .ok_or(Error::Arithmetic)?;
     let (recorded, inventory) = if sell {
+        let seed = match state.mode {
+            PoolMode::FixedPrice => 0,
+            PoolMode::Weighted {
+                collateral_seed, ..
+            } => collateral_seed,
+        };
+        let budget = state
+            .recorded_collateral
+            .checked_sub(seed)
+            .ok_or(Error::Underfunded)?;
+        if quote.gross_collateral > budget {
+            return Err(Error::Underfunded);
+        }
+        let debit = quote
+            .gross_collateral
+            .checked_sub(quote.retained_fee)
+            .ok_or(Error::Arithmetic)?;
         let recorded = state
             .recorded_collateral
-            .checked_sub(quote.gross_collateral)
+            .checked_sub(debit)
             .ok_or(Error::Underfunded)?;
-        if let PoolMode::Weighted {
-            collateral_seed, ..
-        } = state.mode
-            && recorded < collateral_seed
-        {
+        if recorded < seed {
             return Err(Error::Underfunded);
         }
         (

@@ -139,6 +139,7 @@ fn create_message(defer_funding: bool) -> Message {
         buy_policy: crate::BuyPolicy::Open,
         pause_policy: crate::PausePolicy::Disabled,
         ending_policy: crate::EndingPolicy::Scheduled,
+        sell_fee_bps: 0,
         namespace: NS,
         token0_definition_id: TOKEN0,
         token1_definition_id: TOKEN1,
@@ -1725,6 +1726,7 @@ fn pool_state() -> PoolAccount {
             virtual_reserve0: 1000,
             virtual_reserve1: 100,
             ending_policy: pool::EndingPolicy::Scheduled,
+            sell_fee_bps: 0,
             close_timestamp: Some(42),
             close_on_depletion: None,
         })
@@ -2574,6 +2576,7 @@ fn final_buys_keep_pretrade_expiry_bounds_and_match_pure_pool_quotes() {
             virtual_reserve0: 100,
             virtual_reserve1: 100,
             ending_policy: crate::EndingPolicy::Either,
+            sell_fee_bps: 0,
             close_timestamp: Some(42),
             close_on_depletion: Some(pool::TokenSide::Token0),
         })
@@ -2772,6 +2775,7 @@ fn creation_events_separate_preparation_from_activation() {
             policies: EventPoliciesV1 {
                 ending: crate::EndingPolicy::Scheduled,
                 pause: crate::PausePolicy::Disabled,
+                sell_fee_bps: 0,
             },
         };
         let activated = SaleEventKindV1::Activated {
@@ -2891,6 +2895,8 @@ fn trade_events_copy_quotes_and_actual_direct_pool_definitions() {
                 fee_definition: *TOKEN1.value(),
                 fee_amount: outcome.protocol_fee,
                 fee_bps: 100,
+                retained_fee: 0,
+                sell_fee_bps: 0,
                 pricing_time: None,
             }]
         );
@@ -3081,6 +3087,7 @@ fn final_buy_emits_depletion_closure_only_for_selected_endings() {
             virtual_reserve0: 100,
             virtual_reserve1: 100,
             ending_policy: ending,
+            sell_fee_bps: 0,
             close_timestamp: if ending == crate::EndingPolicy::Depletion {
                 None
             } else {
@@ -3135,4 +3142,129 @@ fn final_buy_emits_depletion_closure_only_for_selected_endings() {
             assert_eq!(next.pool.lifecycle, pool::PoolLifecycle::Closed);
         }
     }
+}
+
+#[test]
+fn retained_fee_is_immutable_through_direct_creation_and_activation() {
+    for rate in [0, 125, 9999] {
+        let mut message = create_message(true);
+        if let Message::CreatePool { sell_fee_bps, .. } = &mut message {
+            *sell_fee_bps = rate;
+        }
+        let created = handle(&call(
+            pool_id(),
+            ActorState::empty(),
+            Some(Actor::new(OWNER, PROGRAM)),
+            message.clone(),
+        ))
+        .unwrap();
+        let created = answer_reads(created, &pool_state(), namespace(), [0, 0]).unwrap();
+        let state = PoolAccount::decode(created.post_state.as_ref().unwrap()).unwrap();
+        assert_eq!(state.pool.sell_fee_bps, rate);
+        assert_eq!(state.pool.initial_k, 100_000);
+        let activated = answer_reads(
+            start(&state, Message::ActivatePool { now: 1 }).unwrap(),
+            &state,
+            namespace(),
+            [0, 0],
+        )
+        .unwrap();
+        assert_eq!(
+            PoolAccount::decode(activated.post_state.as_ref().unwrap())
+                .unwrap()
+                .pool
+                .sell_fee_bps,
+            rate
+        );
+        let mut forged = state;
+        forged.pool.sell_fee_bps = if rate == 0 { 1 } else { 0 };
+        let pending = crate::dispatch::Pending::new(forged, message, OWNER, vec![]);
+        assert!(matches!(
+            pending.advance(Actor::new(pool_id(), PROGRAM)),
+            Err(crate::Error::InvalidPool)
+        ));
+    }
+    let mut message = create_message(true);
+    if let Message::CreatePool { sell_fee_bps, .. } = &mut message {
+        *sell_fee_bps = 10_000;
+    }
+    assert!(matches!(
+        handle(&call(
+            pool_id(),
+            ActorState::empty(),
+            Some(Actor::new(OWNER, PROGRAM)),
+            message
+        )),
+        Err(crate::Error::InvalidPool)
+    ));
+}
+
+#[test]
+fn retained_sell_event_and_transfers_keep_collateral_in_reserves() {
+    use crate::events::SaleEventKindV1;
+    let mut state = pool_state();
+    state.pool.sell_fee_bps = 125;
+    let response = answer_reads(
+        start(
+            &state,
+            Message::SwapExactInput {
+                amount_in: 250,
+                min_amount_out: 18,
+                token_in: TOKEN0,
+                membership: None,
+                now: 1,
+            },
+        )
+        .unwrap(),
+        &state,
+        namespace(),
+        [800, 107],
+    )
+    .unwrap();
+    let after = PoolAccount::decode(response.post_state.as_ref().unwrap()).unwrap();
+    assert_eq!(
+        (
+            after.pool.real_reserve1,
+            after.pool.virtual_reserve1,
+            after.pool.fees_accrued
+        ),
+        (81, 81, 1)
+    );
+    assert_eq!((after.pool.initial_k, after.pool.k), (100_000, 101_250));
+    assert!(matches!(
+        event_kinds(&response).as_slice(),
+        [SaleEventKindV1::Trade {
+            gross_output: 20,
+            amount_out: 18,
+            fee_amount: 1,
+            fee_bps: 100,
+            retained_fee: 1,
+            sell_fee_bps: 125,
+            ..
+        }]
+    ));
+    let transfers: Vec<lez_compat_core::token::Message> = response
+        .sync_messages
+        .iter()
+        .map(|call| borsh::from_slice(&call.message).unwrap())
+        .collect();
+    assert!(matches!(
+        transfers.as_slice(),
+        [
+            lez_compat_core::token::Message::Transfer {
+                definition: TOKEN0,
+                amount: 250,
+                ..
+            },
+            lez_compat_core::token::Message::Transfer {
+                definition: TOKEN1,
+                amount: 18,
+                ..
+            }
+        ]
+    ));
+    assert_eq!(
+        107 - 18,
+        after.pool.real_reserve1 + after.pool.fees_accrued + 7
+    );
 }

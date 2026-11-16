@@ -22,6 +22,7 @@ fn creation() -> ReceiveInput {
             pause_policy: curve_core::PausePolicy::Disabled,
             ending_policy: factory_core::EndingPolicy::Either,
             trade_mode: 0,
+            sell_fee_bps: 0,
             graduation_hook_program_id: Some(id(9)),
             graduation_hook_configuration: b"route".to_vec(),
             namespace: id(40),
@@ -258,7 +259,10 @@ fn pool_state(state: &FactoryState, owner: Actor, funded: bool) -> curve_core::P
     curve_core::PoolAccount {
         buy_policy: state.buy_policy.clone(),
         trade_control: curve_core::TradeControl::new(state.pause_policy),
-        allowed_input_token: Some(pool::TokenSide::Token1),
+        allowed_input_token: match state.trade_mode {
+            TradeMode::BuyOnly => Some(pool::TokenSide::Token1),
+            TradeMode::BuyAndSell => None,
+        },
         funded,
         closure_observed: false,
         namespace: state.namespace,
@@ -275,6 +279,7 @@ fn pool_state(state: &FactoryState, owner: Actor, funded: bool) -> curve_core::P
             virtual_reserve0: 1000,
             virtual_reserve1: 100,
             ending_policy: state.ending_policy,
+            sell_fee_bps: state.sell_fee_bps,
             close_timestamp: state.end_timestamp,
             close_on_depletion: match state.ending_policy {
                 EndingPolicy::Scheduled => None,
@@ -2249,7 +2254,8 @@ fn curve_created_event_names_the_launch_and_immutable_terms_once() {
                 end_timestamp: Some(200),
                 policies: EventPoliciesV1 {
                     ending: EndingPolicy::Either,
-                    pause: PausePolicy::Disabled
+                    pause: PausePolicy::Disabled,
+                    sell_fee_bps: 0
                 }
             }
         )]
@@ -2359,4 +2365,165 @@ fn curve_manual_self_recipient_reports_discharged_claim_without_token_movement()
     assert!(
         matches!(&events[..], [SaleEventV1 { kind: SaleEventKindV1::Settlement { effects, .. }, .. }] if matches!(&effects[..], [SettlementEffectV1::Payout { liability_discharged: 100, tokens_transferred: 0, .. }]))
     );
+}
+
+#[test]
+fn retained_curve_invariant_binds_original_product_and_allows_checked_growth() {
+    let (input, mut active) = active();
+    let mut state = FactoryState::decode(active.post_state.as_ref().unwrap()).unwrap();
+    state.sell_fee_bps = 125;
+    state.trade_mode = TradeMode::BuyAndSell;
+    active.post_state = Some(borsh::to_vec(&state).unwrap().into());
+    let mut saved = pool_state(&state, input.receiver, true);
+    for (side, amount) in [
+        (pool::TokenSide::Token1, 100),
+        (pool::TokenSide::Token0, 100),
+    ] {
+        saved
+            .pool
+            .swap_exact_input(pool::ExactInputSwap {
+                token_in: side,
+                amount_in: amount,
+                min_amount_out: 1,
+                pool_fee_bps: 0,
+                protocol_fee_bps: 0,
+                now: 100,
+            })
+            .unwrap();
+    }
+    assert!(saved.pool.k > saved.pool.initial_k);
+    for hook in [false, true] {
+        let (_, ready) = settlement(&input, &active, saved.clone(), 100, 0, hook);
+        assert_eq!(
+            FactoryState::decode(ready.post_state.as_ref().unwrap())
+                .unwrap()
+                .settlement_stage,
+            SettlementStage::Ready
+        );
+    }
+    for case in 0..5 {
+        let mut forged = saved.clone();
+        match case {
+            0 => forged.pool.sell_fee_bps += 1,
+            1 => forged.pool.initial_k -= 1,
+            2 => forged.pool.k = forged.pool.initial_k - 1,
+            3 => forged.pool.virtual_reserve1 = 1,
+            _ => {
+                forged.pool.sell_fee_bps = 0;
+            }
+        }
+        for command in [
+            Message::ClaimCreatorAllocation {
+                creator: id(42),
+                now: 200,
+            },
+            Message::WithdrawFactoryProceeds {
+                creator: id(42),
+                now: 200,
+            },
+            Message::ExecuteGraduationHook { creator_hint: None },
+        ] {
+            let allocation = matches!(command, Message::ClaimCreatorAllocation { .. });
+            let hook = matches!(command, Message::ExecuteGraduationHook { .. });
+            let mut request = input.clone();
+            request.from = None;
+            request.pre_state = active.post_state.clone().unwrap();
+            request.message = borsh::to_vec(&command).unwrap();
+            let mut response = handle(&request).unwrap();
+            if !hook {
+                request = proof(&request, &response, id(42));
+                response = handle(&request).unwrap();
+            }
+            request = reply(&request, &response, borsh::to_vec(&forged).unwrap());
+            if allocation {
+                response = handle(&request).unwrap();
+                request = reply(
+                    &request,
+                    &response,
+                    holding(state.creator_escrow_id, state.token_definition_id, 100),
+                );
+            }
+            if !allocation {
+                response = handle(&request).unwrap();
+                request = reply(
+                    &request,
+                    &response,
+                    holding(input.receiver.account_id, state.token_definition_id, 100),
+                );
+                response = handle(&request).unwrap();
+                request = reply(
+                    &request,
+                    &response,
+                    holding(input.receiver.account_id, state.collateral_definition_id, 0),
+                );
+            }
+            assert!(handle(&request).is_err(), "case {case}");
+        }
+    }
+}
+
+#[test]
+fn curve_retained_fee_forwarding_keeps_prefunding_exact() {
+    for rate in [0, 125, 9999] {
+        let mut input = creation();
+        let mut command: Message = borsh::from_slice(&input.message).unwrap();
+        if let Message::CreateFactoryPool { sell_fee_bps, .. } = &mut command {
+            *sell_fee_bps = rate;
+        }
+        input.message = borsh::to_vec(&command).unwrap();
+        let mut mint = handle(&input).unwrap();
+        for bytes in [config(), definition()] {
+            input = reply(&input, &mint, bytes);
+            mint = handle(&input).unwrap();
+            assert_eq!(
+                FactoryState::decode(mint.post_state.as_ref().unwrap())
+                    .unwrap()
+                    .sell_fee_bps,
+                rate
+            );
+        }
+        let (input, allocated) = continued(&input, &mint, 1000, 0, 0);
+        let (input, prepared) = continued(&input, &allocated, 0, 900, 100);
+        let state = FactoryState::decode(prepared.post_state.as_ref().unwrap()).unwrap();
+        assert_eq!(state.sell_fee_bps, rate);
+        let prepare = prepared
+            .sync_messages
+            .iter()
+            .find(|call| call.to == Actor::new(input.receiver.account_id, state.curve_program_id))
+            .unwrap();
+        assert!(
+            matches!(borsh::from_slice::<curve_core::Message>(&prepare.message).unwrap(), curve_core::Message::CreatePool { sell_fee_bps, .. } if sell_fee_bps == rate)
+        );
+        for case in 0..4 {
+            let (mut request, response) = continued(&input, &prepared, 0, 900, 100);
+            let mut saved = pool_state(&state, input.receiver, false);
+            match case {
+                0 => {}
+                1 => saved.pool.sell_fee_bps = if rate == 0 { 1 } else { 0 },
+                2 => {
+                    saved.pool.k += 1;
+                    saved.pool.virtual_reserve1 += 1;
+                }
+                _ => saved.pool.initial_k -= 1,
+            }
+            request = reply(&request, &response, borsh::to_vec(&saved).unwrap());
+            let response = handle(&request).unwrap();
+            request = reply(
+                &request,
+                &response,
+                holding(state.pool_id, state.token_definition_id, 0),
+            );
+            let result = handle(&request);
+            if case == 0 {
+                assert_eq!(
+                    FactoryState::decode(result.unwrap().post_state.as_ref().unwrap())
+                        .unwrap()
+                        .creation_stage,
+                    CreationStage::Active
+                );
+            } else {
+                assert!(result.is_err(), "rate {rate}, case {case}");
+            }
+        }
+    }
 }

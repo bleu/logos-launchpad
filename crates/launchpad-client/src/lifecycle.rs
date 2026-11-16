@@ -191,6 +191,7 @@ pub fn next_creation_invocation(
             && state.pause_policy == request.pause_policy
             && state.ending_policy == request.ending_policy
             && state.trade_mode == request.trade_mode
+            && state.sell_fee_bps == request.sell_fee_bps
             && state.graduation_hook == request.graduation_hook
             && state.sale_reserve == request.sale_reserve
             && state.dex_seed_reserve == request.dex_seed_reserve

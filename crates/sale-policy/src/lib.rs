@@ -34,6 +34,49 @@ pub struct CollateralSplit {
     pub fee: u128,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SellFeeRate(u16);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SellCollateralSplit {
+    pub gross: u128,
+    pub net: u128,
+    pub protocol_fee: u128,
+    pub retained_fee: u128,
+}
+
+impl SellFeeRate {
+    pub fn new(bps: u16) -> Result<Self, FeeError> {
+        if u128::from(bps) >= BASIS_POINTS {
+            return Err(FeeError::RateAboveDenominator);
+        }
+        Ok(Self(bps))
+    }
+
+    /// Both fees round up independently from gross sell collateral.
+    pub fn split(self, gross: u128, namespace_bps: u16) -> Result<SellCollateralSplit, FeeError> {
+        let combined = u128::from(self.0)
+            .checked_add(u128::from(namespace_bps))
+            .ok_or(FeeError::Arithmetic)?;
+        if combined >= BASIS_POINTS {
+            return Err(FeeError::RateAboveDenominator);
+        }
+        let protocol_fee = FeeRate::new(namespace_bps)?.split(gross)?.fee;
+        let retained_fee = FeeRate::new(self.0)?.split(gross)?.fee;
+        let net = gross
+            .checked_sub(protocol_fee)
+            .and_then(|net| net.checked_sub(retained_fee))
+            .filter(|net| *net > 0)
+            .ok_or(FeeError::InputConsumedByFees)?;
+        Ok(SellCollateralSplit {
+            gross,
+            net,
+            protocol_fee,
+            retained_fee,
+        })
+    }
+}
+
 impl FeeRate {
     pub fn new(bps: u16) -> Result<Self, FeeError> {
         if u128::from(bps) > BASIS_POINTS {

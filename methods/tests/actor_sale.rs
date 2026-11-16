@@ -36,6 +36,15 @@ fn seeded_state(
     bob: AccountId,
     close_timestamp: Option<u64>,
 ) -> (V03State, AccountId) {
+    seeded_state_with_sell_fee(alice, bob, close_timestamp, 0)
+}
+
+fn seeded_state_with_sell_fee(
+    alice: AccountId,
+    bob: AccountId,
+    close_timestamp: Option<u64>,
+    sell_fee_bps: u16,
+) -> (V03State, AccountId) {
     let pool = curve_core::compute_pool_pda(NAMESPACE, CURVE, LAUNCH, COLLATERAL, OWNER);
     let curve = Program::new(Cow::Borrowed(launchpad_methods::CURVE_ELF)).unwrap();
     let token = Program::new(Cow::Borrowed(lez_compat_methods::COMPAT_TOKEN_ELF)).unwrap();
@@ -60,6 +69,7 @@ fn seeded_state(
             } else {
                 curve_core::EndingPolicy::Depletion
             },
+            sell_fee_bps,
             close_timestamp,
             close_on_depletion: Some(pool::TokenSide::Token0),
         })
@@ -233,6 +243,7 @@ fn fixed_state(buyer: AccountId, end: Option<u64>) -> (V03State, AccountId) {
                 lbp_core::EndingPolicy::Depletion
             },
             lbp_core::TradeMode::BuyOnly,
+            0u16,
             None::<Actor>,
             lbp_core::PoolMode::FixedPrice,
             true,
@@ -1271,10 +1282,11 @@ fn curve_allowlist_signed_buy_checks_actual_trader_and_reuses_membership() {
 
 #[test]
 fn curve_factory_locks_allowlist_before_setup_and_buys_with_the_same_policy() {
-    for ending_policy in [
-        curve_core::EndingPolicy::Scheduled,
-        curve_core::EndingPolicy::Depletion,
-        curve_core::EndingPolicy::Either,
+    for (ending_policy, sell_fee_bps) in [
+        (curve_core::EndingPolicy::Scheduled, 0),
+        (curve_core::EndingPolicy::Depletion, 0),
+        (curve_core::EndingPolicy::Either, 0),
+        (curve_core::EndingPolicy::Either, 777),
     ] {
         const FACTORY: AccountId = AccountId::new([17; 32]);
         let key = PrivateKey::try_new([21; 32]).unwrap();
@@ -1395,7 +1407,8 @@ fn curve_factory_locks_allowlist_before_setup_and_buys_with_the_same_policy() {
                 buy_policy: policy.clone(),
                 pause_policy: curve_core::PausePolicy::Disabled,
                 ending_policy,
-                trade_mode: 0,
+                trade_mode: u8::from(sell_fee_bps > 0),
+                sell_fee_bps,
                 graduation_hook_program_id: None,
                 graduation_hook_configuration: vec![],
                 namespace: NAMESPACE,
@@ -1425,6 +1438,7 @@ fn curve_factory_locks_allowlist_before_setup_and_buys_with_the_same_policy() {
             .unwrap();
             assert_eq!(stored.buy_policy, policy);
             assert_eq!(stored.ending_policy, ending_policy);
+            assert_eq!(stored.sell_fee_bps, sell_fee_bps);
             execute(
                 &mut state,
                 factory_core::Message::ContinueCreation { creator, now: 1 },
@@ -1435,6 +1449,7 @@ fn curve_factory_locks_allowlist_before_setup_and_buys_with_the_same_policy() {
         assert!(stored.funded);
         assert_eq!(stored.buy_policy, policy);
         assert_eq!(stored.pool.ending_policy, ending_policy);
+        assert_eq!(stored.pool.sell_fee_bps, sell_fee_bps);
         let mut message = Message::try_new(
             Actor::new(creator, CURVE),
             actors,
@@ -1754,6 +1769,26 @@ fn fixed_factory_env_with_trade_mode(
     graduation_hook: Option<factory_core::GraduationHook>,
     trade_mode: lbp_core::TradeMode,
 ) -> FixedFactoryEnv {
+    fixed_factory_env_with_sell_fee(
+        end,
+        release,
+        pause_policy,
+        ending_policy,
+        graduation_hook,
+        trade_mode,
+        0,
+    )
+}
+
+fn fixed_factory_env_with_sell_fee(
+    end: Option<u64>,
+    release: factory_core::CreatorAllocationRelease,
+    pause_policy: curve_core::PausePolicy,
+    ending_policy: lbp_core::EndingPolicy,
+    graduation_hook: Option<factory_core::GraduationHook>,
+    trade_mode: lbp_core::TradeMode,
+    sell_fee_bps: u16,
+) -> FixedFactoryEnv {
     const FACTORY: AccountId = AccountId::new([17; 32]);
     let key = PrivateKey::try_new([23; 32]).unwrap();
     let creator = AccountId::from(&PublicKey::new_from_private_key(&key));
@@ -1864,6 +1899,7 @@ fn fixed_factory_env_with_trade_mode(
                 pause_policy,
                 ending_policy,
                 trade_mode,
+                sell_fee_bps,
                 graduation_hook,
                 namespace: NAMESPACE,
                 launch_salt: salt,
@@ -1897,6 +1933,7 @@ fn fixed_factory_env_with_trade_mode(
         .unwrap();
         assert_eq!(stored.buy_policy, policy);
         assert_eq!(stored.ending_policy, ending_policy);
+        assert_eq!(stored.sell_fee_bps, sell_fee_bps);
         execute(
             &mut state,
             factory_core::Message::ContinueFixedPriceCreation {
@@ -1906,6 +1943,7 @@ fn fixed_factory_env_with_trade_mode(
             },
         );
     }
+    assert_eq!(fixed_pool(&state, pool).sell_fee_bps, sell_fee_bps);
     for treasury in [TREASURY, NEXT_TREASURY] {
         actors.push(holding(treasury, COLLATERAL));
         state = state.with_public_accounts([token_holding(treasury, COLLATERAL, 0)]);
@@ -2321,6 +2359,7 @@ fn weighted_factory_executes_all_stages_and_rolls_back_failed_funding() {
                 pause_policy: curve_core::PausePolicy::AuthorityControlled,
                 ending_policy,
                 trade_mode: lbp_core::TradeMode::BuyOnly,
+                sell_fee_bps: 0,
                 graduation_hook: None,
                 namespace: NAMESPACE,
                 launch_salt: salt,
@@ -2654,6 +2693,24 @@ fn weighted_factory_env_with_trade_mode(
     Vec<Actor>, // actors for factory transactions
     [u8; 32],   // salt
 ) {
+    weighted_factory_env_with_sell_fee(execute_buy, graduation_hook, trade_mode, 0)
+}
+
+fn weighted_factory_env_with_sell_fee(
+    execute_buy: bool,
+    graduation_hook: Option<factory_core::GraduationHook>,
+    trade_mode: lbp_core::TradeMode,
+    sell_fee_bps: u16,
+) -> (
+    V03State,
+    AccountId, // factory
+    AccountId, // pool
+    AccountId, // launch (token definition)
+    AccountId, // escrow
+    PrivateKey,
+    Vec<Actor>, // actors for factory transactions
+    [u8; 32],   // salt
+) {
     use factory_core::{CreatorAllocationRelease, LbpCreationStage, WeightedInputs};
     const FACTORY: AccountId = AccountId::new([17; 32]);
     let key = PrivateKey::try_new([23; 32]).unwrap();
@@ -2806,6 +2863,7 @@ fn weighted_factory_env_with_trade_mode(
                 pause_policy: curve_core::PausePolicy::AuthorityControlled,
                 ending_policy: lbp_core::EndingPolicy::Scheduled,
                 trade_mode,
+                sell_fee_bps,
                 graduation_hook,
                 namespace: NAMESPACE,
                 launch_salt: salt,
@@ -2859,6 +2917,15 @@ fn weighted_factory_env_with_trade_mode(
     )
     .unwrap();
     assert!(fixed_pool(&state, pool).funded);
+    assert_eq!(fixed_pool(&state, pool).sell_fee_bps, sell_fee_bps);
+    assert_eq!(
+        factory_core::LbpLaunchState::decode(
+            state.get_account_by_id(factory).data.actor_state(FACTORY)
+        )
+        .unwrap()
+        .sell_fee_bps,
+        sell_fee_bps
+    );
     assert_eq!(
         fixed_pool(&state, pool).settlement_progress,
         lbp_core::SettlementProgress::Unselected,
@@ -4769,6 +4836,7 @@ fn factory_creation_rejects_invalid_ending_matrix_without_state_changes() {
                     pause_policy: PausePolicy::Disabled,
                     ending_policy,
                     trade_mode: 0,
+                    sell_fee_bps: 0,
                     graduation_hook_program_id: None,
                     graduation_hook_configuration: vec![],
                     namespace: NAMESPACE,
@@ -4800,6 +4868,7 @@ fn factory_creation_rejects_invalid_ending_matrix_without_state_changes() {
                         pause_policy: PausePolicy::Disabled,
                         ending_policy,
                         trade_mode: lbp_core::TradeMode::BuyOnly,
+                        sell_fee_bps: 0,
                         graduation_hook: None,
                         namespace: NAMESPACE,
                         launch_salt: salt,
@@ -4829,6 +4898,7 @@ fn factory_creation_rejects_invalid_ending_matrix_without_state_changes() {
                         pause_policy: PausePolicy::Disabled,
                         ending_policy,
                         trade_mode: lbp_core::TradeMode::BuyOnly,
+                        sell_fee_bps: 0,
                         graduation_hook: None,
                         namespace: NAMESPACE,
                         launch_salt: salt,
@@ -6627,12 +6697,19 @@ fn assert_lbp_graduated_event(
 }
 
 fn curve_event_env(end: Option<u64>) -> (V03State, AccountId, PrivateKey) {
+    curve_event_env_with_sell_fee(end, 0)
+}
+
+fn curve_event_env_with_sell_fee(
+    end: Option<u64>,
+    sell_fee_bps: u16,
+) -> (V03State, AccountId, PrivateKey) {
     let key = PrivateKey::try_new([21; 32]).unwrap();
     let owner = AccountId::from(&PublicKey::new_from_private_key(&key));
     let bob = AccountId::from(&PublicKey::new_from_private_key(
         &PrivateKey::try_new([22; 32]).unwrap(),
     ));
-    let (state, original_pool) = seeded_state(owner, bob, end);
+    let (state, original_pool) = seeded_state_with_sell_fee(owner, bob, end, sell_fee_bps);
     let mut pool_state = PoolAccount::decode(
         state
             .get_account_by_id(original_pool)
@@ -6839,8 +6916,9 @@ fn signed_curve_trade_events_match_both_buy_forms_and_sells_with_actual_token_ef
                 amount_out: outcome.amount_out,
                 fee_definition: *COLLATERAL.value(),
                 fee_amount: outcome.protocol_fee,
-
                 fee_bps: 1_000,
+                retained_fee: 0,
+                sell_fee_bps: 0,
                 pricing_time: None,
             }
         );
@@ -6930,8 +7008,9 @@ fn signed_lbp_trade_events_match_both_forms_engine_and_accounting_deltas() {
                     amount_out,
                     fee_definition: *COLLATERAL.value(),
                     fee_amount: fee,
-
                     fee_bps: 333,
+                    retained_fee: 0,
+                    sell_fee_bps: 0,
                     pricing_time: if weighted { Some(100) } else { None },
                 }
             );
@@ -7679,6 +7758,8 @@ fn signed_common_sells_fixed_inventory_and_fee_surplus_isolation() {
             fee_definition: COLLATERAL.to_bytes(),
             fee_amount: 4,
             fee_bps: 333,
+            retained_fee: 0,
+            sell_fee_bps: 0,
             pricing_time: None,
         }]
     );
@@ -7797,6 +7878,8 @@ fn signed_common_sells_weighted_seed_fee_surplus_isolation() {
             fee_definition: COLLATERAL.to_bytes(),
             fee_amount: quote.protocol_fee,
             fee_bps: 100,
+            retained_fee: 0,
+            sell_fee_bps: 0,
             pricing_time: Some(150),
         }]
     );
@@ -8012,4 +8095,460 @@ fn signed_common_sells_controls_and_late_credit_rollback() {
         assert_eq!(balance(&overflow, pool, LAUNCH), pool_tokens + 10);
         assert!(balance(&overflow, trader, COLLATERAL) > collateral);
     }
+}
+
+#[test]
+fn signed_retained_sells_fixed_and_weighted_accounting_and_live_fee_scope() {
+    let retained_bps = 777;
+    for weighted in [false, true] {
+        let (mut state, factory, pool, launch, key, actors, salt, membership, now, namespace_bps) =
+            if weighted {
+                let (state, factory, pool, launch, _, key, actors, salt) =
+                    weighted_factory_env_with_sell_fee(
+                        true,
+                        None,
+                        lbp_core::TradeMode::BuyAndSell,
+                        retained_bps,
+                    );
+                (
+                    state, factory, pool, launch, key, actors, salt, None, 150, 100,
+                )
+            } else {
+                let mut env = fixed_factory_env_with_sell_fee(
+                    Some(200),
+                    factory_core::CreatorAllocationRelease::AfterEnd,
+                    curve_core::PausePolicy::AuthorityControlled,
+                    lbp_core::EndingPolicy::Scheduled,
+                    None,
+                    lbp_core::TradeMode::BuyAndSell,
+                    retained_bps,
+                );
+                env.buy(100, 156);
+                (
+                    env.state,
+                    env.factory,
+                    env.pool,
+                    env.launch,
+                    env.key,
+                    env.actors,
+                    env.salt,
+                    Some(env.path),
+                    100,
+                    333,
+                )
+            };
+        let creator = AccountId::from(&PublicKey::new_from_private_key(&key));
+        let initial = fixed_pool(&state, pool);
+        assert_eq!(initial.sell_fee_bps, retained_bps);
+        let quote = lbp_core::quote_trade(
+            &initial,
+            lbp_core::QuoteRequest::SellExactInput {
+                tokens_in: 40,
+                min_collateral_out: 0,
+            },
+            namespace_bps,
+            now,
+        )
+        .unwrap();
+        let ceil_fee = |bps: u16| (quote.gross_collateral * u128::from(bps)).div_ceil(10_000);
+        assert_eq!(quote.protocol_fee, ceil_fee(namespace_bps));
+        assert_eq!(quote.retained_fee, ceil_fee(retained_bps));
+        if weighted {
+            assert!(
+                quote.protocol_fee + quote.retained_fee
+                    > (quote.gross_collateral * u128::from(namespace_bps + retained_bps))
+                        .div_ceil(10_000)
+            );
+        }
+        assert_eq!(
+            quote.amount_out,
+            quote.gross_collateral - quote.protocol_fee - quote.retained_fee
+        );
+        assert!(quote.retained_fee > 0);
+        let sell = if weighted {
+            lbp_core::Message::SellWeightedExactInput {
+                amount_in: 40,
+                min_amount_out: quote.amount_out,
+            }
+        } else {
+            lbp_core::Message::SellExactInput {
+                amount_in: 40,
+                min_amount_out: quote.amount_out,
+                now,
+            }
+        };
+        let collateral = balance(&state, creator, COLLATERAL);
+        let pool_collateral = balance(&state, pool, COLLATERAL);
+        let tokens = balance(&state, creator, launch);
+        let pool_tokens = balance(&state, pool, launch);
+        let mut overflow =
+            state
+                .clone()
+                .with_public_accounts([token_holding(creator, COLLATERAL, u128::MAX)]);
+        let saved = overflow.clone();
+        assert!(
+            matches!(fixed_execute_events_at(&mut overflow, pool, &key, sell.clone(), now * 1_000),
+            Err(lee::error::LeeError::ProgramExecutionFailed(error)) if error.contains("Overflow"))
+        );
+        assert!(overflow == saved);
+        let events = fixed_execute_events_at(&mut state, pool, &key, sell, now * 1_000).unwrap();
+        let sale = fixed_pool(&state, pool);
+        assert_eq!(sale.sell_fee_bps, retained_bps);
+        assert_eq!(
+            sale.recorded_collateral,
+            initial.recorded_collateral - quote.gross_collateral + quote.retained_fee
+        );
+        assert_eq!(sale.accrued_fees, initial.accrued_fees + quote.protocol_fee);
+        assert_eq!(
+            balance(&state, creator, COLLATERAL),
+            collateral + quote.amount_out
+        );
+        assert_eq!(
+            balance(&state, pool, COLLATERAL),
+            pool_collateral - quote.amount_out
+        );
+        assert_eq!(balance(&state, creator, launch), tokens - 40);
+        assert_eq!(balance(&state, pool, launch), pool_tokens + 40);
+        assert_eq!(sale.remaining_inventory, initial.remaining_inventory + 40);
+        if weighted {
+            assert!(
+                matches!(sale.mode, lbp_core::PoolMode::Weighted { collateral_seed: 100, pricing_collateral, .. } if pricing_collateral == sale.recorded_collateral && pricing_collateral >= 100)
+            );
+        } else {
+            assert_eq!(sale.price, initial.price);
+        }
+        let decoded = sale_events(&events, LBP, pool_subject(pool));
+        assert_eq!(decoded.len(), 1);
+        assert_eq!(
+            decoded[0].engine,
+            if weighted {
+                PricingEngineV1::Weighted
+            } else {
+                PricingEngineV1::FixedPrice
+            }
+        );
+        assert_eq!(
+            decoded[0].kind,
+            SaleEventKindV1::Trade {
+                trader: creator.to_bytes(),
+                form: TradeFormV1::ExactInput,
+                token_in: launch.to_bytes(),
+                token_out: COLLATERAL.to_bytes(),
+                amount_in: 40,
+                pricing_input: 40,
+                gross_output: quote.gross_collateral,
+                amount_out: quote.amount_out,
+                fee_definition: COLLATERAL.to_bytes(),
+                fee_amount: quote.protocol_fee,
+                fee_bps: namespace_bps,
+                retained_fee: quote.retained_fee,
+                sell_fee_bps: retained_bps,
+                pricing_time: if weighted { Some(now) } else { None },
+            }
+        );
+        let dust = if weighted {
+            lbp_core::Message::SellWeightedExactInput {
+                amount_in: 5,
+                min_amount_out: 0,
+            }
+        } else {
+            lbp_core::Message::SellExactInput {
+                amount_in: 1,
+                min_amount_out: 0,
+                now,
+            }
+        };
+        let saved = state.clone();
+        assert!(fixed_execute_events_at(&mut state, pool, &key, dust, now * 1_000).is_err());
+        assert!(state == saved);
+        state = fixed_config(state, 10_000 - retained_bps, TREASURY, false);
+        let saved = state.clone();
+        let sell = if weighted {
+            lbp_core::Message::SellWeightedExactInput {
+                amount_in: 10,
+                min_amount_out: 0,
+            }
+        } else {
+            lbp_core::Message::SellExactInput {
+                amount_in: 10,
+                min_amount_out: 0,
+                now,
+            }
+        };
+        assert!(
+            matches!(fixed_execute_events_at(&mut state, pool, &key, sell, now * 1_000),
+            Err(lee::error::LeeError::ProgramExecutionFailed(error)) if error.contains("InvalidFee"))
+        );
+        assert!(state == saved);
+        let buy = if weighted {
+            lbp_core::Message::BuyWeightedExactInput {
+                membership,
+                amount_in: 500,
+                min_amount_out: 1,
+            }
+        } else {
+            lbp_core::Message::BuyExactInput {
+                membership,
+                amount_in: 500,
+                min_amount_out: 1,
+                now,
+            }
+        };
+        let before_buy = balance(&state, creator, launch);
+        let before_payment = balance(&state, creator, COLLATERAL);
+        fixed_execute_at(&mut state, pool, &key, buy, now * 1_000).unwrap();
+        assert!(balance(&state, creator, launch) > before_buy);
+        assert_eq!(balance(&state, creator, COLLATERAL), before_payment - 500);
+        fixed_execute_at(
+            &mut state,
+            pool,
+            &key,
+            lbp_core::Message::CollectFees,
+            now * 1_000,
+        )
+        .unwrap();
+        for paused in [true, false] {
+            let control = if weighted {
+                factory_core::Message::SetWeightedPaused { creator, paused }
+            } else {
+                factory_core::Message::SetPaused { creator, paused }
+            };
+            factory_execute_at(
+                &mut state,
+                factory,
+                &actors,
+                &key,
+                salt,
+                launch,
+                pool,
+                control,
+                now * 1_000,
+            )
+            .unwrap();
+        }
+        let sale = fixed_pool(&state, pool);
+        assert_eq!(sale.sell_fee_bps, retained_bps);
+        let collateral = balance(&state, creator, COLLATERAL);
+        let end = sale.end_timestamp.unwrap();
+        state = clock_state(state, end * 1_000);
+        let settle = if weighted {
+            factory_core::Message::WithdrawWeightedProceeds { creator }
+        } else {
+            factory_core::Message::WithdrawFactoryProceeds { creator, now: end }
+        };
+        factory_execute_at(
+            &mut state,
+            factory,
+            &actors,
+            &key,
+            salt,
+            launch,
+            pool,
+            settle,
+            end * 1_000,
+        )
+        .unwrap();
+        assert_eq!(
+            balance(&state, creator, COLLATERAL),
+            collateral + sale.recorded_collateral
+        );
+        assert_eq!(balance(&state, pool, COLLATERAL), 0);
+    }
+}
+
+#[test]
+fn signed_retained_sells_curve_grows_k_without_consuming_rounding_slack() {
+    let (mut state, pool, key) = curve_event_env_with_sell_fee(Some(200), 777);
+    let trader = AccountId::from(&PublicKey::new_from_private_key(&key));
+    let read = |state: &V03State| {
+        PoolAccount::decode(state.get_account_by_id(pool).data.actor_state(CURVE)).unwrap()
+    };
+    let initial = read(&state);
+    assert_eq!(initial.pool.sell_fee_bps, 777);
+    assert_eq!(initial.pool.initial_k, initial.pool.k);
+    curve_execute_events_at(
+        &mut state,
+        pool,
+        &key,
+        CurveMessage::SwapExactInput {
+            membership: None,
+            token_in: COLLATERAL,
+            amount_in: 100,
+            min_amount_out: 1,
+            now: 1,
+        },
+        1_000,
+    )
+    .unwrap();
+    let before = read(&state);
+    let mut without_retention = before.pool.clone();
+    without_retention.sell_fee_bps = 0;
+    let baseline = without_retention
+        .swap_exact_input(pool::ExactInputSwap {
+            token_in: pool::TokenSide::Token0,
+            amount_in: 300,
+            min_amount_out: 1,
+            pool_fee_bps: 0,
+            protocol_fee_bps: 1_000,
+            now: 1,
+        })
+        .unwrap();
+    let namespace = (baseline.raw_amount_out * 1_000).div_ceil(10_000);
+    let retained = (baseline.raw_amount_out * 777).div_ceil(10_000);
+    let net = baseline.raw_amount_out - namespace - retained;
+    assert!(retained > 0);
+    let collateral = balance(&state, trader, COLLATERAL);
+    let tokens = balance(&state, trader, LAUNCH);
+    let vault_collateral = balance(&state, pool, COLLATERAL);
+    let vault_tokens = balance(&state, pool, LAUNCH);
+    let sell = CurveMessage::SwapExactInput {
+        membership: None,
+        token_in: LAUNCH,
+        amount_in: 300,
+        min_amount_out: net,
+        now: 1,
+    };
+    let mut overflow =
+        state
+            .clone()
+            .with_public_accounts([token_holding(trader, COLLATERAL, u128::MAX)]);
+    let saved = overflow.clone();
+    assert!(
+        matches!(curve_execute_events_at(&mut overflow, pool, &key, sell.clone(), 1_000),
+        Err(lee::error::LeeError::ProgramExecutionFailed(error)) if error.contains("Overflow"))
+    );
+    assert!(overflow == saved);
+    let events = curve_execute_events_at(&mut state, pool, &key, sell, 1_000).unwrap();
+    let after = read(&state);
+    assert_eq!(after.pool.initial_k, initial.pool.initial_k);
+    assert_eq!(
+        after.pool.k,
+        without_retention.k + without_retention.virtual_reserve0 * retained
+    );
+    assert!(after.pool.k > before.pool.k);
+    assert_eq!(
+        after.pool.virtual_reserve0 * after.pool.virtual_reserve1 - after.pool.k,
+        without_retention.virtual_reserve0 * without_retention.virtual_reserve1
+            - without_retention.k
+    );
+    assert_eq!(
+        after.pool.real_reserve1,
+        before.pool.real_reserve1 - baseline.raw_amount_out + retained
+    );
+    assert_eq!(
+        after.pool.fees_accrued,
+        before.pool.fees_accrued + namespace
+    );
+    assert_eq!(balance(&state, trader, COLLATERAL), collateral + net);
+    assert_eq!(balance(&state, pool, COLLATERAL), vault_collateral - net);
+    assert_eq!(balance(&state, trader, LAUNCH), tokens - 300);
+    assert_eq!(balance(&state, pool, LAUNCH), vault_tokens + 300);
+    let decoded = sale_events(&events, CURVE, pool_subject(pool));
+    assert_eq!(decoded.len(), 1);
+    assert_eq!(decoded[0].engine, PricingEngineV1::Curve);
+    assert_eq!(
+        decoded[0].kind,
+        SaleEventKindV1::Trade {
+            trader: trader.to_bytes(),
+            form: TradeFormV1::ExactInput,
+            token_in: LAUNCH.to_bytes(),
+            token_out: COLLATERAL.to_bytes(),
+            amount_in: 300,
+            pricing_input: 300,
+            gross_output: baseline.raw_amount_out,
+            amount_out: net,
+            fee_definition: COLLATERAL.to_bytes(),
+            fee_amount: namespace,
+            fee_bps: 1_000,
+            retained_fee: retained,
+            sell_fee_bps: 777,
+            pricing_time: None,
+        }
+    );
+    let saved = state.clone();
+    assert!(
+        curve_execute_events_at(
+            &mut state,
+            pool,
+            &key,
+            CurveMessage::SwapExactInput {
+                membership: None,
+                token_in: LAUNCH,
+                amount_in: 1,
+                min_amount_out: 0,
+                now: 1,
+            },
+            1_000
+        )
+        .is_err()
+    );
+    assert!(state == saved);
+    state = fixed_config(state, 9_223, TREASURY, false);
+    let saved = state.clone();
+    assert!(
+        curve_execute_events_at(
+            &mut state,
+            pool,
+            &key,
+            CurveMessage::SwapExactInput {
+                membership: None,
+                token_in: LAUNCH,
+                amount_in: 100,
+                min_amount_out: 0,
+                now: 1,
+            },
+            1_000
+        )
+        .is_err()
+    );
+    assert!(state == saved);
+    curve_execute_events_at(
+        &mut state,
+        pool,
+        &key,
+        CurveMessage::SwapExactInput {
+            membership: None,
+            token_in: COLLATERAL,
+            amount_in: 100,
+            min_amount_out: 1,
+            now: 1,
+        },
+        1_000,
+    )
+    .unwrap();
+    curve_execute_events_at(&mut state, pool, &key, CurveMessage::CollectFees, 1_000).unwrap();
+    for paused in [true, false] {
+        curve_execute_events_at(
+            &mut state,
+            pool,
+            &key,
+            CurveMessage::SetPaused { paused },
+            1_000,
+        )
+        .unwrap();
+    }
+    let final_state = read(&state);
+    assert_eq!(final_state.pool.sell_fee_bps, 777);
+    assert_eq!(final_state.pool.initial_k, initial.pool.initial_k);
+    let collateral = balance(&state, trader, COLLATERAL);
+    let tokens = balance(&state, trader, LAUNCH);
+    curve_execute_events_at(
+        &mut state,
+        pool,
+        &key,
+        CurveMessage::WithdrawReserves { now: 200 },
+        200_000,
+    )
+    .unwrap();
+    assert_eq!(
+        balance(&state, trader, COLLATERAL),
+        collateral + final_state.pool.real_reserve1
+    );
+    assert_eq!(
+        balance(&state, trader, LAUNCH),
+        tokens + final_state.pool.real_reserve0
+    );
+    assert_eq!(balance(&state, pool, COLLATERAL), 0);
+    assert_eq!(balance(&state, pool, LAUNCH), 0);
+    assert_eq!(read(&state).pool.initial_k, initial.pool.initial_k);
 }

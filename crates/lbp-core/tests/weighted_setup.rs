@@ -18,6 +18,7 @@ fn weighted_inputs() -> WeightedPoolInputs {
         pause_policy: lbp_core::PausePolicy::AuthorityControlled,
         ending_policy: lbp_core::EndingPolicy::Scheduled,
         trade_mode: lbp_core::TradeMode::BuyOnly,
+        sell_fee_bps: 0,
         graduation_adapter: None,
         namespace: id(40),
         namespace_program_id: id(6),
@@ -400,6 +401,7 @@ fn weighted_policy_survives_every_prepare_and_activation_callback() {
     });
     inputs.buy_policy = policy.clone();
     inputs.trade_mode = lbp_core::TradeMode::BuyAndSell;
+    inputs.sell_fee_bps = 250;
     inputs.graduation_adapter = Some(Actor::new(id(70), id(71)));
     input.message = borsh::to_vec(&Message::PrepareWeighted { inputs }).unwrap();
     let factory = input.from;
@@ -438,6 +440,7 @@ fn weighted_policy_survives_every_prepare_and_activation_callback() {
                 lbp_core::PoolAccount::decode(response.post_state.as_ref().unwrap()).unwrap();
             assert_eq!(saved.buy_policy, policy);
             assert_eq!(saved.trade_mode, lbp_core::TradeMode::BuyAndSell);
+            assert_eq!(saved.sell_fee_bps, 250);
             assert!(!saved.seed_returned);
             assert_eq!(saved.graduation_adapter, Some(Actor::new(id(70), id(71))));
             assert_eq!(
@@ -625,5 +628,21 @@ fn snapshot_quotes_work_without_a_provider_but_weighted_sells_require_one() {
             handle(&input).err(),
             Some(lbp_core::Error::ClockUnavailable)
         );
+    }
+}
+
+#[test]
+fn weighted_rejects_invalid_stored_sell_fee() {
+    let mut input = prepare();
+    let Message::PrepareWeighted { mut inputs } = borsh::from_slice(&input.message).unwrap() else {
+        unreachable!()
+    };
+    for invalid in [10_000, u16::MAX] {
+        inputs.sell_fee_bps = invalid;
+        input.message = borsh::to_vec(&Message::PrepareWeighted {
+            inputs: inputs.clone(),
+        })
+        .unwrap();
+        assert_eq!(handle(&input).err(), Some(lbp_core::Error::InvalidTerms));
     }
 }

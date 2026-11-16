@@ -28,6 +28,7 @@ impl PoolAccount {
         EventPoliciesV1 {
             ending: self.ending_policy,
             pause: self.trade_control.policy(),
+            sell_fee_bps: self.sell_fee_bps,
         }
     }
 

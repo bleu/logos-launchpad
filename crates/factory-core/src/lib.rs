@@ -32,6 +32,7 @@ pub use lbp_setup::{
     LbpCreationStage as FixedPriceCreationStage, LbpLaunchState as FixedPriceLaunchState,
 };
 
+use curve_core::SellFeeRate;
 pub use curve_core::TradeMode;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum CreationStage {
@@ -79,6 +80,7 @@ pub struct FactoryState {
     pub pause_policy: PausePolicy,
     pub ending_policy: EndingPolicy,
     pub trade_mode: TradeMode,
+    pub sell_fee_bps: u16,
     pub graduation_hook: Option<GraduationHook>,
     pub creation_stage: CreationStage,
     pub settlement_stage: SettlementStage,
@@ -160,6 +162,7 @@ impl FactoryState {
         self.response().send(call)
     }
     fn validate_terms(&self) -> Result<(), Error> {
+        SellFeeRate::new(self.sell_fee_bps).map_err(|_| Error::InvalidState)?;
         validate_curve_policies(self.ending_policy, self.end_timestamp)
             .map_err(|_| Error::InvalidState)
     }
@@ -207,6 +210,7 @@ pub enum Message {
         pause_policy: PausePolicy,
         ending_policy: EndingPolicy,
         trade_mode: u8,
+        sell_fee_bps: u16,
         graduation_hook_program_id: Option<AccountId>,
         graduation_hook_configuration: Vec<u8>,
         namespace: AccountId,
@@ -511,6 +515,7 @@ fn create_curve(input: &ReceiveInput, command: Message) -> Result<Response, Erro
         pause_policy,
         ending_policy,
         trade_mode,
+        sell_fee_bps,
         graduation_hook_program_id,
         graduation_hook_configuration,
         namespace,
@@ -547,6 +552,7 @@ fn create_curve(input: &ReceiveInput, command: Message) -> Result<Response, Erro
     {
         return Err(Error::InvalidTerms);
     }
+    SellFeeRate::new(sell_fee_bps).map_err(|_| Error::InvalidTerms)?;
     validate_curve_policies(ending_policy, end_timestamp)?;
     let total_supply = total_supply(sale_reserve, dex_seed_reserve, creator_allocation)
         .map_err(|_| Error::InvalidTerms)?;
@@ -566,6 +572,7 @@ fn create_curve(input: &ReceiveInput, command: Message) -> Result<Response, Erro
         pause_policy,
         ending_policy,
         trade_mode: TradeMode::try_from(trade_mode).map_err(|_| Error::InvalidTerms)?,
+        sell_fee_bps,
         graduation_hook: graduation_hook_program_id.map(|program_id| GraduationHook {
             program_id,
             configuration: graduation_hook_configuration,
@@ -643,6 +650,7 @@ fn create_curve(input: &ReceiveInput, command: Message) -> Result<Response, Erro
             policies: EventPoliciesV1 {
                 ending: state.ending_policy,
                 pause: state.pause_policy,
+                sell_fee_bps: state.sell_fee_bps,
             },
         },
     )))
@@ -652,9 +660,15 @@ fn validate_pool(
     actor: Actor,
     saved: &curve_core::PoolAccount,
 ) -> Result<(), Error> {
-    if saved.pool.ending_policy != state.ending_policy {
+    if saved.pool.ending_policy != state.ending_policy
+        || saved.pool.sell_fee_bps != state.sell_fee_bps
+    {
         return Err(Error::InvalidCustody);
     }
+    saved
+        .pool
+        .validate_policy()
+        .map_err(|_| Error::InvalidState)?;
     if saved.buy_policy != state.buy_policy
         || saved.trade_control.policy() != state.pause_policy
         || saved.namespace != state.namespace
@@ -666,7 +680,7 @@ fn validate_pool(
             ))
         || saved.token0_definition_id != state.token_definition_id
         || saved.token1_definition_id != state.collateral_definition_id
-        || saved.pool.k
+        || saved.pool.initial_k
             != state
                 .virtual_token_reserve
                 .checked_mul(state.virtual_collateral_reserve)
@@ -1413,6 +1427,7 @@ fn curve_resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
                         .map_err(|_| Error::InvalidState)?;
                     validate_pool(&state, input.receiver, &saved)?;
                     if saved.funded
+                        || saved.pool.k != saved.pool.initial_k
                         || saved.pool.virtual_reserve0 != state.virtual_token_reserve
                         || saved.pool.virtual_reserve1 != state.virtual_collateral_reserve
                         || saved.pool.real_reserve0 != state.sale_reserve
@@ -1462,6 +1477,7 @@ fn curve_resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
                                 buy_policy: state.buy_policy.clone(),
                                 pause_policy: state.pause_policy,
                                 ending_policy: state.ending_policy,
+                                sell_fee_bps: state.sell_fee_bps,
                                 namespace: state.namespace,
                                 token0_definition_id: state.token_definition_id,
                                 token1_definition_id: state.collateral_definition_id,

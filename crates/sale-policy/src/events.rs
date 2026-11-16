@@ -56,6 +56,7 @@ pub enum EventSubjectV1 {
 pub struct EventPoliciesV1 {
     pub ending: EndingPolicy,
     pub pause: PausePolicy,
+    pub sell_fee_bps: u16,
 }
 
 /// Unix-second inclusion bounds: inclusive lower bound and exclusive upper bound.
@@ -107,6 +108,8 @@ pub enum SaleEventKindV1 {
         fee_definition: [u8; 32],
         fee_amount: u128,
         fee_bps: u16,
+        retained_fee: u128,
+        sell_fee_bps: u16,
         pricing_time: Option<u64>,
     },
     PauseChanged {

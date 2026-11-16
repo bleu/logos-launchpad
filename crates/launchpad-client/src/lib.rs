@@ -69,6 +69,7 @@ pub struct CreateSaleRequest {
     pub pause_policy: PausePolicy,
     pub ending_policy: EndingPolicy,
     pub trade_mode: TradeMode,
+    pub sell_fee_bps: u16,
     pub graduation_hook: Option<GraduationHook>,
     pub name: String,
     pub uri: String,
@@ -473,6 +474,8 @@ pub fn build_create_sale_invocation(
         request.virtual_collateral_reserve,
     )?;
     factory_core::validate_curve_policies(request.ending_policy, request.end_timestamp)?;
+    curve_core::SellFeeRate::new(request.sell_fee_bps)
+        .map_err(|_| ClientError::FactoryPolicy(factory_core::Error::InvalidTerms))?;
     let a = factory_pool_addresses(sale);
     Ok(admit_factory_accounts(
         invocation(
@@ -484,6 +487,7 @@ pub fn build_create_sale_invocation(
                 pause_policy: request.pause_policy,
                 ending_policy: request.ending_policy,
                 trade_mode: request.trade_mode as u8,
+                sell_fee_bps: request.sell_fee_bps,
                 graduation_hook_program_id: request.graduation_hook.as_ref().map(|h| h.program_id),
                 graduation_hook_configuration: request
                     .graduation_hook
@@ -1334,8 +1338,9 @@ pub(crate) fn validate_factory_pool(
         || state.buy_policy != factory.buy_policy
         || state.trade_control.policy() != factory.pause_policy
         || state.pool.ending_policy != factory.ending_policy
+        || state.pool.sell_fee_bps != factory.sell_fee_bps
         || state.pool.validate_policy().is_err()
-        || Some(state.pool.k)
+        || Some(state.pool.initial_k)
             != factory
                 .virtual_token_reserve
                 .checked_mul(factory.virtual_collateral_reserve)
@@ -1356,6 +1361,8 @@ pub(crate) fn validate_factory_pool(
     Ok(())
 }
 pub(crate) fn validate_factory_state(sale: FactorySale, state: &FactoryState) -> Result<()> {
+    curve_core::SellFeeRate::new(state.sell_fee_bps)
+        .map_err(|_| ClientError::FactorySaleMismatch)?;
     factory_core::validate_curve_policies(state.ending_policy, state.end_timestamp)
         .map_err(|_| ClientError::FactorySaleMismatch)?;
     let a = factory_pool_addresses(sale);

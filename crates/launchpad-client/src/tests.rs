@@ -34,6 +34,7 @@ fn creation() -> CreateSaleRequest {
         pause_policy: curve_core::PausePolicy::Disabled,
         ending_policy: curve_core::EndingPolicy::Depletion,
         trade_mode: factory_core::TradeMode::BuyAndSell,
+        sell_fee_bps: 0,
         graduation_hook: None,
         name: "E2E token".into(),
         uri: "https://example.invalid/e2e-token.json".into(),
@@ -65,6 +66,7 @@ fn pool_snapshot() -> (curve_core::PoolAccount, curve_core::Config) {
             virtual_reserve0: 1_000,
             virtual_reserve1: 100,
             ending_policy: curve_core::EndingPolicy::Manual,
+            sell_fee_bps: 0,
             close_timestamp: None,
             close_on_depletion: None,
         })
@@ -98,6 +100,7 @@ fn valid_factory_state(sale: FactorySale) -> FactoryState {
     field!(curve_core::PausePolicy::Disabled);
     field!(curve_core::EndingPolicy::Depletion);
     field!(factory_core::TradeMode::BuyAndSell);
+    field!(0u16);
     field!(None::<factory_core::GraduationHook>);
     field!(CreationStage::Active);
     field!(SettlementStage::Ready);
@@ -275,6 +278,7 @@ fn fixed_creation() -> factory_core::FixedPriceInputs {
         pause_policy: curve_core::PausePolicy::Disabled,
         ending_policy: curve_core::EndingPolicy::Either,
         trade_mode: super::TradeMode::BuyOnly,
+        sell_fee_bps: 0,
         graduation_hook: None,
         namespace: sale.namespace,
         launch_salt: sale.launch_salt,
@@ -440,6 +444,7 @@ fn weighted_creation() -> factory_core::WeightedInputs {
         pause_policy: curve_core::PausePolicy::AuthorityControlled,
         ending_policy: curve_core::EndingPolicy::Scheduled,
         trade_mode: super::TradeMode::BuyOnly,
+        sell_fee_bps: 0,
         graduation_hook: None,
         namespace: fixed.namespace,
         launch_salt: fixed.launch_salt,
@@ -1776,7 +1781,11 @@ fn matching_factory_pool(state: &FactoryState) -> curve_core::PoolAccount {
         sale().factory_program_id,
         *factory_core::compute_factory_seed(state.namespace, state.launch_salt).as_bytes(),
     ));
-    pool.pool.k = state.virtual_token_reserve * state.virtual_collateral_reserve;
+    pool.pool.virtual_reserve0 = state.virtual_token_reserve;
+    pool.pool.virtual_reserve1 = state.virtual_collateral_reserve;
+    pool.pool.initial_k = state.virtual_token_reserve * state.virtual_collateral_reserve;
+    pool.pool.k = pool.pool.initial_k;
+    pool.pool.sell_fee_bps = state.sell_fee_bps;
     pool.pool.ending_policy = state.ending_policy;
     pool.pool.close_timestamp = state.end_timestamp;
     pool.pool.close_on_depletion = match state.ending_policy {
@@ -1799,7 +1808,7 @@ fn loaded_factory_pool_checks_all_immutable_policy_and_pricing_terms() {
             3 => changed.pool.close_on_depletion = Some(pool::TokenSide::Token1),
             4 => changed.allowed_input_token = Some(pool::TokenSide::Token1),
             5 => changed.trade_control = curve_core::TradeControl::Running,
-            6 => changed.pool.k += 1,
+            6 => changed.pool.initial_k += 1,
             7 => changed.owner_program = None,
             8 => changed.token0_definition_id = AccountId::new([99; 32]),
             9 => changed.buy_policy = fixed_creation().buy_policy,
@@ -1916,6 +1925,7 @@ fn valid_lbp_factory_state(weighted: bool) -> factory_core::LbpLaunchState {
         curve_core::EndingPolicy::Either
     });
     field!(super::TradeMode::BuyOnly);
+    field!(0u16);
     field!(Some(factory_core::GraduationHook {
         program_id: AccountId::new([19; 32]),
         configuration: vec![7, 11]
@@ -2197,6 +2207,7 @@ fn lbp_pool_snapshot(weighted: bool) -> (lbp_core::PoolAccount, curve_core::Conf
         curve_core::TradeControl::Unrestricted,
         curve_core::EndingPolicy::Scheduled,
         super::TradeMode::BuyAndSell,
+        0u16,
         None::<Actor>,
         mode,
         (true, false),
@@ -2422,5 +2433,174 @@ fn lbp_sell_builders_keep_participant_authority_reverse_holdings_and_clock() {
                 .iter()
                 .any(|a| a.program_account_id == curve_core::AUTHORITY_PROGRAM_ACCOUNT_ID)
         );
+    }
+}
+
+#[test]
+fn retained_sell_fee_is_forwarded_and_immutable_at_each_creation_stage() {
+    let mut request = creation();
+    request.sell_fee_bps = 250;
+    let call =
+        build_create_sale_invocation(sale(), AccountId::new([9; 32]), request.clone()).unwrap();
+    assert!(matches!(
+        call.instruction,
+        factory_core::Message::CreateFactoryPool {
+            sell_fee_bps: 250,
+            ..
+        }
+    ));
+    for stage in [
+        CreationStage::Minted,
+        CreationStage::Allocated,
+        CreationStage::PoolPrepared,
+        CreationStage::Active,
+    ] {
+        let mut state = valid_factory_state(sale());
+        state.creation_stage = stage;
+        state.sell_fee_bps = 250;
+        assert!(
+            super::next_creation_invocation(
+                sale(),
+                AccountId::new([9; 32]),
+                request.clone(),
+                Some(&state)
+            )
+            .is_ok()
+        );
+        for replacement in [0, 251] {
+            let mut changed = request.clone();
+            changed.sell_fee_bps = replacement;
+            assert!(matches!(
+                super::next_creation_invocation(
+                    sale(),
+                    AccountId::new([9; 32]),
+                    changed,
+                    Some(&state)
+                ),
+                Err(ClientError::LaunchParametersMismatch)
+            ));
+        }
+    }
+    for rate in [10_000, u16::MAX] {
+        request.sell_fee_bps = rate;
+        assert!(matches!(
+            build_create_sale_invocation(sale(), AccountId::new([9; 32]), request.clone()),
+            Err(ClientError::FactoryPolicy(
+                factory_core::Error::InvalidTerms
+            ))
+        ));
+        let mut state = valid_factory_state(sale());
+        state.sell_fee_bps = rate;
+        assert!(matches!(
+            validate_factory_state(sale(), &state),
+            Err(ClientError::FactorySaleMismatch)
+        ));
+    }
+}
+
+#[test]
+fn factory_pool_binds_initial_k_and_accepts_current_k_after_retained_sell() {
+    let mut state = valid_factory_state(sale());
+    state.sell_fee_bps = 1_000;
+    let mut pool = matching_factory_pool(&state);
+    let initial = pool.pool.initial_k;
+    let quote = pool
+        .pool
+        .swap_exact_input(pool::ExactInputSwap {
+            token_in: pool::TokenSide::Token0,
+            amount_in: 500,
+            min_amount_out: 0,
+            pool_fee_bps: 0,
+            protocol_fee_bps: 500,
+            now: 1,
+        })
+        .unwrap();
+    assert!(quote.retained_fee > 0);
+    assert!(pool.pool.k > initial);
+    assert_eq!(pool.pool.initial_k, initial);
+    super::validate_factory_pool(sale(), &state, &pool).unwrap();
+    let mut changed = pool.clone();
+    changed.pool.initial_k += 1;
+    assert!(matches!(
+        super::validate_factory_pool(sale(), &state, &changed),
+        Err(ClientError::FactorySaleMismatch)
+    ));
+    changed = pool.clone();
+    changed.pool.sell_fee_bps = 999;
+    assert!(matches!(
+        super::validate_factory_pool(sale(), &state, &changed),
+        Err(ClientError::FactorySaleMismatch)
+    ));
+}
+
+#[test]
+fn curve_quotes_expose_retained_fee_without_changing_buy_quotes() {
+    let (mut pool, mut config) = pool_snapshot();
+    config.protocol_fee_bps = 1_000;
+    let zero_sell = quote_sell(&pool, &config, 250, 1).unwrap();
+    let zero_buy = quote_buy_with_collateral(&pool, &config, 25, 1).unwrap();
+    assert_eq!(zero_sell.retained_fee, 0);
+    pool.pool.sell_fee_bps = 500;
+    let sell = quote_sell(&pool, &config, 250, 1).unwrap();
+    assert_eq!(
+        (
+            sell.raw_amount_out,
+            sell.protocol_fee,
+            sell.retained_fee,
+            sell.amount_out
+        ),
+        (20, 2, 1, 17)
+    );
+    assert_eq!(
+        quote_buy_with_collateral(&pool, &config, 25, 1).unwrap(),
+        zero_buy
+    );
+    assert_eq!(pool.pool.k, pool.pool.initial_k);
+    config.protocol_fee_bps = 9_500;
+    assert!(quote_sell(&pool, &config, 250, 1).is_err());
+    assert!(quote_buy_with_collateral(&pool, &config, 100, 1).is_ok());
+}
+
+#[test]
+fn lbp_quotes_expose_independent_retained_fees_and_net_slippage() {
+    for weighted in [false, true] {
+        let (mut pool, config) = lbp_pool_snapshot(weighted);
+        let request = super::LbpQuoteRequest::SellExactInput {
+            tokens_in: 10,
+            min_collateral_out: 0,
+        };
+        let zero = super::quote_lbp_trade(lbp_sale(), &pool, &config, request, 50).unwrap();
+        assert_eq!(zero.retained_fee, 0);
+        let buy = super::LbpQuoteRequest::BuyExactInput {
+            collateral_in: 25,
+            min_tokens_out: 0,
+        };
+        let zero_buy = super::quote_lbp_trade(lbp_sale(), &pool, &config, buy, 50).unwrap();
+        pool.sell_fee_bps = 500;
+        let quote = super::quote_lbp_trade(lbp_sale(), &pool, &config, request, 50).unwrap();
+        assert_eq!(quote.gross_collateral, zero.gross_collateral);
+        assert_eq!(quote.protocol_fee, zero.protocol_fee);
+        assert!(quote.retained_fee > 0);
+        assert_eq!(
+            quote.amount_out + quote.protocol_fee + quote.retained_fee,
+            quote.gross_collateral
+        );
+        assert_eq!(quote.net_collateral, quote.amount_out);
+        assert_eq!(
+            super::quote_lbp_trade(lbp_sale(), &pool, &config, buy, 50).unwrap(),
+            zero_buy
+        );
+        let too_high = super::LbpQuoteRequest::SellExactInput {
+            tokens_in: 10,
+            min_collateral_out: quote.amount_out + 1,
+        };
+        let core_error =
+            lbp_core::quote_trade(&pool, too_high, config.protocol_fee_bps, 50).unwrap_err();
+        let Err(ClientError::QuoteLbpTrade(error)) =
+            super::quote_lbp_trade(lbp_sale(), &pool, &config, too_high, 50)
+        else {
+            panic!("expected core slippage error")
+        };
+        assert_eq!(error, core_error);
     }
 }

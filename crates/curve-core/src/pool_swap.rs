@@ -181,6 +181,8 @@ pub(crate) fn finish(mut pending: Pending, receiver: Actor) -> Result<Response, 
             fee_definition: *pending.state.token1_definition_id.value(),
             fee_amount: outcome.protocol_fee,
             fee_bps: config.protocol_fee_bps,
+            retained_fee: outcome.retained_fee,
+            sell_fee_bps: pending.state.pool.sell_fee_bps,
             pricing_time: None,
         },
     ));

@@ -310,6 +310,7 @@ mod tests {
                 EndingPolicy::Either
             },
             trade_mode: crate::TradeMode::BuyOnly,
+            sell_fee_bps: 0,
             graduation_adapter: Some(Actor::new(id(70), id(71))),
             mode: if weighted {
                 PoolMode::Weighted {

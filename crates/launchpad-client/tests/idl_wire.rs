@@ -478,6 +478,7 @@ fn direct_pool_creation_keeps_namespace_owner_and_funding_terms_on_wire() {
             buy_policy: curve_core::BuyPolicy::Open,
             pause_policy: curve_core::PausePolicy::Disabled,
             ending_policy: curve_core::EndingPolicy::Either,
+            sell_fee_bps: 0x0102,
             namespace: AccountId::new([1; 32]),
             token0_definition_id: AccountId::new([2; 32]),
             token1_definition_id: AccountId::new([3; 32]),
@@ -496,7 +497,7 @@ fn direct_pool_creation_keeps_namespace_owner_and_funding_terms_on_wire() {
             now: 13,
         },
         concat!(
-            "08000003",
+            "080000030201",
             "0101010101010101010101010101010101010101010101010101010101010101",
             "0202020202020202020202020202020202020202020202020202020202020202",
             "0303030303030303030303030303030303030303030303030303030303030303",
@@ -523,6 +524,7 @@ fn direct_pool_creation_keeps_namespace_owner_and_funding_terms_on_wire() {
                 {"name":"buy_policy","type":"BuyPolicy"},
                 {"name":"pause_policy","type":"PausePolicy"},
                 {"name":"ending_policy","type":"EndingPolicy"},
+                {"name":"sell_fee_bps","type":"u16"},
                 {"name":"namespace","type":"AccountId"},
                 {"name":"token0_definition_id","type":"AccountId"},
                 {"name":"token1_definition_id","type":"AccountId"},
@@ -547,6 +549,7 @@ fn factory_creation_keeps_creator_namespace_and_saved_hook_terms_on_wire() {
             pause_policy: curve_core::PausePolicy::Disabled,
             ending_policy: curve_core::EndingPolicy::Either,
             trade_mode: 1,
+            sell_fee_bps: 0x0102,
             graduation_hook_program_id: Some(AccountId::new([1; 32])),
             graduation_hook_configuration: vec![2, 3],
             namespace: AccountId::new([4; 32]),
@@ -565,7 +568,7 @@ fn factory_creation_keeps_creator_namespace_and_saved_hook_terms_on_wire() {
             now: 15,
         },
         concat!(
-            "000000030101",
+            "0000000301020101",
             "0101010101010101010101010101010101010101010101010101010101010101",
             "020000000203",
             "0404040404040404040404040404040404040404040404040404040404040404",
@@ -592,6 +595,7 @@ fn factory_creation_keeps_creator_namespace_and_saved_hook_terms_on_wire() {
                 {"name":"pause_policy","type":"PausePolicy"},
                 {"name":"ending_policy","type":"EndingPolicy"},
                 {"name":"trade_mode","type":"u8"},
+                {"name":"sell_fee_bps","type":"u16"},
                 {"name":"graduation_hook_program_id","type":"Option<AccountId>"},
                 {"name":"graduation_hook_configuration","type":"Vec<u8>"},
                 {"name":"namespace","type":"AccountId"},{"name":"launch_salt","type":"[u8;32]"},
@@ -1233,6 +1237,7 @@ fn weighted_factory_messages_keep_distinct_tags_and_normalized_weights() {
         pause_policy: curve_core::PausePolicy::AuthorityControlled,
         ending_policy: curve_core::EndingPolicy::Scheduled,
         trade_mode: factory_core::TradeMode::BuyOnly,
+        sell_fee_bps: 0x0102,
         graduation_hook: None,
         namespace: creator,
         launch_salt: [6; 32],
@@ -1254,7 +1259,7 @@ fn weighted_factory_messages_keep_distinct_tags_and_normalized_weights() {
     let message = factory_core::Message::CreateWeightedLbp {
         inputs: inputs.clone(),
     };
-    let mut expected = vec![8, 0, 1, 1, 0, 0];
+    let mut expected = vec![8, 0, 1, 1, 0, 2, 1, 0];
     expected.extend_from_slice(creator.value());
     expected.extend_from_slice(&[6; 32]);
     expected.extend_from_slice(&[1, 0, 0, 0, b'W', 1, 0, 0, 0, b'u']);
@@ -1418,7 +1423,11 @@ fn immutable_policy_fields_follow_controls_except_inside_the_curve_pool() {
             "{module}::{name}"
         );
         if module == "pool" {
-            assert_eq!(fields[index + 2]["name"], "close_timestamp");
+            assert_eq!(
+                fields[index + 2],
+                json!({"name":"sell_fee_bps","type":"u16"})
+            );
+            assert_eq!(fields[index + 3]["name"], "close_timestamp");
         }
     }
     let outer = schema["modules"]["curve"]["PoolAccount"]["fields"]
@@ -1439,6 +1448,7 @@ fn fixed_pool_state_tuple_places_policies_after_trade_control() {
         curve_core::TradeControl::Unrestricted,
         lbp_core::EndingPolicy::Either,
         factory_core::TradeMode::BuyOnly,
+        0u16,
         None::<lee_core::account::Actor>,
         lbp_core::PoolMode::FixedPrice,
         (true, false),
@@ -1545,6 +1555,7 @@ fn fixed_pool_terminal_states_use_progress_tags_instead_of_boolean_completion() 
             curve_core::TradeControl::Unrestricted,
             lbp_core::EndingPolicy::Either,
             factory_core::TradeMode::BuyOnly,
+            0u16,
             None::<lee_core::account::Actor>,
             lbp_core::PoolMode::FixedPrice,
             (true, true),
@@ -1790,6 +1801,11 @@ fn immutable_graduation_terms_follow_the_ending_policy_on_wire() {
         );
         assert_eq!(
             fields[index + 2],
+            json!({"name":"sell_fee_bps","type":"u16"}),
+            "{module}::{name}"
+        );
+        assert_eq!(
+            fields[index + 3],
             json!({"name":next,"type":ty}),
             "{module}::{name}"
         );
@@ -1852,6 +1868,7 @@ fn weighted_pool_keeps_the_adapter_and_outstanding_seed_separate_from_progress()
         curve_core::TradeControl::Unrestricted,
         lbp_core::EndingPolicy::Scheduled,
         factory_core::TradeMode::BuyOnly,
+        0u16,
         Some(adapter),
         lbp_core::PoolMode::Weighted {
             token_weight_start: lbp_core::WEIGHT_TOTAL / 2 + 1,
@@ -1886,7 +1903,7 @@ fn weighted_pool_keeps_the_adapter_and_outstanding_seed_separate_from_progress()
     bytes.push(0);
     let pool = lbp_core::PoolAccount::decode(&bytes).unwrap();
     assert!(!pool.closure_observed);
-    assert_eq!(&bytes[..5], &[0, 0, 1, 0, 1]);
+    assert_eq!(&bytes[..7], &[0, 0, 1, 0, 0, 0, 1]);
     assert_eq!(pool.graduation_adapter, Some(adapter));
     assert!(!pool.seed_returned);
     assert_eq!(pool.outstanding_seed().unwrap(), 100);
@@ -1995,13 +2012,15 @@ fn event_engines_subjects_and_policy_fields_have_fixed_wire_order() {
         EventPoliciesV1 {
             ending: curve_core::EndingPolicy::Scheduled,
             pause: curve_core::PausePolicy::AuthorityControlled,
+            sell_fee_bps: 0x0304,
         },
-        "0101",
+        "01010403",
     );
     assert_eq!(
         schema()["modules"]["events"]["EventPoliciesV1"]["fields"],
         json!([
-            {"name":"ending","type":"EndingPolicy"},{"name":"pause","type":"PausePolicy"}
+            {"name":"ending","type":"EndingPolicy"},{"name":"pause","type":"PausePolicy"},
+            {"name":"sell_fee_bps","type":"u16"}
         ])
     );
 }
@@ -2012,6 +2031,7 @@ fn event_kinds_keep_creation_trade_and_settlement_amounts_distinct_on_wire() {
     let policies = EventPoliciesV1 {
         ending: curve_core::EndingPolicy::Scheduled,
         pause: curve_core::PausePolicy::AuthorityControlled,
+        sell_fee_bps: 0x0304,
     };
     let a = "01".repeat(32);
     let b = "02".repeat(32);
@@ -2036,7 +2056,7 @@ fn event_kinds_keep_creation_trade_and_settlement_amounts_distinct_on_wire() {
             0,
             "Created",
             format!(
-                "{a}{b}{c}{d}{}{}{}{}000109000000000000000101",
+                "{a}{b}{c}{d}{}{}{}{}0001090000000000000001010403",
                 n(5),
                 n(6),
                 n(7),
@@ -2054,7 +2074,7 @@ fn event_kinds_keep_creation_trade_and_settlement_amounts_distinct_on_wire() {
             },
             1,
             "Prepared",
-            format!("{a}{b}{c}{}{}0101", n(5), n(6)),
+            format!("{a}{b}{c}{}{}01010403", n(5), n(6)),
         ),
         (
             SaleEventKindV1::Activated {
@@ -2079,17 +2099,20 @@ fn event_kinds_keep_creation_trade_and_settlement_amounts_distinct_on_wire() {
                 fee_definition: [4; 32],
                 fee_amount: 9,
                 fee_bps: 0x0102,
+                retained_fee: 11,
+                sell_fee_bps: 0x0304,
                 pricing_time: Some(10),
             },
             3,
             "Trade",
             format!(
-                "{a}01{b}{c}{}{}{}{}{d}{}0201010a00000000000000",
+                "{a}01{b}{c}{}{}{}{}{d}{}0201{}0403010a00000000000000",
                 n(5),
                 n(6),
                 n(7),
                 n(8),
-                n(9)
+                n(9),
+                n(11)
             ),
         ),
         (
@@ -2347,4 +2370,43 @@ fn lbp_sells_append_tags_without_membership_or_weighted_caller_time() {
             &format!("06{}{tag:02x}{payload}", "03".repeat(32)),
         );
     }
+}
+
+#[test]
+fn retained_sell_fee_and_initial_invariant_have_explicit_schema_slots() {
+    let schema = schema();
+    let fields = schema["modules"]["factory"]["FactoryState"]["fields"]
+        .as_array()
+        .unwrap();
+    let index = fields
+        .iter()
+        .position(|field| field["name"] == "trade_mode")
+        .unwrap();
+    assert_eq!(
+        fields[index + 1],
+        json!({"name":"sell_fee_bps","type":"u16"})
+    );
+    let fields = schema["modules"]["pool"]["Pool"]["fields"]
+        .as_array()
+        .unwrap();
+    let index = fields
+        .iter()
+        .position(|field| field["name"] == "k")
+        .unwrap();
+    assert_eq!(fields[index - 1], json!({"name":"initial_k","type":"u128"}));
+    let trade = variant("events", "SaleEventKindV1", "Trade");
+    let fields = trade["fields"].as_array().unwrap();
+    let index = fields
+        .iter()
+        .position(|field| field["name"] == "fee_bps")
+        .unwrap();
+    assert_eq!(
+        fields[index + 1],
+        json!({"name":"retained_fee","type":"u128"})
+    );
+    assert_eq!(
+        fields[index + 2],
+        json!({"name":"sell_fee_bps","type":"u16"})
+    );
+    assert_eq!(fields[index + 3]["name"], "pricing_time");
 }

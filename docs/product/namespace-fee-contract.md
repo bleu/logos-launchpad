@@ -22,7 +22,7 @@ Each namespace has one administration record. The [administration module](../adr
 
 Sale and namespace accounts must have the correct addresses and program owners. Token account checks cover the owner, token definition, expected address, token-program data, and permission to use the account.
 
-Curve accounts must hold enough collateral for the real reserve and outstanding fees. During trading, fixed-price and weighted sale vaults must satisfy `vault >= recorded collateral + accrued fees`. Weighted pricing collateral equals seed-inclusive recorded collateral; fees and surplus are excluded. Fee records contain trade fees; extra deposits remain surplus. Token creation, fund transfers, namespace settings, and pause/freeze controls have separate authority checks. See [ADR 0028](../adr/0028-token-custody-and-freeze.md).
+Curve accounts must hold enough collateral for the real reserve and outstanding fees. During trading, fixed-price and weighted sale vaults must satisfy `vault >= recorded collateral + accrued fees`. Weighted pricing collateral equals seed-inclusive recorded collateral; accrued namespace fees and surplus are excluded. Fee records contain namespace fees; extra deposits remain surplus. Token creation, fund transfers, namespace settings, and pause/freeze controls have separate authority checks. See [ADR 0028](../adr/0028-token-custody-and-freeze.md).
 
 ## Fees and collection
 
@@ -31,13 +31,13 @@ Fees use collateral: token1 for curve factory sales. Namespace creation and upda
 | Trade | Calculate the fee on | Pricing and payment |
 | --- | --- | --- |
 | Curve buy | Full collateral input | Use input after the fee for pricing and the real reserve |
-| Curve sell | Collateral output before the fee | Pay the participant after the fee; remove the full output from the real reserve |
+| Any permitted sell | Gross collateral output | Pay collateral after namespace and retained fees ([ADR 0015](../adr/0015-fee-accounting.md)) |
 | Fixed-price sale buy | Gross collateral input | Deduct the fee before pricing; exact output grosses up required net collateral; creator proceeds are net ([ADR 0035](../adr/0035-fixed-price-swap-fees.md)) |
 | Weighted sale buy | Gross collateral input | Price net input; exact output grosses up required net collateral; record net proceeds plus the seed ([ADR 0030](../adr/0030-lbp-pricing-collateral.md)) |
 
-Execution checks trade amounts, rounding, price limits, and available funds. A fee change affects later trades; amounts already recorded stay fixed. Trader-borne fixed-price fees are an additional RFP-016 departure with external status `To be reviewed by Logos team`. [ADR 0031](../adr/0031-shared-launch-factory.md) replaces weighted creator-borne incidence with the same collateral buy-input/sell-output namespace fee rule. Retained creator fees remain future work. Fixed-price and weighted-sale fee departures remain `To be reviewed by Logos team`.
+Execution checks trade amounts, rounding, price limits, and available funds. A fee change affects later trades; amounts already recorded stay fixed. Trader-borne fixed-price fees are an additional RFP-016 departure with external status `To be reviewed by Logos team`. [ADR 0031](../adr/0031-shared-launch-factory.md) replaces weighted creator-borne incidence with the same collateral buy-input/sell-output namespace fee rule. Fixed-price and weighted-sale fee departures remain `To be reviewed by Logos team`.
 
-Fees can be collected at any time. Collection pays all outstanding fees, clears that record, and increases total collected fees by the amount paid. If the curve pool is the current treasury, its fees are already in the destination collateral vault: clear outstanding fees and record collection without a transfer to itself. Reserve withdrawal leaves those collected fees in that vault. Collecting a zero balance succeeds and leaves the records unchanged. Repeated collection gives the same result until a trade adds new fees.
+Namespace fees can be collected at any time. Collection pays all outstanding namespace fees, clears that record, and increases total collected fees by the amount paid. If the curve pool is the current treasury, its fees are already in the destination collateral vault: clear outstanding fees and record collection without a transfer to itself. Reserve withdrawal leaves those collected fees in that vault. Collecting a zero balance succeeds and leaves the records unchanged. Repeated collection gives the same result until a trade adds new fees.
 
 Settlement collects remaining fees in the same transaction as the related reserve or proceeds payment. The payment uses the balance after collection. If that stage fails, its state and balances stay unchanged. Earlier stages stay complete. The full process can use several transactions. Completed payments and token burns are recorded so a retry is safe.
 
