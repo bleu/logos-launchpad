@@ -69,6 +69,7 @@ fn closed_sale(
         .call(
             &creator,
             factory_core::Message::CreateFactoryPool {
+                buy_policy: curve_core::BuyPolicy::Open,
                 trade_mode: 0,
                 graduation_hook_program_id: hook,
                 graduation_hook_configuration: configuration,
@@ -125,6 +126,7 @@ fn closed_sale(
             fixture.pool,
             &key(49),
             curve_core::Message::SwapExactOutput {
+                membership: None,
                 amount_out: 100,
                 max_amount_in: 125,
                 token_in: COLLATERAL,

@@ -14,6 +14,7 @@ fi
 temporary="$(mktemp -d)"
 trap 'rm -rf "$temporary"' EXIT
 cargo +"$ACTOR_RUST_VERSION" run --quiet --manifest-path packages/lez-compat/Cargo.toml -p lez-compat-tools --locked -- idl-source \
+  eligibility_policy=crates/eligibility-policy/src/lib.rs \
   curve=crates/curve-core/src/lib.rs \
   pool=crates/pool/src/lib.rs \
   factory=crates/factory-core/src/lib.rs \

@@ -2,19 +2,19 @@
 
 Status: Product and recovery requirements accepted; platform, wallet and proof verification pending.
 
-Date: 2026-10-01.
+Date: 2026-10-01; allowlist amendments: 2026-11-09 and 2026-11-10 ([ADR 0021](../adr/0021-modes-and-open-limits.md)).
 
 This is the shared private-flow specification for curve buys, curve sells, fixed-price sale buys and weighted sale buys. It defines required behavior, not implemented production behavior. The selected actor revision's temporary token support has no private holdings. Existing private purchase and authority helpers return explicit unsupported errors. See [ADR 0018](../adr/0018-private-participation.md), [migration limits](../adr/0034-lez-v04-migration.md) and [allowlist policy](../adr/0021-modes-and-open-limits.md).
 
 ## Transaction contract
 
-A private route uses one transaction. It funds fresh single-use public accounts, deshields the input, executes the public trade, and returns the received tokens, unused input and unused gas to participant-controlled private accounts. Actual fees are excluded from the return. Funding, trade and returns must commit together. There is no separately committed trade followed by a re-shield retry, and no separate-transaction fallback.
+A private route uses one transaction: deshield funding, execute the public trade, then shield received tokens, unused input and unused gas into participant-controlled private accounts. The wallet prefers fresh public trading accounts; an allowlisted buy selects a pre-approved public trader as described below. Actual fees are excluded from the return. Funding, trade and returns must commit together. There is no separately committed trade followed by a re-shield retry, and no separate-transaction fallback.
 
 A route cannot report compliant success while user funds remain public. If a platform account rule or call limit prevents complete returns, record a compatibility blocker. Do not silently retain a public balance or weaken the return rule. Actual transaction fees may still be charged after a rejected execution; the selected platform's fee behavior needs verification. Application-state rollback does not promise a fee refund.
 
 Native gas and custom tokens may require different sources and private destinations. Each source must permit the executing program to spend that balance. The transaction must prove the required account and program authority. A guest's authorization flag alone is insufficient. Funding assets and gas through separate calls inside one transaction is permitted; funding them through separate transactions is not.
 
-The SDK requests fresh public accounts through the wallet integration for each new attempt. It does not reuse accounts from another attempt. The provider keeps control of the fresh accounts until the outcome is resolved. Fresh account generation alone does not prevent a caller outside the SDK from reusing an address later.
+For an allowlisted buy, the wallet selects an unused approved public trader from the participant's precomputed batch and reserves it for the attempt. For other private trades, it prepares fresh public accounts. The provider must verify control and usability before approval and retain protected account derivation, membership and attempt associations for recovery. One-address-per-attempt is a privacy preference, not an on-chain restriction. If no unused approved address remains, report that limit; do not silently reuse an address or select an unapproved one. Intentional approved-address reuse needs a privacy warning and normal current-state authorization. Keep an unresolved attempt's accounts reserved and reconcile it before preparing a replacement with another address. Exact provider APIs remain unverified.
 
 All private destinations must be controlled by the participant and compatible with the asset's account rules. The SDK validates private-account type, token definition, current state where required, and control through the provider before approval. Unknown, foreign or incompatible destinations are rejected. A bare account identifier is not proof of control. Exact validation APIs and private-state access remain wallet integration requirements.
 
@@ -37,21 +37,21 @@ Return accounting uses the actual trade input and output, including the mechanis
 
 Public-state changes can invalidate a private proof even when the displayed price stays within the trade limit. Rebuilding requires fresh state, quote, funding checks and any required proof. Keep explicit limits unless the participant changes them. Never silently lower minimum output, raise maximum input or request an unrestricted trade. Changed transaction contents require renewed wallet approval.
 
-## Fixed-price and weighted sale allowlist policy
+## Allowlist policy
 
-These rules apply only when a fixed-price or weighted sale allowlist is enabled. They are accepted product requirements. The proof construction, identity format, enrollment tooling and verifier remain unselected and unverified.
+Optional allowlists apply to buys in all three pricing engines under [ADR 0021](../adr/0021-modes-and-open-limits.md). The 2026-11-10 amendment replaces private approved-account enrollment with pre-approved public traders. The [plain-English design](allowlist-proof.md) explains that decision; the earlier checking-account protocol is superseded. The maintained `crates/eligibility-policy` module now enforces public buy admission in all three engines. Signed development tests cover native `Execute` authority and replay rejection; see [public execution evidence](../../plans/allowlist-program-integration.md#public-execution-evidence). Weighted public buys use the pinned upstream clock, with the limits in [ADR 0026](../adr/0026-lbp-clock-and-poke.md). Wallet support and complete private execution remain unverified.
 
-- Each approved participant has one successful purchase per sale. A purchase below the limit still consumes that purchase allowance.
-- Public and private routes use the same allowance. Switching route, receiving another credential or changing the public trade account must not grant another purchase for the same approved identity.
-- Membership information alone cannot transfer permission. The participant must prove control of the approved account, and that permission must authorize the actual purchase.
-- One common public collateral limit applies to all allowed participants. It limits the buyer's collateral input under the accepted fixed-price or weighted sale pricing and fee rules. Native transaction charges are separate.
-- The participant list stays private. Public verification must not require publication of the roster or a persistent private participant identifier.
-- Allowance consumption commits with the successful purchase. A rejected transaction does not consume the purchase allowance, even if actual transaction fees are charged.
-- Invalid, copied, replayed or mismatched participation proofs must not permit a purchase. Concurrent public and private attempts may produce at most one successful purchase for the approved identity and sale.
+- Each sale has a fixed private list of regular public trading accounts. Participants can precompute batches locally and send only public addresses to the creator before sale creation locks the context/root in the initial terms. Staged setup cannot change that policy. No keys or private funding/return account IDs go to the creator. Protected membership delivery happens once; buying must not depend on the creator's service afterward. There is no list update, replenishment or revocation feature in this version.
+- Both funding routes must prove membership and control of the actual approved public trader, bound to the sale, purchase and destinations. There is no separate approval-only or private checking account. Membership information alone cannot transfer permission, and another address derived by the same wallet is not automatically approved.
+- The wallet prefers an unused approved address per attempt. Approved addresses can still make repeated and independent concurrent buys when normal native state permits. There is no allowlist collateral cap, purchase counter or consumed allowance. Normal balances, inventory, reserves, pricing, fees, trade limits, pause and end rules still apply.
+- The full roster is not published, but the trader address and trade effects are public. The membership path also reveals the used salt, index and sibling hashes; structure and roster-size secrecy are not guaranteed. Keep unused salts and enrollment bundles protected. The creator can link addresses submitted together; address reuse links purchases publicly. Fresh addresses do not guarantee unlinkability. Private funding/return IDs and private proof secrets stay protected, and no persistent cross-sale private participant ID is required.
+- Membership data may be reused for a new authorized purchase by the same approved trader. Reject invalid proofs, authorization copied to a different trader, sale, purchase or destination, and transaction replay. Replaying the same transaction must not create another trade.
 
-Enforce membership, account control, collateral limits and allowance consumption on-chain for both routes. SDK checks alone are insufficient. The selected proof approach must establish sale-scoped replay protection without creating a persistent cross-sale private identity. DistributionX remains a reference, not the selected method.
+List capacity counts addresses, not people. Exhausting unused batch addresses must be reported; deliberate reuse after a privacy warning remains permitted. This does not weaken required private funding and complete private returns.
 
-Approved-account control does not prove that each account belongs to a different person. It does not prevent someone from sharing full account keys. Do not claim human uniqueness, identity checks or protection against that key sharing. Approved-identity deduplication and replacement rules need definition in the eligibility-proof investigation; multiple credentials for one approved identity must not create multiple allowances.
+Enforce membership and purchase-bound account control on-chain for both routes. SDK checks alone are insufficient. Signatures, nonces and native private-state nullifiers remain required where applicable; no sale-level one-buy nullifier or allowance state is required. DistributionX remains a reference, not the selected method. This policy gates buys only and adds no sells.
+
+Approved-account control does not prove that each account belongs to a different person or prevent full-key sharing. Do not claim human uniqueness or identity checks.
 
 ## Responsibilities
 
@@ -62,7 +62,7 @@ Approved-account control does not prove that each account belongs to a different
 | Wallet provider | Select accounts, approve private balance access, obtain transaction approval, sign, submit and provide outcome and private-state synchronization support. |
 | On-chain programs and platform | Enforce custody, mechanism and allowlist rules; validate the complete transaction; commit or reject its application changes. |
 
-User keys stay outside the shared core. Wallet state, private witnesses and proving data need a protected wallet/proving boundary. The final provider interface and the location of proving remain integration questions. Do not assume that LP-0021 supplies all required methods. See [ADR 0029](../adr/0029-wallet-integration.md).
+User keys stay outside the shared core. Wallet state, private witnesses and proving data need a protected participant-local wallet/proving boundary. Proving must run locally, without a remote prover or remote key custody. The final provider interface remains an integration question. Do not assume that LP-0021 supplies all required methods. See [ADR 0029](../adr/0029-wallet-integration.md).
 
 ## Progress states
 
@@ -104,7 +104,7 @@ Before wallet approval, show the sale and operation, quoted input/output, explic
 
 State that amounts, timing, public pool state and trade effects remain visible. Fresh public accounts do not hide those effects or prove that transactions cannot be linked. Explain that an unknown outcome blocks replacement until reconciliation and that wallet synchronization can remain pending after a confirmed trade.
 
-For an allowlisted sale, show the common public collateral limit and the one-successful-purchase rule across both routes. State that approved-account control is required. Public buying exposes the public trading account; a private roster does not hide that public account or all facts observers may infer from its trades.
+For an allowlisted sale, state that membership and approved-public-trader control must authorize each buy. Do not show an allowlist collateral cap, remaining allowance or purchase counter. The approved public address is visible even when the purchase uses private funds. Explain that the creator can link the submitted batch and that reusing an address links its purchases. A private roster and fresh addresses do not hide timing, amounts or all facts observers may infer. The creator does not need private funding/return IDs or account keys.
 
 The SDK applies its private-route account and return policies. Callers who construct other transactions can bypass those client policies and expose accounts or balances. They cannot bypass on-chain custody, sale or allowlist enforcement. Do not promise SDK-enforced privacy for such callers.
 
@@ -121,7 +121,7 @@ These are required tests for later implementation. They have not been executed f
 | Fixed-price sale private buy succeeds | Fixed-price sale execution follows current chain state. Pricing uses collateral after fees; exact output grosses up required net collateral. Returns use actual gross input spent without charging the fee twice. All user returns end private. |
 | Weighted sale private buy succeeds | Weighted sale execution follows current chain state. Full buyer collateral enters pricing; creator-borne fees are not charged twice. All user returns end private. |
 | Sale closes, pauses or rejects selling | Current mechanism checks reject the trade. No deshield or trade application changes commit. Account for any actual transaction charge separately. |
-| Collateral funding fails | No funding, trade or return application changes commit. No purchase allowance is consumed. |
+| Collateral funding fails | No funding, trade or return application changes commit. Account for any actual transaction charge separately. |
 | Native funding fails or uses the wrong program owner | Reject the complete transaction. Do not treat successful collateral funding as a completed stage. |
 | Fresh-account setup or source authorization fails | Reject mismatched accounts, token definitions and unauthorized spending. No partial setup/funding is accepted as route success. |
 | Trade fails its limit or reserve checks | No deshield, trade or return application changes commit. Keep participant-selected limits. |
@@ -139,23 +139,31 @@ These are required tests for later implementation. They have not been executed f
 | Known terminal failure permits retry | Synchronize, refresh state, quote, bounds, funding and proof, then obtain approval for the new attempt. Report actual charges accurately. |
 | Quote or private proof becomes stale | Refresh after a known rejection. A pool-state mismatch may reject the proof even when the price bound would pass. Never weaken limits silently. |
 | Provider lacks required combined-transaction or recovery support | Report an integration blocker. No separate-transaction fallback and no key-custody workaround. |
-| Allowlisted public buy followed by private buy, or the reverse | First successful purchase consumes the shared allowance. The second is rejected. |
-| Concurrent public/private buys or duplicate credentials | At most one purchase commits for the same approved identity and sale. A rejected attempt does not consume another allowance. |
+| Allowlisted public buy followed by private buy, or the reverse, for each pricing engine | Accept both genuine authorized purchases when normal sale and funding checks pass. Reusing the membership path does not consume permission. |
+| Independent concurrent buys using approved public traders | Both may commit when each has valid purchase-bound authorization, sufficient funding and compatible native and pool state. No one-buy guard rejects them. Reuse of a nonce or private spend still fails. |
+| Batch of public accounts is prepared before list lock | Verify local control and usability, enroll each address and deliver matching membership data. Send no keys or private funding/return IDs to the creator. |
+| Approved public trader buys with private funds | The actual public trader is the approved account. Deshield, buy and shield output, unused input and unused gas in one transaction. Require no private approved-account ID or separate checking account. |
+| A different address from the same wallet is used | Reject an unapproved trader even if another account in that wallet is approved. |
+| The wallet selects the next batch address | Prefer an unused approved address and retain the account/attempt association. If the original attempt is unresolved, block a replacement through another address. |
+| No unused approved addresses remain | Report the limit. Do not update the locked list, silently reuse an address or choose an unapproved one. Intentional reuse after a privacy warning can pass normal on-chain checks. |
+| The same approved public address makes another authorized buy | Accept when normal state and sale checks pass. Approval is not consumed; disclose that its purchases are linked. |
 | Membership information is shared without approved-account control | The other account cannot purchase using that information alone. |
-| Invalid, replayed or wrong-sale proof is used | Reject purchase and do not consume an unused allowance. |
-| Purchase is below, at or above the common collateral limit | Apply the same public cap to both routes. A successful smaller purchase consumes the one purchase; an above-cap purchase is rejected. |
-| Logs, events and progress records are inspected | No private roster, persistent private participant identifier, account keys or private witness material is exposed. Verify the limited local journal separately. |
+| Proof has the wrong approved account, sale, purchase or destination | Reject the purchase, including copied authorization for changed transaction contents. |
+| The same transaction is replayed | No second trade occurs. Signatures, nonces and native private-state replay protections remain effective. |
+| Creator service is unavailable after membership delivery | A new authorized purchase can use locally held membership data and local proving. No per-buy creator request, remote prover or remote key custody is required. |
+| Allowlisted buy has a different collateral amount or follows earlier buys | Apply normal balances, reserves, pricing, fees and trade limits without an allowlist cap or purchase counter. Show no remaining allowance. |
+| Logs, events and progress records are inspected | No full private roster, private funding/return IDs, account keys or private witness material is exposed. Used approved public addresses and their public effects remain visible. Verify the limited local journal separately. |
 | Caller bypasses SDK policies | On-chain sale and allowlist rules still hold. Do not claim client privacy policies were enforced for that caller. |
 
-For transaction failures, inspect the selected platform's pool state, public balances, private commitments/nullifiers and allowance state. Verify rollback of application changes and separately report fees and replay-state effects. Include deliberate late-return failures; a proof-generation error before the trade is reached does not establish rollback of the full route.
+For transaction failures, inspect the selected platform's pool state, public balances and private commitments/nullifiers. Verify rollback of application changes and separately report fees and replay-state effects. Include deliberate late-return failures; a proof-generation error before the trade is reached does not establish rollback of the full route.
 
 ## Evidence still required
 
 - A complete successful route on the selected platform, within its total-call budget and with correct native/token source ownership.
 - Return accounting for actual input, output, protocol fees and unused gas, including any platform account-balance constraints.
 - Wallet support for the whole transaction, understandable approval, participant-controlled targets, recovery references, confirmation and private-state synchronization.
-- A selected, tested allowlist proof method with private membership, account binding, common-cap enforcement, sale-scoped replay protection and cross-route allowance consumption.
-- Enrollment, approved-identity deduplication, credential delivery and loss/account-change behavior that do not bypass the one-purchase rule.
+- Private-funded execution of the selected membership method and native account authorization bound to the actual approved public trader, sale and purchase for all pricing engines. Public-funded execution has separate signed evidence linked above. Private funding/return IDs must stay protected without a separate private eligibility-checking account.
+- Precomputed public-account batches, fixed-list enrollment and protected membership delivery, address selection and recovery, repeat and concurrent authorized buys, transaction replay rejection and no per-buy creator dependency.
 - Reconciliation and restart tests covering lost responses, missing hashes, authoritative terminal outcomes and no duplicate trades.
 - Agreement with the accepted custody, fee, clock, event and SDK interface decisions before final design acceptance.
 

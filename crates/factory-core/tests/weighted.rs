@@ -13,6 +13,7 @@ fn id(n: u8) -> AccountId {
 }
 fn inputs() -> WeightedInputs {
     WeightedInputs {
+        buy_policy: curve_core::BuyPolicy::Open,
         namespace: id(40),
         launch_salt: [3; 32],
         name: "Weighted".into(),
@@ -121,6 +122,9 @@ fn finish_clock(input: &ReceiveInput, mut response: Response) -> Result<Response
 fn minted(release: CreatorAllocationRelease) -> (ReceiveInput, Response) {
     let mut value = inputs();
     value.allocation_release = release;
+    minted_with_terms(value)
+}
+fn minted_with_terms(value: WeightedInputs) -> (ReceiveInput, Response) {
     let mut input = creation(value);
     let mut response = handle(&input).unwrap();
     for bytes in [config(), definition()] {
@@ -188,9 +192,33 @@ fn advance(
     finish_clock(&input, response)
 }
 fn prepared(release: CreatorAllocationRelease) -> (ReceiveInput, Response, Vec<u8>) {
-    let (input, response) = minted(release);
+    let mut terms = inputs();
+    terms.allocation_release = release;
+    prepared_with_terms(terms)
+}
+fn prepared_with_terms(terms: WeightedInputs) -> (ReceiveInput, Response, Vec<u8>) {
+    let policy = terms.buy_policy.clone();
+    let (input, response) = minted_with_terms(terms);
+    assert_eq!(
+        LbpLaunchState::decode(response.post_state.as_ref().unwrap())
+            .unwrap()
+            .buy_policy,
+        policy
+    );
     let allocated = advance(&input, &response, vec![]).unwrap();
+    assert_eq!(
+        LbpLaunchState::decode(allocated.post_state.as_ref().unwrap())
+            .unwrap()
+            .buy_policy,
+        policy
+    );
     let prepared = advance(&input, &allocated, vec![]).unwrap();
+    assert_eq!(
+        LbpLaunchState::decode(prepared.post_state.as_ref().unwrap())
+            .unwrap()
+            .buy_policy,
+        policy
+    );
     let call = prepared
         .sync_messages
         .iter()
@@ -352,5 +380,97 @@ fn fixed_price_payout_commands_cannot_release_weighted_sale_funds() {
     ] {
         input.message = borsh::to_vec(&message).unwrap();
         assert_eq!(handle(&input).err(), Some(Error::InvalidState));
+    }
+}
+
+fn allowlisted_inputs() -> WeightedInputs {
+    let mut terms = inputs();
+    let factory = factory_core::compute_factory_pda(terms.namespace, id(7), terms.launch_salt);
+    let pool = lbp_core::compute_pool_pda(
+        terms.namespace,
+        terms.lbp_program_id,
+        factory_core::compute_definition_pda(terms.namespace, id(7), terms.launch_salt),
+        terms.collateral_definition_id,
+        factory,
+    );
+    terms.buy_policy = curve_core::BuyPolicy::Allowlist(curve_core::AllowlistPolicy {
+        version: 1,
+        namespace: *terms.namespace.value(),
+        sale_policy_id: *pool.value(),
+        root: [9; 32],
+    });
+    terms
+}
+
+#[test]
+fn weighted_creation_saves_the_initial_bound_buy_policy() {
+    let terms = allowlisted_inputs();
+    let response = handle(&creation(terms.clone())).unwrap();
+    assert_eq!(
+        LbpLaunchState::decode(response.post_state.as_ref().unwrap())
+            .unwrap()
+            .buy_policy,
+        terms.buy_policy
+    );
+}
+
+#[test]
+fn weighted_policy_is_immutable_through_setup_funding_and_retry() {
+    let terms = allowlisted_inputs();
+    let policy = terms.buy_policy.clone();
+    let (input, prepared, bytes) = prepared_with_terms(terms);
+    let state = LbpLaunchState::decode(prepared.post_state.as_ref().unwrap()).unwrap();
+    let pool = lbp_core::PoolAccount::decode(&bytes).unwrap();
+    assert_eq!(pool.buy_policy, policy);
+    for case in 0..3 {
+        let mut changed = pool.clone();
+        match case {
+            0 => changed.buy_policy = curve_core::BuyPolicy::Open,
+            1 => {
+                let curve_core::BuyPolicy::Allowlist(policy) = &mut changed.buy_policy else {
+                    unreachable!()
+                };
+                policy.root = [99; 32];
+            }
+            _ => {}
+        }
+        let result = advance(
+            &input,
+            &prepared,
+            vec![
+                borsh::to_vec(&changed).unwrap(),
+                holding(state.pool_id, state.token_definition_id, 0),
+                holding(state.pool_id, state.collateral_definition_id, 0),
+                holding(id(42), state.collateral_definition_id, 100),
+            ],
+        );
+        if case < 2 {
+            assert_eq!(result.err(), Some(Error::InvalidState), "case {case}");
+        } else {
+            let response = result.unwrap();
+            let complete = LbpLaunchState::decode(response.post_state.as_ref().unwrap()).unwrap();
+            assert_eq!(complete.buy_policy, policy);
+            assert_eq!(complete.creation_stage, LbpCreationStage::Complete);
+        }
+    }
+}
+
+#[test]
+fn weighted_creation_rejects_wrong_policy_version_namespace_or_pool() {
+    for case in 0..3 {
+        let mut terms = allowlisted_inputs();
+        let curve_core::BuyPolicy::Allowlist(policy) = &mut terms.buy_policy else {
+            unreachable!()
+        };
+        match case {
+            0 => policy.version = 2,
+            1 => policy.namespace = [99; 32],
+            _ => policy.sale_policy_id = [99; 32],
+        }
+        assert_eq!(
+            handle(&creation(terms)).err(),
+            Some(Error::InvalidTerms),
+            "case {case}"
+        );
     }
 }

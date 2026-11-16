@@ -12,6 +12,7 @@ fn id(n: u8) -> AccountId {
 fn prepare() -> ReceiveInput {
     let factory = AccountId::for_public_pda(&id(7), &PdaSeed::new([3; 32]));
     let inputs = FixedPricePoolInputs {
+        buy_policy: curve_core::BuyPolicy::Open,
         namespace: id(40),
         namespace_program_id: id(6),
         factory_program_id: id(7),
@@ -436,6 +437,7 @@ fn operation(
 }
 fn exact_in(amount_in: u128) -> Message {
     Message::BuyExactInput {
+        membership: None,
         amount_in,
         min_amount_out: 0,
         now: 100,
@@ -474,6 +476,7 @@ fn buy_windows_keep_zero_start_no_end_and_reject_overflow() {
     state.start_timestamp = u64::MAX;
     state.end_timestamp = None;
     let message = Message::BuyExactInput {
+        membership: None,
         amount_in: 5,
         min_amount_out: 0,
         now: u64::MAX,
@@ -497,6 +500,7 @@ fn buys_bind_inclusion_to_saved_start_and_end() {
     for message in [
         exact_in(5),
         Message::BuyExactOutput {
+            membership: None,
             amount_out: 3,
             max_amount_in: 6,
             now: 100,
@@ -525,6 +529,7 @@ fn buys_deduct_live_fees_before_pricing_and_gross_up_exact_output() {
         (exact_in(101), 100, 101, 66, 2),
         (
             Message::BuyExactOutput {
+                membership: None,
                 amount_out: 3,
                 max_amount_in: 6,
                 now: 100,
@@ -536,6 +541,7 @@ fn buys_deduct_live_fees_before_pricing_and_gross_up_exact_output() {
         ),
         (
             Message::BuyExactOutput {
+                membership: None,
                 amount_out: 3,
                 max_amount_in: 5,
                 now: 100,
@@ -619,6 +625,7 @@ fn exact_output_payment_is_minimal_across_prices_and_fee_rates() {
                 let gross = (required_net * 10_000).div_ceil(10_000 - u128::from(rate));
                 let fee = (gross * u128::from(rate)).div_ceil(10_000);
                 let message = Message::BuyExactOutput {
+                    membership: None,
                     amount_out,
                     max_amount_in: gross,
                     now: 100,
@@ -655,6 +662,7 @@ fn exact_output_payment_is_minimal_across_prices_and_fee_rates() {
                         &input,
                         &state,
                         Message::BuyExactOutput {
+                            membership: None,
                             amount_out,
                             max_amount_in: previous_gross,
                             now: 100,
@@ -717,6 +725,7 @@ fn exact_input_rejects_fee_consumed_dust_and_prices_only_net_collateral() {
             &input,
             &state,
             Message::BuyExactInput {
+                membership: None,
                 amount_in: 100,
                 min_amount_out: 100,
                 now: 100,
@@ -736,31 +745,37 @@ fn buys_reject_limits_zero_inventory_time_freeze_and_underbacking() {
         exact_in(1),
         exact_in(1_215),
         Message::BuyExactInput {
+            membership: None,
             amount_in: 5,
             min_amount_out: 3,
             now: 100,
         },
         Message::BuyExactOutput {
+            membership: None,
             amount_out: 3,
             max_amount_in: 4,
             now: 100,
         },
         Message::BuyExactOutput {
+            membership: None,
             amount_out: 0,
             max_amount_in: 100,
             now: 100,
         },
         Message::BuyExactOutput {
+            membership: None,
             amount_out: 801,
             max_amount_in: 2_000,
             now: 100,
         },
         Message::BuyExactInput {
+            membership: None,
             amount_in: 5,
             min_amount_out: 0,
             now: 99,
         },
         Message::BuyExactInput {
+            membership: None,
             amount_in: 5,
             min_amount_out: 0,
             now: 200,
@@ -841,6 +856,7 @@ fn no_end_sellout_donations_and_anytime_collection_keep_separate_accounts() {
         &input,
         &state,
         Message::BuyExactOutput {
+            membership: None,
             amount_out: 800,
             max_amount_in: 1_213,
             now: 500,
@@ -1026,6 +1042,7 @@ fn exact_output_rejects_overflow_in_price_or_fee_gross_up() {
                 &input,
                 &state,
                 Message::BuyExactOutput {
+                    membership: None,
                     amount_out,
                     max_amount_in: u128::MAX,
                     now: 100,
@@ -1095,6 +1112,7 @@ fn actor_message_tags_keep_setup_and_read_state_order() {
         (exact_in(5), 3),
         (
             Message::BuyExactOutput {
+                membership: None,
                 amount_out: 3,
                 max_amount_in: 5,
                 now: 100,
@@ -1520,5 +1538,299 @@ fn setup_requires_inclusion_before_the_saved_end() {
     for (_, response) in [prepared(), activation(17)] {
         assert_eq!(response.validity.timestamps.start(), None);
         assert_eq!(response.validity.timestamps.end(), Some(200_000));
+    }
+}
+
+#[test]
+fn fixed_price_preparation_keeps_the_bound_buy_policy() {
+    let mut input = prepare();
+    let Message::PrepareFixedPrice { mut inputs } = borsh::from_slice(&input.message).unwrap()
+    else {
+        unreachable!()
+    };
+    let policy = curve_core::BuyPolicy::Allowlist(curve_core::AllowlistPolicy {
+        version: 1,
+        namespace: *inputs.namespace.value(),
+        sale_policy_id: *input.receiver.account_id.value(),
+        root: [9; 32],
+    });
+    inputs.buy_policy = policy.clone();
+    input.message = borsh::to_vec(&Message::PrepareFixedPrice { inputs }).unwrap();
+    let response = handle(&input).unwrap();
+    assert_eq!(
+        lbp_core::PoolAccount::decode(response.post_state.as_ref().unwrap())
+            .unwrap()
+            .buy_policy,
+        policy
+    );
+}
+
+#[test]
+fn fixed_price_policy_binding_is_checked_before_setup_queries_and_on_state_reads() {
+    for case in 0..3 {
+        let mut input = prepare();
+        let Message::PrepareFixedPrice { mut inputs } = borsh::from_slice(&input.message).unwrap()
+        else {
+            unreachable!()
+        };
+        inputs.buy_policy = curve_core::BuyPolicy::Allowlist(curve_core::AllowlistPolicy {
+            version: if case == 0 { 2 } else { 1 },
+            namespace: if case == 1 {
+                [99; 32]
+            } else {
+                *inputs.namespace.value()
+            },
+            sale_policy_id: if case == 2 {
+                [99; 32]
+            } else {
+                *input.receiver.account_id.value()
+            },
+            root: [9; 32],
+        });
+        input.message = borsh::to_vec(&Message::PrepareFixedPrice {
+            inputs: inputs.clone(),
+        })
+        .unwrap();
+        assert!(
+            matches!(handle(&input), Err(lbp_core::Error::InvalidTerms)),
+            "case {case}"
+        );
+        let (_, mut state) = funded();
+        state.buy_policy = inputs.buy_policy;
+        input.pre_state = borsh::to_vec(&state).unwrap().into();
+        input.message = borsh::to_vec(&Message::ReadState).unwrap();
+        assert!(
+            matches!(handle(&input), Err(lbp_core::Error::InvalidTerms)),
+            "stored case {case}"
+        );
+    }
+}
+
+#[test]
+fn fixed_price_allowlisted_buys_require_membership_before_external_queries() {
+    let (mut input, mut state) = funded();
+    state.buy_policy = curve_core::BuyPolicy::Allowlist(curve_core::AllowlistPolicy {
+        version: 1,
+        namespace: *state.namespace.value(),
+        sale_policy_id: *input.receiver.account_id.value(),
+        root: [9; 32],
+    });
+    input.pre_state = borsh::to_vec(&state).unwrap().into();
+    for message in [
+        Message::BuyExactInput {
+            membership: None,
+            amount_in: 30,
+            min_amount_out: 0,
+            now: 100,
+        },
+        Message::BuyExactOutput {
+            membership: None,
+            amount_out: 10,
+            max_amount_in: 30,
+            now: 100,
+        },
+    ] {
+        input.message = borsh::to_vec(&message).unwrap();
+        assert!(matches!(handle(&input), Err(lbp_core::Error::Unauthorized)));
+    }
+}
+
+fn membership_for(
+    namespace: AccountId,
+    pool: AccountId,
+    trader: AccountId,
+) -> (curve_core::BuyPolicy, curve_core::MembershipPath) {
+    use risc0_zkvm::sha::{Impl, Sha256 as _};
+    let path = curve_core::MembershipPath {
+        index: 0,
+        salt: [7; 32],
+        siblings: [[8; 32]; 17],
+    };
+    let context = [&[1][..], namespace.value(), pool.value()].concat();
+    let hash = |parts: &[&[u8]]| -> [u8; 32] {
+        Impl::hash_bytes(&parts.concat())
+            .as_bytes()
+            .try_into()
+            .unwrap()
+    };
+    let mut root = hash(&[
+        b"LP/allowlist/leaf/v1\0",
+        &context,
+        trader.value(),
+        &path.salt,
+    ]);
+    for sibling in &path.siblings {
+        root = hash(&[b"LP/allowlist/node/v1\0", &context, &root, sibling]);
+    }
+    (
+        curve_core::BuyPolicy::Allowlist(curve_core::AllowlistPolicy {
+            version: 1,
+            namespace: *namespace.value(),
+            sale_policy_id: *pool.value(),
+            root,
+        }),
+        path,
+    )
+}
+
+#[test]
+fn fixed_price_membership_can_be_reused_in_both_buy_forms_without_changing_economics() {
+    let (input, mut state) = funded();
+    let (policy, path) = membership_for(state.namespace, input.receiver.account_id, id(50));
+    state.buy_policy = policy.clone();
+    for message in [
+        Message::BuyExactInput {
+            membership: Some(path.clone()),
+            amount_in: 30,
+            min_amount_out: 19,
+            now: 100,
+        },
+        Message::BuyExactOutput {
+            membership: Some(path),
+            amount_out: 10,
+            max_amount_in: 16,
+            now: 100,
+        },
+    ] {
+        let response = operation(
+            &input,
+            &state,
+            message,
+            config(100, id(43), false),
+            [
+                state.recorded_collateral + state.accrued_fees,
+                state.remaining_inventory,
+                100,
+            ],
+        )
+        .unwrap();
+        state = state_of(&response);
+        assert_eq!(state.buy_policy, policy);
+        assert!(response.sync_messages.iter().any(|call| borsh::from_slice::<lez_compat_core::token::Message>(&call.message).is_ok_and(|message| matches!(message, lez_compat_core::token::Message::Transfer { recipient, .. } if recipient == id(50)))));
+    }
+    assert_eq!(
+        (
+            state.remaining_inventory,
+            state.recorded_collateral,
+            state.accrued_fees
+        ),
+        (771, 44, 2)
+    );
+}
+
+#[test]
+fn fixed_price_rejects_copied_and_malformed_membership_in_both_buy_forms() {
+    let (mut input, mut state) = funded();
+    let (policy, path) = membership_for(state.namespace, input.receiver.account_id, id(50));
+    for case in 0..7 {
+        state.buy_policy = policy.clone();
+        let mut evidence = path.clone();
+        input.from = Some(Actor::new(id(50), id(8)));
+        match case {
+            0 => input.from = Some(Actor::new(id(51), id(8))),
+            1 => evidence.salt = [99; 32],
+            2 => evidence.index = 1 << 17,
+            3 => evidence.siblings[4] = [99; 32],
+            4 => {
+                let curve_core::BuyPolicy::Allowlist(policy) = &mut state.buy_policy else {
+                    unreachable!()
+                };
+                policy.root = [99; 32];
+            }
+            5 => input.from = Some(Actor::new(id(50), id(99))),
+            _ => input.from = Some(input.receiver),
+        }
+        input.pre_state = borsh::to_vec(&state).unwrap().into();
+        for message in [
+            Message::BuyExactInput {
+                membership: Some(evidence.clone()),
+                amount_in: 30,
+                min_amount_out: 0,
+                now: 100,
+            },
+            Message::BuyExactOutput {
+                membership: Some(evidence.clone()),
+                amount_out: 10,
+                max_amount_in: 30,
+                now: 100,
+            },
+        ] {
+            input.message = borsh::to_vec(&message).unwrap();
+            assert_eq!(
+                handle(&input).err(),
+                Some(lbp_core::Error::Unauthorized),
+                "case {case}"
+            );
+        }
+    }
+    input.from = Some(Actor::new(id(50), id(8)));
+    input.pre_state = borsh::to_vec(&state).unwrap().into();
+    input.message = borsh::to_vec(&Message::BuyExactInput {
+        membership: Some(path),
+        amount_in: 30,
+        min_amount_out: 0,
+        now: 100,
+    })
+    .unwrap();
+    input.message.pop();
+    assert_eq!(handle(&input).err(), Some(lbp_core::Error::InvalidMessage));
+}
+
+#[test]
+fn fixed_price_policy_survives_every_prepare_and_activation_callback() {
+    let mut input = prepare();
+    let Message::PrepareFixedPrice { mut inputs } = borsh::from_slice(&input.message).unwrap()
+    else {
+        unreachable!()
+    };
+    let policy = curve_core::BuyPolicy::Allowlist(curve_core::AllowlistPolicy {
+        version: 1,
+        namespace: *inputs.namespace.value(),
+        sale_policy_id: *input.receiver.account_id.value(),
+        root: [9; 32],
+    });
+    inputs.buy_policy = policy.clone();
+    input.message = borsh::to_vec(&Message::PrepareFixedPrice { inputs }).unwrap();
+    let factory = input.from;
+    let mut response = handle(&input).unwrap();
+    for activate in [false, true] {
+        if activate {
+            input.pre_state = response.post_state.clone().unwrap();
+            input.from = factory;
+            input.message = borsh::to_vec(&Message::ActivateFixedPrice).unwrap();
+            response = handle(&input).unwrap();
+        }
+        for bytes in [
+            namespace_state(),
+            definition(),
+            definition(),
+            holding(
+                factory.unwrap().account_id,
+                id(41),
+                if activate { 0 } else { 800 },
+            ),
+            holding(
+                input.receiver.account_id,
+                id(41),
+                if activate { 800 } else { 0 },
+            ),
+            holding(input.receiver.account_id, id(42), 0),
+        ] {
+            let source = response.sync_messages.last().unwrap().to;
+            input = reply(&input, &response, source, bytes);
+            response = handle(&input).unwrap();
+            assert_eq!(
+                lbp_core::PoolAccount::decode(response.post_state.as_ref().unwrap())
+                    .unwrap()
+                    .buy_policy,
+                policy
+            );
+        }
+        assert_eq!(
+            lbp_core::PoolAccount::decode(response.post_state.as_ref().unwrap())
+                .unwrap()
+                .funded,
+            activate
+        );
     }
 }

@@ -22,7 +22,7 @@ Permissionless poke and successful buys record observer checkpoints. Checkpoints
 
 ## Scope
 
-The implemented scope includes creation, funding, public buys, permissionless fee collection and creator payouts. Fixed-price sales are buy-only and use fee-first pricing under [ADR 0035](../adr/0035-fixed-price-swap-fees.md). Trader-borne fixed-price fees are an additional RFP-016 departure with external status `To be reviewed by Logos team`. End hooks, delayed settlement, cancellation and expired-recovery handlers remain future work. Weighted virtual accounting, private fixed-price or weighted sales, allowlists, and full SDK and CLI flows are also out of scope.
+The implemented scope includes creation, funding, public buys, permissionless fee collection and creator payouts. Fixed-price sales are buy-only and use fee-first pricing under [ADR 0035](../adr/0035-fixed-price-swap-fees.md). Trader-borne fixed-price fees are an additional RFP-016 departure with external status `To be reviewed by Logos team`. End hooks, delayed settlement, cancellation and expired-recovery handlers remain future work. Public buy allowlists are implemented under [ADR 0021](../adr/0021-modes-and-open-limits.md); see [signed integration evidence](../../plans/allowlist-program-integration.md#public-execution-evidence). Wallet allowlist flows, weighted virtual accounting, private fixed-price or weighted sales, and full SDK and CLI flows remain out of scope.
 
 ## Future work
 

@@ -17,6 +17,7 @@ fn creation() -> ReceiveInput {
         is_authorized: false,
         pre_state: vec![].into(),
         message: borsh::to_vec(&Message::CreateFactoryPool {
+            buy_policy: curve_core::BuyPolicy::Open,
             trade_mode: 0,
             graduation_hook_program_id: Some(id(9)),
             graduation_hook_configuration: b"route".to_vec(),
@@ -38,6 +39,22 @@ fn creation() -> ReceiveInput {
         .unwrap(),
     }
 }
+#[test]
+fn curve_creation_rejects_policy_for_another_pool() {
+    let mut input = creation();
+    let mut message: Message = borsh::from_slice(&input.message).unwrap();
+    if let Message::CreateFactoryPool { buy_policy, .. } = &mut message {
+        *buy_policy = curve_core::BuyPolicy::Allowlist(curve_core::AllowlistPolicy {
+            version: 1,
+            namespace: *id(40).value(),
+            sale_policy_id: [99; 32],
+            root: [8; 32],
+        });
+    }
+    input.message = borsh::to_vec(&message).unwrap();
+    assert!(matches!(handle(&input), Err(Error::InvalidTerms)));
+}
+
 fn reply(input: &ReceiveInput, response: &Response, bytes: Vec<u8>) -> ReceiveInput {
     ReceiveInput {
         receiver: input.receiver,
@@ -94,7 +111,15 @@ fn proof(input: &ReceiveInput, response: &Response, creator: AccountId) -> Recei
     }
 }
 fn minted() -> (ReceiveInput, Response) {
+    minted_with_policy(curve_core::BuyPolicy::Open)
+}
+fn minted_with_policy(policy: curve_core::BuyPolicy) -> (ReceiveInput, Response) {
     let mut input = creation();
+    let mut message: Message = borsh::from_slice(&input.message).unwrap();
+    if let Message::CreateFactoryPool { buy_policy, .. } = &mut message {
+        *buy_policy = policy;
+    }
+    input.message = borsh::to_vec(&message).unwrap();
     let mut response = handle(&input).unwrap();
     for bytes in [config(), definition()] {
         input = reply(&input, &response, bytes);
@@ -226,6 +251,7 @@ fn curve_preparation_uses_neutral_restriction_and_defers_funding() {
 }
 fn pool_state(state: &FactoryState, owner: Actor, funded: bool) -> curve_core::PoolAccount {
     curve_core::PoolAccount {
+        buy_policy: state.buy_policy.clone(),
         allowed_input_token: Some(pool::TokenSide::Token1),
         funded,
         namespace: state.namespace,
@@ -247,6 +273,98 @@ fn pool_state(state: &FactoryState, owner: Actor, funded: bool) -> curve_core::P
         .unwrap(),
     }
 }
+fn allowlist_policy() -> curve_core::BuyPolicy {
+    let factory = compute_factory_pda(id(40), id(7), [3; 32]);
+    let pool = curve_core::compute_pool_pda(
+        id(40),
+        id(6),
+        compute_definition_pda(id(40), id(7), [3; 32]),
+        id(41),
+        factory,
+    );
+    curve_core::BuyPolicy::Allowlist(curve_core::AllowlistPolicy {
+        version: 1,
+        namespace: *id(40).value(),
+        sale_policy_id: *pool.value(),
+        root: [8; 32],
+    })
+}
+
+#[test]
+fn curve_activation_rejects_a_replaced_or_downgraded_pool_policy() {
+    let policy = allowlist_policy();
+    let (input, mint) = minted_with_policy(policy.clone());
+    let (input, allocated) = continued(&input, &mint, 1000, 0, 0);
+    let (input, prepared) = continued(&input, &allocated, 0, 900, 100);
+    let (input, response) = continued(&input, &prepared, 0, 900, 100);
+    let state = FactoryState::decode(response.post_state.as_ref().unwrap()).unwrap();
+    let curve_core::BuyPolicy::Allowlist(mut replacement) = policy else {
+        unreachable!()
+    };
+    replacement.root = [9; 32];
+    for policy in [
+        curve_core::BuyPolicy::Open,
+        curve_core::BuyPolicy::Allowlist(replacement),
+    ] {
+        let mut saved = pool_state(&state, input.receiver, false);
+        saved.buy_policy = policy;
+        let next = reply(&input, &response, borsh::to_vec(&saved).unwrap());
+        let next_response = handle(&next).unwrap();
+        let next = reply(
+            &next,
+            &next_response,
+            holding(state.pool_id, state.token_definition_id, 0),
+        );
+        assert!(matches!(handle(&next), Err(Error::InvalidState)));
+    }
+}
+
+#[test]
+fn curve_allowlist_policy_is_unchanged_through_all_creation_stages() {
+    let policy = allowlist_policy();
+    let (input, mint) = minted_with_policy(policy.clone());
+    assert_eq!(
+        FactoryState::decode(mint.post_state.as_ref().unwrap())
+            .unwrap()
+            .buy_policy,
+        policy
+    );
+    let (input, allocated) = continued(&input, &mint, 1000, 0, 0);
+    assert_eq!(
+        FactoryState::decode(allocated.post_state.as_ref().unwrap())
+            .unwrap()
+            .buy_policy,
+        policy
+    );
+    let (input, prepared) = continued(&input, &allocated, 0, 900, 100);
+    assert_eq!(
+        FactoryState::decode(prepared.post_state.as_ref().unwrap())
+            .unwrap()
+            .buy_policy,
+        policy
+    );
+    let create = prepared
+        .sync_messages
+        .iter()
+        .find_map(|call| borsh::from_slice::<curve_core::Message>(&call.message).ok())
+        .unwrap();
+    assert!(
+        matches!(create, curve_core::Message::CreatePool { buy_policy, .. } if buy_policy == policy)
+    );
+    let (mut input, mut response) = continued(&input, &prepared, 0, 900, 100);
+    let state = FactoryState::decode(response.post_state.as_ref().unwrap()).unwrap();
+    for bytes in [
+        borsh::to_vec(&pool_state(&state, input.receiver, false)).unwrap(),
+        holding(state.pool_id, state.token_definition_id, 0),
+    ] {
+        input = reply(&input, &response, bytes);
+        response = handle(&input).unwrap();
+    }
+    let active = FactoryState::decode(response.post_state.as_ref().unwrap()).unwrap();
+    assert_eq!(active.creation_stage, CreationStage::Active);
+    assert_eq!(active.buy_policy, policy);
+}
+
 fn active() -> (ReceiveInput, Response) {
     let (input, mint) = minted();
     let (input, allocated) = continued(&input, &mint, 1000, 0, 0);

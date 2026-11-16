@@ -1,5 +1,6 @@
 //! Launch setup and mechanism-specific settlement over synchronous actor calls.
 use borsh::{BorshDeserialize, BorshSerialize};
+use eligibility_policy::BuyPolicy;
 use lee_core::{
     account::{AccountId, Actor},
     program::{PdaSeed, ReceiveInput, Response, StateReply, SyncMessage},
@@ -68,6 +69,7 @@ pub struct GraduationHook {
 }
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct FactoryState {
+    pub buy_policy: BuyPolicy,
     pub trade_mode: TradeMode,
     pub graduation_hook: Option<GraduationHook>,
     pub creation_stage: CreationStage,
@@ -140,6 +142,7 @@ impl FactoryState {
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum Message {
     CreateFactoryPool {
+        buy_policy: BuyPolicy,
         trade_mode: u8,
         graduation_hook_program_id: Option<AccountId>,
         graduation_hook_configuration: Vec<u8>,
@@ -411,6 +414,7 @@ fn transfer(
 }
 fn create_curve(input: &ReceiveInput, command: Message) -> Result<Response, Error> {
     let Message::CreateFactoryPool {
+        buy_policy,
         trade_mode,
         graduation_hook_program_id,
         graduation_hook_configuration,
@@ -462,6 +466,7 @@ fn create_curve(input: &ReceiveInput, command: Message) -> Result<Response, Erro
         return Err(Error::InvalidTerms);
     }
     let state = FactoryState {
+        buy_policy,
         trade_mode: TradeMode::try_from(trade_mode).map_err(|_| Error::InvalidTerms)?,
         graduation_hook: graduation_hook_program_id.map(|program_id| GraduationHook {
             program_id,
@@ -520,6 +525,10 @@ fn create_curve(input: &ReceiveInput, command: Message) -> Result<Response, Erro
             values: vec![],
         }),
     };
+    state
+        .buy_policy
+        .validate_binding(state.namespace.value(), state.pool_id.value())
+        .map_err(|_| Error::InvalidTerms)?;
     Ok(state.next())
 }
 fn validate_pool(
@@ -527,7 +536,8 @@ fn validate_pool(
     actor: Actor,
     saved: &curve_core::PoolAccount,
 ) -> Result<(), Error> {
-    if saved.namespace != state.namespace
+    if saved.buy_policy != state.buy_policy
+        || saved.namespace != state.namespace
         || saved.owner != actor.account_id
         || saved.owner_program
             != Some((
@@ -1168,6 +1178,7 @@ fn curve_resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
                         SyncMessage::new(
                             Actor::new(input.receiver.account_id, state.curve_program_id),
                             &curve_core::Message::CreatePool {
+                                buy_policy: state.buy_policy.clone(),
                                 namespace: state.namespace,
                                 token0_definition_id: state.token_definition_id,
                                 token1_definition_id: state.collateral_definition_id,

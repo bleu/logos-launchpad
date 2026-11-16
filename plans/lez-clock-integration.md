@@ -1,6 +1,6 @@
 # Integrate LEZ timestamp reads
 
-Status: Implemented. PR #35 is included. Its poke and checkpoint paths use the upstream adapter. The `dev` pin and local checks were updated on 16 November 2026.
+Status: Implemented. PR #35 and PR #37 are included. Its poke and checkpoint paths use the upstream adapter. The `dev` pin and local checks were updated on 16 November 2026.
 
 Date: 2026-11-09
 
@@ -126,3 +126,5 @@ The integration is complete when normal builds execute weighted buys with the pi
 The full local gate passed with unchanged lockfiles on 9 November 2026 at the earlier feature-branch pin `f94ca8a7550fa0012222b9fb5990dfe44c54a3dc`. The host development gate, IDL and wire checks, shell regressions, strict host lints and formatting also passed. See the [workspace evidence](../docs/architecture/workspace-guide.md#weighted-pricing-clock). The initial run preceded the merge of PR #35. The combined gate then passed all 28 sale guest tests and 31 curve, role-authority and settlement guest tests with unchanged lockfiles. See the workspace evidence for scope and limits.
 
 On 16 November 2026, the full locked gate passed on the selected `dev` pin. See the [verification record](../docs/architecture/workspace-guide.md#dev-pin-verification-2026-11-16). The SDK uses the upstream loader-state decoder. Execution fixtures use the renamed program-seeding API and its test-only feature in debug host builds. Guest and production builds retain their release profile.
+
+The later merge of main retained the allowlist policy and tests from PR #37. The combined checks passed. See the [main merge verification](../docs/architecture/workspace-guide.md#main-merge-verification-2026-11-16).

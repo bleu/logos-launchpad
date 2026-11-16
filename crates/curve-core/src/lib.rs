@@ -1,6 +1,7 @@
 //! Bounded curve actor and namespace administration.
 
 use borsh::{BorshDeserialize, BorshSerialize};
+pub use eligibility_policy::{AllowlistPolicy, BuyPolicy, MembershipPath};
 use lee_core::{
     account::{AccountId, Actor},
     program::{PdaSeed, ReceiveInput, Response, SyncMessage},
@@ -51,12 +52,14 @@ pub enum Message {
         amount_out: u128,
         max_amount_in: u128,
         token_in: AccountId,
+        membership: Option<MembershipPath>,
         now: u64,
     },
     SwapExactInput {
         amount_in: u128,
         min_amount_out: u128,
         token_in: AccountId,
+        membership: Option<MembershipPath>,
         now: u64,
     },
     ActivatePool {
@@ -67,6 +70,7 @@ pub enum Message {
         instruction: Box<Message>,
     },
     CreatePool {
+        buy_policy: BuyPolicy,
         namespace: AccountId,
         token0_definition_id: AccountId,
         token1_definition_id: AccountId,
@@ -421,6 +425,7 @@ mod tests;
 
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PoolAccount {
+    pub buy_policy: BuyPolicy,
     pub allowed_input_token: Option<pool::TokenSide>,
     pub funded: bool,
     pub namespace: AccountId,
@@ -446,6 +451,9 @@ impl PoolAccount {
         {
             return Err(Error::WrongAccount);
         }
+        self.buy_policy
+            .validate_binding(self.namespace.value(), actor.account_id.value())
+            .map_err(|_| Error::InvalidPool)?;
         Ok(())
     }
 }

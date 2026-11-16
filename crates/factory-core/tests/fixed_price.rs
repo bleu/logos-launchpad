@@ -11,6 +11,7 @@ fn id(n: u8) -> AccountId {
 }
 fn inputs() -> FixedPriceInputs {
     FixedPriceInputs {
+        buy_policy: curve_core::BuyPolicy::Open,
         namespace: id(40),
         launch_salt: [3; 32],
         name: "Launch".into(),
@@ -377,6 +378,7 @@ fn pool_preparation_uses_saved_terms_and_separate_setup_stage() {
 
 fn prepared_pool(state: &factory_core::FixedPriceLaunchState, factory: Actor) -> Vec<u8> {
     let inputs = lbp_core::FixedPricePoolInputs {
+        buy_policy: state.buy_policy.clone(),
         namespace: state.namespace,
         namespace_program_id: state.namespace_program_id,
         factory_program_id: factory.program_account_id,
@@ -1306,4 +1308,196 @@ fn creation_mints_exact_supply_with_metadata_and_a_separate_creator_role() {
     );
     assert_eq!(response.validity.timestamps.start(), Some(0));
     assert_eq!(response.validity.timestamps.end(), Some(200_000));
+}
+
+#[test]
+fn fixed_price_creation_saves_the_initial_buy_policy() {
+    let mut input = creation();
+    let mut terms = inputs();
+    terms.buy_policy = curve_core::BuyPolicy::Allowlist(curve_core::AllowlistPolicy {
+        version: 1,
+        namespace: *terms.namespace.value(),
+        sale_policy_id: *lbp_core::compute_pool_pda(
+            terms.namespace,
+            terms.lbp_program_id,
+            factory_core::compute_definition_pda(terms.namespace, id(7), terms.launch_salt),
+            terms.collateral_definition_id,
+            input.receiver.account_id,
+        )
+        .value(),
+        root: [9; 32],
+    });
+    input.message = borsh::to_vec(&Message::CreateFixedPriceLbp {
+        inputs: terms.clone(),
+    })
+    .unwrap();
+    let response = handle(&input).unwrap();
+    assert_eq!(
+        factory_core::FixedPriceLaunchState::decode(response.post_state.as_ref().unwrap())
+            .unwrap()
+            .buy_policy,
+        terms.buy_policy
+    );
+}
+
+#[test]
+fn fixed_price_creation_rejects_unbound_or_unsupported_buy_policy() {
+    for case in 0..3 {
+        let mut input = creation();
+        let mut terms = inputs();
+        terms.buy_policy = curve_core::BuyPolicy::Allowlist(curve_core::AllowlistPolicy {
+            version: if case == 0 { 2 } else { 1 },
+            namespace: if case == 1 {
+                [99; 32]
+            } else {
+                *terms.namespace.value()
+            },
+            sale_policy_id: if case == 2 {
+                [99; 32]
+            } else {
+                *lbp_core::compute_pool_pda(
+                    terms.namespace,
+                    terms.lbp_program_id,
+                    factory_core::compute_definition_pda(terms.namespace, id(7), terms.launch_salt),
+                    terms.collateral_definition_id,
+                    input.receiver.account_id,
+                )
+                .value()
+            },
+            root: [9; 32],
+        });
+        input.message = borsh::to_vec(&Message::CreateFixedPriceLbp { inputs: terms }).unwrap();
+        assert_eq!(
+            handle(&input).err(),
+            Some(Error::InvalidTerms),
+            "case {case}"
+        );
+    }
+}
+
+fn allowlisted_prepared() -> (ReceiveInput, lee_core::program::Response) {
+    let mut input = creation();
+    let mut terms = inputs();
+    let pool = lbp_core::compute_pool_pda(
+        terms.namespace,
+        terms.lbp_program_id,
+        factory_core::compute_definition_pda(terms.namespace, id(7), terms.launch_salt),
+        terms.collateral_definition_id,
+        input.receiver.account_id,
+    );
+    let policy = curve_core::BuyPolicy::Allowlist(curve_core::AllowlistPolicy {
+        version: 1,
+        namespace: *terms.namespace.value(),
+        sale_policy_id: *pool.value(),
+        root: [9; 32],
+    });
+    terms.buy_policy = policy.clone();
+    input.message = borsh::to_vec(&Message::CreateFixedPriceLbp { inputs: terms }).unwrap();
+    let mut response = handle(&input).unwrap();
+    for bytes in [namespace_state(), collateral()] {
+        input = reply(&input, &response, bytes);
+        response = handle(&input).unwrap();
+        assert_eq!(
+            factory_core::FixedPriceLaunchState::decode(response.post_state.as_ref().unwrap())
+                .unwrap()
+                .buy_policy,
+            policy
+        );
+    }
+    for (stage, source, inventory, escrow) in [
+        (factory_core::FixedPriceCreationStage::Minted, 1000, 0, 0),
+        (
+            factory_core::FixedPriceCreationStage::Allocated,
+            0,
+            800,
+            200,
+        ),
+    ] {
+        (input, response) = continue_sale(&input, &response, stage, source, inventory, escrow);
+        assert_eq!(
+            factory_core::FixedPriceLaunchState::decode(response.post_state.as_ref().unwrap())
+                .unwrap()
+                .buy_policy,
+            policy
+        );
+    }
+    let call = response
+        .sync_messages
+        .iter()
+        .find(|call| call.to.account_id == pool)
+        .unwrap();
+    let lbp_core::Message::PrepareFixedPrice { inputs } = borsh::from_slice(&call.message).unwrap()
+    else {
+        unreachable!()
+    };
+    assert_eq!(inputs.buy_policy, policy);
+    (input, response)
+}
+
+#[test]
+fn fixed_price_setup_rejects_policy_downgrades_and_replacements_on_every_retry() {
+    let (input, prepared) = allowlisted_prepared();
+    for case in 0..3 {
+        let (mut input, mut response) = continue_sale(
+            &input,
+            &prepared,
+            factory_core::FixedPriceCreationStage::PoolPrepared,
+            0,
+            800,
+            200,
+        );
+        let state =
+            factory_core::FixedPriceLaunchState::decode(response.post_state.as_ref().unwrap())
+                .unwrap();
+        let mut pool =
+            lbp_core::PoolAccount::decode(&prepared_pool(&state, input.receiver)).unwrap();
+        match case {
+            0 => pool.buy_policy = curve_core::BuyPolicy::Open,
+            1 => {
+                let curve_core::BuyPolicy::Allowlist(policy) = &mut pool.buy_policy else {
+                    unreachable!()
+                };
+                policy.root = [99; 32];
+            }
+            _ => {}
+        }
+        let values = [
+            borsh::to_vec(&pool).unwrap(),
+            holding(state.pool_id, state.token_definition_id, 0),
+            holding(state.pool_id, state.collateral_definition_id, 0),
+        ];
+        for (slot, bytes) in values.into_iter().enumerate() {
+            input = reply(&input, &response, bytes);
+            let result = handle(&input);
+            if slot == 2 && case < 2 {
+                assert_eq!(result.err(), Some(Error::InvalidState), "case {case}");
+                break;
+            }
+            response = result.unwrap();
+        }
+        if case == 2 {
+            let complete =
+                factory_core::FixedPriceLaunchState::decode(response.post_state.as_ref().unwrap())
+                    .unwrap();
+            assert_eq!(
+                complete.creation_stage,
+                factory_core::FixedPriceCreationStage::Complete
+            );
+            assert_eq!(complete.buy_policy, state.buy_policy);
+        }
+    }
+}
+
+#[test]
+fn fixed_price_allocation_rejects_a_different_pool_buy_policy() {
+    let (input, prepared) = allowlisted_prepared();
+    let mut state =
+        factory_core::FixedPriceLaunchState::decode(prepared.post_state.as_ref().unwrap()).unwrap();
+    state.creation_stage = factory_core::FixedPriceCreationStage::Complete;
+    let mut pool = active_pool(&state, input.receiver);
+    pool.buy_policy = curve_core::BuyPolicy::Open;
+    assert_eq!(
+        claim_allocation(&input, &state, &pool, 200, 200).err(),
+        Some(Error::InvalidState)
+    );
 }

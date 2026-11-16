@@ -14,6 +14,7 @@ fn id(n: u8) -> AccountId {
 
 fn weighted_inputs() -> WeightedPoolInputs {
     WeightedPoolInputs {
+        buy_policy: curve_core::BuyPolicy::Open,
         namespace: id(40),
         namespace_program_id: id(6),
         factory_program_id: id(7),
@@ -348,4 +349,117 @@ fn handle_completed(input: &ReceiveInput) -> lee_core::program::Response {
         .unwrap();
     }
     response
+}
+
+#[test]
+fn weighted_preparation_saves_the_initial_bound_buy_policy() {
+    let mut input = prepare();
+    let mut inputs = weighted_inputs();
+    inputs.buy_policy = curve_core::BuyPolicy::Allowlist(curve_core::AllowlistPolicy {
+        version: 1,
+        namespace: *inputs.namespace.value(),
+        sale_policy_id: *input.receiver.account_id.value(),
+        root: [9; 32],
+    });
+    input.message = borsh::to_vec(&Message::PrepareWeighted {
+        inputs: inputs.clone(),
+    })
+    .unwrap();
+    let response = handle_completed(&input);
+    assert_eq!(
+        lbp_core::PoolAccount::decode(response.post_state.as_ref().unwrap())
+            .unwrap()
+            .buy_policy,
+        inputs.buy_policy
+    );
+}
+
+#[test]
+fn weighted_preparation_rejects_wrong_policy_version_namespace_or_pool() {
+    for case in 0..3 {
+        let mut input = prepare();
+        let mut inputs = weighted_inputs();
+        inputs.buy_policy = curve_core::BuyPolicy::Allowlist(curve_core::AllowlistPolicy {
+            version: if case == 0 { 2 } else { 1 },
+            namespace: if case == 1 {
+                [99; 32]
+            } else {
+                *inputs.namespace.value()
+            },
+            sale_policy_id: if case == 2 {
+                [99; 32]
+            } else {
+                *input.receiver.account_id.value()
+            },
+            root: [9; 32],
+        });
+        input.message = borsh::to_vec(&Message::PrepareWeighted { inputs }).unwrap();
+        assert_eq!(
+            handle(&input).err(),
+            Some(lbp_core::Error::InvalidTerms),
+            "case {case}"
+        );
+    }
+}
+
+#[test]
+fn weighted_policy_survives_every_prepare_and_activation_callback() {
+    let mut input = prepare();
+    let Message::PrepareWeighted { mut inputs } = borsh::from_slice(&input.message).unwrap() else {
+        unreachable!()
+    };
+    let policy = curve_core::BuyPolicy::Allowlist(curve_core::AllowlistPolicy {
+        version: 1,
+        namespace: *inputs.namespace.value(),
+        sale_policy_id: *input.receiver.account_id.value(),
+        root: [9; 32],
+    });
+    inputs.buy_policy = policy.clone();
+    input.message = borsh::to_vec(&Message::PrepareWeighted { inputs }).unwrap();
+    let factory = input.from;
+    let mut response = handle_completed(&input);
+    for activate in [false, true] {
+        if activate {
+            input.pre_state = response.post_state.clone().unwrap();
+            input.from = factory;
+            input.message = borsh::to_vec(&Message::ActivateWeighted).unwrap();
+            response = handle_completed(&input);
+        }
+        for bytes in [
+            namespace_state(),
+            definition(),
+            definition(),
+            holding(
+                factory.unwrap().account_id,
+                id(41),
+                if activate { 0 } else { 1_000_000 },
+            ),
+            holding(
+                input.receiver.account_id,
+                id(41),
+                if activate { 1_000_000 } else { 0 },
+            ),
+            holding(
+                input.receiver.account_id,
+                id(42),
+                if activate { 100 } else { 0 },
+            ),
+        ] {
+            let source = response.sync_messages.last().unwrap().to;
+            input = reply(&input, &response, source, bytes);
+            response = handle_completed(&input);
+            assert_eq!(
+                lbp_core::PoolAccount::decode(response.post_state.as_ref().unwrap())
+                    .unwrap()
+                    .buy_policy,
+                policy
+            );
+        }
+        assert_eq!(
+            lbp_core::PoolAccount::decode(response.post_state.as_ref().unwrap())
+                .unwrap()
+                .funded,
+            activate
+        );
+    }
 }

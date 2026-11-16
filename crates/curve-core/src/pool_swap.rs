@@ -14,8 +14,30 @@ pub fn begin(input: &ReceiveInput, message: Message) -> Result<Response, Error> 
     let state = PoolAccount::decode(&input.pre_state)?;
     state.validate_address(input.receiver)?;
     let sender = input.from.ok_or(Error::Unauthorized)?;
-    if sender.program_account_id != input.receiver.program_account_id {
+    if sender.program_account_id != input.receiver.program_account_id
+        || matches!(state.buy_policy, crate::BuyPolicy::Allowlist(_))
+            && sender.account_id == input.receiver.account_id
+    {
         return Err(Error::Unauthorized);
+    }
+    let (token_in, membership) = match &message {
+        Message::SwapExactInput {
+            token_in,
+            membership,
+            ..
+        }
+        | Message::SwapExactOutput {
+            token_in,
+            membership,
+            ..
+        } => (token_in, membership),
+        _ => return Err(Error::InvalidMessage),
+    };
+    if *token_in == state.token1_definition_id {
+        state
+            .buy_policy
+            .admit(sender.account_id.value(), membership.as_ref())
+            .map_err(|_| Error::Unauthorized)?;
     }
     Pending::new(
         state,

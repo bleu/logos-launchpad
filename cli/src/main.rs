@@ -278,6 +278,7 @@ struct CreateSaleArgs {
 impl CreateSaleArgs {
     fn sale_request(&self) -> CreateSaleRequest {
         CreateSaleRequest {
+            buy_policy: launchpad_client::BuyPolicy::Open,
             trade_mode: self.trade_mode.into(),
             graduation_hook: self.graduation_hook_program_id.map(|program_id| {
                 launchpad_client::GraduationHook {
@@ -1081,6 +1082,7 @@ async fn buy(namespace: lee::AccountId, json: bool, args: BuyArgs) -> Result<()>
             amount_out: args.tokens,
             max_amount_in: args.max_collateral,
         },
+        None,
         now,
     )?;
     let transaction_hash = submit_public_invocation(&wallet, &curve_program, invocation).await?;
@@ -1131,6 +1133,7 @@ async fn buy_with_collateral(
             amount_in: args.collateral,
             min_amount_out: args.min_tokens,
         },
+        None,
         now,
     )?;
     let transaction_hash = submit_public_invocation(&wallet, &curve_program, invocation).await?;

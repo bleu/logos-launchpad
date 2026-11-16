@@ -359,6 +359,7 @@ fn fresh_sale(trade_mode: u8, end_timestamp: Option<u64>) -> FactoryFixture {
         .call(
             &creator,
             factory_core::Message::CreateFactoryPool {
+                buy_policy: curve_core::BuyPolicy::Open,
                 trade_mode,
                 graduation_hook_program_id: None,
                 graduation_hook_configuration: vec![],
@@ -464,6 +465,7 @@ fn fresh_factory_sale_modes_apply_live_fees_and_collect_all_to_current_treasury_
         trade(
             &mut fixture,
             curve_core::Message::SwapExactInput {
+                membership: None,
                 amount_in: 100,
                 min_amount_out: 82,
                 token_in: COLLATERAL,
@@ -491,6 +493,7 @@ fn fresh_factory_sale_modes_apply_live_fees_and_collect_all_to_current_treasury_
         )
         .unwrap();
         let sell = curve_core::Message::SwapExactInput {
+            membership: None,
             amount_in: 82,
             min_amount_out: 72,
             token_in: fixture.definition,
@@ -570,6 +573,7 @@ fn failed_swap_and_fee_payout_restore_full_runtime_state_before_successful_retry
                 fixture.pool,
                 &key(49),
                 curve_core::Message::SwapExactInput {
+                    membership: None,
                     amount_in: 100,
                     min_amount_out: 82,
                     token_in: COLLATERAL,
@@ -583,6 +587,7 @@ fn failed_swap_and_fee_payout_restore_full_runtime_state_before_successful_retry
     trade(
         &mut fixture,
         curve_core::Message::SwapExactInput {
+            membership: None,
             amount_in: 100,
             min_amount_out: 82,
             token_in: COLLATERAL,
@@ -645,6 +650,7 @@ fn frozen_factory_sales_block_buys_and_sells_but_keep_admin_roles_and_fee_collec
         trade(
             &mut fixture,
             curve_core::Message::SwapExactInput {
+                membership: None,
                 amount_in: 100,
                 min_amount_out: 82,
                 token_in: COLLATERAL,
@@ -664,18 +670,21 @@ fn frozen_factory_sales_block_buys_and_sells_but_keep_admin_roles_and_fee_collec
         .unwrap();
         for message in [
             curve_core::Message::SwapExactInput {
+                membership: None,
                 amount_in: 100,
                 min_amount_out: 1,
                 token_in: COLLATERAL,
                 now: 1,
             },
             curve_core::Message::SwapExactInput {
+                membership: None,
                 amount_in: 82,
                 min_amount_out: 1,
                 token_in: fixture.definition,
                 now: 1,
             },
             curve_core::Message::SwapExactOutput {
+                membership: None,
                 amount_out: 1,
                 max_amount_in: 100,
                 token_in: COLLATERAL,
@@ -746,6 +755,7 @@ fn frozen_factory_sales_block_buys_and_sells_but_keep_admin_roles_and_fee_collec
             trade(
                 &mut fixture,
                 curve_core::Message::SwapExactInput {
+                    membership: None,
                     amount_in: 100,
                     min_amount_out: 63,
                     token_in: COLLATERAL,
@@ -763,6 +773,7 @@ fn frozen_factory_sales_block_buys_and_sells_but_keep_admin_roles_and_fee_collec
             trade(
                 &mut fixture,
                 curve_core::Message::SwapExactInput {
+                    membership: None,
                     amount_in: 82,
                     min_amount_out: 72,
                     token_in: definition,
@@ -797,6 +808,7 @@ fn buying_all_factory_d_closes_both_sale_modes_and_rejects_later_trades() {
         trade(
             &mut fixture,
             curve_core::Message::SwapExactOutput {
+                membership: None,
                 amount_out: 400,
                 max_amount_in: 667,
                 token_in: COLLATERAL,
@@ -828,6 +840,7 @@ fn buying_all_factory_d_closes_both_sale_modes_and_rejects_later_trades() {
                     fixture.pool,
                     &key(49),
                     curve_core::Message::SwapExactInput {
+                        membership: None,
                         amount_in: 1,
                         min_amount_out: 0,
                         token_in: COLLATERAL,
@@ -847,6 +860,7 @@ fn buying_all_factory_d_closes_both_sale_modes_and_rejects_later_trades() {
                         fixture.pool,
                         &key(49),
                         curve_core::Message::SwapExactInput {
+                            membership: None,
                             amount_in: 1,
                             min_amount_out: 0,
                             token_in: fixture.definition,
@@ -900,6 +914,7 @@ fn namespace_freeze_and_emergency_transfer_do_not_control_another_namespace_pool
         other_pool,
         &owner,
         curve_core::Message::CreatePool {
+            buy_policy: curve_core::BuyPolicy::Open,
             namespace: other_id,
             token0_definition_id: LAUNCH,
             token1_definition_id: COLLATERAL,
@@ -991,6 +1006,7 @@ fn namespace_freeze_and_emergency_transfer_do_not_control_another_namespace_pool
         other_pool,
         &owner,
         curve_core::Message::SwapExactInput {
+            membership: None,
             amount_in: 100,
             min_amount_out: 90,
             token_in: COLLATERAL,
@@ -1026,6 +1042,7 @@ fn pool_treasury_alias_collects_fees_without_self_transfer_or_reserve_change() {
     trade(
         &mut fixture,
         curve_core::Message::SwapExactInput {
+            membership: None,
             amount_in: 100,
             min_amount_out: 82,
             token_in: COLLATERAL,
@@ -1081,6 +1098,7 @@ fn frozen_direct_pool_keeps_owner_close_and_reserve_recovery_checks() {
         pool_id,
         &owner,
         curve_core::Message::CreatePool {
+            buy_policy: curve_core::BuyPolicy::Open,
             namespace: ns,
             token0_definition_id: LAUNCH,
             token1_definition_id: COLLATERAL,
@@ -1135,6 +1153,7 @@ fn factory_expiry_rejects_current_and_stale_trades_and_can_close_while_frozen() 
     trade(
         &mut fixture,
         curve_core::Message::SwapExactInput {
+            membership: None,
             amount_in: 100,
             min_amount_out: 90,
             token_in: COLLATERAL,
@@ -1149,6 +1168,7 @@ fn factory_expiry_rejects_current_and_stale_trades_and_can_close_while_frozen() 
             let result = trade(
                 &mut fixture,
                 curve_core::Message::SwapExactInput {
+                    membership: None,
                     amount_in: 10,
                     min_amount_out: 1,
                     token_in,
@@ -1229,6 +1249,7 @@ fn factory_expiry_rejects_current_and_stale_trades_and_can_close_while_frozen() 
                     fixture.pool,
                     &key(49),
                     curve_core::Message::SwapExactInput {
+                        membership: None,
                         amount_in: 1,
                         min_amount_out: 0,
                         token_in,
