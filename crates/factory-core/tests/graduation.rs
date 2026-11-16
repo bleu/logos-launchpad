@@ -259,7 +259,79 @@ fn request_hash_binds_each_field_and_each_typed_asset_intent() {
 }
 
 #[test]
-fn readiness_is_immutable_and_accepts_only_the_explicit_intent_kind() {
+fn readiness_can_activate_once_for_each_intent_kind() {
+    let kinds = [
+        None,
+        Some(GraduationIntentKind::CurveReserves),
+        Some(GraduationIntentKind::FixedPriceProceeds),
+        Some(GraduationIntentKind::WeightedBuyerProceeds),
+    ];
+    for kind in kinds.into_iter().flatten() {
+        let (mut input, response) = initialized_kind(None);
+        input.pre_state = response.post_state.unwrap();
+        let mut expected = AdapterState::decode(&input.pre_state).unwrap();
+        input.message = borsh::to_vec(&AdapterMessage::Initialize {
+            factory_program_id: id(7),
+            namespace: id(40),
+            launch_salt: [3; 32],
+            accepted_intent: Some(kind),
+        })
+        .unwrap();
+        assert!(input.from.is_none());
+        assert!(!input.is_authorized);
+        let response = handle_adapter(&input).unwrap();
+        expected.accepted_intent = Some(kind);
+        assert_eq!(
+            AdapterState::decode(response.post_state.as_ref().unwrap()).unwrap(),
+            expected
+        );
+        assert!(response.sync_messages.is_empty());
+        input.pre_state = response.post_state.unwrap();
+        for accepted_intent in kinds {
+            input.message = borsh::to_vec(&AdapterMessage::Initialize {
+                factory_program_id: id(7),
+                namespace: id(40),
+                launch_salt: [3; 32],
+                accepted_intent,
+            })
+            .unwrap();
+            assert!(matches!(
+                handle_adapter(&input),
+                Err(Error::AlreadyInitialized)
+            ));
+        }
+    }
+}
+
+#[test]
+fn readiness_activation_requires_the_saved_factory_and_canonical_custody() {
+    let (mut input, response) = initialized_kind(None);
+    input.pre_state = response.post_state.unwrap();
+    input.message = borsh::to_vec(&AdapterMessage::Initialize {
+        factory_program_id: id(7),
+        namespace: id(40),
+        launch_salt: [3; 32],
+        accepted_intent: Some(GraduationIntentKind::CurveReserves),
+    })
+    .unwrap();
+    let mut wrong = input.clone();
+    wrong.receiver.account_id = id(99);
+    assert!(matches!(handle_adapter(&wrong), Err(Error::WrongAccount)));
+    let saved_factory = AdapterState::decode(&input.pre_state).unwrap().factory;
+    for factory in [
+        Actor::new(id(99), saved_factory.program_account_id),
+        Actor::new(saved_factory.account_id, id(99)),
+    ] {
+        let mut state = AdapterState::decode(&input.pre_state).unwrap();
+        state.factory = factory;
+        wrong = input.clone();
+        wrong.pre_state = borsh::to_vec(&state).unwrap().into();
+        assert!(matches!(handle_adapter(&wrong), Err(Error::WrongAccount)));
+    }
+}
+
+#[test]
+fn readiness_accepts_only_the_explicit_intent_kind() {
     let intents = [
         GraduationIntent::CurveReserves {
             launch_tokens: 100,
@@ -370,6 +442,24 @@ fn every_intent_checks_both_canonical_holdings_and_returns_its_exact_request_has
             }
         );
         input.pre_state = response.post_state.unwrap();
+        input.from = None;
+        for accepted_intent in [None, Some(intent.kind())] {
+            input.message = borsh::to_vec(&AdapterMessage::Initialize {
+                factory_program_id: id(7),
+                namespace: id(40),
+                launch_salt: [3; 32],
+                accepted_intent,
+            })
+            .unwrap();
+            assert!(matches!(
+                handle_adapter(&input),
+                Err(Error::AlreadyInitialized)
+            ));
+            assert_eq!(
+                AdapterState::decode(&input.pre_state).unwrap().receipt,
+                Some(request.clone())
+            );
+        }
         input.from = Some(factory);
         input.message = borsh::to_vec(&AdapterMessage::Graduate { request }).unwrap();
         assert!(matches!(handle_adapter(&input), Err(Error::AlreadySettled)));
@@ -455,10 +545,26 @@ fn malformed_or_underfunded_holdings_fail_for_each_intent_without_a_receipt() {
 }
 
 #[test]
-fn pending_callback_cannot_be_replaced_by_another_graduation_message() {
+fn pending_callback_cannot_be_replaced_by_another_adapter_message() {
     let (mut input, response, request) =
         begin_intent(GraduationIntent::FixedPriceProceeds { collateral: 0 });
     input.pre_state = response.post_state.unwrap();
-    input.message = borsh::to_vec(&AdapterMessage::Graduate { request }).unwrap();
-    assert!(matches!(handle_adapter(&input), Err(Error::Unauthorized)));
+    for message in [
+        AdapterMessage::Graduate { request },
+        AdapterMessage::Initialize {
+            factory_program_id: id(7),
+            namespace: id(40),
+            launch_salt: [3; 32],
+            accepted_intent: None,
+        },
+        AdapterMessage::Initialize {
+            factory_program_id: id(7),
+            namespace: id(40),
+            launch_salt: [3; 32],
+            accepted_intent: Some(GraduationIntentKind::FixedPriceProceeds),
+        },
+    ] {
+        input.message = borsh::to_vec(&message).unwrap();
+        assert!(matches!(handle_adapter(&input), Err(Error::Unauthorized)));
+    }
 }

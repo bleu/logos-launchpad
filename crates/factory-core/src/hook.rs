@@ -187,7 +187,15 @@ pub fn handle_adapter(input: &ReceiveInput) -> Result<Response, Error> {
                 return Err(Error::WrongAccount);
             }
             if !input.pre_state.is_empty() {
-                return Err(Error::AlreadyInitialized);
+                let mut state = AdapterState::decode(&input.pre_state)?;
+                if state.factory != factory {
+                    return Err(Error::WrongAccount);
+                }
+                if state.accepted_intent.is_some() || accepted_intent.is_none() {
+                    return Err(Error::AlreadyInitialized);
+                }
+                state.accepted_intent = accepted_intent;
+                return Ok(Response::set_state(borsh::to_vec(&state).unwrap()));
             }
             Ok(Response::set_state(
                 borsh::to_vec(&AdapterState {

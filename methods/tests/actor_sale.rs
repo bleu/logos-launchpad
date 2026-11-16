@@ -5588,11 +5588,100 @@ fn lbp_zero_first_graduation_burns_once_and_returns_only_the_weighted_seed() {
     }
 }
 
+fn reject_lbp_adapter_reinitialization(
+    env: &mut FixedFactoryEnv,
+    accepted_intent: Option<factory_core::GraduationIntentKind>,
+) {
+    let before = env.state.clone();
+    let adapter = lbp_adapter(env);
+    let salt = env.salt;
+    let result = lbp_signed_call(
+        env,
+        adapter,
+        factory_core::AdapterMessage::Initialize {
+            factory_program_id: LBP_FACTORY_PROGRAM,
+            namespace: NAMESPACE,
+            launch_salt: salt,
+            accepted_intent,
+        },
+        &[],
+        vec![],
+    );
+    assert!(
+        matches!(&result, Err(lee::error::LeeError::ProgramExecutionFailed(reason)) if reason.contains("AlreadyInitialized")),
+        "{result:?}"
+    );
+    assert!(
+        env.state == before,
+        "adapter reinitialization changed state"
+    );
+}
+
 #[test]
-fn lbp_graduation_rejects_unready_or_wrong_kind_adapters_and_cannot_reinitialize_them() {
+fn lbp_graduation_allows_permissionless_adapter_activation_once_and_preserves_receipts() {
     for weighted in [false, true] {
+        let mut env = lbp_graduation_env(weighted, true, vec![], None);
+        let creator = env.creator();
+        reject_lbp_factory(
+            &mut env,
+            lbp_hook_message(creator),
+            300_000,
+            "AdapterNotReady",
+        );
+        reject_lbp_adapter_reinitialization(&mut env, None);
+        let mut expected = lbp_adapter_state(&env);
+        expected.accepted_intent = Some(lbp_kind(weighted));
+        let adapter = lbp_adapter(&env);
+        let salt = env.salt;
+        lbp_signed_call(
+            &mut env,
+            adapter,
+            factory_core::AdapterMessage::Initialize {
+                factory_program_id: LBP_FACTORY_PROGRAM,
+                namespace: NAMESPACE,
+                launch_salt: salt,
+                accepted_intent: Some(lbp_kind(weighted)),
+            },
+            &[],
+            vec![],
+        )
+        .unwrap();
+        assert_eq!(lbp_adapter_state(&env), expected);
         for accepted in [
             None,
+            Some(lbp_kind(weighted)),
+            Some(lbp_kind(!weighted)),
+            Some(factory_core::GraduationIntentKind::CurveReserves),
+        ] {
+            reject_lbp_adapter_reinitialization(&mut env, accepted);
+        }
+        env.state = fixed_config(
+            env.state,
+            if weighted { 100 } else { 333 },
+            NEXT_TREASURY,
+            false,
+        );
+        let initial = fixed_pool(&env.state, env.pool);
+        let collateral = balance(&env.state, creator, COLLATERAL);
+        let supply = token_supply(&env.state, env.launch);
+        env.execute(lbp_hook_message(creator), 300_000).unwrap();
+        assert_lbp_graduated(&env, weighted, &initial, collateral, supply, false, false);
+        for accepted in [
+            None,
+            Some(lbp_kind(weighted)),
+            Some(lbp_kind(!weighted)),
+            Some(factory_core::GraduationIntentKind::CurveReserves),
+        ] {
+            reject_lbp_adapter_reinitialization(&mut env, accepted);
+        }
+        assert_lbp_graduated(&env, weighted, &initial, collateral, supply, false, false);
+    }
+}
+
+#[test]
+fn lbp_graduation_rejects_wrong_kind_adapters_and_cannot_change_their_intent() {
+    for weighted in [false, true] {
+        for accepted in [
             Some(lbp_kind(!weighted)),
             Some(factory_core::GraduationIntentKind::CurveReserves),
         ] {
@@ -5604,27 +5693,9 @@ fn lbp_graduation_rejects_unready_or_wrong_kind_adapters_and_cannot_reinitialize
                 300_000,
                 "AdapterNotReady",
             );
-            let before = env.state.clone();
-            let caller = PrivateKey::try_new([96; 32]).unwrap();
-            let adapter = lbp_adapter(&env);
-            let salt = env.salt;
-            let result = lbp_signed_call(
-                &mut env,
-                adapter,
-                factory_core::AdapterMessage::Initialize {
-                    factory_program_id: LBP_FACTORY_PROGRAM,
-                    namespace: NAMESPACE,
-                    launch_salt: salt,
-                    accepted_intent: Some(lbp_kind(weighted)),
-                },
-                &[&caller],
-                vec![],
-            );
-            assert!(
-                matches!(&result, Err(lee::error::LeeError::ProgramExecutionFailed(reason)) if reason.contains("AlreadyInitialized")),
-                "{result:?}"
-            );
-            assert!(env.state == before);
+            for replacement in [None, accepted, Some(lbp_kind(weighted))] {
+                reject_lbp_adapter_reinitialization(&mut env, replacement);
+            }
             assert_eq!(lbp_adapter_state(&env).accepted_intent, accepted);
         }
     }
