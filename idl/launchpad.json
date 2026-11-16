@@ -3,7 +3,8 @@
   "imports": {
     "curve": [
       "eligibility_policy",
-      "pool"
+      "pool",
+      "sale_policy"
     ],
     "factory": [
       "curve",
@@ -15,12 +16,16 @@
       "factory"
     ],
     "lbp": [
-      "curve"
+      "curve",
+      "sale_policy"
     ],
     "lbp_setup": [
       "curve",
       "factory",
       "lbp"
+    ],
+    "pool": [
+      "sale_policy"
     ]
   },
   "modules": {
@@ -203,6 +208,10 @@
                 "type": "BuyPolicy"
               },
               {
+                "name": "pause_policy",
+                "type": "PausePolicy"
+              },
+              {
                 "name": "namespace",
                 "type": "AccountId"
               },
@@ -381,6 +390,16 @@
             ],
             "name": "InitializeNamespace",
             "tag": 16
+          },
+          {
+            "fields": [
+              {
+                "name": "paused",
+                "type": "bool"
+              }
+            ],
+            "name": "SetPaused",
+            "tag": 17
           }
         ]
       },
@@ -389,6 +408,10 @@
           {
             "name": "buy_policy",
             "type": "BuyPolicy"
+          },
+          {
+            "name": "trade_control",
+            "type": "TradeControl"
           },
           {
             "name": "allowed_input_token",
@@ -514,6 +537,10 @@
             "type": "BuyPolicy"
           },
           {
+            "name": "pause_policy",
+            "type": "PausePolicy"
+          },
+          {
             "name": "trade_mode",
             "type": "TradeMode"
           },
@@ -626,6 +653,10 @@
               {
                 "name": "buy_policy",
                 "type": "BuyPolicy"
+              },
+              {
+                "name": "pause_policy",
+                "type": "PausePolicy"
               },
               {
                 "name": "trade_mode",
@@ -841,6 +872,20 @@
             ],
             "name": "ClaimWeightedAllocation",
             "tag": 12
+          },
+          {
+            "fields": [
+              {
+                "name": "creator",
+                "type": "AccountId"
+              },
+              {
+                "name": "paused",
+                "type": "bool"
+              }
+            ],
+            "name": "SetPaused",
+            "tag": 13
           }
         ]
       },
@@ -1105,6 +1150,10 @@
             "type": "BuyPolicy"
           },
           {
+            "name": "pause_policy",
+            "type": "PausePolicy"
+          },
+          {
             "name": "namespace",
             "type": "AccountId"
           },
@@ -1328,6 +1377,16 @@
             "fields": [],
             "name": "PokeWeighted",
             "tag": 14
+          },
+          {
+            "fields": [
+              {
+                "name": "paused",
+                "type": "bool"
+              }
+            ],
+            "name": "SetPaused",
+            "tag": 15
           }
         ]
       },
@@ -1348,6 +1407,10 @@
           {
             "name": "buy_policy",
             "type": "BuyPolicy"
+          },
+          {
+            "name": "trade_control",
+            "type": "TradeControl"
           },
           {
             "name": "mode",
@@ -1441,10 +1504,6 @@
           {
             "fields": [
               {
-                "name": "paused",
-                "type": "bool"
-              },
-              {
                 "name": "token_weight_start",
                 "type": "u128"
               },
@@ -1479,6 +1538,10 @@
           {
             "name": "buy_policy",
             "type": "BuyPolicy"
+          },
+          {
+            "name": "pause_policy",
+            "type": "PausePolicy"
           },
           {
             "name": "namespace",
@@ -1545,6 +1608,10 @@
           {
             "name": "buy_policy",
             "type": "curve::BuyPolicy"
+          },
+          {
+            "name": "pause_policy",
+            "type": "PausePolicy"
           },
           {
             "name": "namespace",
@@ -1637,6 +1704,10 @@
           {
             "name": "buy_policy",
             "type": "curve::BuyPolicy"
+          },
+          {
+            "name": "pause_policy",
+            "type": "PausePolicy"
           },
           {
             "name": "format",
@@ -1794,6 +1865,10 @@
             "type": "curve::BuyPolicy"
           },
           {
+            "name": "pause_policy",
+            "type": "PausePolicy"
+          },
+          {
             "name": "namespace",
             "type": "AccountId"
           },
@@ -1935,6 +2010,41 @@
             "fields": [],
             "name": "Token1",
             "tag": 1
+          }
+        ]
+      }
+    },
+    "sale_policy": {
+      "PausePolicy": {
+        "variants": [
+          {
+            "fields": [],
+            "name": "Disabled",
+            "tag": 0
+          },
+          {
+            "fields": [],
+            "name": "AuthorityControlled",
+            "tag": 1
+          }
+        ]
+      },
+      "TradeControl": {
+        "variants": [
+          {
+            "fields": [],
+            "name": "Unrestricted",
+            "tag": 0
+          },
+          {
+            "fields": [],
+            "name": "Running",
+            "tag": 1
+          },
+          {
+            "fields": [],
+            "name": "Paused",
+            "tag": 2
           }
         ]
       }

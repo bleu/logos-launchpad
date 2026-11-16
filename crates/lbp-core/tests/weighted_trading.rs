@@ -17,6 +17,7 @@ fn id(n: u8) -> AccountId {
 fn weighted_inputs() -> WeightedPoolInputs {
     WeightedPoolInputs {
         buy_policy: curve_core::BuyPolicy::Open,
+        pause_policy: lbp_core::PausePolicy::AuthorityControlled,
         namespace: id(40),
         namespace_program_id: id(6),
         factory_program_id: id(7),
@@ -1223,10 +1224,7 @@ fn weighted_repeated_pause_succeeds_without_event() {
     assert!(!response.events.is_empty(), "first pause should emit event");
     let paused_state =
         lbp_core::PoolAccount::decode(response.post_state.as_ref().unwrap()).unwrap();
-    assert!(matches!(
-        paused_state.mode,
-        lbp_core::PoolMode::Weighted { paused: true, .. }
-    ));
+    assert!(paused_state.trade_control.is_paused());
 
     // Repeated pause succeeds but emits no event
     input.pre_state = response.post_state.unwrap();
@@ -1254,9 +1252,7 @@ fn weighted_repeated_pause_succeeds_without_event() {
 #[test]
 fn weighted_pause_blocks_both_buy_forms() {
     let (mut input, mut state) = funded();
-    if let lbp_core::PoolMode::Weighted { paused, .. } = &mut state.mode {
-        *paused = true;
-    }
+    state.trade_control.set_paused(true).unwrap();
     for message in [
         Message::BuyWeightedExactInput {
             membership: None,
@@ -1302,9 +1298,7 @@ fn weighted_fees_collectible_when_paused() {
     let (input, mut state) = funded();
     state.accrued_fees = 5;
     state.recorded_collateral = 100;
-    if let lbp_core::PoolMode::Weighted { paused, .. } = &mut state.mode {
-        *paused = true;
-    }
+    state.trade_control.set_paused(true).unwrap();
     let response = operation(
         &input,
         &state,
@@ -1537,9 +1531,7 @@ fn weighted_settlement_available_when_frozen() {
 #[test]
 fn weighted_settlement_available_when_paused() {
     let (input, mut state) = funded();
-    if let lbp_core::PoolMode::Weighted { paused, .. } = &mut state.mode {
-        *paused = true;
-    }
+    state.trade_control.set_paused(true).unwrap();
     let response = settle(
         &input,
         &state,
@@ -2142,4 +2134,149 @@ fn poke_on_settled_pool_still_works() {
     let response = poke_at(1_500_000, &input, &state).unwrap();
     let (time, _) = checkpoint(&state_of(&response));
     assert_eq!(time, 1500);
+}
+
+#[test]
+fn common_weighted_controls_match_legacy_events_and_keep_the_scheduled_end() {
+    let (mut input, mut state) = funded();
+    input.from = Some(Actor::new(state.factory_owner, state.factory_program_id));
+    state.remaining_inventory = 0;
+    for paused in [false, true, true, false, false] {
+        input.pre_state = borsh::to_vec(&state).unwrap().into();
+        input.message = borsh::to_vec(&Message::SetWeightedPaused { paused }).unwrap();
+        let legacy = handle(&input).unwrap();
+        input.message = borsh::to_vec(&Message::SetPaused { paused }).unwrap();
+        let common = handle(&input).unwrap();
+        assert_eq!(common.post_state, legacy.post_state);
+        assert_eq!(common.events.len(), legacy.events.len());
+        let changed = state.trade_control.is_paused() != paused;
+        assert_eq!(common.events.len(), usize::from(changed));
+        if changed {
+            assert_eq!(
+                common.events[0].selector,
+                [109, 140, 24, 3, 232, 43, 58, 157]
+            );
+            assert_eq!(common.events[0].data, borsh::to_vec(&paused).unwrap());
+            assert_eq!(common.events[0].selector, legacy.events[0].selector);
+            assert_eq!(common.events[0].data, legacy.events[0].data);
+        }
+        assert_eq!(common.validity.timestamps.start(), None);
+        assert_eq!(common.validity.timestamps.end(), Some(3_000_000));
+        state = state_of(&common);
+        assert_eq!(
+            state.trade_control.policy(),
+            lbp_core::PausePolicy::AuthorityControlled
+        );
+        for from in [
+            None,
+            Some(Actor::new(id(50), id(8))),
+            Some(Actor::new(id(99), state.factory_program_id)),
+            Some(Actor::new(state.factory_owner, id(99))),
+        ] {
+            let mut forged = input.clone();
+            forged.from = from;
+            forged.pre_state = common.post_state.clone().unwrap();
+            forged.is_authorized = true;
+            assert_eq!(handle(&forged).err(), Some(lbp_core::Error::Unauthorized));
+        }
+    }
+    let response = settle(
+        &input,
+        &state,
+        Message::SettleWeighted { creator: id(50) },
+        config(0, id(43), true),
+        [100, 0],
+    )
+    .unwrap();
+    assert_eq!(response.validity.timestamps.start(), Some(3_000_000));
+}
+
+#[test]
+fn weighted_controls_reject_disabled_unfunded_settled_and_overflow_even_on_noops() {
+    let (mut input, original) = funded();
+    input.from = Some(Actor::new(
+        original.factory_owner,
+        original.factory_program_id,
+    ));
+    for legacy in [false, true] {
+        for paused in [false, true] {
+            for case in 0..4 {
+                let mut state = original.clone();
+                state.trade_control.set_paused(paused).unwrap();
+                let expected = match case {
+                    0 => {
+                        state.trade_control = lbp_core::TradeControl::Unrestricted;
+                        lbp_core::Error::PauseDisabled
+                    }
+                    1 => {
+                        state.funded = false;
+                        lbp_core::Error::PendingFunding
+                    }
+                    2 => {
+                        state.proceeds_settled = true;
+                        lbp_core::Error::Closed
+                    }
+                    _ => {
+                        state.end_timestamp = Some(u64::MAX);
+                        lbp_core::Error::InvalidTerms
+                    }
+                };
+                input.pre_state = borsh::to_vec(&state).unwrap().into();
+                input.message = borsh::to_vec(&if legacy {
+                    Message::SetWeightedPaused { paused }
+                } else {
+                    Message::SetPaused { paused }
+                })
+                .unwrap();
+                assert_eq!(handle(&input).err(), Some(expected));
+            }
+        }
+    }
+}
+
+#[test]
+fn common_weighted_resume_keeps_namespace_freeze_for_both_buys() {
+    let (mut input, state) = funded();
+    input.from = Some(Actor::new(state.factory_owner, state.factory_program_id));
+    input.pre_state = borsh::to_vec(&state).unwrap().into();
+    input.message = borsh::to_vec(&Message::SetPaused { paused: true }).unwrap();
+    let response = handle(&input).unwrap();
+    input.pre_state = response.post_state.unwrap();
+    input.message = borsh::to_vec(&Message::SetPaused { paused: false }).unwrap();
+    let resumed = state_of(&handle(&input).unwrap());
+    input.from = Some(Actor::new(id(50), id(8)));
+    for message in [
+        Message::BuyWeightedExactInput {
+            membership: None,
+            amount_in: 10,
+            min_amount_out: 1,
+        },
+        Message::BuyWeightedExactOutput {
+            membership: None,
+            amount_out: 500,
+            max_amount_in: 1000,
+        },
+    ] {
+        assert_eq!(
+            operation(
+                &input,
+                &resumed,
+                message.clone(),
+                config(0, id(43), true),
+                [100, 1_000_000, 1000]
+            )
+            .err(),
+            Some(lbp_core::Error::Frozen)
+        );
+        assert!(
+            operation(
+                &input,
+                &resumed,
+                message,
+                config(0, id(43), false),
+                [100, 1_000_000, 1000]
+            )
+            .is_ok()
+        );
+    }
 }

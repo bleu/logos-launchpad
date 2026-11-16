@@ -10,6 +10,7 @@ license = "MIT"
 # `riscv32im-risc0-zkvm-elf`. Keep it free of host-only features.
 [dependencies]
 eligibility-policy = { path = "../eligibility-policy" }
+sale-policy = { path = "../sale-policy" }
 lez-compat-core.workspace = true
 borsh.workspace = true
 clock_core.workspace = true

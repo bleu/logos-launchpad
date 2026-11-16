@@ -230,6 +230,9 @@ impl From<launchpad_client::TradeMode> for TradeModeArg {
 struct CreateSaleArgs {
     #[arg(long, value_enum)]
     trade_mode: TradeModeArg,
+    /// Let the current creator pause and resume swaps.
+    #[arg(long)]
+    pausable: bool,
     /// Saved adapter deployment address.
     #[arg(long, value_parser = parse_public_account_id)]
     graduation_hook_program_id: Option<lee::AccountId>,
@@ -279,6 +282,11 @@ impl CreateSaleArgs {
     fn sale_request(&self) -> CreateSaleRequest {
         CreateSaleRequest {
             buy_policy: launchpad_client::BuyPolicy::Open,
+            pause_policy: if self.pausable {
+                launchpad_client::PausePolicy::AuthorityControlled
+            } else {
+                launchpad_client::PausePolicy::Disabled
+            },
             trade_mode: self.trade_mode.into(),
             graduation_hook: self.graduation_hook_program_id.map(|program_id| {
                 launchpad_client::GraduationHook {
@@ -2011,6 +2019,19 @@ mod tests {
             panic!("create sale")
         };
         assert!(args.sale_request().graduation_hook.is_none());
+        assert_eq!(
+            args.sale_request().pause_policy,
+            launchpad_client::PausePolicy::Disabled
+        );
+        let mut pausable = arguments.clone();
+        pausable.push("--pausable");
+        let Command::CreateSale(args) = Cli::try_parse_from(pausable).unwrap().command else {
+            panic!("create sale")
+        };
+        assert_eq!(
+            args.sale_request().pause_policy,
+            launchpad_client::PausePolicy::AuthorityControlled
+        );
         let mut configuration_without_program = arguments.clone();
         configuration_without_program.extend(["--graduation-hook-configuration", "070b"]);
         assert!(Cli::try_parse_from(configuration_without_program).is_err());

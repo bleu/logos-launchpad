@@ -95,6 +95,7 @@ impl Pending {
                 }
                 Message::WithdrawReserves { .. }
                 | Message::ClosePool { .. }
+                | Message::SetPaused { .. }
                 | Message::CollectFees => crate::pool_lifecycle::finish(self, receiver),
                 _ => crate::pool_create::finish(self, receiver),
             };

@@ -13,6 +13,9 @@ use pool::{ExactInputSwap, ExactOutputSwap, TokenSide};
 pub fn begin(input: &ReceiveInput, message: Message) -> Result<Response, Error> {
     let state = PoolAccount::decode(&input.pre_state)?;
     state.validate_address(input.receiver)?;
+    if state.trade_control.is_paused() {
+        return Err(Error::Paused);
+    }
     let sender = input.from.ok_or(Error::Unauthorized)?;
     if sender.program_account_id != input.receiver.program_account_id
         || matches!(state.buy_policy, crate::BuyPolicy::Allowlist(_))
@@ -88,6 +91,9 @@ pub(crate) fn payout(
     )
 }
 pub(crate) fn finish(mut pending: Pending, receiver: Actor) -> Result<Response, Error> {
+    if pending.state.trade_control.is_paused() {
+        return Err(Error::Paused);
+    }
     let config = pending.config.as_ref().ok_or(Error::InvalidState)?;
     if config.emergency.is_frozen {
         return Err(Error::Frozen);

@@ -6,6 +6,7 @@ use lee_core::{
     account::{AccountId, Actor},
     program::{PdaSeed, ReceiveInput, Response, SyncMessage},
 };
+pub use sale_policy::{PausePolicy, TradeControl};
 
 include!(concat!(env!("OUT_DIR"), "/emergency_authority.rs"));
 
@@ -36,6 +37,8 @@ pub enum Error {
     Arithmetic,
     Restricted,
     Closed,
+    PauseDisabled,
+    Paused,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -71,6 +74,7 @@ pub enum Message {
     },
     CreatePool {
         buy_policy: BuyPolicy,
+        pause_policy: PausePolicy,
         namespace: AccountId,
         token0_definition_id: AccountId,
         token1_definition_id: AccountId,
@@ -119,6 +123,9 @@ pub enum Message {
         namespace: AccountId,
         protocol_fee_bps: u32,
         treasury: AccountId,
+    },
+    SetPaused {
+        paused: bool,
     },
 }
 pub type Instruction = Message;
@@ -281,6 +288,7 @@ pub fn handle(input: &ReceiveInput) -> Result<Response, Error> {
                         | Message::ActivatePool { .. }
                         | Message::WithdrawReserves { .. }
                         | Message::ClosePool { .. }
+                        | Message::SetPaused { .. }
                         | Message::SwapExactInput { .. }
                         | Message::SwapExactOutput { .. }
                 )
@@ -305,9 +313,10 @@ pub fn handle(input: &ReceiveInput) -> Result<Response, Error> {
             }
             Ok(Response::keep_state().send(call))
         }
-        Message::WithdrawReserves { .. } | Message::ClosePool { .. } | Message::CollectFees => {
-            pool_lifecycle::begin(input, message)
-        }
+        Message::WithdrawReserves { .. }
+        | Message::ClosePool { .. }
+        | Message::CollectFees
+        | Message::SetPaused { .. } => pool_lifecycle::begin(input, message),
         Message::SwapExactInput { .. } | Message::SwapExactOutput { .. } => {
             pool_swap::begin(input, message)
         }
@@ -433,6 +442,7 @@ mod tests;
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PoolAccount {
     pub buy_policy: BuyPolicy,
+    pub trade_control: TradeControl,
     pub allowed_input_token: Option<pool::TokenSide>,
     pub funded: bool,
     pub namespace: AccountId,

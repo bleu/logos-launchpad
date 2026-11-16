@@ -1,6 +1,6 @@
 # ADR 0031: Shared launch setup and reusable pool policies
 
-Status: Shared setup, public buy eligibility and fee arithmetic implemented. Selectable ending and fee policies and cross-engine graduation remain incomplete. Private routes, real proofs and deployment readiness pending.
+Status: Shared setup, public buy eligibility, fee arithmetic and optional pause/resume implemented. Selectable ending and fee policies and cross-engine graduation remain incomplete. Private routes, real proofs and deployment readiness pending.
 
 Date: 2026-10-13; policy amendment: 2026-11-09
 
@@ -34,7 +34,7 @@ The allowlist is a shared buy-admission policy, with pre-approved public trading
 
 Preserve existing fees, ending rules, payouts, live namespace settings and buy-only allowlist admission. See [settlement](0020-settlement-and-graduation.md) and [sale closing](0025-sale-closing.md). New policy choices require explicit accounting rules; neither fixed-price nor weighted sales has a curve `R` reserve.
 
-Share controls and graduation through typed interfaces without changing supported behavior. Creation must fix pause as disabled or authority-controlled. The current creator controls factory sales; the current owner controls direct pools. Authenticate every call, including retries. Pause blocks swaps, but permits fee collection and safe settlement. Resume must not move the schedule or clear emergency freeze. Controls reject closed sales; weighted inventory depletion alone does not end the schedule.
+Optional pause/resume is implemented through `PausePolicy` and `TradeControl`. Creation fixes pause as disabled or authority-controlled. The current creator controls factory sales; the current owner controls direct pools. Authenticate every call, including retries. Pause blocks swaps, but permits fee collection and safe settlement. Resume must not move the schedule or clear emergency freeze. Controls reject closed sales; weighted inventory depletion alone does not end the schedule.
 
 Test shared policies through each engine's interface. Signed guest tests must check token effects, rollback and retries. Callback success does not prove DEX liquidity.
 

@@ -2,6 +2,9 @@
 
 #![deny(clippy::arithmetic_side_effects)]
 
+mod controls;
+pub use controls::{PauseError, PausePolicy, TradeControl};
+
 use integer_math::{Rounding, mul_div};
 
 const BASIS_POINTS: u128 = 10_000;

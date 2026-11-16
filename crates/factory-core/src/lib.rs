@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 
 mod hook;
 mod lbp_setup;
-pub use curve_core::{AUTHORITY_PROGRAM_ACCOUNT_ID, TOKEN_PROGRAM_ACCOUNT_ID};
+pub use curve_core::{AUTHORITY_PROGRAM_ACCOUNT_ID, PausePolicy, TOKEN_PROGRAM_ACCOUNT_ID};
 pub use hook::{AdapterMessage, AdapterState, GraduationRequest, GraduationResult, handle_adapter};
 pub use lbp_setup::{
     CreatorAllocationRelease, FixedPrice, FixedPriceInputs, LbpCreationStage, LbpLaunchState,
@@ -70,6 +70,7 @@ pub struct GraduationHook {
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct FactoryState {
     pub buy_policy: BuyPolicy,
+    pub pause_policy: PausePolicy,
     pub trade_mode: TradeMode,
     pub graduation_hook: Option<GraduationHook>,
     pub creation_stage: CreationStage,
@@ -143,6 +144,7 @@ impl FactoryState {
 pub enum Message {
     CreateFactoryPool {
         buy_policy: BuyPolicy,
+        pause_policy: PausePolicy,
         trade_mode: u8,
         graduation_hook_program_id: Option<AccountId>,
         graduation_hook_configuration: Vec<u8>,
@@ -201,6 +203,10 @@ pub enum Message {
     },
     ClaimWeightedAllocation {
         creator: AccountId,
+    },
+    SetPaused {
+        creator: AccountId,
+        paused: bool,
     },
 }
 pub type Instruction = Message;
@@ -415,6 +421,7 @@ fn transfer(
 fn create_curve(input: &ReceiveInput, command: Message) -> Result<Response, Error> {
     let Message::CreateFactoryPool {
         buy_policy,
+        pause_policy,
         trade_mode,
         graduation_hook_program_id,
         graduation_hook_configuration,
@@ -467,6 +474,7 @@ fn create_curve(input: &ReceiveInput, command: Message) -> Result<Response, Erro
     }
     let state = FactoryState {
         buy_policy,
+        pause_policy,
         trade_mode: TradeMode::try_from(trade_mode).map_err(|_| Error::InvalidTerms)?,
         graduation_hook: graduation_hook_program_id.map(|program_id| GraduationHook {
             program_id,
@@ -537,6 +545,7 @@ fn validate_pool(
     saved: &curve_core::PoolAccount,
 ) -> Result<(), Error> {
     if saved.buy_policy != state.buy_policy
+        || saved.trade_control.policy() != state.pause_policy
         || saved.namespace != state.namespace
         || saved.owner != actor.account_id
         || saved.owner_program
@@ -600,6 +609,29 @@ fn begin_curve(input: &ReceiveInput, command: Message) -> Result<Response, Error
             holding_read(state.pool_id, state.token_definition_id),
         ]);
     }
+    Ok(state.response().send_sync(
+        Actor::new(creator, AUTHORITY_PROGRAM_ACCOUNT_ID),
+        &authority::Message::Check {
+            role: state.creator_role_id,
+            callback: input.receiver,
+        },
+    ))
+}
+fn begin_pause(input: &ReceiveInput, command: Message) -> Result<Response, Error> {
+    let mut state = FactoryState::decode(&input.pre_state)?;
+    state.validate(input.receiver)?;
+    if state.creation_stage != CreationStage::Active {
+        return Err(Error::CreationPending);
+    }
+    let Message::SetPaused { creator, .. } = command else {
+        return Err(Error::InvalidMessage);
+    };
+    state.pending = Some(Pending {
+        command,
+        proof: true,
+        reads: vec![],
+        values: vec![],
+    });
     Ok(state.response().send_sync(
         Actor::new(creator, AUTHORITY_PROGRAM_ACCOUNT_ID),
         &authority::Message::Check {
@@ -758,7 +790,8 @@ fn curve_resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
                 Message::CreateFactoryPool { creator, .. }
                 | Message::ContinueCreation { creator, .. }
                 | Message::ClaimCreatorAllocation { creator, .. }
-                | Message::WithdrawFactoryProceeds { creator, .. } => creator,
+                | Message::WithdrawFactoryProceeds { creator, .. }
+                | Message::SetPaused { creator, .. } => creator,
                 _ => return Err(Error::InvalidState),
             };
             authority::verify(
@@ -766,6 +799,15 @@ fn curve_resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
                 Actor::new(state.creator_role_id, AUTHORITY_PROGRAM_ACCOUNT_ID),
                 creator,
             )?;
+            if let Message::SetPaused { paused, .. } = pending.command {
+                return Ok(state.response().send(
+                    SyncMessage::new(
+                        Actor::new(state.pool_id, state.curve_program_id),
+                        &curve_core::Message::SetPaused { paused },
+                    )
+                    .with_pda_seeds([compute_factory_seed(state.namespace, state.launch_salt)]),
+                ));
+            }
             pending.proof = false;
             state.pending = Some(pending);
             let mut response = state.response();
@@ -1179,6 +1221,7 @@ fn curve_resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
                             Actor::new(input.receiver.account_id, state.curve_program_id),
                             &curve_core::Message::CreatePool {
                                 buy_policy: state.buy_policy.clone(),
+                                pause_policy: state.pause_policy,
                                 namespace: state.namespace,
                                 token0_definition_id: state.token_definition_id,
                                 token1_definition_id: state.collateral_definition_id,
@@ -1313,6 +1356,13 @@ pub fn handle(input: &ReceiveInput) -> Result<Response, Error> {
     }
     let message: Message = borsh::from_slice(&input.message).map_err(|_| Error::InvalidMessage)?;
     match message {
+        command @ Message::SetPaused { .. } => {
+            if LbpLaunchState::decode(&input.pre_state).is_ok() {
+                lbp_setup::begin_payout(input, command)
+            } else {
+                begin_pause(input, command)
+            }
+        }
         message @ (Message::ClaimCreatorAllocation { .. }
         | Message::WithdrawFactoryProceeds { .. })
             if FixedPriceLaunchState::decode(&input.pre_state).is_ok() =>

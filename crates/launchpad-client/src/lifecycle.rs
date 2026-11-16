@@ -181,6 +181,7 @@ pub fn next_creation_invocation(
     if let Some(state) = state {
         validate_factory_state(sale, state)?;
         if !(state.buy_policy == request.buy_policy
+            && state.pause_policy == request.pause_policy
             && state.trade_mode == request.trade_mode
             && state.graduation_hook == request.graduation_hook
             && state.sale_reserve == request.sale_reserve

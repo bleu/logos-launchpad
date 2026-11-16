@@ -27,27 +27,39 @@ pub(super) fn authorize(state: &PoolAccount, input: &ReceiveInput) -> Result<(),
 }
 pub(super) fn set_paused(input: &ReceiveInput, paused: bool) -> Result<Response, Error> {
     let mut state = PoolAccount::decode(&input.pre_state)?;
-    authorize(&state, input)?;
-    let end = end(&state)?;
-    if state.proceeds_settled {
+    state.validate_address(input.receiver)?;
+    if !state.funded {
+        return Err(Error::PendingFunding);
+    }
+    if input.from != Some(Actor::new(state.factory_owner, state.factory_program_id)) {
+        return Err(Error::Unauthorized);
+    }
+    let end = match state.mode {
+        PoolMode::FixedPrice => state.end_timestamp,
+        PoolMode::Weighted { .. } => Some(end(&state)?),
+    };
+    if state.proceeds_settled
+        || (state.mode == PoolMode::FixedPrice && state.remaining_inventory == 0)
+    {
         return Err(Error::Closed);
     }
-    let PoolMode::Weighted { paused: stored, .. } = &mut state.mode else {
-        unreachable!()
-    };
-    let changed = *stored != paused;
-    *stored = paused;
-    let response = curve_core::with_time_bounds(state.response(), None, Some(end))
+    let changed = state
+        .trade_control
+        .set_paused(paused)
+        .map_err(|_| Error::PauseDisabled)?;
+    let response = curve_core::with_time_bounds(state.response(), None, end)
         .map_err(|_| Error::InvalidTerms)?;
-    Ok(if changed {
-        response.event(ProgramEvent {
-            // First eight bytes of sha256("lbp::WeightedPauseChanged").
-            selector: [109, 140, 24, 3, 232, 43, 58, 157],
-            data: borsh::to_vec(&paused).unwrap(),
-        })
-    } else {
-        response
-    })
+    Ok(
+        if changed && matches!(state.mode, PoolMode::Weighted { .. }) {
+            response.event(ProgramEvent {
+                // First eight bytes of sha256("lbp::WeightedPauseChanged").
+                selector: [109, 140, 24, 3, 232, 43, 58, 157],
+                data: borsh::to_vec(&paused).unwrap(),
+            })
+        } else {
+            response
+        },
+    )
 }
 
 // ---------------------------------------------------------------------------

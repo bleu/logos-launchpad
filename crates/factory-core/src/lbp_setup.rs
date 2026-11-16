@@ -11,6 +11,7 @@ pub enum SaleStart {
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize, Serialize, Deserialize)]
 pub struct FixedPriceInputs {
     pub buy_policy: curve_core::BuyPolicy,
+    pub pause_policy: PausePolicy,
     pub namespace: AccountId,
     pub launch_salt: [u8; 32],
     pub name: String,
@@ -30,6 +31,7 @@ pub struct FixedPriceInputs {
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize, Serialize, Deserialize)]
 pub struct WeightedInputs {
     pub buy_policy: curve_core::BuyPolicy,
+    pub pause_policy: PausePolicy,
     pub namespace: AccountId,
     pub launch_salt: [u8; 32],
     pub name: String,
@@ -66,7 +68,6 @@ impl LbpSetupMode {
                 token_weight_start,
                 token_weight_end,
             } => lbp_core::PoolMode::Weighted {
-                paused: false,
                 collateral_seed,
                 token_weight_start,
                 token_weight_end,
@@ -90,6 +91,7 @@ pub enum LbpCreationStage {
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct LbpLaunchState {
     pub buy_policy: curve_core::BuyPolicy,
+    pub pause_policy: PausePolicy,
     format: [u8; 8],
     version: u16,
     pub creator_role_id: AccountId,
@@ -117,6 +119,7 @@ pub struct LbpLaunchState {
 }
 struct SetupInputs {
     buy_policy: curve_core::BuyPolicy,
+    pause_policy: PausePolicy,
     namespace: AccountId,
     launch_salt: [u8; 32],
     name: String,
@@ -144,6 +147,7 @@ pub(super) fn create_fixed(
         input,
         SetupInputs {
             buy_policy: inputs.buy_policy,
+            pause_policy: inputs.pause_policy,
             namespace: inputs.namespace,
             launch_salt: inputs.launch_salt,
             name: inputs.name,
@@ -179,6 +183,7 @@ pub(super) fn create_weighted(
         input,
         SetupInputs {
             buy_policy: inputs.buy_policy,
+            pause_policy: inputs.pause_policy,
             namespace: inputs.namespace,
             launch_salt: inputs.launch_salt,
             name: inputs.name,
@@ -252,6 +257,7 @@ fn create(input: &ReceiveInput, inputs: SetupInputs, command: Message) -> Result
         .map_err(|_| Error::InvalidTerms)?;
     let state = LbpLaunchState {
         buy_policy: inputs.buy_policy,
+        pause_policy: inputs.pause_policy,
         format: match inputs.mode {
             LbpSetupMode::FixedPrice => *b"LZFXLAUN",
             LbpSetupMode::Weighted { .. } => *b"LZWGLAUN",
@@ -401,7 +407,9 @@ pub(super) fn begin_payout(input: &ReceiveInput, command: Message) -> Result<Res
             | Message::WithdrawWeightedProceeds { .. }
             | Message::ClaimWeightedAllocation { .. }
     );
-    if matches!(state.mode, LbpSetupMode::Weighted { .. }) != weighted {
+    if !matches!(command, Message::SetPaused { .. })
+        && matches!(state.mode, LbpSetupMode::Weighted { .. }) != weighted
+    {
         return Err(Error::InvalidState);
     }
     if state.creation_stage != LbpCreationStage::Complete {
@@ -410,6 +418,7 @@ pub(super) fn begin_payout(input: &ReceiveInput, command: Message) -> Result<Res
     let creator = match command {
         Message::WithdrawFactoryProceeds { creator, .. }
         | Message::ClaimCreatorAllocation { creator, .. }
+        | Message::SetPaused { creator, .. }
         | Message::SetWeightedPaused { creator, .. }
         | Message::WithdrawWeightedProceeds { creator }
         | Message::ClaimWeightedAllocation { creator } => creator,
@@ -465,6 +474,7 @@ pub(super) fn resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
                 | Message::ContinueWeightedCreation { creator, .. }
                 | Message::ClaimCreatorAllocation { creator, .. }
                 | Message::WithdrawFactoryProceeds { creator, .. }
+                | Message::SetPaused { creator, .. }
                 | Message::SetWeightedPaused { creator, .. }
                 | Message::WithdrawWeightedProceeds { creator }
                 | Message::ClaimWeightedAllocation { creator } => creator,
@@ -475,6 +485,15 @@ pub(super) fn resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
                 Actor::new(state.creator_role_id, AUTHORITY_PROGRAM_ACCOUNT_ID),
                 creator,
             )?;
+            if let Message::SetPaused { paused, .. } = pending.command {
+                return Ok(state.response().send(
+                    SyncMessage::new(
+                        Actor::new(state.pool_id, state.lbp_program_id),
+                        &lbp_core::Message::SetPaused { paused },
+                    )
+                    .with_pda_seeds([compute_factory_seed(state.namespace, state.launch_salt)]),
+                ));
+            }
             if let Message::SetWeightedPaused { paused, .. } = pending.command {
                 return Ok(state.response().send_sync(
                     Actor::new(state.pool_id, state.lbp_program_id),
@@ -551,6 +570,7 @@ pub(super) fn resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
             let pool = lbp_core::PoolAccount::decode(&pending.values[0])
                 .map_err(|_| Error::InvalidState)?;
             if pool.buy_policy != state.buy_policy
+                || pool.trade_control.policy() != state.pause_policy
                 || !payout_mode_matches(state.mode, pool.mode)
                 || pool.namespace != state.namespace
                 || pool.namespace_program_id != state.namespace_program_id
@@ -651,6 +671,7 @@ pub(super) fn resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
                 let pool = lbp_core::PoolAccount::decode(&pending.values[4])
                     .map_err(|_| Error::InvalidState)?;
                 if pool.buy_policy != state.buy_policy
+                    || pool.trade_control.policy() != state.pause_policy
                     || pool.funded
                     || pool.mode != state.mode.pool_mode()
                     || pool.remaining_inventory != state.sale_inventory
@@ -762,6 +783,7 @@ pub(super) fn resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
                     LbpSetupMode::FixedPrice => lbp_core::Message::PrepareFixedPrice {
                         inputs: lbp_core::FixedPricePoolInputs {
                             buy_policy: state.buy_policy.clone(),
+                            pause_policy: state.pause_policy,
                             namespace: state.namespace,
                             namespace_program_id: state.namespace_program_id,
                             factory_program_id: input.receiver.program_account_id,
@@ -784,6 +806,7 @@ pub(super) fn resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
                     } => lbp_core::Message::PrepareWeighted {
                         inputs: lbp_core::WeightedPoolInputs {
                             buy_policy: state.buy_policy.clone(),
+                            pause_policy: state.pause_policy,
                             namespace: state.namespace,
                             namespace_program_id: state.namespace_program_id,
                             factory_program_id: input.receiver.program_account_id,
@@ -994,7 +1017,7 @@ impl LbpLaunchState {
     }
 }
 
-// Dynamic pricing collateral and pause state do not change the saved allocation terms.
+// Dynamic pricing collateral does not change the saved allocation terms.
 fn payout_mode_matches(saved: LbpSetupMode, pool: lbp_core::PoolMode) -> bool {
     match (saved, pool) {
         (LbpSetupMode::FixedPrice, lbp_core::PoolMode::FixedPrice) => true,

@@ -21,6 +21,7 @@ pub(crate) fn side(side: Option<u8>) -> Result<Option<TokenSide>, Error> {
 pub fn begin(input: &ReceiveInput, message: Message) -> Result<Response, Error> {
     let Message::CreatePool {
         buy_policy,
+        pause_policy,
         namespace,
         token0_definition_id,
         token1_definition_id,
@@ -108,6 +109,7 @@ pub fn begin(input: &ReceiveInput, message: Message) -> Result<Response, Error> 
     }
     let state = PoolAccount {
         buy_policy,
+        trade_control: crate::TradeControl::new(pause_policy),
         allowed_input_token: side(allowed_input_token)?,
         funded: !defer_funding,
         namespace,
@@ -201,9 +203,17 @@ pub(crate) fn finish(mut pending: Pending, receiver: Actor) -> Result<Response, 
         }
         return Ok(response);
     }
-    let Message::CreatePool { defer_funding, .. } = pending.message else {
+    let Message::CreatePool {
+        defer_funding,
+        pause_policy,
+        ..
+    } = pending.message
+    else {
         return Err(Error::InvalidMessage);
     };
+    if pending.state.trade_control.policy() != pause_policy {
+        return Err(Error::InvalidPool);
+    }
     if pending.state.owner_program.is_some()
         && !defer_funding
         && (pending.balances[0] < pending.state.pool.real_reserve0

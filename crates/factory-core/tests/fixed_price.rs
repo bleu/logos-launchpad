@@ -1,3 +1,6 @@
+#[path = "support/lbp_pause_forwarding.rs"]
+mod lbp_pause_forwarding;
+
 use factory_core::{
     CreatorAllocationRelease, Error, FixedPrice, FixedPriceInputs, Message, SaleStart,
     compute_factory_pda, handle,
@@ -12,6 +15,7 @@ fn id(n: u8) -> AccountId {
 fn inputs() -> FixedPriceInputs {
     FixedPriceInputs {
         buy_policy: curve_core::BuyPolicy::Open,
+        pause_policy: curve_core::PausePolicy::Disabled,
         namespace: id(40),
         launch_salt: [3; 32],
         name: "Launch".into(),
@@ -379,6 +383,7 @@ fn pool_preparation_uses_saved_terms_and_separate_setup_stage() {
 fn prepared_pool(state: &factory_core::FixedPriceLaunchState, factory: Actor) -> Vec<u8> {
     let inputs = lbp_core::FixedPricePoolInputs {
         buy_policy: state.buy_policy.clone(),
+        pause_policy: state.pause_policy,
         namespace: state.namespace,
         namespace_program_id: state.namespace_program_id,
         factory_program_id: factory.program_account_id,
@@ -1500,4 +1505,140 @@ fn fixed_price_allocation_rejects_a_different_pool_buy_policy() {
         claim_allocation(&input, &state, &pool, 200, 200).err(),
         Some(Error::InvalidState)
     );
+}
+
+#[test]
+fn fixed_price_pause_policy_survives_every_setup_stage_and_rejects_substitution() {
+    for policy in [
+        curve_core::PausePolicy::Disabled,
+        curve_core::PausePolicy::AuthorityControlled,
+    ] {
+        let mut input = creation();
+        let mut terms = inputs();
+        terms.pause_policy = policy;
+        input.message = borsh::to_vec(&Message::CreateFixedPriceLbp { inputs: terms }).unwrap();
+        let mut mint = handle(&input).unwrap();
+        for bytes in [namespace_state(), collateral()] {
+            assert_eq!(
+                factory_core::LbpLaunchState::decode(mint.post_state.as_ref().unwrap())
+                    .unwrap()
+                    .pause_policy,
+                policy
+            );
+            input = reply(&input, &mint, bytes);
+            mint = handle(&input).unwrap();
+        }
+        let (input, allocated) = continue_sale(
+            &input,
+            &mint,
+            factory_core::LbpCreationStage::Minted,
+            1000,
+            0,
+            0,
+        );
+        assert_eq!(
+            factory_core::LbpLaunchState::decode(allocated.post_state.as_ref().unwrap())
+                .unwrap()
+                .pause_policy,
+            policy
+        );
+        let (input, prepared) = continue_sale(
+            &input,
+            &allocated,
+            factory_core::LbpCreationStage::Allocated,
+            0,
+            800,
+            200,
+        );
+        let state =
+            factory_core::LbpLaunchState::decode(prepared.post_state.as_ref().unwrap()).unwrap();
+        assert_eq!(state.pause_policy, policy);
+        let call = prepared
+            .sync_messages
+            .iter()
+            .find(|call| call.to.account_id == state.pool_id)
+            .unwrap();
+        let lbp_core::Message::PrepareFixedPrice { inputs } =
+            borsh::from_slice(&call.message).unwrap()
+        else {
+            panic!("prepare")
+        };
+        assert_eq!(inputs.pause_policy, policy);
+        for control in [
+            curve_core::TradeControl::Unrestricted,
+            curve_core::TradeControl::Running,
+            curve_core::TradeControl::Paused,
+        ] {
+            let (mut input, mut response) = continue_sale(
+                &input,
+                &prepared,
+                factory_core::LbpCreationStage::PoolPrepared,
+                0,
+                800,
+                200,
+            );
+            let mut pool =
+                lbp_core::PoolAccount::decode(&prepared_pool(&state, input.receiver)).unwrap();
+            pool.trade_control = control;
+            let values = [
+                borsh::to_vec(&pool).unwrap(),
+                holding(state.pool_id, state.token_definition_id, 0),
+                holding(state.pool_id, state.collateral_definition_id, 0),
+            ];
+            for (slot, bytes) in values.into_iter().enumerate() {
+                input = reply(&input, &response, bytes);
+                let result = handle(&input);
+                if slot == 2 && control.policy() != policy {
+                    assert_eq!(result.err(), Some(Error::InvalidState));
+                    break;
+                }
+                response = result.unwrap();
+                if slot == 2 {
+                    let complete =
+                        factory_core::LbpLaunchState::decode(response.post_state.as_ref().unwrap())
+                            .unwrap();
+                    assert_eq!(
+                        complete.creation_stage,
+                        factory_core::LbpCreationStage::Complete
+                    );
+                    assert_eq!(complete.pause_policy, policy);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn paused_fixed_price_allocation_uses_immutable_policy_and_keeps_close_bounds() {
+    let (input, mut state) = completed();
+    state.pause_policy = curve_core::PausePolicy::AuthorityControlled;
+    let mut pool = active_pool(&state, input.receiver);
+    pool.trade_control = curve_core::TradeControl::Paused;
+    let response = claim_allocation(&input, &state, &pool, 0, 200).unwrap();
+    assert_eq!(response.validity.timestamps.start(), Some(200_000));
+    pool.trade_control = curve_core::TradeControl::Unrestricted;
+    assert_eq!(
+        claim_allocation(&input, &state, &pool, 200, 200).err(),
+        Some(Error::InvalidState)
+    );
+}
+
+#[test]
+fn shared_pause_requires_the_sale_creator_on_every_call_before_pool_forwarding() {
+    let (input, mut state) = completed();
+    state.pause_policy = curve_core::PausePolicy::AuthorityControlled;
+    assert!(matches!(state.mode, factory_core::LbpSetupMode::FixedPrice));
+    lbp_pause_forwarding::assert_creator_authority_and_pool_forwarding(input, state);
+}
+
+#[test]
+fn legacy_weighted_pause_does_not_route_to_fixed_price_sales() {
+    let (mut input, state) = completed();
+    input.pre_state = borsh::to_vec(&state).unwrap().into();
+    input.message = borsh::to_vec(&Message::SetWeightedPaused {
+        creator: id(42),
+        paused: true,
+    })
+    .unwrap();
+    assert_eq!(handle(&input).err(), Some(Error::InvalidState));
 }

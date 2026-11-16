@@ -1,6 +1,7 @@
 //! Fixed-price and weighted sale setup, buys and fees and mechanism-specific settlement.
 
 pub use curve_core::{AllowlistPolicy, BuyPolicy, MembershipPath};
+pub use sale_policy::{PausePolicy, TradeControl};
 
 mod pricing;
 pub mod pricing_clock;
@@ -44,6 +45,7 @@ pub enum CreatorAllocationRelease {
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize, Serialize, Deserialize)]
 pub struct FixedPricePoolInputs {
     pub buy_policy: BuyPolicy,
+    pub pause_policy: PausePolicy,
     pub namespace: AccountId,
     pub namespace_program_id: AccountId,
     pub factory_program_id: AccountId,
@@ -69,6 +71,7 @@ pub struct FixedPricePoolInputs {
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize, Serialize, Deserialize)]
 pub struct WeightedPoolInputs {
     pub buy_policy: BuyPolicy,
+    pub pause_policy: PausePolicy,
     pub namespace: AccountId,
     pub namespace_program_id: AccountId,
     pub factory_program_id: AccountId,
@@ -152,6 +155,10 @@ pub enum Message {
     /// Permissionless observer checkpoint. Reads the pricing clock and records
     /// the current token weight without changing the price schedule.
     PokeWeighted,
+    /// Factory-authorized controls for either sale mode.
+    SetPaused {
+        paused: bool,
+    },
 }
 pub type Instruction = Message;
 
@@ -160,7 +167,6 @@ pub enum PoolMode {
     FixedPrice,
     /// Collateral weight is the exact complement within `WEIGHT_TOTAL`.
     Weighted {
-        paused: bool,
         token_weight_start: u128,
         token_weight_end: u128,
         /// Immutable creator seed. Surplus does not change this value.
@@ -177,6 +183,7 @@ pub enum PoolMode {
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PoolAccount {
     pub buy_policy: BuyPolicy,
+    pub trade_control: TradeControl,
     pub mode: PoolMode,
     pub funded: bool,
     pub namespace: AccountId,
@@ -228,6 +235,7 @@ pub enum Error {
     MathAccuracy,
     PowerUnderflow,
     Underfunded,
+    PauseDisabled,
 }
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -545,6 +553,7 @@ pub fn handle(input: &ReceiveInput) -> Result<Response, Error> {
                 .map_err(|_| Error::InvalidTerms)?;
             let state = PoolAccount {
                 buy_policy: inputs.buy_policy,
+                trade_control: TradeControl::new(inputs.pause_policy),
                 mode: PoolMode::FixedPrice,
                 funded: false,
                 namespace: inputs.namespace,
@@ -655,8 +664,8 @@ pub fn handle(input: &ReceiveInput) -> Result<Response, Error> {
                 .map_err(|_| Error::InvalidTerms)?;
             let state = PoolAccount {
                 buy_policy: inputs.buy_policy,
+                trade_control: TradeControl::new(inputs.pause_policy),
                 mode: PoolMode::Weighted {
-                    paused: false,
                     token_weight_start: inputs.token_weight_start,
                     token_weight_end: inputs.token_weight_end,
                     collateral_seed: inputs.collateral_seed,
@@ -760,7 +769,11 @@ pub fn handle(input: &ReceiveInput) -> Result<Response, Error> {
         | Message::BuyWeightedExactOutput { .. }
         | Message::SettleFixedPrice { .. }
         | Message::CollectFees => trading::begin(input, message),
-        Message::SetWeightedPaused { paused } => weighted_lifecycle::set_paused(input, paused),
+        Message::SetWeightedPaused { paused } => {
+            weighted_lifecycle::end(&PoolAccount::decode(&input.pre_state)?)?;
+            weighted_lifecycle::set_paused(input, paused)
+        }
+        Message::SetPaused { paused } => weighted_lifecycle::set_paused(input, paused),
         Message::SettleWeighted { .. } => trading::begin(input, message),
         Message::PokeWeighted => weighted_lifecycle::poke(input),
         Message::ReadState => {
