@@ -86,6 +86,8 @@ pub enum ClientError {
     #[error("invalid factory curve parameters: {0}")]
     #[strum(serialize = "factory_parameters")]
     FactoryParameters(#[from] factory_core::CreateError),
+    #[error("invalid factory sale policy: {0}")]
+    FactoryPolicy(#[from] factory_core::Error),
     #[error("reading the live curve configuration")]
     #[strum(serialize = "read_curve_config")]
     ReadCurveConfig(#[source] Box<dyn Error + Send + Sync>),
@@ -271,6 +273,7 @@ mod tests {
                 factory_core::CreateError::SaleReserveZero.into(),
                 "factory_parameters",
             ),
+            (factory_core::Error::InvalidTerms.into(), "factory_policy"),
             (
                 ClientError::ReadFactoryPool(Box::new(std::io::Error::other("slippage"))),
                 "read_factory_pool",
@@ -297,6 +300,14 @@ mod tests {
                 .unwrap()
                 .downcast_ref::<factory_core::CreateError>(),
             Some(factory_core::CreateError::VirtualTokenReserveNotAboveSaleReserve)
+        ));
+        let error: ClientError = factory_core::Error::InvalidTerms.into();
+        assert!(matches!(
+            error
+                .source()
+                .unwrap()
+                .downcast_ref::<factory_core::Error>(),
+            Some(factory_core::Error::InvalidTerms)
         ));
         let error = ClientError::QuoteSell(pool::SwapError::InsufficientRealOutputReserve);
         assert!(matches!(

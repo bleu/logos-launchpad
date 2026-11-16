@@ -17,7 +17,7 @@ Defer the controls, observations, settlement and recovery discussion. Those deci
 - The temporary reply contains Unix milliseconds. Convert it to Unix seconds with integer division. Use that second to interpolate collateral weight. Calculate token weight as its exact complement. Keep the existing normalized weights, rounding and math limits.
 - Model the saved time of the previous block. It is not the current inclusion time. Reject pricing time before the sale start or at or after its end.
 - Attach the sale's half-open start/end interval to the transaction response. These real LEZ inclusion bounds must reject a buy at or after the end even if the fake clock is stale.
-- Keep buyer price limits, current pricing reserves, creator-borne fees, vault coverage, namespace freeze and atomic rollback.
+- Keep buyer price limits, current pricing reserves, vault coverage, namespace freeze and atomic rollback. The later [shared namespace fee rule](../docs/adr/0031-shared-launch-factory.md) supersedes this plan's original creator-borne fees.
 - Keep fixed-price and bonding-curve behavior unchanged. Weighted setup keeps its current clock assertions and inclusion bounds.
 
 ## 1. Add the temporary clock boundary

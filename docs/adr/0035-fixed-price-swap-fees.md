@@ -14,7 +14,7 @@ For exact input, charge `fee = ceil(gross * bps / 10_000)` and price tokens from
 
 Record net collateral as creator proceeds and fees separately. Keep the live namespace rate, current treasury, anytime permissionless full idempotent collection and settlement rules unchanged. Unsolicited transfers remain surplus.
 
-This supersedes only the fixed-price fee burden and pricing portions of ADR 0016 and ADR 0033. Their other rules remain in force. Curve behavior is unchanged. Future weighted-sale fees remain creator-borne, with full buyer input in pricing under [ADR 0030](0030-lbp-pricing-collateral.md); this decision adds no weighted-sale execution or policy change.
+This supersedes only the fixed-price fee burden and pricing portions of ADR 0016 and ADR 0033. Their other rules remain in force. Curve behavior is unchanged. The later [ADR 0031](0031-shared-launch-factory.md) amendment applies the same namespace fee incidence to weighted buys; [ADR 0030](0030-lbp-pricing-collateral.md) defines their seed-inclusive accounting.
 
 ## Consequences
 

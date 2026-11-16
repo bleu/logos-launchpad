@@ -36,10 +36,13 @@ pub fn begin(input: &ReceiveInput, message: Message) -> Result<Response, Error> 
     .advance(input.receiver)
 }
 pub(crate) fn finish(mut pending: Pending, receiver: Actor) -> Result<Response, Error> {
+    pending.state.validate_address(receiver)?;
     if let Message::SetPaused { paused } = pending.message {
-        if pending.state.pool.lifecycle != pool::PoolLifecycle::Open {
-            return Err(Error::Closed);
-        }
+        let bounds = pending
+            .state
+            .pool
+            .trade_bounds()
+            .map_err(|_| Error::Closed)?;
         pending
             .state
             .trade_control
@@ -47,11 +50,16 @@ pub(crate) fn finish(mut pending: Pending, receiver: Actor) -> Result<Response, 
             .map_err(|_| Error::PauseDisabled)?;
         return crate::with_time_bounds(
             Response::set_state(borsh::to_vec(&pending.state).unwrap()),
-            None,
-            pending.state.pool.close_timestamp,
+            bounds.at_least,
+            bounds.before,
         );
     }
     if let Message::ClosePool { now } = pending.message {
+        let bounds = pending
+            .state
+            .pool
+            .trade_bounds()
+            .map_err(|_| Error::Closed)?;
         pending
             .state
             .pool
@@ -59,8 +67,8 @@ pub(crate) fn finish(mut pending: Pending, receiver: Actor) -> Result<Response, 
             .map_err(|_| Error::Closed)?;
         return crate::with_time_bounds(
             Response::set_state(borsh::to_vec(&pending.state).unwrap()),
-            None,
-            pending.state.pool.close_timestamp,
+            bounds.at_least,
+            bounds.before,
         );
     }
     let config = pending.config.as_ref().ok_or(Error::InvalidState)?;
@@ -76,12 +84,13 @@ pub(crate) fn finish(mut pending: Pending, receiver: Actor) -> Result<Response, 
     }
     if let Message::WithdrawReserves { now } = pending.message {
         crate::pool_swap::backed(&pending)?;
-        let expiry = if pending.state.pool.lifecycle == pool::PoolLifecycle::Open {
-            Some(pending.state.pool.close_timestamp.ok_or(Error::Closed)?)
-        } else {
-            None
-        };
-        let now = expiry.map_or(now, |end| now.max(end));
+        let bounds = pending
+            .state
+            .pool
+            .ending_decision()
+            .map_err(|_| Error::Closed)?
+            .inclusion_bounds();
+        let now = bounds.at_least.map_or(now, |end| now.max(end));
         let (reserve0, reserve1) = pending
             .state
             .pool
@@ -94,8 +103,8 @@ pub(crate) fn finish(mut pending: Pending, receiver: Actor) -> Result<Response, 
             .map_err(|_| Error::Arithmetic)?;
         let response = crate::with_time_bounds(
             Response::set_state(borsh::to_vec(&pending.state).unwrap()),
-            expiry,
-            None,
+            bounds.at_least,
+            bounds.before,
         )?;
         let response = payout(
             response,

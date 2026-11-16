@@ -22,6 +22,7 @@ pub fn begin(input: &ReceiveInput, message: Message) -> Result<Response, Error> 
     let Message::CreatePool {
         buy_policy,
         pause_policy,
+        ending_policy,
         namespace,
         token0_definition_id,
         token1_definition_id,
@@ -67,6 +68,17 @@ pub fn begin(input: &ReceiveInput, message: Message) -> Result<Response, Error> 
     if !defer_funding && close_timestamp.is_some_and(|end| now >= end) {
         return Err(Error::Closed);
     }
+    close_timestamp.map(crate::timestamp_millis).transpose()?;
+    let pool = Pool::create(PoolCreateParams {
+        token0_amount,
+        token1_amount,
+        virtual_reserve0,
+        virtual_reserve1,
+        ending_policy,
+        close_timestamp,
+        close_on_depletion: side(close_on_depletion)?,
+    })
+    .map_err(|_| Error::InvalidPool)?;
     let owner_program = match (owner_program_id, owner_program_seed) {
         (None, None) => None,
         (Some(p), Some(s)) if p != AccountId::default() => Some((p, s)),
@@ -117,15 +129,7 @@ pub fn begin(input: &ReceiveInput, message: Message) -> Result<Response, Error> 
         token1_definition_id,
         owner,
         owner_program,
-        pool: Pool::create(PoolCreateParams {
-            token0_amount,
-            token1_amount,
-            virtual_reserve0,
-            virtual_reserve1,
-            close_timestamp,
-            close_on_depletion: side(close_on_depletion)?,
-        })
-        .map_err(|_| Error::InvalidPool)?,
+        pool,
     };
     state.validate_address(input.receiver)?;
     let mut queries = vec![Query::Namespace, Query::Definition0, Query::Definition1];
@@ -164,6 +168,13 @@ pub fn activate(input: &ReceiveInput, message: Message) -> Result<Response, Erro
     Pending::new(state, message, authority, queries).advance(input.receiver)
 }
 pub(crate) fn finish(mut pending: Pending, receiver: Actor) -> Result<Response, Error> {
+    pending.state.validate_address(receiver)?;
+    pending
+        .state
+        .pool
+        .close_timestamp
+        .map(crate::timestamp_millis)
+        .transpose()?;
     if let Message::ActivatePool { now } = pending.message {
         if pending.state.owner_program.is_some()
             && (pending.balances[0] < pending.state.pool.real_reserve0
@@ -206,12 +217,19 @@ pub(crate) fn finish(mut pending: Pending, receiver: Actor) -> Result<Response, 
     let Message::CreatePool {
         defer_funding,
         pause_policy,
+        ending_policy,
+        close_timestamp,
+        close_on_depletion,
         ..
     } = pending.message
     else {
         return Err(Error::InvalidMessage);
     };
-    if pending.state.trade_control.policy() != pause_policy {
+    if pending.state.trade_control.policy() != pause_policy
+        || pending.state.pool.ending_policy != ending_policy
+        || pending.state.pool.close_timestamp != close_timestamp
+        || pending.state.pool.close_on_depletion != side(close_on_depletion)?
+    {
         return Err(Error::InvalidPool);
     }
     if pending.state.owner_program.is_some()

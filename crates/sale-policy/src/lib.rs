@@ -4,6 +4,8 @@
 
 mod controls;
 pub use controls::{PauseError, PausePolicy, TradeControl};
+mod terms;
+pub use terms::{EndingDecision, EndingError, EndingPolicy, EndingReason, TimeBounds};
 
 use integer_math::{Rounding, mul_div};
 
@@ -34,7 +36,7 @@ impl FeeRate {
         Ok(Self(bps))
     }
 
-    /// The caller chooses whether net collateral prices the trade or pays the creator.
+    /// Splits gross collateral into its net amount and namespace fee.
     pub fn split(self, gross: u128) -> Result<CollateralSplit, FeeError> {
         let fee = mul_div(gross, u128::from(self.0), BASIS_POINTS, Rounding::Ceil)
             .map_err(|_| FeeError::Arithmetic)?;

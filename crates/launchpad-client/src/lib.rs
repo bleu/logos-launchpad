@@ -6,7 +6,8 @@ mod error;
 mod lifecycle;
 mod types;
 pub use curve_core::{
-    AllowlistPolicy, BuyPolicy, MembershipPath, PausePolicy, TOKEN_PROGRAM_ACCOUNT_ID, TradeControl,
+    AllowlistPolicy, BuyPolicy, EndingPolicy, MembershipPath, PausePolicy,
+    TOKEN_PROGRAM_ACCOUNT_ID, TradeControl,
 };
 pub use error::{ClientError, Result};
 pub use factory_core::{CreationStage, GraduationHook, SettlementStage, TradeMode};
@@ -65,6 +66,7 @@ pub fn load_program(path: &Path) -> Result<Program> {
 pub struct CreateSaleRequest {
     pub buy_policy: BuyPolicy,
     pub pause_policy: PausePolicy,
+    pub ending_policy: EndingPolicy,
     pub trade_mode: TradeMode,
     pub graduation_hook: Option<GraduationHook>,
     pub name: String,
@@ -469,6 +471,7 @@ pub fn build_create_sale_invocation(
         request.virtual_token_reserve,
         request.virtual_collateral_reserve,
     )?;
+    factory_core::validate_curve_policies(request.ending_policy, request.end_timestamp)?;
     let a = factory_pool_addresses(sale);
     Ok(admit_factory_accounts(
         invocation(
@@ -478,6 +481,7 @@ pub fn build_create_sale_invocation(
             FactoryInstruction::CreateFactoryPool {
                 buy_policy: request.buy_policy,
                 pause_policy: request.pause_policy,
+                ending_policy: request.ending_policy,
                 trade_mode: request.trade_mode as u8,
                 graduation_hook_program_id: request.graduation_hook.as_ref().map(|h| h.program_id),
                 graduation_hook_configuration: request
@@ -1194,6 +1198,18 @@ pub async fn load_factory_pool(
         .await
         .map_err(ClientError::ReadFactoryPool)?;
     let state = curve_core::PoolAccount::decode(&data).map_err(ClientError::DecodeFactoryPool)?;
+    let factory = load_factory_state(wallet, sale).await?;
+    validate_factory_pool(sale, &factory, &state)?;
+    Ok(state)
+}
+
+pub(crate) fn validate_factory_pool(
+    sale: FactorySale,
+    factory: &FactoryState,
+    state: &curve_core::PoolAccount,
+) -> Result<()> {
+    validate_factory_state(sale, factory)?;
+    let a = factory_pool_addresses(sale);
     if state.namespace != sale.namespace
         || state.token0_definition_id != a.token_definition
         || state.token1_definition_id != sale.collateral_definition
@@ -1203,12 +1219,33 @@ pub async fn load_factory_pool(
                 sale.factory_program_id,
                 *factory_core::compute_factory_seed(sale.namespace, sale.launch_salt).as_bytes(),
             ))
+        || state.buy_policy != factory.buy_policy
+        || state.trade_control.policy() != factory.pause_policy
+        || state.pool.ending_policy != factory.ending_policy
+        || state.pool.validate_policy().is_err()
+        || Some(state.pool.k)
+            != factory
+                .virtual_token_reserve
+                .checked_mul(factory.virtual_collateral_reserve)
+        || state.pool.close_timestamp != factory.end_timestamp
+        || state.pool.close_on_depletion
+            != match factory.ending_policy {
+                EndingPolicy::Scheduled => None,
+                _ => Some(pool::TokenSide::Token0),
+            }
+        || state.allowed_input_token
+            != match factory.trade_mode {
+                TradeMode::BuyOnly => Some(pool::TokenSide::Token1),
+                TradeMode::BuyAndSell => None,
+            }
     {
         return Err(ClientError::FactorySaleMismatch);
     }
-    Ok(state)
+    Ok(())
 }
 pub(crate) fn validate_factory_state(sale: FactorySale, state: &FactoryState) -> Result<()> {
+    factory_core::validate_curve_policies(state.ending_policy, state.end_timestamp)
+        .map_err(|_| ClientError::FactorySaleMismatch)?;
     let a = factory_pool_addresses(sale);
     if state.namespace != sale.namespace
         || state.launch_salt != sale.launch_salt
@@ -1420,6 +1457,10 @@ pub fn quote_buy(
     {
         return Err(ClientError::InputTokenRestricted);
     }
+    pool_account
+        .pool
+        .validate_policy()
+        .map_err(|_| ClientError::QuoteBuy(pool::SwapError::InvalidPolicy))?;
     let mut pool = pool_account.pool.clone();
     pool.swap_exact_output(pool::ExactOutputSwap {
         token_in: pool::TokenSide::Token1,
@@ -1455,6 +1496,10 @@ pub fn quote_sell(
     {
         return Err(ClientError::InputTokenRestricted);
     }
+    pool_account
+        .pool
+        .validate_policy()
+        .map_err(|_| ClientError::QuoteSell(pool::SwapError::InvalidPolicy))?;
     let mut pool = pool_account.pool.clone();
     pool.swap_exact_input(pool::ExactInputSwap {
         token_in: pool::TokenSide::Token0,
@@ -1489,6 +1534,10 @@ pub fn quote_buy_with_collateral(
     {
         return Err(ClientError::InputTokenRestricted);
     }
+    pool_account
+        .pool
+        .validate_policy()
+        .map_err(|_| ClientError::QuoteBuyWithCollateral(pool::SwapError::InvalidPolicy))?;
     let mut pool = pool_account.pool.clone();
     pool.swap_exact_input(pool::ExactInputSwap {
         token_in: pool::TokenSide::Token1,

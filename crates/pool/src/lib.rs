@@ -11,6 +11,7 @@
 #![deny(clippy::arithmetic_side_effects)]
 
 use borsh::{BorshDeserialize, BorshSerialize};
+pub use sale_policy::{EndingDecision, EndingError, EndingPolicy, TimeBounds};
 use sale_policy::{FeeError, FeeRate};
 
 /// Why a pool could not be created.
@@ -22,11 +23,13 @@ pub enum CreateError {
     VirtualReserveZero,
     /// A configured depletion side must begin with a positive real reserve.
     DepletionReserveZero,
+    InvalidEndingPolicy,
 }
 
 impl std::fmt::Display for CreateError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::InvalidEndingPolicy => f.write_str("inconsistent curve ending policy"),
             Self::VirtualReserveAboveBound => {
                 write!(
                     f,
@@ -64,6 +67,7 @@ pub struct Pool {
     pub fees_accrued: u128,
     /// Cumulative token1 fees paid to treasury.
     pub fees_collected: u128,
+    pub ending_policy: EndingPolicy,
     pub close_timestamp: Option<u64>,
     pub close_on_depletion: Option<TokenSide>,
     pub lifecycle: PoolLifecycle,
@@ -81,6 +85,7 @@ pub struct PoolCreateParams {
     pub token1_amount: u128,
     pub virtual_reserve0: u128,
     pub virtual_reserve1: u128,
+    pub ending_policy: EndingPolicy,
     pub close_timestamp: Option<u64>,
     pub close_on_depletion: Option<TokenSide>,
 }
@@ -137,6 +142,7 @@ pub struct SwapOutcome {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SwapError {
+    InvalidPolicy,
     Closed,
     ZeroAmount,
     /// A non-zero input would produce no output after conservative integer rounding.
@@ -157,6 +163,7 @@ pub enum SwapError {
 impl std::fmt::Display for SwapError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let message = match self {
+            Self::InvalidPolicy => "the saved pool policy is invalid",
             Self::Closed => "the pool is closed",
             Self::ZeroAmount => "swap input or requested output must be non-zero",
             Self::OutputTooSmall => "the input is too small to produce one output unit",
@@ -181,12 +188,14 @@ impl std::error::Error for SwapError {}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WithdrawError {
+    InvalidPolicy,
     StillOpen,
     AlreadyWithdrawn,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CloseError {
+    InvalidPolicy,
     AlreadyClosed,
 }
 
@@ -198,6 +207,7 @@ impl Pool {
             token1_amount,
             virtual_reserve0,
             virtual_reserve1,
+            ending_policy,
             close_timestamp,
             close_on_depletion,
         } = params;
@@ -212,6 +222,7 @@ impl Pool {
         {
             return Err(CreateError::DepletionReserveZero);
         }
+        validate_policies(ending_policy, close_timestamp, close_on_depletion)?;
         let k = virtual_reserve0
             .checked_mul(virtual_reserve1)
             .expect("both virtual reserves are below 2^64, so the product fits u128");
@@ -223,6 +234,7 @@ impl Pool {
             real_reserve1: token1_amount,
             fees_accrued: 0,
             fees_collected: 0,
+            ending_policy,
             close_timestamp,
             close_on_depletion,
             lifecycle: PoolLifecycle::Open,
@@ -360,8 +372,8 @@ impl Pool {
         if required_effective_input == 0 {
             return Err(SwapError::InputTooSmall);
         }
-        let split = FeeRate::new(protocol_fee_bps)
-            .map_err(map_fee_error)?
+        let rate = FeeRate::new(protocol_fee_bps).map_err(map_fee_error)?;
+        let split = rate
             .gross_up(required_effective_input)
             .map_err(map_fee_error)?;
         let amount_in = split.gross;
@@ -418,6 +430,8 @@ impl Pool {
 
     /// Permissionless and idempotent; neither pricing nor lifecycle changes.
     pub fn collect_fees(&mut self) -> Result<u128, SwapError> {
+        self.validate_policy()
+            .map_err(|_| SwapError::InvalidPolicy)?;
         let amount = self.fees_accrued;
         let total = self
             .fees_collected
@@ -429,6 +443,8 @@ impl Pool {
     }
 
     pub fn close_pool(&mut self, now: u64) -> Result<(), CloseError> {
+        self.validate_policy()
+            .map_err(|_| CloseError::InvalidPolicy)?;
         if self.effective_lifecycle(now) != PoolLifecycle::Open {
             return Err(CloseError::AlreadyClosed);
         }
@@ -437,6 +453,8 @@ impl Pool {
     }
 
     pub fn withdraw_reserves(&mut self, now: u64) -> Result<(u128, u128), WithdrawError> {
+        self.validate_policy()
+            .map_err(|_| WithdrawError::InvalidPolicy)?;
         if self.lifecycle == PoolLifecycle::Withdrawn {
             return Err(WithdrawError::AlreadyWithdrawn);
         }
@@ -450,33 +468,70 @@ impl Pool {
         Ok(reserves)
     }
 
-    /// Reports logical timestamp expiry without requiring a state write.
+    pub fn validate_policy(&self) -> Result<(), CreateError> {
+        validate_policies(
+            self.ending_policy,
+            self.close_timestamp,
+            self.close_on_depletion,
+        )
+    }
+
+    fn remaining(&self) -> u128 {
+        match self.close_on_depletion {
+            Some(TokenSide::Token0) => self.real_reserve0,
+            Some(TokenSide::Token1) => self.real_reserve1,
+            None => 1,
+        }
+    }
+
+    pub fn trade_bounds(&self) -> Result<TimeBounds, SwapError> {
+        self.validate_policy()
+            .map_err(|_| SwapError::InvalidPolicy)?;
+        if self.lifecycle != PoolLifecycle::Open {
+            return Err(SwapError::Closed);
+        }
+        self.ending_policy
+            .trade_bounds(None, self.close_timestamp, self.remaining())
+            .map_err(|error| match error {
+                EndingError::Ended => SwapError::Closed,
+                _ => SwapError::InvalidPolicy,
+            })
+    }
+
+    pub fn ending_decision(&self) -> Result<EndingDecision, EndingError> {
+        self.validate_policy()
+            .map_err(|_| EndingError::InvalidWindow)?;
+        // Stored closure stays valid after withdrawal clears the reserves.
+        if self.lifecycle != PoolLifecycle::Open {
+            return Ok(EndingDecision::Manual);
+        }
+        self.ending_policy
+            .settlement(self.close_timestamp, self.remaining())
+    }
+
     #[must_use]
     pub fn effective_lifecycle(&self, now: u64) -> PoolLifecycle {
-        if self.lifecycle == PoolLifecycle::Open
-            && self.close_timestamp.is_some_and(|close| now >= close)
-        {
-            PoolLifecycle::Closed
-        } else {
-            self.lifecycle
+        if self.lifecycle != PoolLifecycle::Open {
+            return self.lifecycle;
+        }
+        match self.trade_bounds() {
+            Ok(bounds) if bounds.contains(now) => PoolLifecycle::Open,
+            _ => PoolLifecycle::Closed,
         }
     }
 
     fn ensure_swappable(&self, now: u64) -> Result<(), SwapError> {
-        if self.effective_lifecycle(now) != PoolLifecycle::Open {
-            Err(SwapError::Closed)
-        } else {
+        if self.trade_bounds()?.contains(now) {
             Ok(())
+        } else {
+            Err(SwapError::Closed)
         }
     }
 
     fn close_if_depleted(&mut self) {
-        let depleted = match self.close_on_depletion {
-            Some(TokenSide::Token0) => self.real_reserve0 == 0,
-            Some(TokenSide::Token1) => self.real_reserve1 == 0,
-            None => false,
-        };
-        if depleted {
+        if self.lifecycle == PoolLifecycle::Open
+            && self.ending_decision() == Ok(EndingDecision::Depleted)
+        {
             self.lifecycle = PoolLifecycle::Closed;
         }
     }
@@ -523,6 +578,20 @@ impl Pool {
     }
 }
 
+fn validate_policies(
+    ending: EndingPolicy,
+    end: Option<u64>,
+    side: Option<TokenSide>,
+) -> Result<(), CreateError> {
+    ending
+        .validate(None, end)
+        .map_err(|_| CreateError::InvalidEndingPolicy)?;
+    if matches!(ending, EndingPolicy::Depletion | EndingPolicy::Either) != side.is_some() {
+        return Err(CreateError::InvalidEndingPolicy);
+    }
+    Ok(())
+}
+
 fn map_fee_error(error: FeeError) -> SwapError {
     match error {
         FeeError::RateAboveDenominator => SwapError::FeeAboveDenominator,
@@ -542,6 +611,7 @@ mod tests {
             token1_amount: 25,
             virtual_reserve0: 1000,
             virtual_reserve1: 100,
+            ending_policy: EndingPolicy::Scheduled,
             close_timestamp: Some(42),
             close_on_depletion: None,
         })
@@ -562,6 +632,7 @@ mod tests {
             token1_amount: 100,
             virtual_reserve0: 1000,
             virtual_reserve1: 100,
+            ending_policy: EndingPolicy::Manual,
             close_timestamp: None,
             close_on_depletion: None,
         })
@@ -593,6 +664,7 @@ mod tests {
             token1_amount: 0,
             virtual_reserve0: 100,
             virtual_reserve1: 100,
+            ending_policy: EndingPolicy::Depletion,
             close_timestamp: None,
             close_on_depletion: Some(TokenSide::Token0),
         })
@@ -632,6 +704,7 @@ mod tests {
             token1_amount: 0,
             virtual_reserve0: 100,
             virtual_reserve1: 100,
+            ending_policy: EndingPolicy::Depletion,
             close_timestamp: None,
             close_on_depletion: Some(TokenSide::Token0),
         })
@@ -659,6 +732,7 @@ mod tests {
                 token1_amount: 1,
                 virtual_reserve0: 100,
                 virtual_reserve1: 100,
+                ending_policy: EndingPolicy::Depletion,
                 close_timestamp: None,
                 close_on_depletion: Some(TokenSide::Token0)
             }),
@@ -673,6 +747,7 @@ mod tests {
             token1_amount: 100,
             virtual_reserve0: 1_000,
             virtual_reserve1: 100,
+            ending_policy: EndingPolicy::Manual,
             close_timestamp: None,
             close_on_depletion: None,
         })
@@ -697,6 +772,7 @@ mod tests {
             token1_amount: 100,
             virtual_reserve0: 1_000,
             virtual_reserve1: 100,
+            ending_policy: EndingPolicy::Manual,
             close_timestamp: None,
             close_on_depletion: None,
         })
@@ -729,6 +805,7 @@ mod tests {
             token1_amount: 100,
             virtual_reserve0: 1000,
             virtual_reserve1: 100,
+            ending_policy: EndingPolicy::Manual,
             close_timestamp: None,
             close_on_depletion: None,
         })
@@ -760,6 +837,7 @@ mod tests {
             token1_amount: 1_000,
             virtual_reserve0: 1_000,
             virtual_reserve1: 1_000,
+            ending_policy: EndingPolicy::Manual,
             close_timestamp: None,
             close_on_depletion: None,
         })
@@ -800,6 +878,7 @@ mod tests {
             token1_amount: 74_513,
             virtual_reserve0: 1,
             virtual_reserve1: 1_709,
+            ending_policy: EndingPolicy::Manual,
             close_timestamp: None,
             close_on_depletion: None,
         })
@@ -850,6 +929,7 @@ mod tests {
                 token1_amount: 100,
                 virtual_reserve0: 1_000,
                 virtual_reserve1: 100,
+                ending_policy: EndingPolicy::Manual,
                 close_timestamp: None,
                 close_on_depletion: None,
             })
@@ -884,6 +964,7 @@ mod tests {
                 token1_amount: 100,
                 virtual_reserve0: 1_000,
                 virtual_reserve1: 100,
+                ending_policy: EndingPolicy::Manual,
                 close_timestamp: None,
                 close_on_depletion: None,
             })
@@ -912,6 +993,7 @@ mod tests {
                 token1_amount: 100,
                 virtual_reserve0: 1000,
                 virtual_reserve1: 100,
+                ending_policy: EndingPolicy::Manual,
                 close_timestamp: None,
                 close_on_depletion: None,
             })
@@ -950,6 +1032,7 @@ mod tests {
                 token1_amount: 100,
                 virtual_reserve0: 1_000,
                 virtual_reserve1: 100,
+                ending_policy: EndingPolicy::Manual,
                 close_timestamp: None,
                 close_on_depletion: None,
             })
@@ -970,6 +1053,7 @@ mod tests {
                 token1_amount: 100,
                 virtual_reserve0: 1_000,
                 virtual_reserve1: 100,
+                ending_policy: EndingPolicy::Manual,
                 close_timestamp: None,
                 close_on_depletion: None,
             })
@@ -991,6 +1075,7 @@ mod tests {
                 token1_amount: 100,
                 virtual_reserve0: 1_000,
                 virtual_reserve1: 100,
+                ending_policy: EndingPolicy::Manual,
                 close_timestamp: None,
                 close_on_depletion: None,
             })
@@ -1018,6 +1103,7 @@ mod tests {
             token1_amount: 25,
             virtual_reserve0: 1000,
             virtual_reserve1: 100,
+            ending_policy: EndingPolicy::Scheduled,
             close_timestamp: Some(42),
             close_on_depletion: None,
         })
@@ -1039,6 +1125,7 @@ mod tests {
             token1_amount: 100,
             virtual_reserve0: 1000,
             virtual_reserve1: 100,
+            ending_policy: EndingPolicy::Scheduled,
             close_timestamp: Some(42),
             close_on_depletion: None,
         })
@@ -1065,6 +1152,7 @@ mod tests {
             token1_amount: 10,
             virtual_reserve0: 1000,
             virtual_reserve1: 100,
+            ending_policy: EndingPolicy::Manual,
             close_timestamp: None,
             close_on_depletion: None,
         })
@@ -1096,6 +1184,7 @@ mod tests {
             token1_amount: 100,
             virtual_reserve0: 1_000,
             virtual_reserve1: 1_000,
+            ending_policy: EndingPolicy::Manual,
             close_timestamp: None,
             close_on_depletion: None,
         })
@@ -1123,6 +1212,7 @@ mod tests {
             token1_amount: 25,
             virtual_reserve0: 1000,
             virtual_reserve1: 100,
+            ending_policy: EndingPolicy::Manual,
             close_timestamp: None,
             close_on_depletion: None,
         })
@@ -1141,6 +1231,7 @@ mod tests {
                 token1_amount: 0,
                 virtual_reserve0: 1 << 64,
                 virtual_reserve1: 100,
+                ending_policy: EndingPolicy::Manual,
                 close_timestamp: None,
                 close_on_depletion: None
             }),
@@ -1152,6 +1243,7 @@ mod tests {
                 token1_amount: 0,
                 virtual_reserve0: 1000,
                 virtual_reserve1: 1 << 64,
+                ending_policy: EndingPolicy::Manual,
                 close_timestamp: None,
                 close_on_depletion: None
             }),
@@ -1163,6 +1255,7 @@ mod tests {
                 token1_amount: 0,
                 virtual_reserve0: (1 << 64) - 1,
                 virtual_reserve1: (1 << 64) - 1,
+                ending_policy: EndingPolicy::Manual,
                 close_timestamp: None,
                 close_on_depletion: None
             })
@@ -1178,6 +1271,7 @@ mod tests {
                 token1_amount: 200,
                 virtual_reserve0: 1000,
                 virtual_reserve1: 0,
+                ending_policy: EndingPolicy::Manual,
                 close_timestamp: None,
                 close_on_depletion: None
             }),
@@ -1189,6 +1283,7 @@ mod tests {
                 token1_amount: 200,
                 virtual_reserve0: 0,
                 virtual_reserve1: 100,
+                ending_policy: EndingPolicy::Manual,
                 close_timestamp: None,
                 close_on_depletion: None
             }),
@@ -1203,6 +1298,7 @@ mod tests {
             token1_amount: 200,
             virtual_reserve0: 1000,
             virtual_reserve1: 100,
+            ending_policy: EndingPolicy::Scheduled,
             close_timestamp: Some(42),
             close_on_depletion: None,
         })
@@ -1212,17 +1308,18 @@ mod tests {
     }
 
     #[test]
-    fn pool_borsh_layout_matches_the_pre_refactor_golden_bytes() {
+    fn pool_borsh_layout_places_ending_tag_before_the_deadline() {
         let pool = Pool::create(PoolCreateParams {
             token0_amount: 800,
             token1_amount: 200,
             virtual_reserve0: 1000,
             virtual_reserve1: 100,
+            ending_policy: EndingPolicy::Scheduled,
             close_timestamp: Some(42),
             close_on_depletion: None,
         })
         .expect("valid pool");
-        let expected: [u8; 123] = [
+        let expected: [u8; 124] = [
             0xe8, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
             0x00, 0x00, 0x64, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
             0x00, 0x00, 0x00, 0x00, 0xa0, 0x86, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -1231,9 +1328,286 @@ mod tests {
             0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
             0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
             0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x01, 0x2a, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x01, 0x01, 0x2a, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
         ];
 
         assert_eq!(borsh::to_vec(&pool).expect("pool serialises"), expected);
+    }
+    fn policy_params() -> PoolCreateParams {
+        PoolCreateParams {
+            token0_amount: 80,
+            token1_amount: 100,
+            virtual_reserve0: 100,
+            virtual_reserve1: 100,
+            ending_policy: EndingPolicy::Manual,
+            close_timestamp: None,
+            close_on_depletion: None,
+        }
+    }
+
+    #[test]
+    fn direct_curve_policy_matrix_preserves_all_existing_endings() {
+        for ending in [
+            EndingPolicy::Manual,
+            EndingPolicy::Scheduled,
+            EndingPolicy::Depletion,
+            EndingPolicy::Either,
+        ] {
+            for end in [None, Some(42)] {
+                for side in [None, Some(TokenSide::Token0), Some(TokenSide::Token1)] {
+                    let params = PoolCreateParams {
+                        ending_policy: ending,
+                        close_timestamp: end,
+                        close_on_depletion: side,
+                        ..policy_params()
+                    };
+                    let valid = match ending {
+                        EndingPolicy::Manual => end.is_none() && side.is_none(),
+                        EndingPolicy::Scheduled => end.is_some() && side.is_none(),
+                        EndingPolicy::Depletion => end.is_none() && side.is_some(),
+                        EndingPolicy::Either => end.is_some() && side.is_some(),
+                    };
+                    let result = Pool::create(params);
+                    if valid {
+                        let mut pool = result.unwrap();
+                        assert_eq!(pool.validate_policy(), Ok(()));
+                        assert_eq!(pool.close_pool(1), Ok(()));
+                        assert_eq!(pool.withdraw_reserves(1), Ok((80, 100)));
+                    } else {
+                        assert_eq!(result, Err(CreateError::InvalidEndingPolicy));
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn malformed_saved_policy_rejects_all_mutations_before_other_errors() {
+        let mut pool = Pool::create(policy_params()).unwrap();
+        pool.close_on_depletion = Some(TokenSide::Token0);
+        assert_invalid_saved_policy(pool);
+    }
+
+    fn assert_invalid_saved_policy(mut pool: Pool) {
+        let before = pool.clone();
+        assert_eq!(
+            pool.swap_exact_input(ExactInputSwap {
+                token_in: TokenSide::Token0,
+                amount_in: 0,
+                min_amount_out: 0,
+                pool_fee_bps: 1,
+                protocol_fee_bps: 10_001,
+                now: 1,
+            }),
+            Err(SwapError::InvalidPolicy)
+        );
+        assert_eq!(
+            pool.swap_exact_output(ExactOutputSwap {
+                token_in: TokenSide::Token1,
+                amount_out: 0,
+                max_amount_in: 0,
+                pool_fee_bps: 1,
+                protocol_fee_bps: 10_001,
+                now: 1,
+            }),
+            Err(SwapError::InvalidPolicy)
+        );
+        assert_eq!(pool.collect_fees(), Err(SwapError::InvalidPolicy));
+        assert_eq!(pool.close_pool(1), Err(CloseError::InvalidPolicy));
+        assert_eq!(
+            pool.withdraw_reserves(42),
+            Err(WithdrawError::InvalidPolicy)
+        );
+        assert_eq!(pool, before);
+    }
+
+    #[test]
+    fn selected_reserve_and_expiry_are_independent_ending_facts() {
+        for side in [TokenSide::Token0, TokenSide::Token1] {
+            let mut pool = Pool::create(PoolCreateParams {
+                ending_policy: EndingPolicy::Either,
+                close_on_depletion: Some(side),
+                close_timestamp: Some(42),
+                ..policy_params()
+            })
+            .unwrap();
+            assert_eq!(pool.effective_lifecycle(41), PoolLifecycle::Open);
+            assert_eq!(pool.effective_lifecycle(42), PoolLifecycle::Closed);
+            assert_eq!(
+                pool.ending_decision(),
+                Ok(EndingDecision::ScheduledEnd { timestamp: 42 })
+            );
+            match side {
+                TokenSide::Token0 => pool.real_reserve0 = 0,
+                TokenSide::Token1 => pool.real_reserve1 = 0,
+            }
+            assert_eq!(pool.ending_decision(), Ok(EndingDecision::Depleted));
+            assert_eq!(pool.trade_bounds(), Err(SwapError::Closed));
+            assert_eq!(pool.effective_lifecycle(1), PoolLifecycle::Closed);
+        }
+    }
+
+    #[test]
+    fn cleared_reserves_never_supply_depletion_evidence_for_stored_closure() {
+        let mut pool = Pool::create(PoolCreateParams {
+            ending_policy: EndingPolicy::Either,
+            close_on_depletion: Some(TokenSide::Token0),
+            close_timestamp: Some(42),
+            ..policy_params()
+        })
+        .unwrap();
+        pool.close_pool(1).unwrap();
+        assert_eq!(pool.ending_decision(), Ok(EndingDecision::Manual));
+        pool.withdraw_reserves(1).unwrap();
+        assert_eq!(pool.ending_decision(), Ok(EndingDecision::Manual));
+        assert_eq!(pool.effective_lifecycle(1), PoolLifecycle::Withdrawn);
+    }
+
+    #[test]
+    fn scheduled_sellout_stays_open_and_rejects_early_withdrawal() {
+        let mut pool = Pool::create(PoolCreateParams {
+            ending_policy: EndingPolicy::Scheduled,
+            close_timestamp: Some(42),
+            ..policy_params()
+        })
+        .unwrap();
+        pool.swap_exact_output(ExactOutputSwap {
+            token_in: TokenSide::Token1,
+            amount_out: 80,
+            max_amount_in: 400,
+            pool_fee_bps: 0,
+            protocol_fee_bps: 0,
+            now: 1,
+        })
+        .unwrap();
+        assert_eq!(pool.real_reserve0, 0);
+        assert_eq!(pool.lifecycle, PoolLifecycle::Open);
+        assert_eq!(pool.effective_lifecycle(41), PoolLifecycle::Open);
+        assert_eq!(pool.withdraw_reserves(41), Err(WithdrawError::StillOpen));
+        assert_eq!(
+            pool.ending_decision(),
+            Ok(EndingDecision::ScheduledEnd { timestamp: 42 })
+        );
+        assert_eq!(
+            pool.swap_exact_output(ExactOutputSwap {
+                token_in: TokenSide::Token1,
+                amount_out: 1,
+                max_amount_in: 100,
+                pool_fee_bps: 0,
+                protocol_fee_bps: 0,
+                now: 1,
+            }),
+            Err(SwapError::InsufficientRealOutputReserve)
+        );
+        pool.swap_exact_input(ExactInputSwap {
+            token_in: TokenSide::Token0,
+            amount_in: 1,
+            min_amount_out: 1,
+            pool_fee_bps: 0,
+            protocol_fee_bps: 0,
+            now: 41,
+        })
+        .unwrap();
+        assert_eq!(pool.real_reserve0, 1);
+        assert_eq!(pool.lifecycle, PoolLifecycle::Open);
+        assert!(pool.withdraw_reserves(42).is_ok());
+    }
+
+    #[test]
+    fn selected_depletion_cannot_reopen_when_inventory_returns() {
+        for (ending, end) in [
+            (EndingPolicy::Depletion, None),
+            (EndingPolicy::Either, Some(42)),
+        ] {
+            let mut pool = Pool::create(PoolCreateParams {
+                ending_policy: ending,
+                close_timestamp: end,
+                close_on_depletion: Some(TokenSide::Token0),
+                ..policy_params()
+            })
+            .unwrap();
+            pool.swap_exact_output(ExactOutputSwap {
+                token_in: TokenSide::Token1,
+                amount_out: 80,
+                max_amount_in: 400,
+                pool_fee_bps: 0,
+                protocol_fee_bps: 0,
+                now: 1,
+            })
+            .unwrap();
+            assert_eq!(pool.lifecycle, PoolLifecycle::Closed);
+            pool.real_reserve0 = 1;
+            assert_eq!(pool.effective_lifecycle(1), PoolLifecycle::Closed);
+            assert_eq!(
+                pool.swap_exact_input(ExactInputSwap {
+                    token_in: TokenSide::Token0,
+                    amount_in: 1,
+                    min_amount_out: 0,
+                    pool_fee_bps: 0,
+                    protocol_fee_bps: 0,
+                    now: 1,
+                }),
+                Err(SwapError::Closed)
+            );
+        }
+    }
+
+    #[test]
+    fn policy_buy_quotes_match_fee_math_and_curve_rounding() {
+        for bps in [0, 1, 1000, 9999] {
+            let base = Pool::create(PoolCreateParams {
+                token0_amount: 800,
+                virtual_reserve0: 1000,
+                ..policy_params()
+            })
+            .unwrap();
+            let rate = FeeRate::new(bps).unwrap();
+            let split = rate.split(100_000).unwrap();
+            let expected =
+                curve_math::exact_input_amount_out_floor(100, 1000, base.k, split.net).unwrap();
+            let mut pool = base.clone();
+            let quoted = pool.swap_exact_input(ExactInputSwap {
+                token_in: TokenSide::Token1,
+                amount_in: 100_000,
+                min_amount_out: 0,
+                pool_fee_bps: 0,
+                protocol_fee_bps: bps,
+                now: 1,
+            });
+            if expected > base.real_reserve0 {
+                assert_eq!(quoted, Err(SwapError::InsufficientRealOutputReserve));
+            } else {
+                let quoted = quoted.unwrap();
+                assert_eq!(
+                    (
+                        quoted.amount_out,
+                        quoted.effective_amount_in,
+                        quoted.protocol_fee
+                    ),
+                    (expected, split.net, split.fee)
+                );
+            }
+            let required = curve_math::exact_output_amount_in_ceil(100, 1000, base.k, 100).unwrap();
+            let split = rate.gross_up(required).unwrap();
+            let mut pool = base;
+            let quoted = pool
+                .swap_exact_output(ExactOutputSwap {
+                    token_in: TokenSide::Token1,
+                    amount_out: 100,
+                    max_amount_in: u128::MAX,
+                    pool_fee_bps: 0,
+                    protocol_fee_bps: bps,
+                    now: 1,
+                })
+                .unwrap();
+            assert_eq!(
+                (
+                    quoted.amount_in,
+                    quoted.effective_amount_in,
+                    quoted.protocol_fee
+                ),
+                (split.gross, split.net, split.fee)
+            );
+        }
     }
 }

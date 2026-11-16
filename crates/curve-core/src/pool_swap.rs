@@ -91,6 +91,7 @@ pub(crate) fn payout(
     )
 }
 pub(crate) fn finish(mut pending: Pending, receiver: Actor) -> Result<Response, Error> {
+    pending.state.validate_address(receiver)?;
     if pending.state.trade_control.is_paused() {
         return Err(Error::Paused);
     }
@@ -121,6 +122,11 @@ pub(crate) fn finish(mut pending: Pending, receiver: Actor) -> Result<Response, 
         return Err(Error::Restricted);
     }
     backed(&pending)?;
+    let bounds = pending
+        .state
+        .pool
+        .trade_bounds()
+        .map_err(|_| Error::InvalidPool)?;
     let outcome = match pending.message {
         Message::SwapExactInput {
             amount_in,
@@ -151,8 +157,8 @@ pub(crate) fn finish(mut pending: Pending, receiver: Actor) -> Result<Response, 
     .map_err(|_| Error::InvalidPool)?;
     let mut response = crate::with_time_bounds(
         Response::set_state(borsh::to_vec(&pending.state).unwrap()),
-        None,
-        pending.state.pool.close_timestamp,
+        bounds.at_least,
+        bounds.before,
     )?;
     response = transfer(
         response,

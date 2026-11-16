@@ -18,6 +18,7 @@ fn weighted_inputs() -> WeightedPoolInputs {
     WeightedPoolInputs {
         buy_policy: curve_core::BuyPolicy::Open,
         pause_policy: lbp_core::PausePolicy::AuthorityControlled,
+        ending_policy: lbp_core::EndingPolicy::Scheduled,
         namespace: id(40),
         namespace_program_id: id(6),
         factory_program_id: id(7),
@@ -353,12 +354,14 @@ fn weighted_program_rejects_unsafe_and_uncertified_quotes_with_defined_errors() 
     {
         *pricing_collateral = u128::MAX;
     }
+    state.recorded_collateral = u128::MAX;
     assert_eq!(
-        run(&state, exact_in.clone(), [100, 1_000_000, 1000]),
+        run(&state, exact_in.clone(), [u128::MAX, 1_000_000, 1000]),
         Some(lbp_core::Error::Arithmetic)
     );
 
     let b = 1u128 << 100;
+    state.recorded_collateral = b;
     state.sale_inventory = b;
     state.remaining_inventory = b;
     if let lbp_core::PoolMode::Weighted {
@@ -375,7 +378,7 @@ fn weighted_program_rejects_unsafe_and_uncertified_quotes_with_defined_errors() 
                 amount_out: b / 10 * 3,
                 max_amount_in: u128::MAX,
             },
-            [100, b, u128::MAX]
+            [b, b, u128::MAX]
         ),
         Some(lbp_core::Error::Arithmetic)
     );
@@ -387,7 +390,7 @@ fn weighted_program_rejects_unsafe_and_uncertified_quotes_with_defined_errors() 
                 amount_in: 1,
                 min_amount_out: 0,
             },
-            [100, b, 1000]
+            [b, b, 1000]
         ),
         Some(lbp_core::Error::InvalidAmount)
     );
@@ -452,40 +455,43 @@ fn weighted_program_checks_full_inventory_and_post_buy_vault_capacity() {
 }
 
 #[test]
-fn weighted_pricing_is_independent_of_live_creator_borne_fees() {
-    let (input, state) = funded();
-    for message in [
-        Message::BuyWeightedExactInput {
-            membership: None,
-            amount_in: 50,
-            min_amount_out: 1,
-        },
-        Message::BuyWeightedExactOutput {
-            membership: None,
-            amount_out: 500,
-            max_amount_in: 1000,
-        },
-    ] {
-        let mut reference = None;
-        for fee in [0, 100, 500, 9999] {
-            let response = operation(
+fn weighted_positive_fees_price_net_input_against_constant_product_reference() {
+    let (input, mut state) = funded();
+    if let lbp_core::PoolMode::Weighted {
+        token_weight_start,
+        token_weight_end,
+        ..
+    } = &mut state.mode
+    {
+        *token_weight_start = weight(50);
+        *token_weight_end = weight(50);
+    }
+    for gross in [50_u128, 100, 250] {
+        for fee_bps in [0_u16, 1, 100, 500, 9999] {
+            let fee = (gross * u128::from(fee_bps)).div_ceil(10_000);
+            let net = gross - fee;
+            let result = operation(
                 &input,
                 &state,
-                message.clone(),
-                config(fee, id(43), false),
+                Message::BuyWeightedExactInput {
+                    membership: None,
+                    amount_in: gross,
+                    min_amount_out: 0,
+                },
+                config(fee_bps, id(43), false),
                 [100, state.remaining_inventory, 1000],
-            )
-            .unwrap();
-            let next = state_of(&response);
-            let quote = (next.remaining_inventory, pricing_collateral(&next));
-            if let Some(expected) = reference {
-                assert_eq!(quote, expected);
-            }
-            reference = Some(quote);
-            assert_eq!(
-                next.recorded_collateral + next.accrued_fees,
-                pricing_collateral(&next)
             );
+            if net == 0 {
+                assert_eq!(result.err(), Some(lbp_core::Error::InvalidAmount));
+                continue;
+            }
+            let next = state_of(&result.unwrap());
+            let output = state.remaining_inventory - next.remaining_inventory;
+            let reference = state.remaining_inventory * net / (100 + net);
+            assert!(output <= reference && reference - output <= 1);
+            assert_eq!(next.recorded_collateral, 100 + net);
+            assert_eq!(pricing_collateral(&next), next.recorded_collateral);
+            assert_eq!(next.accrued_fees, fee);
         }
     }
 }
@@ -518,9 +524,9 @@ fn weighted_same_time_buys_use_updated_reserves_and_collection_keeps_the_quote()
     .unwrap();
     let after_first = state_of(&first);
     let first_out = state.remaining_inventory - after_first.remaining_inventory;
-    let ideal_first = state.remaining_inventory * 50 / 150;
+    let ideal_first = state.remaining_inventory * 49 / 149;
     assert!(first_out <= ideal_first && ideal_first - first_out <= 1);
-    assert_eq!(pricing_collateral(&after_first), 150);
+    assert_eq!(pricing_collateral(&after_first), 149);
     assert_eq!(after_first.accrued_fees, 1);
 
     let quote_before_collection = operation(
@@ -541,7 +547,7 @@ fn weighted_same_time_buys_use_updated_reserves_and_collection_keeps_the_quote()
     .unwrap();
     let after_collection = state_of(&collected);
     assert_eq!(after_collection.accrued_fees, 0);
-    assert_eq!(pricing_collateral(&after_collection), 150);
+    assert_eq!(pricing_collateral(&after_collection), 149);
     let quote_after_collection = operation(
         &input,
         &after_collection,
@@ -555,9 +561,9 @@ fn weighted_same_time_buys_use_updated_reserves_and_collection_keeps_the_quote()
         next.remaining_inventory,
         state_of(&quote_before_collection).remaining_inventory
     );
-    assert_eq!(pricing_collateral(&next), 200);
+    assert_eq!(pricing_collateral(&next), 198);
     let second_out = after_first.remaining_inventory - next.remaining_inventory;
-    let ideal_second = after_first.remaining_inventory * 50 / 200;
+    let ideal_second = after_first.remaining_inventory * 49 / 198;
     assert!(second_out <= ideal_second && ideal_second - second_out <= 1);
     assert!(second_out < first_out);
 }
@@ -585,7 +591,7 @@ fn weighted_buy_exact_in_returns_correct_amount_from_weighted_formula() {
         coll_w,
         inputs.sale_inventory,
         token_w,
-        amount_in,
+        amount_in - amount_in.div_ceil(100),
     );
     assert!(expected_out > 0, "expected non-zero output");
 
@@ -631,8 +637,7 @@ fn weighted_buy_exact_out_charges_correct_amount_from_weighted_formula() {
         token_w,
         amount_out,
     );
-    // The creator pays fees from the required input. The buyer pays no extra.
-    let gross_in = amount_in;
+    let gross_in = (amount_in * 10_000).div_ceil(10_000 - fee_bps);
 
     let response = operation_at(
         inputs.start_timestamp * 1000,
@@ -1147,7 +1152,7 @@ fn weighted_schedule_bounds_reject_millisecond_overflow() {
             [100, 1_000_000, 1000]
         )
         .err(),
-        Some(lbp_core::Error::Arithmetic)
+        Some(lbp_core::Error::InvalidTerms)
     );
 }
 
@@ -1336,6 +1341,8 @@ fn fixed_price_pool_rejects_weighted_pause() {
     let (mut input, state) = funded();
     let mut fixed = state.clone();
     fixed.mode = lbp_core::PoolMode::FixedPrice;
+
+    fixed.ending_policy = lbp_core::EndingPolicy::Either;
     input.from = Some(Actor::new(fixed.factory_owner, fixed.factory_program_id));
     input.pre_state = borsh::to_vec(&fixed).unwrap().into();
     input.message = borsh::to_vec(&Message::SetWeightedPaused { paused: true }).unwrap();
@@ -1357,7 +1364,7 @@ fn weighted_settlement_pays_seed_and_proceeds_burns_unsold_and_collects_fees() {
         pricing_collateral, ..
     } = &mut state.mode
     {
-        *pricing_collateral = 150;
+        *pricing_collateral = 149;
     }
     let vault_collateral = 191; // 150 liabilities + 41 surplus
     let vault_token = 999_507; // remaining + 7 surplus (creator alloc mock)
@@ -2277,6 +2284,248 @@ fn common_weighted_resume_keeps_namespace_freeze_for_both_buys() {
                 [100, 1_000_000, 1000]
             )
             .is_ok()
+        );
+    }
+}
+
+#[test]
+fn weighted_shared_closing_keeps_the_schedule_after_depletion_and_burn() {
+    let (mut input, original) = funded();
+    for remaining in [0, original.remaining_inventory] {
+        let mut state = original.clone();
+        state.remaining_inventory = remaining;
+        assert_eq!(state.close_time_bound().unwrap(), Some(3000));
+        let response = settle(
+            &input,
+            &state,
+            Message::SettleWeighted { creator: id(50) },
+            config(0, id(43), true),
+            [117, remaining + 7],
+        )
+        .unwrap();
+        let next = state_of(&response);
+        assert_eq!(next.remaining_inventory, remaining);
+        assert_eq!(next.close_time_bound().unwrap(), Some(3000));
+        assert_eq!(response.validity.timestamps.start(), Some(3_000_000));
+        assert_eq!(response.validity.timestamps.end(), None);
+        input.from = Some(Actor::new(next.factory_owner, next.factory_program_id));
+        input.pre_state = borsh::to_vec(&next).unwrap().into();
+        input.message = borsh::to_vec(&Message::SettleWeighted { creator: id(50) }).unwrap();
+        let retry = handle(&input).unwrap();
+        assert!(retry.sync_messages.is_empty());
+        assert_eq!(retry.validity.timestamps.start(), Some(3_000_000));
+        assert_eq!(state_of(&retry), next);
+    }
+}
+
+#[test]
+fn weighted_exact_output_gross_limit_and_fee_rounding_use_net_pricing() {
+    let (input, mut state) = funded();
+    if let lbp_core::PoolMode::Weighted {
+        token_weight_start,
+        token_weight_end,
+        ..
+    } = &mut state.mode
+    {
+        *token_weight_start = weight(50);
+        *token_weight_end = weight(50);
+    }
+    for output in [500_u128, 50_000, 250_000] {
+        let ideal_net = (100 * output).div_ceil(state.remaining_inventory - output);
+        let required = calc_in_given_out(
+            100,
+            weight(50),
+            state.remaining_inventory,
+            weight(50),
+            output,
+        );
+        assert!(required >= ideal_net && required - ideal_net <= 1);
+        for fee_bps in [0_u16, 1, 100, 500, 9999] {
+            let gross = (required * 10_000).div_ceil(10_000 - u128::from(fee_bps));
+            let fee = (gross * u128::from(fee_bps)).div_ceil(10_000);
+            let net = gross - fee;
+            assert!(net >= required);
+            if gross > 0 {
+                let lower = gross - 1;
+                assert!(lower - (lower * u128::from(fee_bps)).div_ceil(10_000) < required);
+                assert_eq!(
+                    operation(
+                        &input,
+                        &state,
+                        Message::BuyWeightedExactOutput {
+                            membership: None,
+                            amount_out: output,
+                            max_amount_in: lower,
+                        },
+                        config(fee_bps, id(43), false),
+                        [117, 1_000_007, gross]
+                    )
+                    .err(),
+                    Some(lbp_core::Error::Slippage)
+                );
+            }
+            let response = operation(
+                &input,
+                &state,
+                Message::BuyWeightedExactOutput {
+                    membership: None,
+                    amount_out: output,
+                    max_amount_in: gross,
+                },
+                config(fee_bps, id(43), false),
+                [117, 1_000_007, gross],
+            )
+            .unwrap();
+            let next = state_of(&response);
+            assert_eq!(next.recorded_collateral, 100 + net);
+            assert_eq!(pricing_collateral(&next), next.recorded_collateral);
+            assert_eq!(next.accrued_fees, fee);
+            assert_eq!(next.remaining_inventory, state.remaining_inventory - output);
+        }
+    }
+}
+
+#[test]
+fn weighted_exact_time_edges_apply_to_both_buy_forms() {
+    let (input, state) = funded();
+    for timestamp_ms in [999_999, 1_000_000, 2_999_999, 3_000_000] {
+        for message in [
+            Message::BuyWeightedExactInput {
+                membership: None,
+                amount_in: 50,
+                min_amount_out: 0,
+            },
+            Message::BuyWeightedExactOutput {
+                membership: None,
+                amount_out: 500,
+                max_amount_in: 1000,
+            },
+        ] {
+            let result = operation_at(
+                timestamp_ms,
+                &input,
+                &state,
+                message,
+                config(100, id(43), false),
+                [100, 1_000_000, 1000],
+            );
+            if (1_000_000..3_000_000).contains(&timestamp_ms) {
+                let response = result.unwrap();
+                assert_eq!(response.validity.timestamps.start(), Some(1_000_000));
+                assert_eq!(response.validity.timestamps.end(), Some(3_000_000));
+            } else {
+                assert_eq!(result.err(), Some(lbp_core::Error::Closed));
+            }
+        }
+    }
+}
+
+#[test]
+fn pending_poke_rechecks_saved_policy_and_schedule_before_clock_reply() {
+    let (input, original) = funded();
+    for case in 0..4 {
+        let mut state = original.clone();
+        match case {
+            0 => state.ending_policy = lbp_core::EndingPolicy::Manual,
+            1 => state.ending_policy = lbp_core::EndingPolicy::Depletion,
+            2 => state.end_timestamp = None,
+            _ => state.start_timestamp = u64::MAX,
+        }
+        let expected = if case < 2 {
+            lbp_core::Error::InvalidState
+        } else {
+            lbp_core::Error::InvalidTerms
+        };
+        let callback = ReceiveInput {
+            receiver: input.receiver,
+            from: Some(lbp_core::pricing_clock::actor()),
+            is_authorized: false,
+            pre_state: borsh::to_vec(&(*b"LZLBPOKE", state)).unwrap().into(),
+            message: borsh::to_vec(&lbp_core::pricing_clock::Reply {
+                timestamp_ms: 1_500_000,
+            })
+            .unwrap(),
+        };
+        assert_eq!(handle(&callback).err(), Some(expected));
+    }
+}
+
+#[test]
+fn weighted_either_settlement_requires_depletion_or_the_schedule_and_keeps_retry_evidence() {
+    let (input, original) = funded();
+    for ending in [
+        lbp_core::EndingPolicy::Scheduled,
+        lbp_core::EndingPolicy::Either,
+    ] {
+        for remaining in [0, 1] {
+            let mut state = original.clone();
+            state.ending_policy = ending;
+            state.remaining_inventory = remaining;
+            let expected = if ending == lbp_core::EndingPolicy::Either && remaining == 0 {
+                None
+            } else {
+                Some(3_000_000)
+            };
+            let response = settle(
+                &input,
+                &state,
+                Message::SettleWeighted { creator: id(50) },
+                config(100, id(43), true),
+                [100, remaining],
+            )
+            .unwrap();
+            assert_eq!(response.validity.timestamps.start(), expected);
+            let next = state_of(&response);
+            assert!(next.proceeds_settled);
+            assert_eq!(next.remaining_inventory, remaining);
+            assert_eq!(
+                next.close_time_bound().unwrap(),
+                expected.map(|time| time / 1000)
+            );
+            let mut retry = input.clone();
+            retry.from = Some(Actor::new(next.factory_owner, next.factory_program_id));
+            retry.pre_state = borsh::to_vec(&next).unwrap().into();
+            retry.message = borsh::to_vec(&Message::SettleWeighted { creator: id(50) }).unwrap();
+            let repeated = handle(&retry).unwrap();
+            assert_eq!(repeated.validity.timestamps.start(), expected);
+            assert!(repeated.sync_messages.is_empty());
+        }
+    }
+}
+
+#[test]
+fn weighted_collection_and_settlement_reject_unbacked_pricing_or_reduced_seed() {
+    let (input, original) = funded();
+    for (recorded, pricing) in [(99, 99), (100, 101), (101, 100)] {
+        let mut state = original.clone();
+        state.recorded_collateral = recorded;
+        if let lbp_core::PoolMode::Weighted {
+            pricing_collateral, ..
+        } = &mut state.mode
+        {
+            *pricing_collateral = pricing;
+        }
+        assert_eq!(
+            operation(
+                &input,
+                &state,
+                Message::CollectFees,
+                config(100, id(43), false),
+                [1000, 1_000_000, 1000]
+            )
+            .err(),
+            Some(lbp_core::Error::InvalidState)
+        );
+        assert_eq!(
+            settle(
+                &input,
+                &state,
+                Message::SettleWeighted { creator: id(50) },
+                config(100, id(43), false),
+                [1000, 1_000_000]
+            )
+            .err(),
+            Some(lbp_core::Error::InvalidState)
         );
     }
 }

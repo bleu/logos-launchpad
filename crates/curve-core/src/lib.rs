@@ -6,7 +6,9 @@ use lee_core::{
     account::{AccountId, Actor},
     program::{PdaSeed, ReceiveInput, Response, SyncMessage},
 };
-pub use sale_policy::{PausePolicy, TradeControl};
+pub use sale_policy::{
+    EndingDecision, EndingError, EndingPolicy, EndingReason, PausePolicy, TimeBounds, TradeControl,
+};
 
 include!(concat!(env!("OUT_DIR"), "/emergency_authority.rs"));
 
@@ -75,6 +77,7 @@ pub enum Message {
     CreatePool {
         buy_policy: BuyPolicy,
         pause_policy: PausePolicy,
+        ending_policy: EndingPolicy,
         namespace: AccountId,
         token0_definition_id: AccountId,
         token1_definition_id: AccountId,
@@ -468,6 +471,9 @@ impl PoolAccount {
         {
             return Err(Error::WrongAccount);
         }
+        self.pool
+            .validate_policy()
+            .map_err(|_| Error::InvalidPool)?;
         self.buy_policy
             .validate_binding(self.namespace.value(), actor.account_id.value())
             .map_err(|_| Error::InvalidPool)?;

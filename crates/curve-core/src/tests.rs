@@ -6,6 +6,11 @@ fn closed_pool_withdrawal_does_not_wait_for_its_future_deadline() {
     state.pool.lifecycle = pool::PoolLifecycle::Closed;
     for deadline in [Some(42), None] {
         state.pool.close_timestamp = deadline;
+        state.pool.ending_policy = if deadline.is_some() {
+            crate::EndingPolicy::Scheduled
+        } else {
+            crate::EndingPolicy::Manual
+        };
         let response = answer_reads(
             start(&state, Message::WithdrawReserves { now: 1 }).unwrap(),
             &state,
@@ -29,6 +34,7 @@ fn closed_pool_withdrawal_does_not_wait_for_its_future_deadline() {
 fn pools_without_expiry_keep_time_independent_trading_and_cannot_withdraw_while_open() {
     let mut state = pool_state();
     state.pool.close_timestamp = None;
+    state.pool.ending_policy = crate::EndingPolicy::Manual;
     let response = answer_reads(
         start(
             &state,
@@ -132,6 +138,7 @@ fn create_message(defer_funding: bool) -> Message {
     Message::CreatePool {
         buy_policy: crate::BuyPolicy::Open,
         pause_policy: crate::PausePolicy::Disabled,
+        ending_policy: crate::EndingPolicy::Scheduled,
         namespace: NS,
         token0_definition_id: TOKEN0,
         token1_definition_id: TOKEN1,
@@ -1716,6 +1723,7 @@ fn pool_state() -> PoolAccount {
             token1_amount: 100,
             virtual_reserve0: 1000,
             virtual_reserve1: 100,
+            ending_policy: pool::EndingPolicy::Scheduled,
             close_timestamp: Some(42),
             close_on_depletion: None,
         })
@@ -2160,6 +2168,11 @@ fn pause_controls_bind_expiry_even_for_no_ops_and_check_conversion() {
             Some(u64::MAX / 1000 + 1),
         ] {
             state.pool.close_timestamp = end;
+            state.pool.ending_policy = if end.is_some() {
+                crate::EndingPolicy::Scheduled
+            } else {
+                crate::EndingPolicy::Manual
+            };
             let result = answer_reads(
                 start(
                     &state,
@@ -2373,4 +2386,316 @@ fn pool_close_rights_follow_the_current_role_holder() {
     assert_eq!(response.validity.timestamps.start(), None);
     assert_eq!(response.validity.timestamps.end(), Some(42_000));
     assert!(response.sync_messages.is_empty());
+}
+
+#[test]
+fn direct_creation_checks_ending_combinations_before_reads() {
+    for ending in [
+        crate::EndingPolicy::Manual,
+        crate::EndingPolicy::Scheduled,
+        crate::EndingPolicy::Depletion,
+        crate::EndingPolicy::Either,
+    ] {
+        for end in [None, Some(42)] {
+            for side in [None, Some(0), Some(1)] {
+                let valid = match ending {
+                    crate::EndingPolicy::Manual => end.is_none() && side.is_none(),
+                    crate::EndingPolicy::Scheduled => end.is_some() && side.is_none(),
+                    crate::EndingPolicy::Depletion => end.is_none() && side.is_some(),
+                    crate::EndingPolicy::Either => end.is_some() && side.is_some(),
+                };
+                let mut message = create_message(true);
+                if let Message::CreatePool {
+                    ending_policy,
+                    close_timestamp,
+                    close_on_depletion,
+                    ..
+                } = &mut message
+                {
+                    *ending_policy = ending;
+                    *close_timestamp = end;
+                    *close_on_depletion = side;
+                }
+                let result = handle(&call(
+                    pool_id(),
+                    ActorState::empty(),
+                    Some(Actor::new(OWNER, PROGRAM)),
+                    message,
+                ));
+                if valid {
+                    let created =
+                        answer_reads(result.unwrap(), &pool_state(), namespace(), [0, 0]).unwrap();
+                    let state = PoolAccount::decode(&created.post_state.unwrap()).unwrap();
+                    let activated = answer_reads(
+                        start(&state, Message::ActivatePool { now: 1 }).unwrap(),
+                        &state,
+                        namespace(),
+                        [0, 0],
+                    )
+                    .unwrap();
+                    let state = PoolAccount::decode(&activated.post_state.unwrap()).unwrap();
+                    assert_eq!(state.pool.ending_policy, ending);
+                    assert_eq!(state.pool.close_timestamp, end);
+                    assert_eq!(
+                        state.pool.close_on_depletion,
+                        crate::pool_create::side(side).unwrap()
+                    );
+                } else {
+                    assert!(matches!(result, Err(crate::Error::InvalidPool)));
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn malformed_saved_policy_blocks_reads_activation_swaps_controls_and_settlement() {
+    for malformed in 0..3 {
+        let mut state = pool_state();
+        match malformed {
+            0 => state.pool.ending_policy = crate::EndingPolicy::Manual,
+            1 => state.pool.ending_policy = crate::EndingPolicy::Depletion,
+            _ => state.pool.close_on_depletion = Some(pool::TokenSide::Token1),
+        }
+        for message in [
+            Message::ReadState,
+            Message::ActivatePool { now: 1 },
+            Message::SwapExactInput {
+                amount_in: 28,
+                min_amount_out: 0,
+                token_in: TOKEN1,
+                membership: None,
+                now: 1,
+            },
+            Message::SwapExactInput {
+                amount_in: 250,
+                min_amount_out: 0,
+                token_in: TOKEN0,
+                membership: None,
+                now: 1,
+            },
+            Message::SwapExactOutput {
+                amount_out: 100,
+                max_amount_in: 100,
+                token_in: TOKEN1,
+                membership: None,
+                now: 1,
+            },
+            Message::SetPaused { paused: true },
+            Message::ClosePool { now: 1 },
+            Message::CollectFees,
+            Message::WithdrawReserves { now: 42 },
+        ] {
+            assert!(matches!(
+                start(&state, message.clone()),
+                Err(crate::Error::InvalidPool)
+            ));
+            let pending = crate::dispatch::Pending::new(
+                state.clone(),
+                message,
+                HOLDER,
+                vec![crate::dispatch::Query::Namespace],
+            );
+            assert!(matches!(
+                handle(&ReceiveInput {
+                    receiver: Actor::new(pool_id(), PROGRAM),
+                    from: Some(Actor::new(compute_config_pda(NS, PROGRAM), PROGRAM)),
+                    is_authorized: false,
+                    pre_state: borsh::to_vec(&pending).unwrap().into(),
+                    message: borsh::to_vec(&StateReply { state: namespace() }).unwrap(),
+                }),
+                Err(crate::Error::InvalidPool)
+            ));
+        }
+    }
+}
+
+#[test]
+fn pending_creation_rejects_policy_terms_that_differ_from_saved_state() {
+    let mut message = create_message(true);
+    if let Message::CreatePool { ending_policy, .. } = &mut message {
+        *ending_policy = crate::EndingPolicy::Either;
+    }
+    let pending = crate::dispatch::Pending::new(pool_state(), message, HOLDER, vec![]);
+    assert!(matches!(
+        pending.advance(Actor::new(pool_id(), PROGRAM)),
+        Err(crate::Error::InvalidPool)
+    ));
+}
+
+#[test]
+fn creation_rejects_timestamp_conversion_overflow_even_before_deferred_funding() {
+    for deferred in [false, true] {
+        let mut message = create_message(deferred);
+        if let Message::CreatePool {
+            close_timestamp, ..
+        } = &mut message
+        {
+            *close_timestamp = Some(u64::MAX / 1000 + 1);
+        }
+        assert!(matches!(
+            handle(&call(
+                pool_id(),
+                ActorState::empty(),
+                Some(Actor::new(OWNER, PROGRAM)),
+                message
+            )),
+            Err(crate::Error::Arithmetic)
+        ));
+    }
+    let mut state = pool_state();
+    state.funded = false;
+    state.pool.close_timestamp = Some(u64::MAX / 1000 + 1);
+    assert!(matches!(
+        answer_reads(
+            start(&state, Message::ActivatePool { now: 1 }).unwrap(),
+            &state,
+            namespace(),
+            [0, 0]
+        ),
+        Err(crate::Error::Arithmetic)
+    ));
+}
+
+#[test]
+fn final_buys_keep_pretrade_expiry_bounds_and_match_pure_pool_quotes() {
+    for exact_output in [false, true] {
+        let mut state = pool_state();
+        state.pool = pool::Pool::create(pool::PoolCreateParams {
+            token0_amount: 80,
+            token1_amount: 100,
+            virtual_reserve0: 100,
+            virtual_reserve1: 100,
+            ending_policy: crate::EndingPolicy::Either,
+            close_timestamp: Some(42),
+            close_on_depletion: Some(pool::TokenSide::Token0),
+        })
+        .unwrap();
+        let mut expected = state.pool.clone();
+        let (message, quote) = if exact_output {
+            (
+                Message::SwapExactOutput {
+                    amount_out: 80,
+                    max_amount_in: 1000,
+                    token_in: TOKEN1,
+                    membership: None,
+                    now: 41,
+                },
+                expected
+                    .swap_exact_output(pool::ExactOutputSwap {
+                        token_in: pool::TokenSide::Token1,
+                        amount_out: 80,
+                        max_amount_in: 1000,
+                        pool_fee_bps: 0,
+                        protocol_fee_bps: 100,
+                        now: 41,
+                    })
+                    .unwrap(),
+            )
+        } else {
+            (
+                Message::SwapExactInput {
+                    amount_in: 405,
+                    min_amount_out: 80,
+                    token_in: TOKEN1,
+                    membership: None,
+                    now: 41,
+                },
+                expected
+                    .swap_exact_input(pool::ExactInputSwap {
+                        token_in: pool::TokenSide::Token1,
+                        amount_in: 405,
+                        min_amount_out: 80,
+                        pool_fee_bps: 0,
+                        protocol_fee_bps: 100,
+                        now: 41,
+                    })
+                    .unwrap(),
+            )
+        };
+        assert_eq!(quote.amount_out, 80);
+        let response = answer_reads(
+            start(&state, message).unwrap(),
+            &state,
+            namespace(),
+            [80, 100],
+        )
+        .unwrap();
+        assert_eq!(response.validity.timestamps.start(), None);
+        assert_eq!(response.validity.timestamps.end(), Some(42_000));
+        assert!(response.validity.timestamps.is_valid_for(41_999));
+        assert!(!response.validity.timestamps.is_valid_for(42_000));
+        let closed = PoolAccount::decode(&response.post_state.unwrap()).unwrap();
+        assert_eq!(closed.pool, expected);
+        assert_eq!(closed.pool.lifecycle, pool::PoolLifecycle::Closed);
+        let withdrawn = answer_reads(
+            start(&closed, Message::WithdrawReserves { now: 1 }).unwrap(),
+            &closed,
+            namespace(),
+            [0, expected.real_reserve1 + expected.fees_accrued],
+        )
+        .unwrap();
+        assert_eq!(withdrawn.validity.timestamps.start(), None);
+    }
+}
+
+#[test]
+fn saved_open_depletion_uses_selected_custody_reserve_and_blocks_controls() {
+    for side in [pool::TokenSide::Token0, pool::TokenSide::Token1] {
+        let mut state = pool_state();
+        state.pool.ending_policy = crate::EndingPolicy::Either;
+        state.pool.close_on_depletion = Some(side);
+        state.trade_control = crate::TradeControl::Running;
+        match side {
+            pool::TokenSide::Token0 => state.pool.real_reserve0 = 0,
+            pool::TokenSide::Token1 => state.pool.real_reserve1 = 0,
+        }
+        let balances = [state.pool.real_reserve0, state.pool.real_reserve1];
+        let response = answer_reads(
+            start(&state, Message::WithdrawReserves { now: 1 }).unwrap(),
+            &state,
+            namespace(),
+            balances,
+        )
+        .unwrap();
+        assert_eq!(response.validity.timestamps.start(), None);
+        assert_eq!(response.validity.timestamps.end(), None);
+        for message in [
+            Message::SetPaused { paused: true },
+            Message::SetPaused { paused: false },
+        ] {
+            assert!(matches!(
+                answer_reads(
+                    start(&state, message).unwrap(),
+                    &state,
+                    namespace(),
+                    balances
+                ),
+                Err(crate::Error::Closed)
+            ));
+        }
+    }
+}
+
+#[test]
+fn depleted_policy_expiry_requires_lower_bound_when_inventory_remains() {
+    let mut state = pool_state();
+    state.pool.ending_policy = crate::EndingPolicy::Either;
+    state.pool.close_on_depletion = Some(pool::TokenSide::Token0);
+    let response = answer_reads(
+        start(&state, Message::WithdrawReserves { now: 0 }).unwrap(),
+        &state,
+        namespace(),
+        [800, 100],
+    )
+    .unwrap();
+    assert_eq!(response.validity.timestamps.start(), Some(42_000));
+    assert_eq!(response.validity.timestamps.end(), None);
+    assert!(!response.validity.timestamps.is_valid_for(41_999));
+    assert!(response.validity.timestamps.is_valid_for(42_000));
+    let state = PoolAccount::decode(&response.post_state.unwrap()).unwrap();
+    assert_eq!(
+        state.pool.ending_decision(),
+        Ok(crate::EndingDecision::Manual)
+    );
 }

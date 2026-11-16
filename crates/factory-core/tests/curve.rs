@@ -19,6 +19,7 @@ fn creation() -> ReceiveInput {
         message: borsh::to_vec(&Message::CreateFactoryPool {
             buy_policy: curve_core::BuyPolicy::Open,
             pause_policy: curve_core::PausePolicy::Disabled,
+            ending_policy: factory_core::EndingPolicy::Either,
             trade_mode: 0,
             graduation_hook_program_id: Some(id(9)),
             graduation_hook_configuration: b"route".to_vec(),
@@ -239,6 +240,7 @@ fn curve_preparation_uses_neutral_restriction_and_defers_funding() {
         token1_amount,
         owner_program_id,
         close_on_depletion,
+        ending_policy,
         ..
     } = borsh::from_slice(&call.message).unwrap()
     else {
@@ -249,6 +251,7 @@ fn curve_preparation_uses_neutral_restriction_and_defers_funding() {
     assert_eq!((token0_amount, token1_amount), (800, 0));
     assert_eq!(owner_program_id, Some(id(7)));
     assert_eq!(close_on_depletion, Some(0));
+    assert_eq!(ending_policy, EndingPolicy::Either);
 }
 fn pool_state(state: &FactoryState, owner: Actor, funded: bool) -> curve_core::PoolAccount {
     curve_core::PoolAccount {
@@ -269,8 +272,12 @@ fn pool_state(state: &FactoryState, owner: Actor, funded: bool) -> curve_core::P
             token1_amount: 0,
             virtual_reserve0: 1000,
             virtual_reserve1: 100,
-            close_timestamp: Some(200),
-            close_on_depletion: Some(pool::TokenSide::Token0),
+            ending_policy: state.ending_policy,
+            close_timestamp: state.end_timestamp,
+            close_on_depletion: match state.ending_policy {
+                EndingPolicy::Scheduled => None,
+                _ => Some(pool::TokenSide::Token0),
+            },
         })
         .unwrap(),
     }
@@ -365,6 +372,7 @@ fn curve_allowlist_policy_is_unchanged_through_all_creation_stages() {
     let active = FactoryState::decode(response.post_state.as_ref().unwrap()).unwrap();
     assert_eq!(active.creation_stage, CreationStage::Active);
     assert_eq!(active.buy_policy, policy);
+    assert_eq!(active.ending_policy, EndingPolicy::Either);
 }
 
 fn active() -> (ReceiveInput, Response) {
@@ -1611,4 +1619,274 @@ fn curve_pause_checks_current_creator_on_every_call_and_forwards_only_to_bound_p
     })
     .unwrap();
     assert_eq!(handle(&input).err(), Some(Error::InvalidState));
+}
+
+#[test]
+fn curve_creation_checks_the_ending_matrix_before_reads() {
+    for ending in [
+        EndingPolicy::Manual,
+        EndingPolicy::Scheduled,
+        EndingPolicy::Depletion,
+        EndingPolicy::Either,
+    ] {
+        for end in [None, Some(200)] {
+            let mut input = creation();
+            let mut command: Message = borsh::from_slice(&input.message).unwrap();
+            if let Message::CreateFactoryPool {
+                ending_policy,
+                end_timestamp,
+                ..
+            } = &mut command
+            {
+                *ending_policy = ending;
+                *end_timestamp = end;
+            }
+            input.message = borsh::to_vec(&command).unwrap();
+            let result = handle(&input);
+            let valid = match ending {
+                EndingPolicy::Manual => false,
+                EndingPolicy::Scheduled | EndingPolicy::Either => end.is_some(),
+                EndingPolicy::Depletion => end.is_none(),
+            };
+            if valid {
+                let state =
+                    FactoryState::decode(result.unwrap().post_state.as_ref().unwrap()).unwrap();
+                assert_eq!((state.ending_policy, state.end_timestamp), (ending, end));
+            } else {
+                assert_eq!(result.err(), Some(Error::InvalidTerms));
+            }
+        }
+    }
+}
+
+#[test]
+fn curve_timestamp_overflow_rejects_before_setup_reads_or_minting() {
+    let mut input = creation();
+    let mut command: Message = borsh::from_slice(&input.message).unwrap();
+    if let Message::CreateFactoryPool { end_timestamp, .. } = &mut command {
+        *end_timestamp = Some(u64::MAX);
+    }
+    input.message = borsh::to_vec(&command).unwrap();
+    assert_eq!(handle(&input).err(), Some(Error::InvalidTerms));
+}
+
+#[test]
+fn curve_rejects_malformed_saved_policies_before_resuming_setup() {
+    let mut input = creation();
+    let response = handle(&input).unwrap();
+    let state = FactoryState::decode(response.post_state.as_ref().unwrap()).unwrap();
+    for case in 0..3 {
+        let mut changed = state.clone();
+        match case {
+            0 => changed.ending_policy = EndingPolicy::Manual,
+            1 => changed.ending_policy = EndingPolicy::Depletion,
+            _ => changed.end_timestamp = Some(u64::MAX),
+        }
+        let bytes = borsh::to_vec(&changed).unwrap();
+        assert_eq!(
+            FactoryState::decode(&bytes).err(),
+            Some(Error::InvalidState)
+        );
+        input = reply(&input, &response, config());
+        input.pre_state = bytes.into();
+        assert_eq!(handle(&input).err(), Some(Error::InvalidState));
+    }
+}
+
+#[test]
+fn curve_activation_rejects_a_valid_direct_pool_ending_policy() {
+    let (input, mint) = minted();
+    let (input, allocated) = continued(&input, &mint, 1000, 0, 0);
+    let (input, prepared) = continued(&input, &allocated, 0, 900, 100);
+    let (mut input, mut response) = continued(&input, &prepared, 0, 900, 100);
+    let state = FactoryState::decode(response.post_state.as_ref().unwrap()).unwrap();
+    let mut saved = pool_state(&state, input.receiver, false);
+    saved.pool.ending_policy = EndingPolicy::Manual;
+    saved.pool.close_timestamp = None;
+    saved.pool.close_on_depletion = None;
+    input = reply(&input, &response, borsh::to_vec(&saved).unwrap());
+    response = handle(&input).unwrap();
+    input = reply(
+        &input,
+        &response,
+        holding(state.pool_id, state.token_definition_id, 0),
+    );
+    assert_eq!(handle(&input).err(), Some(Error::InvalidCustody));
+}
+
+#[test]
+fn curve_allocation_rejects_changed_inner_pool_policy() {
+    let (input, active) = active();
+    let state = FactoryState::decode(active.post_state.as_ref().unwrap()).unwrap();
+    for case in 0..2 {
+        let mut saved = pool_state(&state, input.receiver, true);
+        if case == 0 {
+            saved.pool.ending_policy = EndingPolicy::Manual;
+            saved.pool.close_timestamp = None;
+            saved.pool.close_on_depletion = None;
+        } else {
+            saved.pool.ending_policy = EndingPolicy::Scheduled;
+            saved.pool.close_on_depletion = None;
+        }
+        let mut request = input.clone();
+        request.pre_state = active.post_state.clone().unwrap();
+        request.from = None;
+        request.message = borsh::to_vec(&Message::ClaimCreatorAllocation {
+            creator: id(42),
+            now: 999,
+        })
+        .unwrap();
+        let response = handle(&request).unwrap();
+        request = proof(&request, &response, id(42));
+        let mut response = handle(&request).unwrap();
+        request = reply(&request, &response, borsh::to_vec(&saved).unwrap());
+        response = handle(&request).unwrap();
+        request = reply(
+            &request,
+            &response,
+            holding(state.creator_escrow_id, state.token_definition_id, 100),
+        );
+        assert_eq!(handle(&request).err(), Some(Error::InvalidCustody));
+    }
+}
+
+#[test]
+fn selected_ending_controls_allocation_proceeds_and_hook_payouts() {
+    for ending in [
+        EndingPolicy::Scheduled,
+        EndingPolicy::Depletion,
+        EndingPolicy::Either,
+    ] {
+        for remaining in [0, 800] {
+            for action in 0..3 {
+                let (mut input, active) = active();
+                let mut state = FactoryState::decode(active.post_state.as_ref().unwrap()).unwrap();
+                state.ending_policy = ending;
+                state.end_timestamp = if ending == EndingPolicy::Depletion {
+                    None
+                } else {
+                    Some(200)
+                };
+                let mut saved = pool_state(&state, input.receiver, true);
+                saved.pool.real_reserve0 = remaining;
+                input.pre_state = borsh::to_vec(&state).unwrap().into();
+                input.from = None;
+                let command = match action {
+                    0 => Message::ClaimCreatorAllocation {
+                        creator: id(42),
+                        now: 999,
+                    },
+                    1 => Message::WithdrawFactoryProceeds {
+                        creator: id(42),
+                        now: 999,
+                    },
+                    _ => Message::ExecuteGraduationHook { now: 999 },
+                };
+                input.message = borsh::to_vec(&command).unwrap();
+                let mut response = handle(&input).unwrap();
+                if action != 2 {
+                    input = proof(&input, &response, id(42));
+                    response = handle(&input).unwrap();
+                }
+                let mut values = vec![borsh::to_vec(&saved).unwrap()];
+                if action == 0 {
+                    values.push(holding(
+                        state.creator_escrow_id,
+                        state.token_definition_id,
+                        100,
+                    ));
+                } else {
+                    values.extend([
+                        holding(input.receiver.account_id, state.token_definition_id, 100),
+                        holding(input.receiver.account_id, state.collateral_definition_id, 0),
+                    ]);
+                }
+                let mut result = Ok(response);
+                for value in values {
+                    input = reply(&input, result.as_ref().unwrap(), value);
+                    result = handle(&input);
+                }
+                if ending == EndingPolicy::Depletion && remaining != 0 {
+                    assert_eq!(result.err(), Some(Error::NotClosed));
+                    continue;
+                }
+                let response = result.unwrap();
+                let early = remaining == 0 && ending != EndingPolicy::Scheduled;
+                assert_eq!(
+                    response.validity.timestamps.start(),
+                    if early { None } else { Some(200_000) }
+                );
+                assert_eq!(response.validity.timestamps.end(), None);
+                assert_eq!(response.validity.timestamps.is_valid_for(199_999), early);
+                assert!(response.validity.timestamps.is_valid_for(200_000));
+                let after = FactoryState::decode(response.post_state.as_ref().unwrap()).unwrap();
+                assert_eq!(after.dex_seed_reserve, 100);
+                assert_eq!(after.creator_allocation, 100);
+                assert_eq!(after.sale_reserve, 800);
+            }
+        }
+    }
+}
+
+#[test]
+fn curve_setup_keeps_each_selected_ending_and_its_depletion_side() {
+    for ending in [
+        EndingPolicy::Scheduled,
+        EndingPolicy::Depletion,
+        EndingPolicy::Either,
+    ] {
+        let mut input = creation();
+        let mut command: Message = borsh::from_slice(&input.message).unwrap();
+        let end = if ending == EndingPolicy::Depletion {
+            None
+        } else {
+            Some(200)
+        };
+        if let Message::CreateFactoryPool {
+            ending_policy,
+            end_timestamp,
+            ..
+        } = &mut command
+        {
+            *ending_policy = ending;
+            *end_timestamp = end;
+        }
+        input.message = borsh::to_vec(&command).unwrap();
+        let mut response = handle(&input).unwrap();
+        for bytes in [config(), definition()] {
+            input = reply(&input, &response, bytes);
+            response = handle(&input).unwrap();
+        }
+        assert_eq!(
+            response.validity.timestamps.end(),
+            end.map(|end| end * 1000)
+        );
+        let (input, allocated) = continued(&input, &response, 1000, 0, 0);
+        let (input, prepared) = continued(&input, &allocated, 0, 900, 100);
+        let message: curve_core::Message =
+            borsh::from_slice(&prepared.sync_messages[0].message).unwrap();
+        let expected_side = if ending == EndingPolicy::Scheduled {
+            None
+        } else {
+            Some(0)
+        };
+        assert!(matches!(message, curve_core::Message::CreatePool {
+            ending_policy, close_timestamp, close_on_depletion, token0_amount: 800, token1_amount: 0, ..
+        } if ending_policy == ending && close_timestamp == end && close_on_depletion == expected_side));
+        let (mut input, mut response) = continued(&input, &prepared, 0, 900, 100);
+        let state = FactoryState::decode(response.post_state.as_ref().unwrap()).unwrap();
+        for bytes in [
+            borsh::to_vec(&pool_state(&state, input.receiver, false)).unwrap(),
+            holding(state.pool_id, state.token_definition_id, 0),
+        ] {
+            input = reply(&input, &response, bytes);
+            response = handle(&input).unwrap();
+        }
+        let active = FactoryState::decode(response.post_state.as_ref().unwrap()).unwrap();
+        assert_eq!(active.creation_stage, CreationStage::Active);
+        assert_eq!(active.ending_policy, ending);
+        assert_eq!(active.end_timestamp, end);
+        assert_eq!(active.dex_seed_reserve, 100);
+        assert_eq!(active.creator_allocation, 100);
+    }
 }

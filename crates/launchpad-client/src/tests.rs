@@ -32,6 +32,7 @@ fn creation() -> CreateSaleRequest {
     CreateSaleRequest {
         buy_policy: curve_core::BuyPolicy::Open,
         pause_policy: curve_core::PausePolicy::Disabled,
+        ending_policy: curve_core::EndingPolicy::Depletion,
         trade_mode: factory_core::TradeMode::BuyAndSell,
         graduation_hook: None,
         name: "E2E token".into(),
@@ -62,6 +63,7 @@ fn pool_snapshot() -> (curve_core::PoolAccount, curve_core::Config) {
             token1_amount: 100,
             virtual_reserve0: 1_000,
             virtual_reserve1: 100,
+            ending_policy: curve_core::EndingPolicy::Manual,
             close_timestamp: None,
             close_on_depletion: None,
         })
@@ -93,6 +95,7 @@ fn valid_factory_state(sale: FactorySale) -> FactoryState {
     }
     field!(curve_core::BuyPolicy::Open);
     field!(curve_core::PausePolicy::Disabled);
+    field!(curve_core::EndingPolicy::Depletion);
     field!(factory_core::TradeMode::BuyAndSell);
     field!(None::<factory_core::GraduationHook>);
     field!(CreationStage::Active);
@@ -269,6 +272,7 @@ fn fixed_creation() -> factory_core::FixedPriceInputs {
             root: [42; 32],
         }),
         pause_policy: curve_core::PausePolicy::Disabled,
+        ending_policy: curve_core::EndingPolicy::Either,
         namespace: sale.namespace,
         launch_salt: sale.launch_salt,
         name: "Sale".into(),
@@ -431,6 +435,7 @@ fn weighted_creation() -> factory_core::WeightedInputs {
     factory_core::WeightedInputs {
         buy_policy: fixed.buy_policy,
         pause_policy: curve_core::PausePolicy::AuthorityControlled,
+        ending_policy: curve_core::EndingPolicy::Scheduled,
         namespace: fixed.namespace,
         launch_salt: fixed.launch_salt,
         name: fixed.name,
@@ -1635,5 +1640,245 @@ fn paused_curve_quotes_reject_both_buy_forms_and_sells() {
         quote_sell(&pool, &config, 1, 1),
     ] {
         assert!(matches!(result, Err(ClientError::PoolPaused)));
+    }
+}
+
+#[test]
+fn creation_accepts_only_factory_ending_windows() {
+    use curve_core::EndingPolicy::{Depletion, Either, Manual, Scheduled};
+    for ending in [Manual, Scheduled, Depletion, Either] {
+        for end in [None, Some(100)] {
+            let mut request = creation();
+            request.ending_policy = ending;
+            request.end_timestamp = end;
+            let result = build_create_sale_invocation(sale(), AccountId::new([9; 32]), request);
+            let supported = matches!(
+                (ending, end),
+                (Depletion, None) | (Scheduled | Either, Some(_))
+            );
+            if supported {
+                assert!(matches!(
+                    result.unwrap().instruction,
+                    factory_core::Message::CreateFactoryPool { ending_policy, end_timestamp, .. }
+                        if ending_policy == ending && end_timestamp == end
+                ));
+            } else {
+                assert!(matches!(
+                    result,
+                    Err(ClientError::FactoryPolicy(
+                        factory_core::Error::InvalidTerms
+                    ))
+                ));
+            }
+        }
+    }
+}
+
+#[test]
+fn creation_resume_rejects_ending_and_deadline_replacements_at_every_stage() {
+    use curve_core::EndingPolicy::{Depletion, Either, Scheduled};
+    for stage in [
+        CreationStage::Minted,
+        CreationStage::Allocated,
+        CreationStage::PoolPrepared,
+        CreationStage::Active,
+    ] {
+        for (ending, end) in [
+            (Depletion, None),
+            (Scheduled, Some(100)),
+            (Either, Some(100)),
+        ] {
+            let mut state = valid_factory_state(sale());
+            state.creation_stage = stage;
+            state.ending_policy = ending;
+            state.end_timestamp = end;
+            let mut request = creation();
+            request.ending_policy = ending;
+            request.end_timestamp = end;
+            assert!(
+                super::next_creation_invocation(
+                    sale(),
+                    AccountId::new([9; 32]),
+                    request.clone(),
+                    Some(&state)
+                )
+                .is_ok()
+            );
+            for (replacement, deadline) in [
+                (Depletion, None),
+                (Scheduled, Some(100)),
+                (Either, Some(100)),
+                (ending, Some(101)),
+            ] {
+                if (replacement, deadline) == (ending, end) {
+                    continue;
+                }
+                let mut changed = request.clone();
+                changed.ending_policy = replacement;
+                changed.end_timestamp = deadline;
+                assert!(matches!(
+                    super::next_creation_invocation(
+                        sale(),
+                        AccountId::new([9; 32]),
+                        changed,
+                        Some(&state)
+                    ),
+                    Err(ClientError::LaunchParametersMismatch)
+                ));
+            }
+        }
+    }
+}
+
+#[test]
+fn factory_state_rejects_invalid_ending_windows() {
+    use curve_core::EndingPolicy::{Depletion, Either, Manual, Scheduled};
+    for (ending, end) in [
+        (Manual, None),
+        (Manual, Some(100)),
+        (Scheduled, None),
+        (Either, None),
+        (Depletion, Some(100)),
+    ] {
+        let mut state = valid_factory_state(sale());
+        state.ending_policy = ending;
+        state.end_timestamp = end;
+        assert!(matches!(
+            super::validate_factory_state(sale(), &state),
+            Err(ClientError::FactorySaleMismatch)
+        ));
+    }
+}
+
+fn matching_factory_pool(state: &FactoryState) -> curve_core::PoolAccount {
+    let (mut pool, _) = pool_snapshot();
+    pool.namespace = state.namespace;
+    pool.token0_definition_id = state.token_definition_id;
+    pool.token1_definition_id = state.collateral_definition_id;
+    pool.owner = super::factory_pool_addresses(sale()).factory;
+    pool.owner_program = Some((
+        sale().factory_program_id,
+        *factory_core::compute_factory_seed(state.namespace, state.launch_salt).as_bytes(),
+    ));
+    pool.pool.k = state.virtual_token_reserve * state.virtual_collateral_reserve;
+    pool.pool.ending_policy = state.ending_policy;
+    pool.pool.close_timestamp = state.end_timestamp;
+    pool.pool.close_on_depletion = match state.ending_policy {
+        curve_core::EndingPolicy::Scheduled => None,
+        _ => Some(pool::TokenSide::Token0),
+    };
+    pool
+}
+
+#[test]
+fn loaded_factory_pool_checks_all_immutable_policy_and_pricing_terms() {
+    let state = valid_factory_state(sale());
+    let pool = matching_factory_pool(&state);
+    super::validate_factory_pool(sale(), &state, &pool).unwrap();
+    for change in 1..10 {
+        let mut changed = pool.clone();
+        match change {
+            1 => changed.pool.ending_policy = curve_core::EndingPolicy::Manual,
+            2 => changed.pool.close_timestamp = Some(100),
+            3 => changed.pool.close_on_depletion = Some(pool::TokenSide::Token1),
+            4 => changed.allowed_input_token = Some(pool::TokenSide::Token1),
+            5 => changed.trade_control = curve_core::TradeControl::Running,
+            6 => changed.pool.k += 1,
+            7 => changed.owner_program = None,
+            8 => changed.token0_definition_id = AccountId::new([99; 32]),
+            9 => changed.buy_policy = fixed_creation().buy_policy,
+            _ => unreachable!(),
+        }
+        assert!(
+            matches!(
+                super::validate_factory_pool(sale(), &state, &changed),
+                Err(ClientError::FactorySaleMismatch)
+            ),
+            "change {change}"
+        );
+    }
+    let mut paused_state = state.clone();
+    paused_state.pause_policy = curve_core::PausePolicy::AuthorityControlled;
+    let mut paused_pool = pool.clone();
+    paused_pool.trade_control = curve_core::TradeControl::Paused;
+    super::validate_factory_pool(sale(), &paused_state, &paused_pool).unwrap();
+    let mut traded_pool = pool;
+    traded_pool.pool.virtual_reserve0 -= 1;
+    traded_pool.pool.virtual_reserve1 += 1;
+    traded_pool.pool.real_reserve0 -= 1;
+    traded_pool.pool.real_reserve1 += 1;
+    super::validate_factory_pool(sale(), &state, &traded_pool).unwrap();
+}
+
+#[test]
+fn malformed_policy_quotes_keep_the_quote_error_label_and_source() {
+    use std::error::Error;
+    let (original, config) = pool_snapshot();
+    for change in 0..4 {
+        let mut pool = original.clone();
+        match change {
+            0 => pool.pool.ending_policy = curve_core::EndingPolicy::Either,
+            1 => pool.pool.ending_policy = curve_core::EndingPolicy::Scheduled,
+            2 => pool.pool.ending_policy = curve_core::EndingPolicy::Depletion,
+            3 => pool.pool.close_timestamp = Some(100),
+            _ => unreachable!(),
+        }
+        let before = pool.clone();
+        for (error, label) in [
+            (
+                super::quote_buy(&pool, &config, 1, 0).unwrap_err(),
+                "quote_buy",
+            ),
+            (
+                super::quote_sell(&pool, &config, 1, 0).unwrap_err(),
+                "quote_sell",
+            ),
+            (
+                super::quote_buy_with_collateral(&pool, &config, 1, 0).unwrap_err(),
+                "quote_buy_with_collateral",
+            ),
+        ] {
+            let actual: &'static str = (&error).into();
+            assert_eq!(actual, label);
+            assert!(matches!(
+                error.source().unwrap().downcast_ref::<pool::SwapError>(),
+                Some(pool::SwapError::InvalidPolicy)
+            ));
+        }
+        assert_eq!(pool, before);
+    }
+}
+
+#[test]
+fn loaded_factory_pool_matches_each_selected_ending() {
+    use curve_core::EndingPolicy::{Depletion, Either, Scheduled};
+    for (ending, end) in [
+        (Depletion, None),
+        (Scheduled, Some(100)),
+        (Either, Some(100)),
+    ] {
+        let mut state = valid_factory_state(sale());
+        state.ending_policy = ending;
+        state.end_timestamp = end;
+        let pool = matching_factory_pool(&state);
+        super::validate_factory_pool(sale(), &state, &pool).unwrap();
+        for side in [
+            None,
+            Some(pool::TokenSide::Token0),
+            Some(pool::TokenSide::Token1),
+        ] {
+            let mut changed = pool.clone();
+            changed.pool.close_on_depletion = side;
+            assert_eq!(
+                super::validate_factory_pool(sale(), &state, &changed).is_ok(),
+                side == pool.pool.close_on_depletion
+            );
+        }
+        let mut changed = pool;
+        changed.pool.ending_policy = if ending == Either { Scheduled } else { Either };
+        assert!(matches!(
+            super::validate_factory_pool(sale(), &state, &changed),
+            Err(ClientError::FactorySaleMismatch)
+        ));
     }
 }
