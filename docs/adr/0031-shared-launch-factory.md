@@ -1,6 +1,6 @@
 # ADR 0031: Shared launch setup and reusable pool policies
 
-Status: Shared setup, public buy eligibility, fee arithmetic, optional pause/resume and supported fee/ending decisions implemented. Shared settlement, cross-engine graduation and common events remain incomplete. Private routes, real proofs and deployment readiness pending.
+Status: Shared setup, public buy eligibility, fee arithmetic, optional pause/resume, supported fee/ending decisions and settlement route rules with duplicate-payout protection implemented. Cross-engine graduation and common events remain incomplete. Private routes, real proofs and deployment readiness pending.
 
 Date: 2026-10-13; policy amendment: 2026-11-09; ending and namespace-fee amendment: 2026-11-13
 

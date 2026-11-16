@@ -254,7 +254,7 @@ fn fixed_state(buyer: AccountId, end: Option<u64>) -> (V03State, AccountId) {
             lbp_core::CreatorAllocationRelease::AfterEnd,
             0u128,
             0u128,
-            false,
+            lbp_core::SettlementProgress::Unselected,
             None::<(bool, u8)>,
         ),
     ))
@@ -2532,6 +2532,21 @@ fn weighted_factory_env() -> (
     Vec<Actor>, // actors for factory transactions
     [u8; 32],   // salt
 ) {
+    weighted_factory_env_with_buy(true)
+}
+
+fn weighted_factory_env_with_buy(
+    execute_buy: bool,
+) -> (
+    V03State,
+    AccountId, // factory
+    AccountId, // pool
+    AccountId, // launch (token definition)
+    AccountId, // escrow
+    PrivateKey,
+    Vec<Actor>, // actors for factory transactions
+    [u8; 32],   // salt
+) {
     use factory_core::{CreatorAllocationRelease, LbpCreationStage, WeightedInputs};
     const FACTORY: AccountId = AccountId::new([17; 32]);
     let key = PrivateKey::try_new([23; 32]).unwrap();
@@ -2735,20 +2750,25 @@ fn weighted_factory_env() -> (
     )
     .unwrap();
     assert!(fixed_pool(&state, pool).funded);
-    // Set clock for buy window and execute a buy
+    assert_eq!(
+        fixed_pool(&state, pool).settlement_progress,
+        lbp_core::SettlementProgress::Unselected,
+    );
     state = clock_state(state, 150_000);
-    fixed_execute_at(
-        &mut state,
-        pool,
-        &key,
-        lbp_core::Message::BuyWeightedExactInput {
-            membership: None,
-            amount_in: 50,
-            min_amount_out: 1,
-        },
-        150_000,
-    )
-    .unwrap();
+    if execute_buy {
+        fixed_execute_at(
+            &mut state,
+            pool,
+            &key,
+            lbp_core::Message::BuyWeightedExactInput {
+                membership: None,
+                amount_in: 50,
+                min_amount_out: 1,
+            },
+            150_000,
+        )
+        .unwrap();
+    }
     (state, factory, pool, launch, escrow, key, actors, salt)
 }
 
@@ -2941,7 +2961,10 @@ fn weighted_factory_controls_and_settlement_full_flow() {
     .unwrap();
 
     let sale_after = fixed_pool(&state, pool);
-    assert!(sale_after.proceeds_settled);
+    assert_eq!(
+        sale_after.settlement_progress,
+        lbp_core::SettlementProgress::ManualComplete
+    );
     assert_eq!(sale_after.recorded_collateral, 0);
     assert_eq!(sale_after.accrued_fees, 0);
 
@@ -3154,7 +3177,10 @@ fn weighted_frozen_buys_blocked_but_settlement_allowed() {
         300_000,
     )
     .unwrap();
-    assert!(fixed_pool(&state, pool).proceeds_settled);
+    assert_eq!(
+        fixed_pool(&state, pool).settlement_progress,
+        lbp_core::SettlementProgress::ManualComplete
+    );
 
     // Allocation claim must work when frozen
     factory_execute_at(
@@ -3215,7 +3241,10 @@ fn weighted_allocation_before_settlement_then_settlement() {
         300_000,
     )
     .unwrap();
-    assert!(fixed_pool(&state, pool).proceeds_settled);
+    assert_eq!(
+        fixed_pool(&state, pool).settlement_progress,
+        lbp_core::SettlementProgress::ManualComplete
+    );
     assert_eq!(
         balance(&state, creator, COLLATERAL),
         creator_collateral_before + recorded
@@ -3228,6 +3257,14 @@ fn weighted_settlement_failures_roll_back_all_effects_and_retry_once() {
     let creator = AccountId::from(&PublicKey::new_from_private_key(&key));
     let state = clock_state(state, 300_000);
     let sale = fixed_pool(&state, pool);
+    assert_eq!(
+        sale.settlement_progress,
+        lbp_core::SettlementProgress::Unselected
+    );
+    let mut expected = sale.clone();
+    expected.recorded_collateral = 0;
+    expected.accrued_fees = 0;
+    expected.settlement_progress = lbp_core::SettlementProgress::ManualComplete;
     assert!(sale.accrued_fees > 0);
     assert!(sale.remaining_inventory > 0);
     let definition_actor = Actor::new(launch, TOKEN_PROGRAM_ACCOUNT_ID);
@@ -3296,6 +3333,10 @@ fn weighted_settlement_failures_roll_back_all_effects_and_retry_once() {
             "{fault}: failed settlement changed runtime state"
         );
         assert_eq!(rejected.get_account_by_id(creator).nonce, nonce);
+        assert_eq!(
+            fixed_pool(&rejected, pool).settlement_progress,
+            lbp_core::SettlementProgress::Unselected
+        );
 
         let mut repaired = rejected.with_public_accounts([account(actor, original)]);
         let creator_before = balance(&repaired, creator, COLLATERAL);
@@ -3314,7 +3355,11 @@ fn weighted_settlement_failures_roll_back_all_effects_and_retry_once() {
                 300_000,
             )
             .unwrap();
-            assert!(fixed_pool(&repaired, pool).proceeds_settled);
+            assert_eq!(
+                fixed_pool(&repaired, pool).settlement_progress,
+                lbp_core::SettlementProgress::ManualComplete
+            );
+            assert_eq!(fixed_pool(&repaired, pool), expected);
             assert_eq!(
                 balance(&repaired, creator, COLLATERAL),
                 creator_before + sale.recorded_collateral
@@ -3600,7 +3645,10 @@ fn guest_poke_in_settlement_flow() {
     .unwrap();
     // Settlement should succeed with a checkpoint already recorded
     let sale = fixed_pool(&state, pool);
-    assert!(sale.proceeds_settled);
+    assert_eq!(
+        sale.settlement_progress,
+        lbp_core::SettlementProgress::ManualComplete
+    );
 }
 
 fn token_holding(owner: AccountId, definition: AccountId, balance: u128) -> (AccountId, Account) {
@@ -3702,7 +3750,10 @@ fn fixed_expiry_settlement_and_allocation_in_both_orders_keep_surplus_while_froz
             assert_eq!(balance(&env.state, env.pool, env.launch), 7);
             assert_eq!(token_supply(&env.state, env.launch), supply - 700);
             let settled = fixed_pool(&env.state, env.pool);
-            assert!(settled.proceeds_settled);
+            assert_eq!(
+                settled.settlement_progress,
+                lbp_core::SettlementProgress::ManualComplete
+            );
             assert_eq!(
                 settled.remaining_inventory, 700,
                 "burn must not become sellout evidence"
@@ -3790,6 +3841,14 @@ fn fixed_settlement_token_faults_restore_full_runtime_then_repair_and_pay_once()
     let env = fixed_settlement_env(Some(200));
     let creator = env.creator();
     let sale = fixed_pool(&env.state, env.pool);
+    assert_eq!(
+        sale.settlement_progress,
+        lbp_core::SettlementProgress::Unselected
+    );
+    let mut expected = sale.clone();
+    expected.recorded_collateral = 0;
+    expected.accrued_fees = 0;
+    expected.settlement_progress = lbp_core::SettlementProgress::ManualComplete;
     let supply = token_supply(&env.state, env.launch);
     for fault in ["fee", "burn", "proceeds", "allocation"] {
         let actor = match fault {
@@ -3845,6 +3904,10 @@ fn fixed_settlement_token_faults_restore_full_runtime_then_repair_and_pay_once()
             "{fault}: failed payout changed runtime state"
         );
         assert_eq!(state.get_account_by_id(creator).nonce, nonce);
+        assert_eq!(
+            fixed_pool(&state, env.pool).settlement_progress,
+            lbp_core::SettlementProgress::Unselected
+        );
         state = state.with_public_accounts([account(actor, original)]);
         let collateral = balance(&state, creator, COLLATERAL);
         let tokens = balance(&state, creator, env.launch);
@@ -3881,7 +3944,11 @@ fn fixed_settlement_token_faults_restore_full_runtime_then_repair_and_pay_once()
                 );
                 assert_eq!(balance(&state, env.escrow, env.launch), 200);
                 let settled = fixed_pool(&state, env.pool);
-                assert!(settled.proceeds_settled);
+                assert_eq!(
+                    settled.settlement_progress,
+                    lbp_core::SettlementProgress::ManualComplete
+                );
+                assert_eq!(settled, expected);
                 assert_eq!((settled.recorded_collateral, settled.accrued_fees), (0, 0));
             }
         }
@@ -4168,7 +4235,10 @@ fn fixed_shared_pause_blocks_both_buys_but_keeps_frozen_collection_and_settlemen
     )
     .unwrap();
     let sale = fixed_pool(&env.state, env.pool);
-    assert!(sale.proceeds_settled);
+    assert_eq!(
+        sale.settlement_progress,
+        lbp_core::SettlementProgress::ManualComplete
+    );
     assert!(sale.trade_control.is_paused());
     assert_eq!(balance(&env.state, env.escrow, env.launch), 0);
 }
@@ -4768,7 +4838,10 @@ fn fixed_selected_ending_controls_sellout_settlement() {
         };
         env.execute(claim, timestamp).unwrap();
         env.execute(settle, timestamp).unwrap();
-        assert!(fixed_pool(&env.state, env.pool).proceeds_settled);
+        assert_eq!(
+            fixed_pool(&env.state, env.pool).settlement_progress,
+            lbp_core::SettlementProgress::ManualComplete
+        );
         assert_eq!(balance(&env.state, env.escrow, env.launch), 0);
         assert_eq!(balance(&env.state, creator, env.launch), 1_000);
         assert_eq!(balance(&env.state, TREASURY, COLLATERAL), 42);
@@ -4817,4 +4890,120 @@ fn weighted_buys_reject_unbacked_claims_and_mismatched_pricing_records() {
             );
         }
     }
+}
+
+#[test]
+fn fixed_zero_proceeds_settlement_burns_once_and_keeps_manual_completion_on_authenticated_retry() {
+    let mut env = fixed_factory_env(Some(200), factory_core::CreatorAllocationRelease::AfterEnd);
+    let creator = env.creator();
+    let initial = fixed_pool(&env.state, env.pool);
+    assert_eq!(
+        initial.settlement_progress,
+        lbp_core::SettlementProgress::Unselected
+    );
+    assert_eq!((initial.recorded_collateral, initial.accrued_fees), (0, 0));
+    assert_eq!(initial.remaining_inventory, 800);
+    let creator_collateral = balance(&env.state, creator, COLLATERAL);
+    let supply = token_supply(&env.state, env.launch);
+    let mut expected = initial.clone();
+    expected.settlement_progress = lbp_core::SettlementProgress::ManualComplete;
+    for _ in 0..2 {
+        env.execute(
+            factory_core::Message::WithdrawFactoryProceeds { creator, now: 200 },
+            200_000,
+        )
+        .unwrap();
+        assert_eq!(fixed_pool(&env.state, env.pool), expected);
+        assert_eq!(balance(&env.state, creator, COLLATERAL), creator_collateral);
+        assert_eq!(balance(&env.state, env.pool, COLLATERAL), 0);
+        assert_eq!(balance(&env.state, env.pool, env.launch), 0);
+        assert_eq!(balance(&env.state, TREASURY, COLLATERAL), 0);
+        assert_eq!(balance(&env.state, env.escrow, env.launch), 200);
+        assert_eq!(
+            token_supply(&env.state, env.launch),
+            supply - initial.remaining_inventory
+        );
+    }
+    reject_payout_roles(
+        env.state,
+        env.factory,
+        env.pool,
+        env.launch,
+        &env.actors,
+        env.salt,
+        false,
+    );
+}
+
+#[test]
+fn weighted_seed_only_settlement_completes_manual_route_and_retries_keep_the_end_bound() {
+    let (mut state, factory, pool, launch, escrow, key, actors, salt) =
+        weighted_factory_env_with_buy(false);
+    let creator = AccountId::from(&PublicKey::new_from_private_key(&key));
+    let initial = fixed_pool(&state, pool);
+    assert_eq!(
+        initial.settlement_progress,
+        lbp_core::SettlementProgress::Unselected
+    );
+    assert_eq!(
+        (initial.recorded_collateral, initial.accrued_fees),
+        (100, 0)
+    );
+    assert_eq!(initial.remaining_inventory, 800);
+    let creator_collateral = balance(&state, creator, COLLATERAL);
+    let supply = token_supply(&state, launch);
+    let mut expected = initial.clone();
+    expected.recorded_collateral = 0;
+    expected.settlement_progress = lbp_core::SettlementProgress::ManualComplete;
+    state = clock_state(state, 300_000);
+    for _ in 0..2 {
+        let before = state.clone();
+        let nonce = state.get_account_by_id(creator).nonce;
+        let early = factory_execute_at(
+            &mut state,
+            factory,
+            &actors,
+            &key,
+            salt,
+            launch,
+            pool,
+            factory_core::Message::WithdrawWeightedProceeds { creator },
+            299_999,
+        );
+        assert!(
+            matches!(early, Err(lee::error::LeeError::OutOfValidityWindow)),
+            "seed-only settlement or retry lost its scheduled-end bound: {early:?}",
+        );
+        assert!(
+            state == before,
+            "early seed-only settlement changed runtime state"
+        );
+        assert_eq!(state.get_account_by_id(creator).nonce, nonce);
+        factory_execute_at(
+            &mut state,
+            factory,
+            &actors,
+            &key,
+            salt,
+            launch,
+            pool,
+            factory_core::Message::WithdrawWeightedProceeds { creator },
+            300_000,
+        )
+        .unwrap();
+        assert_eq!(fixed_pool(&state, pool), expected);
+        assert_eq!(
+            balance(&state, creator, COLLATERAL),
+            creator_collateral + 100
+        );
+        assert_eq!(balance(&state, pool, COLLATERAL), 0);
+        assert_eq!(balance(&state, pool, launch), 0);
+        assert_eq!(balance(&state, TREASURY, COLLATERAL), 0);
+        assert_eq!(balance(&state, escrow, launch), 200);
+        assert_eq!(
+            token_supply(&state, launch),
+            supply - initial.remaining_inventory
+        );
+    }
+    reject_payout_roles(state, factory, pool, launch, &actors, salt, true);
 }

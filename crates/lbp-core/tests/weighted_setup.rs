@@ -433,6 +433,10 @@ fn weighted_policy_survives_every_prepare_and_activation_callback() {
             let saved =
                 lbp_core::PoolAccount::decode(response.post_state.as_ref().unwrap()).unwrap();
             assert_eq!(saved.buy_policy, policy);
+            assert_eq!(
+                saved.settlement_progress,
+                lbp_core::SettlementProgress::Unselected
+            );
             assert_eq!(saved.ending_policy, lbp_core::EndingPolicy::Scheduled);
         }
         assert_eq!(

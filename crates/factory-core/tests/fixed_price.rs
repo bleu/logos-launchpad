@@ -1073,7 +1073,11 @@ fn sellout_releases_after_end_allocation_before_or_after_proceeds_settlement() {
         let mut pool = active_pool(&state, input.receiver);
         pool.remaining_inventory = 0;
         for settled in [false, true] {
-            pool.proceeds_settled = settled;
+            pool.settlement_progress = if settled {
+                lbp_core::SettlementProgress::ManualComplete
+            } else {
+                lbp_core::SettlementProgress::Unselected
+            };
             let response = claim_allocation(&input, &state, &pool, 100, 217).unwrap();
             assert_eq!(response.sync_messages.len(), 1);
             assert_eq!(response.validity.timestamps.start(), None);
@@ -1124,7 +1128,7 @@ fn allocation_stays_locked_before_close_and_requires_escrow_coverage() {
 fn expiry_burn_keeps_the_allocation_inclusion_bound_until_expiry() {
     let (input, state) = completed();
     let mut pool = active_pool(&state, input.receiver);
-    pool.proceeds_settled = true;
+    pool.settlement_progress = lbp_core::SettlementProgress::ManualComplete;
     pool.recorded_collateral = 0;
     pool.accrued_fees = 0;
     let before_end = claim_allocation(&input, &state, &pool, 199, 200).unwrap();
