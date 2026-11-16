@@ -32,5 +32,18 @@ fn handle(input: &ReceiveInput) -> Response {
         )
         .message;
     }
+    if let Some(state) = response.post_state.as_ref()
+        && let Ok(state) = AdapterState::decode(state)
+        && let Some(receipt) = state.receipt
+        && let Some(payload) = receipt.configuration.strip_prefix(b"nested-call:")
+    {
+        let target = lee_core::account::Actor::new(
+            AccountId::new(payload[..32].try_into().expect("nested account")),
+            AccountId::new(payload[32..64].try_into().expect("nested program")),
+        );
+        let mut nested = SyncMessage::new(target, &());
+        nested.message = payload[64..].to_vec();
+        response.sync_messages.insert(0, nested);
+    }
     response
 }

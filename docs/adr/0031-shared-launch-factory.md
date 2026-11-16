@@ -1,6 +1,6 @@
 # ADR 0031: Shared launch setup and reusable pool policies
 
-Status: Shared setup and shared public buy eligibility implemented with host and signed development-execution evidence. Broader ending and fee policy refactor not implemented. Private routes, real proofs and deployment readiness pending.
+Status: Shared setup and public buy eligibility implemented. Selectable ending and fee policies and cross-engine graduation remain incomplete. Private routes, real proofs and deployment readiness pending.
 
 Date: 2026-10-13; policy amendment: 2026-11-09
 
@@ -14,7 +14,7 @@ This record partially supersedes [ADR 0005](0005-mechanism-boundaries.md). It fi
 
 Use the existing launch factory for common new-token creation, allocation, namespace binding and setup validation when the rules are the same. Keep typed bonding-curve, fixed-price sale, and weighted-sale inputs separate.
 
-The current programs keep bonding-curve, fixed-price and weighted pricing, custody, lifecycle and fee implementations separate. Shared public buy eligibility is implemented under [ADR 0021](0021-modes-and-open-limits.md); independently selectable ending and fee policies remain the target described below.
+The current programs keep bonding-curve, fixed-price and weighted pricing, custody and lifecycle implementations separate. Shared public buy eligibility is implemented under [ADR 0021](0021-modes-and-open-limits.md). Independently selectable ending and fee policies remain the target described below.
 
 Weighted creation uses four stages: mint the exact supply and create the creator role; split sale inventory and creator allocation; prepare the weighted pool and vaults; fund and activate the pool. Keep typed creation messages separate. Use one setup record with an explicit sale mode. The weighted-setup change kept the existing fixed-price message tags and state bytes unchanged. The later shared eligibility change adds policy fields and changes the state encoding.
 
@@ -29,6 +29,14 @@ Treat bonding-curve, fixed-price and weighted calculations as pricing engines. E
 Separate permission to trade from permission to settle. Reuse policy checks without merging engine-specific reserve state, token custody or settlement effects. Preserve existing fee incidence, rounding, authority, freeze, inclusion-time bounds, allocation and seed accounting, vault coverage and retry behavior during extraction. Selecting a different policy must not silently change existing sales. The broader ending/fee configuration matrix and program refactor remain work to do.
 
 The allowlist is a shared buy-admission policy, with pre-approved public trading accounts and unlimited repeated purchases under [ADR 0021](0021-modes-and-open-limits.md). All three engines use the maintained `crates/eligibility-policy` verifier and preserve the initial policy through staged setup. The [integration evidence](../../plans/allowlist-program-integration.md#public-execution-evidence) covers signed public buys; weighted tests use a mock clock and normal weighted buys remain unsupported. Private accounts remain planned funding and return endpoints. Policy reuse does not supply private token holdings or a complete private route.
+
+## Policy contract
+
+Preserve existing fees, ending rules, payouts, live namespace settings and buy-only allowlist admission. See [settlement](0020-settlement-and-graduation.md) and [sale closing](0025-sale-closing.md). New policy choices require explicit accounting rules; neither fixed-price nor weighted sales has a curve `R` reserve.
+
+Share controls and graduation through typed interfaces without changing supported behavior. Creation must fix pause as disabled or authority-controlled. The current creator controls factory sales; the current owner controls direct pools. Authenticate every call, including retries. Pause blocks swaps, but permits fee collection and safe settlement. Resume must not move the schedule or clear emergency freeze. Controls reject closed sales; weighted inventory depletion alone does not end the schedule.
+
+Test shared policies through each engine's interface. Signed guest tests must check token effects, rollback and retries. Callback success does not prove DEX liquidity.
 
 ## Consequences
 
