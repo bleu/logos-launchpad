@@ -1,5 +1,6 @@
 use crate::{Error, Message, PoolAccount, PoolMode, compute_pool_pda_seed};
 use borsh::{BorshDeserialize, BorshSerialize};
+use curve_core::events::{SaleEventKindV1, SettlementStepV1, TradeFormV1};
 use curve_core::{Config, TOKEN_PROGRAM_ACCOUNT_ID};
 use lee_core::{
     account::{AccountId, Actor},
@@ -114,8 +115,14 @@ impl Pending {
         if matches!(self.message, Message::CollectFees) {
             let amount = self.state.accrued_fees;
             self.state.accrued_fees = 0;
+            let response =
+                if let Some(event) = self.state.fee_event(receiver, config.treasury, amount) {
+                    self.state.response().event(event)
+                } else {
+                    self.state.response()
+                };
             return Ok(payout(
-                self.state.response(),
+                response,
                 &self.state,
                 receiver,
                 self.state.collateral_definition_id,
@@ -293,6 +300,15 @@ impl Pending {
         } else {
             None
         };
+        let closure_event = if matches!(
+            self.state.ending_policy,
+            crate::EndingPolicy::Depletion | crate::EndingPolicy::Either
+        ) && self.state.remaining_inventory == 0
+        {
+            self.state.observe_closure(receiver)?
+        } else {
+            None
+        };
         let response =
             curve_core::with_time_bounds(self.state.response(), bounds.at_least, bounds.before)
                 .map_err(|_| match self.state.mode {
@@ -300,6 +316,33 @@ impl Pending {
                     PoolMode::Weighted { .. } => Error::Arithmetic,
                 })?;
         let response = if let Some(event) = checkpoint_event {
+            response.event(event)
+        } else {
+            response
+        };
+        let response = response.event(self.state.event(
+            receiver,
+            SaleEventKindV1::Trade {
+                trader: *self.buyer.value(),
+                form: match self.message {
+                    Message::BuyExactOutput { .. } | Message::BuyWeightedExactOutput { .. } => {
+                        TradeFormV1::ExactOutput
+                    }
+                    _ => TradeFormV1::ExactInput,
+                },
+                token_in: *self.state.collateral_definition_id.value(),
+                token_out: *self.state.token_definition_id.value(),
+                amount_in,
+                pricing_input: net_in,
+                gross_output: amount_out,
+                amount_out,
+                fee_definition: *self.state.collateral_definition_id.value(),
+                fee_amount: fee,
+                fee_bps: config.protocol_fee_bps,
+                pricing_time: self.pricing_time,
+            },
+        ));
+        let response = if let Some(event) = closure_event {
             response.event(event)
         } else {
             response
@@ -683,15 +726,30 @@ fn settlement_payout(
     if balances[1] < plan.burn {
         return Err(Error::Underfunded);
     }
+    let closure_event = state.observe_closure(receiver)?;
     state.settlement_progress = plan.progress;
     state.seed_returned = true;
     state.accrued_fees = 0;
     state.recorded_collateral = 0;
     let response = curve_core::with_time_bounds(state.response(), expiry, None)
         .map_err(|_| Error::InvalidTerms)?;
-    Ok(custody_effects(
-        response, &state, receiver, creator, None, treasury, &plan,
-    ))
+    let response = if let Some(event) = closure_event {
+        response.event(event)
+    } else {
+        response
+    };
+    Ok(
+        custody_effects(response, &state, receiver, creator, None, treasury, &plan).event(
+            state.event(
+                receiver,
+                SaleEventKindV1::Settlement {
+                    step: SettlementStepV1::Completed,
+                    route: Some(crate::events::settlement_route(plan.progress)),
+                    effects: vec![],
+                },
+            ),
+        ),
+    )
 }
 
 pub(super) fn custody_effects(
@@ -730,7 +788,7 @@ pub(super) fn custody_effects(
             )]),
         )
     };
-    if let Some(adapter) = adapter {
+    let response = if let Some(adapter) = adapter {
         let response = payout(
             response,
             state,
@@ -756,7 +814,8 @@ pub(super) fn custody_effects(
             creator,
             plan.seed + plan.amounts.collateral,
         )
-    }
+    };
+    crate::events::custody_events(response, state, receiver, creator, adapter, treasury, plan)
 }
 
 #[cfg(test)]
@@ -798,6 +857,7 @@ mod tests {
             graduation_adapter: None,
             mode: PoolMode::FixedPrice,
             funded: true,
+            closure_observed: false,
             namespace,
             namespace_program_id: namespace_program,
             factory_owner: id(7),

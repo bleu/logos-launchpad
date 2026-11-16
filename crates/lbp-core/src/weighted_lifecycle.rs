@@ -43,12 +43,20 @@ pub(super) fn set_paused(input: &ReceiveInput, paused: bool) -> Result<Response,
         .map_err(|_| Error::PauseDisabled)?;
     let response = curve_core::with_time_bounds(state.response(), None, bounds.before)
         .map_err(|_| Error::InvalidTerms)?;
+    let response = if changed {
+        response.event(state.event(
+            input.receiver,
+            curve_core::events::SaleEventKindV1::PauseChanged { paused },
+        ))
+    } else {
+        response
+    };
     Ok(
         if changed && matches!(state.mode, PoolMode::Weighted { .. }) {
             response.event(ProgramEvent {
                 // First eight bytes of sha256("lbp::WeightedPauseChanged").
                 selector: [109, 140, 24, 3, 232, 43, 58, 157],
-                data: borsh::to_vec(&paused).unwrap(),
+                data: borsh::to_vec(&curve_core::events::WeightedPauseChanged { paused }).unwrap(),
             })
         } else {
             response
@@ -118,12 +126,10 @@ pub(super) fn record_checkpoint(
 const CHECKPOINT_SELECTOR: [u8; 8] = [0xae, 0x2f, 0x6d, 0x45, 0x7f, 0xb3, 0x79, 0xcf];
 
 fn checkpoint_event(time: u64, token_weight: u128) -> ProgramEvent {
-    let mut data = Vec::with_capacity(24);
-    data.extend_from_slice(&time.to_le_bytes());
-    data.extend_from_slice(&token_weight.to_le_bytes());
     ProgramEvent {
         selector: CHECKPOINT_SELECTOR,
-        data,
+        data: borsh::to_vec(&curve_core::events::WeightedCheckpoint { time, token_weight })
+            .unwrap(),
     }
 }
 

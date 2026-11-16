@@ -9,6 +9,7 @@ use lee_core::{
     program::{ReceiveInput, Response, SyncMessage},
 };
 use pool::{ExactInputSwap, ExactOutputSwap, TokenSide};
+use sale_policy::events::{SaleEventKindV1, TradeFormV1};
 
 pub fn begin(input: &ReceiveInput, message: Message) -> Result<Response, Error> {
     let state = PoolAccount::decode(&input.pre_state)?;
@@ -102,9 +103,9 @@ pub(crate) fn finish(mut pending: Pending, receiver: Actor) -> Result<Response, 
     if !pending.state.funded {
         return Err(Error::PendingFunding);
     }
-    let (token_in, now) = match pending.message {
-        Message::SwapExactInput { token_in, now, .. }
-        | Message::SwapExactOutput { token_in, now, .. } => (token_in, now),
+    let (token_in, now, form) = match pending.message {
+        Message::SwapExactInput { token_in, now, .. } => (token_in, now, TradeFormV1::ExactInput),
+        Message::SwapExactOutput { token_in, now, .. } => (token_in, now, TradeFormV1::ExactOutput),
         _ => return Err(Error::InvalidMessage),
     };
     let (side, token_out) = if token_in == pending.state.token0_definition_id {
@@ -155,11 +156,37 @@ pub(crate) fn finish(mut pending: Pending, receiver: Actor) -> Result<Response, 
         _ => return Err(Error::InvalidMessage),
     }
     .map_err(|_| Error::InvalidPool)?;
+    let closure = if pending.state.pool.lifecycle == pool::PoolLifecycle::Closed {
+        let reason = pending.state.depletion_reason().ok_or(Error::InvalidPool)?;
+        pending.state.observe_closure(receiver, reason, bounds)
+    } else {
+        None
+    };
     let mut response = crate::with_time_bounds(
         Response::set_state(borsh::to_vec(&pending.state).unwrap()),
         bounds.at_least,
         bounds.before,
     )?;
+    response = response.event(pending.state.event(
+        receiver,
+        SaleEventKindV1::Trade {
+            trader: *pending.authority.value(),
+            form,
+            token_in: *token_in.value(),
+            token_out: *token_out.value(),
+            amount_in: outcome.amount_in,
+            pricing_input: outcome.effective_amount_in,
+            gross_output: outcome.raw_amount_out,
+            amount_out: outcome.amount_out,
+            fee_definition: *pending.state.token1_definition_id.value(),
+            fee_amount: outcome.protocol_fee,
+            fee_bps: config.protocol_fee_bps,
+            pricing_time: None,
+        },
+    ));
+    if let Some(event) = closure {
+        response = response.event(event);
+    }
     response = transfer(
         response,
         pending.authority,

@@ -3,6 +3,7 @@
 #![deny(clippy::arithmetic_side_effects)]
 
 mod controls;
+pub mod events;
 mod settlement;
 pub use controls::{PauseError, PausePolicy, TradeControl};
 pub use settlement::{SettlementAmounts, SettlementError, SettlementProgress, SettlementRoute};

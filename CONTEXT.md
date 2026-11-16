@@ -37,6 +37,7 @@ This is the shared language for the launchpad and its three sale types. The repo
 | Trade mode | Immutable curve setting that selects permitted trade directions. See [ADR 0021](docs/adr/0021-modes-and-open-limits.md#sale-modes). |
 | Graduation hook | Public post-close call to an adapter saved at creation. |
 | Adapter custody | Adapter-owned PDA whose canonical ATAs receive hook payouts. |
+| Sale event | Versioned public program output for a committed change. It identifies the namespace, pricing engine and pool or launch. It does not establish indexer delivery or event history. |
 | Graduated | Final factory state after successful hook transfers and callback; not proof of DEX liquidity. |
 | Private route | SDK-managed deshield, public trade and return of received tokens, unused input and unused gas to participant-controlled private accounts within one transaction. Actual fees are excluded from returns. Public pool state and trade effects remain visible. |
 | Pricing engine | Bonding-curve, fixed-price or weighted calculation of trade amounts. Pricing stays separate from shared eligibility, fees and ending decisions. See [ADR 0031](docs/adr/0031-shared-launch-factory.md). |

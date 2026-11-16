@@ -1,3 +1,4 @@
+use factory_core::events::*;
 use factory_core::*;
 use lee_core::{
     account::{AccountId, Actor},
@@ -259,6 +260,7 @@ fn pool_state(state: &FactoryState, owner: Actor, funded: bool) -> curve_core::P
         trade_control: curve_core::TradeControl::new(state.pause_policy),
         allowed_input_token: Some(pool::TokenSide::Token1),
         funded,
+        closure_observed: false,
         namespace: state.namespace,
         token0_definition_id: state.token_definition_id,
         token1_definition_id: state.collateral_definition_id,
@@ -488,6 +490,9 @@ fn expiry_starts_manual_settlement_with_canonical_collateral_custody() {
     );
     let state = FactoryState::decode(response.post_state.as_ref().unwrap()).unwrap();
     assert_eq!(state.settlement_stage, SettlementStage::Ready);
+    assert!(
+        matches!(&launch_events(&response)[..], [SaleEventV1 { kind: SaleEventKindV1::Settlement { step: SettlementStepV1::Prepared, route: None, effects }, .. }] if effects.is_empty())
+    );
     assert_eq!(response.validity.timestamps.start(), Some(200_000));
     assert_eq!(response.validity.timestamps.end(), None);
     assert_eq!(state.pool_id, compute_pool_address(&state, input.receiver));
@@ -738,6 +743,9 @@ fn hook_ready() -> (ReceiveInput, Response, curve_core::PoolAccount) {
 #[test]
 fn hook_preparation_requires_saved_adapter_custody_and_keeps_manual_recovery() {
     let (input, response, saved) = hook_ready();
+    assert!(
+        matches!(&launch_events(&response)[..], [SaleEventV1 { kind: SaleEventKindV1::Settlement { step: SettlementStepV1::Prepared, route: None, effects }, .. }] if effects.is_empty())
+    );
     let state = FactoryState::decode(response.post_state.as_ref().unwrap()).unwrap();
     assert_eq!(
         state.settlement_stage,
@@ -761,6 +769,9 @@ fn hook_finalization_pays_custody_without_factory_grant_and_waits_for_authentica
     assert_eq!(
         state.settlement_stage,
         SettlementStage::HookReady { collateral_due: 50 }
+    );
+    assert!(
+        matches!(&launch_events(&response)[..], [SaleEventV1 { kind: SaleEventKindV1::Settlement { step: SettlementStepV1::Payout, route: Some(SettlementRouteV1::Graduation), effects }, .. }] if matches!(&effects[..], [SettlementEffectV1::Payout { purpose: PayoutPurposeV1::CurveReserve, liability_discharged: 100, tokens_transferred: 100, .. }, SettlementEffectV1::Payout { purpose: PayoutPurposeV1::CreatorProceeds, liability_discharged: 50, tokens_transferred: 50, .. }]))
     );
     let custody = compute_graduation_pda(id(9), input.receiver.account_id);
     let callback = response.sync_messages.last().unwrap();
@@ -819,6 +830,28 @@ fn hook_finalization_pays_custody_without_factory_grant_and_waits_for_authentica
     assert_eq!(handle(&input).err(), Some(Error::InvalidMessage));
     input.message = valid;
     let complete = handle(&input).unwrap();
+    let events = launch_events(&complete);
+    assert!(matches!(
+        &events[..],
+        [
+            SaleEventV1 {
+                kind: SaleEventKindV1::Settlement {
+                    step: SettlementStepV1::Completed,
+                    route: Some(SettlementRouteV1::Graduation),
+                    ..
+                },
+                ..
+            },
+            SaleEventV1 {
+                kind: SaleEventKindV1::Graduated {
+                    launch_tokens: 100,
+                    collateral: 50,
+                    ..
+                },
+                ..
+            }
+        ]
+    ));
     assert_eq!(
         FactoryState::decode(complete.post_state.as_ref().unwrap())
             .unwrap()
@@ -996,6 +1029,10 @@ fn zero_manual_completion_blocks_hooks_but_a_zero_hook_can_finish_first() {
     saved.pool.real_reserve0 = 0;
     let (input, burned) = settlement(&input, &withdrawn, saved.clone(), 800, 0, false);
     let (mut manual_input, complete) = settlement(&input, &burned, saved.clone(), 0, 0, false);
+    let events = launch_events(&complete);
+    assert!(
+        matches!(&events[..], [SaleEventV1 { kind: SaleEventKindV1::Settlement { step: SettlementStepV1::Completed, route: Some(SettlementRouteV1::Manual), effects }, .. }] if effects.is_empty())
+    );
     assert_eq!(
         FactoryState::decode(complete.post_state.as_ref().unwrap())
             .unwrap()
@@ -1043,6 +1080,34 @@ fn zero_manual_completion_blocks_hooks_but_a_zero_hook_can_finish_first() {
     })
     .unwrap();
     let complete = handle(&input).unwrap();
+    let events = launch_events(&complete);
+    assert!(matches!(
+        &events[..],
+        [
+            SaleEventV1 {
+                kind: SaleEventKindV1::Settlement {
+                    step: SettlementStepV1::Completed,
+                    route: Some(SettlementRouteV1::Graduation),
+                    ..
+                },
+                ..
+            },
+            SaleEventV1 {
+                kind: SaleEventKindV1::Graduated {
+                    launch_tokens: 0,
+                    collateral: 0,
+                    ..
+                },
+                ..
+            }
+        ]
+    ));
+    let progress = FactoryState::decode(complete.post_state.as_ref().unwrap())
+        .unwrap()
+        .settlement_stage
+        .progress();
+    assert_eq!(progress, SettlementProgress::Graduated);
+    assert_eq!(progress.route(), Some(SettlementRoute::Graduation));
     input.pre_state = complete.post_state.unwrap();
     input.message = borsh::to_vec(&Message::ExecuteGraduationHook { creator_hint: None }).unwrap();
     assert!(matches!(handle(&input), Err(Error::AlreadySettled)));
@@ -1629,6 +1694,7 @@ fn curve_pause_checks_current_creator_on_every_call_and_forwards_only_to_bound_p
             Some(Error::Unauthorized)
         );
         let response = handle(&proof(&input, &response, id(99))).unwrap();
+        assert!(response.events.is_empty());
         assert_eq!(response.sync_messages.len(), 1);
         let call = &response.sync_messages[0];
         assert_eq!(call.to, Actor::new(state.pool_id, state.curve_program_id));
@@ -2131,4 +2197,158 @@ fn curve_preparation_leaves_both_routes_available_until_a_manual_asset_payout() 
         SettlementProgress::ManualComplete
     );
     assert!(state.settlement_stage.is_manual_settlement_complete());
+}
+
+fn launch_events(response: &Response) -> Vec<SaleEventV1> {
+    response
+        .events
+        .iter()
+        .map(|event| {
+            let payload: SaleEventV1 = borsh::from_slice(&event.data).unwrap();
+            assert_eq!(
+                event.selector,
+                curve_core::sale_event(payload.clone()).selector
+            );
+            payload
+        })
+        .collect()
+}
+
+#[test]
+fn curve_created_event_names_the_launch_and_immutable_terms_once() {
+    let input = creation();
+    let response = handle(&input).unwrap();
+    let state = FactoryState::decode(response.post_state.as_ref().unwrap()).unwrap();
+    assert_eq!(
+        launch_events(&response),
+        vec![SaleEventV1::new(
+            *state.namespace.value(),
+            PricingEngineV1::Curve,
+            EventSubjectV1::Launch {
+                factory: *input.receiver.account_id.value(),
+                pool: *state.pool_id.value()
+            },
+            SaleEventKindV1::Created {
+                creator: *id(42).value(),
+                creator_role: *state.creator_role_id.value(),
+                token_definition: *state.token_definition_id.value(),
+                collateral_definition: *state.collateral_definition_id.value(),
+                sale_inventory: 800,
+                creator_allocation: 100,
+                curve_reserve: 100,
+                collateral_seed: 0,
+                start_timestamp: None,
+                end_timestamp: Some(200),
+                policies: EventPoliciesV1 {
+                    ending: EndingPolicy::Either,
+                    pause: PausePolicy::Disabled
+                }
+            }
+        )]
+    );
+    let (_, minted) = minted();
+    assert!(minted.events.is_empty());
+    let mut replay = input;
+    replay.pre_state = minted.post_state.unwrap();
+    assert_eq!(handle(&replay).err(), Some(Error::AlreadyInitialized));
+}
+
+#[test]
+fn curve_settlement_events_report_factory_burn_payouts_and_final_route() {
+    let (input, burned, pool) = burned(50);
+    let events = launch_events(&burned);
+    assert!(
+        matches!(&events[..], [SaleEventV1 { kind: SaleEventKindV1::Settlement { step: SettlementStepV1::UnsoldBurned, route: None, effects }, .. }] if effects == &vec![SettlementEffectV1::Burn { definition: *FactoryState::decode(burned.post_state.as_ref().unwrap()).unwrap().token_definition_id.value(), amount: 800 }])
+    );
+    let (input, paid) = settlement(&input, &burned, pool.clone(), 100, 67, false);
+    let events = launch_events(&paid);
+    assert!(
+        matches!(&events[..], [SaleEventV1 { kind: SaleEventKindV1::Settlement { step: SettlementStepV1::Payout, route: Some(SettlementRouteV1::Manual), effects }, .. }] if matches!(&effects[..], [SettlementEffectV1::Payout { purpose: PayoutPurposeV1::CurveReserve, liability_discharged: 100, tokens_transferred: 100, .. }]))
+    );
+    let (_, complete) = settlement(&input, &paid, pool, 0, 67, false);
+    let events = launch_events(&complete);
+    assert!(
+        matches!(&events[..], [SaleEventV1 { kind: SaleEventKindV1::Settlement { step: SettlementStepV1::Payout, route: Some(SettlementRouteV1::Manual), effects }, .. }, SaleEventV1 { kind: SaleEventKindV1::Settlement { step: SettlementStepV1::Completed, route: Some(SettlementRouteV1::Manual), effects: completed }, .. }] if matches!(&effects[..], [SettlementEffectV1::Payout { purpose: PayoutPurposeV1::CreatorProceeds, liability_discharged: 50, tokens_transferred: 50, .. }]) && completed.is_empty())
+    );
+    let (_, withdrawn, _) = withdrawn();
+    assert!(withdrawn.events.is_empty());
+}
+
+#[test]
+fn curve_allocation_read_emits_only_actual_allocation_payment() {
+    for (amount, self_recipient) in [(0, false), (100, false), (100, true)] {
+        let (mut input, active) = active();
+        let mut state = FactoryState::decode(active.post_state.as_ref().unwrap()).unwrap();
+        state.creator_allocation = amount;
+        let pool = pool_state(&state, input.receiver, true);
+        let creator = if self_recipient {
+            state.creator_escrow_id
+        } else {
+            id(42)
+        };
+        input.pre_state = borsh::to_vec(&state).unwrap().into();
+        input.from = None;
+        input.message =
+            borsh::to_vec(&Message::ClaimCreatorAllocation { creator, now: 0 }).unwrap();
+        let response = handle(&input).unwrap();
+        input = proof(&input, &response, creator);
+        let mut response = handle(&input).unwrap();
+        let mut values = vec![borsh::to_vec(&pool).unwrap()];
+        if amount != 0 {
+            values.push(holding(
+                state.creator_escrow_id,
+                state.token_definition_id,
+                amount,
+            ));
+        }
+        for bytes in values {
+            input = reply(&input, &response, bytes);
+            response = handle(&input).unwrap();
+        }
+        let events = launch_events(&response);
+        if amount == 0 || self_recipient {
+            assert!(events.is_empty());
+        } else {
+            assert!(matches!(
+                &events[..],
+                [SaleEventV1 {
+                    kind: SaleEventKindV1::AllocationReleased {
+                        amount: 100,
+                        release: AllocationReleaseV1::AfterEnd,
+                        ..
+                    },
+                    ..
+                }]
+            ));
+        }
+        assert_eq!(response.validity.timestamps.start(), Some(200_000));
+    }
+}
+
+#[test]
+fn curve_manual_self_recipient_reports_discharged_claim_without_token_movement() {
+    let (mut input, burned, pool) = burned(0);
+    let state = FactoryState::decode(burned.post_state.as_ref().unwrap()).unwrap();
+    input.pre_state = burned.post_state.unwrap();
+    input.from = None;
+    input.message = borsh::to_vec(&Message::WithdrawFactoryProceeds {
+        creator: input.receiver.account_id,
+        now: 0,
+    })
+    .unwrap();
+    let response = handle(&input).unwrap();
+    input = proof(&input, &response, input.receiver.account_id);
+    let mut response = handle(&input).unwrap();
+    for bytes in [
+        borsh::to_vec(&pool).unwrap(),
+        holding(input.receiver.account_id, state.token_definition_id, 100),
+        holding(input.receiver.account_id, state.collateral_definition_id, 0),
+    ] {
+        input = reply(&input, &response, bytes);
+        response = handle(&input).unwrap();
+    }
+    let events = launch_events(&response);
+    assert!(
+        matches!(&events[..], [SaleEventV1 { kind: SaleEventKindV1::Settlement { effects, .. }, .. }] if matches!(&effects[..], [SettlementEffectV1::Payout { liability_discharged: 100, tokens_transferred: 0, .. }]))
+    );
 }

@@ -1,6 +1,8 @@
 //! Launch setup and mechanism-specific settlement over synchronous actor calls.
 use borsh::{BorshDeserialize, BorshSerialize};
+pub use curve_core::events;
 use eligibility_policy::BuyPolicy;
+use events::*;
 use lee_core::{
     account::{AccountId, Actor},
     program::{PdaSeed, ReceiveInput, Response, StateReply, SyncMessage},
@@ -114,7 +116,53 @@ pub struct FactoryState {
     pub creator_allocation_claimed: bool,
     pending: Option<Pending>,
 }
+fn launch_event(
+    namespace: AccountId,
+    factory: AccountId,
+    pool: AccountId,
+    engine: PricingEngineV1,
+    kind: SaleEventKindV1,
+) -> lee_core::program::ProgramEvent {
+    curve_core::sale_event(SaleEventV1::new(
+        *namespace.value(),
+        engine,
+        EventSubjectV1::Launch {
+            factory: *factory.value(),
+            pool: *pool.value(),
+        },
+        kind,
+    ))
+}
+
 impl FactoryState {
+    fn event(&self, factory: AccountId, kind: SaleEventKindV1) -> lee_core::program::ProgramEvent {
+        launch_event(
+            self.namespace,
+            factory,
+            self.pool_id,
+            PricingEngineV1::Curve,
+            kind,
+        )
+    }
+    fn allocation_event(
+        &self,
+        response: Response,
+        factory: AccountId,
+        creator: AccountId,
+    ) -> Response {
+        if self.creator_allocation == 0 || creator == self.creator_escrow_id {
+            return response;
+        }
+        response.event(self.event(
+            factory,
+            SaleEventKindV1::AllocationReleased {
+                definition: *self.token_definition_id.value(),
+                recipient: *creator.value(),
+                amount: self.creator_allocation,
+                release: AllocationReleaseV1::AfterEnd,
+            },
+        ))
+    }
     fn response(&self) -> Response {
         Response::set_state(borsh::to_vec(self).unwrap())
     }
@@ -593,7 +641,25 @@ fn create_curve(input: &ReceiveInput, command: Message) -> Result<Response, Erro
         .buy_policy
         .validate_binding(state.namespace.value(), state.pool_id.value())
         .map_err(|_| Error::InvalidTerms)?;
-    Ok(state.next())
+    Ok(state.next().event(state.event(
+        input.receiver.account_id,
+        SaleEventKindV1::Created {
+            creator: *creator.value(),
+            creator_role: *state.creator_role_id.value(),
+            token_definition: *state.token_definition_id.value(),
+            collateral_definition: *state.collateral_definition_id.value(),
+            sale_inventory: state.sale_reserve,
+            creator_allocation: state.creator_allocation,
+            curve_reserve: state.dex_seed_reserve,
+            collateral_seed: 0,
+            start_timestamp: None,
+            end_timestamp: state.end_timestamp,
+            policies: EventPoliciesV1 {
+                ending: state.ending_policy,
+                pause: state.pause_policy,
+            },
+        },
+    )))
 }
 fn validate_pool(
     state: &FactoryState,
@@ -843,8 +909,30 @@ fn curve_resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
             }
             let mut progress = state.settlement_stage.progress();
             progress.finish_graduation()?;
+            let SettlementStage::HookReady { collateral_due } = state.settlement_stage else {
+                return Err(Error::InvalidState);
+            };
             state.settlement_stage = SettlementStage::Graduated;
-            return Ok(state.response());
+            return Ok(state
+                .response()
+                .event(state.event(
+                    input.receiver.account_id,
+                    SaleEventKindV1::Settlement {
+                        step: SettlementStepV1::Completed,
+                        route: Some(SettlementRouteV1::Graduation),
+                        effects: vec![],
+                    },
+                ))
+                .event(state.event(
+                    input.receiver.account_id,
+                    SaleEventKindV1::Graduated {
+                        adapter_program: *program.value(),
+                        adapter_custody:
+                            *compute_graduation_pda(program, input.receiver.account_id).value(),
+                        launch_tokens: state.dex_seed_reserve,
+                        collateral: collateral_due,
+                    },
+                )));
         }
         if pending.proof {
             let creator = match pending.command {
@@ -931,14 +1019,18 @@ fn curve_resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
                     return Err(Error::InvalidCustody);
                 }
                 state.creator_allocation_claimed = true;
-                Ok(transfer(
-                    curve_core::with_time_bounds(state.response(), expiry, None)
-                        .map_err(|_| Error::InvalidTerms)?,
-                    state.creator_escrow_id,
-                    compute_escrow_seed(state.namespace, state.launch_salt),
-                    state.token_definition_id,
+                Ok(state.allocation_event(
+                    transfer(
+                        curve_core::with_time_bounds(state.response(), expiry, None)
+                            .map_err(|_| Error::InvalidTerms)?,
+                        state.creator_escrow_id,
+                        compute_escrow_seed(state.namespace, state.launch_salt),
+                        state.token_definition_id,
+                        creator,
+                        state.creator_allocation,
+                    ),
+                    input.receiver.account_id,
                     creator,
-                    state.creator_allocation,
                 ))
             }
             command @ (Message::WithdrawFactoryProceeds { .. }
@@ -1037,6 +1129,37 @@ fn curve_resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
                         custody,
                         collateral_due,
                     );
+                    let mut effects = vec![];
+                    if state.dex_seed_reserve != 0 {
+                        effects.push(SettlementEffectV1::Payout {
+                            definition: *state.token_definition_id.value(),
+                            recipient: *custody.value(),
+                            purpose: PayoutPurposeV1::CurveReserve,
+                            liability_discharged: state.dex_seed_reserve,
+                            tokens_transferred: state.dex_seed_reserve,
+                        });
+                    }
+                    if collateral_due != 0 {
+                        effects.push(SettlementEffectV1::Payout {
+                            definition: *state.collateral_definition_id.value(),
+                            recipient: *custody.value(),
+                            purpose: PayoutPurposeV1::CreatorProceeds,
+                            liability_discharged: collateral_due,
+                            tokens_transferred: collateral_due,
+                        });
+                    }
+                    let response = if effects.is_empty() {
+                        response
+                    } else {
+                        response.event(state.event(
+                            input.receiver.account_id,
+                            SaleEventKindV1::Settlement {
+                                step: SettlementStepV1::Payout,
+                                route: Some(SettlementRouteV1::Graduation),
+                                effects,
+                            },
+                        ))
+                    };
                     // The callback gets no factory PDA grant. Ambient signer authority remains a runtime property.
                     return Ok(response.send_sync(
                         Actor::new(custody, program),
@@ -1067,6 +1190,14 @@ fn curve_resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
                     state.settlement_stage = SettlementStage::HookReady { collateral_due };
                     return Ok(state
                         .response()
+                        .event(state.event(
+                            input.receiver.account_id,
+                            SaleEventKindV1::Settlement {
+                                step: SettlementStepV1::Prepared,
+                                route: None,
+                                effects: vec![],
+                            },
+                        ))
                         .send_sync(
                             Actor::new(state.token_definition_id, TOKEN_PROGRAM_ACCOUNT_ID),
                             &token::Message::Initialize { owner: custody },
@@ -1123,14 +1254,52 @@ fn curve_resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
                         state.settlement_stage = SettlementStage::Complete;
                         (state.collateral_definition_id, collateral_due)
                     };
-                    return Ok(transfer(
+                    let response = transfer(
                         state.response(),
                         input.receiver.account_id,
                         compute_factory_seed(state.namespace, state.launch_salt),
                         definition,
                         creator,
                         amount,
-                    ));
+                    );
+                    let response = if amount == 0 {
+                        response
+                    } else {
+                        response.event(state.event(
+                            input.receiver.account_id,
+                            SaleEventKindV1::Settlement {
+                                step: SettlementStepV1::Payout,
+                                route: Some(SettlementRouteV1::Manual),
+                                effects: vec![SettlementEffectV1::Payout {
+                                    definition: *definition.value(),
+                                    recipient: *creator.value(),
+                                    purpose: if token_due != 0 {
+                                        PayoutPurposeV1::CurveReserve
+                                    } else {
+                                        PayoutPurposeV1::CreatorProceeds
+                                    },
+                                    liability_discharged: amount,
+                                    tokens_transferred: if creator == input.receiver.account_id {
+                                        0
+                                    } else {
+                                        amount
+                                    },
+                                }],
+                            },
+                        ))
+                    };
+                    return Ok(if token_due == 0 {
+                        response.event(state.event(
+                            input.receiver.account_id,
+                            SaleEventKindV1::Settlement {
+                                step: SettlementStepV1::Completed,
+                                route: Some(SettlementRouteV1::Manual),
+                                effects: vec![],
+                            },
+                        ))
+                    } else {
+                        response
+                    });
                 }
                 if let SettlementStage::Withdrawn {
                     unsold,
@@ -1155,7 +1324,22 @@ fn curve_resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
                         return Err(Error::InvalidCustody);
                     }
                     state.settlement_stage = SettlementStage::Burned { collateral_due };
-                    let response = state.response();
+                    let effects = if unsold == 0 {
+                        vec![]
+                    } else {
+                        vec![SettlementEffectV1::Burn {
+                            definition: *state.token_definition_id.value(),
+                            amount: unsold,
+                        }]
+                    };
+                    let response = state.response().event(state.event(
+                        input.receiver.account_id,
+                        SaleEventKindV1::Settlement {
+                            step: SettlementStepV1::UnsoldBurned,
+                            route: None,
+                            effects,
+                        },
+                    ));
                     return Ok(if unsold == 0 {
                         response
                     } else {
@@ -1191,7 +1375,14 @@ fn curve_resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
                         &curve_core::Message::WithdrawReserves { now },
                     )
                 } else {
-                    response
+                    response.event(state.event(
+                        input.receiver.account_id,
+                        SaleEventKindV1::Settlement {
+                            step: SettlementStepV1::Prepared,
+                            route: None,
+                            effects: vec![],
+                        },
+                    ))
                 })
             }
             Message::ContinueCreation { now, .. } => {

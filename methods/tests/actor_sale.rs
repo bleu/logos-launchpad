@@ -44,6 +44,7 @@ fn seeded_state(
         trade_control: curve_core::TradeControl::Unrestricted,
         allowed_input_token: Some(pool::TokenSide::Token1),
         funded: true,
+        closure_observed: false,
         namespace: NAMESPACE,
         token0_definition_id: LAUNCH,
         token1_definition_id: COLLATERAL,
@@ -234,6 +235,7 @@ fn fixed_state(buyer: AccountId, end: Option<u64>) -> (V03State, AccountId) {
             None::<Actor>,
             lbp_core::PoolMode::FixedPrice,
             true,
+            false,
             NAMESPACE,
             CURVE,
             OWNER,
@@ -632,10 +634,18 @@ fn fixed_execute_at(
     instruction: lbp_core::Message,
     timestamp: u64,
 ) -> Result<(), lee::error::LeeError> {
+    fixed_execute_events_at(state, pool, key, instruction, timestamp).map(|_| ())
+}
+
+fn fixed_execute_events_at(
+    state: &mut V03State,
+    pool: AccountId,
+    key: &PrivateKey,
+    instruction: lbp_core::Message,
+    timestamp: u64,
+) -> Result<Vec<lee_core::program::TransactionEvent>, lee::error::LeeError> {
     let transaction = fixed_transaction(state, pool, key, instruction);
-    state
-        .transition_from_public_transaction(&transaction, 1, timestamp)
-        .map(|_| ())
+    state.transition_from_public_transaction(&transaction, 1, timestamp)
 }
 
 fn fixed_rejected(
@@ -1628,6 +1638,24 @@ impl FixedFactoryEnv {
         timestamp: u64,
     ) -> Result<(), lee::error::LeeError> {
         factory_execute_at(
+            &mut self.state,
+            self.factory,
+            &self.actors,
+            &self.key,
+            self.salt,
+            self.launch,
+            self.pool,
+            instruction,
+            timestamp,
+        )
+    }
+
+    fn execute_events(
+        &mut self,
+        instruction: factory_core::Message,
+        timestamp: u64,
+    ) -> Result<Vec<lee_core::program::TransactionEvent>, lee::error::LeeError> {
+        factory_execute_events_at(
             &mut self.state,
             self.factory,
             &self.actors,
@@ -2826,6 +2854,32 @@ fn factory_execute_at(
     instruction: factory_core::Message,
     timestamp: u64,
 ) -> Result<(), lee::error::LeeError> {
+    factory_execute_events_at(
+        state,
+        factory,
+        actors,
+        key,
+        salt,
+        launch,
+        pool,
+        instruction,
+        timestamp,
+    )
+    .map(|_| ())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn factory_execute_events_at(
+    state: &mut V03State,
+    factory: AccountId,
+    actors: &[Actor],
+    key: &PrivateKey,
+    salt: [u8; 32],
+    launch: AccountId,
+    pool: AccountId,
+    instruction: factory_core::Message,
+    timestamp: u64,
+) -> Result<Vec<lee_core::program::TransactionEvent>, lee::error::LeeError> {
     const FACTORY_PROGRAM: AccountId = AccountId::new([17; 32]);
     let creator = AccountId::from(&PublicKey::new_from_private_key(key));
     let mut message = Message::try_new(
@@ -2866,13 +2920,11 @@ fn factory_execute_at(
         }
     }
     let witnesses = WitnessSet::for_message(&message, &[key]);
-    state
-        .transition_from_public_transaction(
-            &PublicTransaction::new(message, witnesses),
-            1,
-            timestamp,
-        )
-        .map(|_| ())
+    state.transition_from_public_transaction(
+        &PublicTransaction::new(message, witnesses),
+        1,
+        timestamp,
+    )
 }
 
 #[test]
@@ -3304,6 +3356,7 @@ fn weighted_settlement_failures_roll_back_all_effects_and_retry_once() {
         lbp_core::SettlementProgress::Unselected
     );
     let mut expected = sale.clone();
+    expected.closure_observed = true;
     expected.recorded_collateral = 0;
     expected.seed_returned = true;
     expected.accrued_fees = 0;
@@ -3385,8 +3438,8 @@ fn weighted_settlement_failures_roll_back_all_effects_and_retry_once() {
         let creator_before = balance(&repaired, creator, COLLATERAL);
         let treasury_before = balance(&repaired, TREASURY, COLLATERAL);
         let tokens_before = balance(&repaired, pool, launch);
-        for _ in 0..2 {
-            factory_execute_at(
+        for attempt in 0..2 {
+            let events = factory_execute_events_at(
                 &mut repaired,
                 factory,
                 &actors,
@@ -3398,6 +3451,11 @@ fn weighted_settlement_failures_roll_back_all_effects_and_retry_once() {
                 300_000,
             )
             .unwrap();
+            if attempt == 0 {
+                assert_lbp_settlement_events(&events, pool, &sale, creator, TREASURY, None);
+            } else {
+                assert!(events.is_empty(), "settlement retry emitted an event");
+            }
             assert_eq!(
                 fixed_pool(&repaired, pool).settlement_progress,
                 lbp_core::SettlementProgress::ManualComplete
@@ -3634,12 +3692,16 @@ fn guest_buy_updates_checkpoint_and_poke_is_idempotent() {
     let cp_after_buy = checkpoint_of(&state, pool);
     assert_eq!(cp_after_buy.0, 100); // clock is at 100_000ms = 100s
     assert!(cp_after_buy.1 > 0);
-    assert_eq!(events.len(), 1);
-    assert_eq!(events[0].account_id, LBP);
-    use risc0_zkvm::sha::{Impl, Sha256 as _};
-    let hash = Impl::hash_bytes(b"lbp::WeightedCheckpoint");
-    assert_eq!(events[0].event.selector, hash.as_bytes()[..8]);
-    assert_eq!(events[0].event.data, borsh::to_vec(&cp_after_buy).unwrap());
+    let checkpoint_selector = event_selector(curve_core::events::WeightedCheckpoint::SELECTOR_NAME);
+    let checkpoints: Vec<_> = events
+        .iter()
+        .filter(|event| event.account_id == LBP && event.event.selector == checkpoint_selector)
+        .collect();
+    assert_eq!(checkpoints.len(), 1);
+    assert_eq!(
+        checkpoints[0].event.data,
+        borsh::to_vec(&cp_after_buy).unwrap()
+    );
     // Another buy at the same pricing second does not emit a duplicate event.
     let transaction = fixed_transaction(
         &state,
@@ -3654,7 +3716,11 @@ fn guest_buy_updates_checkpoint_and_poke_is_idempotent() {
     let events = state
         .transition_from_public_transaction(&transaction, 1, 150_000)
         .unwrap();
-    assert!(events.is_empty());
+    assert!(
+        events
+            .iter()
+            .all(|event| event.account_id != LBP || event.event.selector != checkpoint_selector)
+    );
     // Poke at same time is idempotent — checkpoint unchanged
     let transaction = poke_transaction(&state, pool);
     let events = state
@@ -3889,6 +3955,7 @@ fn fixed_settlement_token_faults_restore_full_runtime_then_repair_and_pay_once()
         lbp_core::SettlementProgress::Unselected
     );
     let mut expected = sale.clone();
+    expected.closure_observed = true;
     expected.recorded_collateral = 0;
     expected.accrued_fees = 0;
     expected.settlement_progress = lbp_core::SettlementProgress::ManualComplete;
@@ -3954,8 +4021,8 @@ fn fixed_settlement_token_faults_restore_full_runtime_then_repair_and_pay_once()
         state = state.with_public_accounts([account(actor, original)]);
         let collateral = balance(&state, creator, COLLATERAL);
         let tokens = balance(&state, creator, env.launch);
-        for _ in 0..2 {
-            factory_execute_at(
+        for attempt in 0..2 {
+            let events = factory_execute_events_at(
                 &mut state,
                 env.factory,
                 &env.actors,
@@ -3967,6 +4034,28 @@ fn fixed_settlement_token_faults_restore_full_runtime_then_repair_and_pay_once()
                 200_000,
             )
             .unwrap();
+            if attempt == 0 {
+                if fault == "allocation" {
+                    assert_eq!(
+                        sale_event_kinds(
+                            &events,
+                            LBP_FACTORY_PROGRAM,
+                            launch_subject(env.factory, env.pool)
+                        ),
+                        vec![SaleEventKindV1::AllocationReleased {
+                            definition: *env.launch.value(),
+                            recipient: *creator.value(),
+                            amount: 200,
+                            release: AllocationReleaseV1::AfterEnd,
+                        }]
+                    );
+                    assert!(sale_event_kinds(&events, LBP, pool_subject(env.pool)).is_empty());
+                } else {
+                    assert_lbp_settlement_events(&events, env.pool, &sale, creator, TREASURY, None);
+                }
+            } else {
+                assert!(events.is_empty(), "payout retry emitted an event");
+            }
             if fault == "allocation" {
                 assert_eq!(balance(&state, creator, env.launch), tokens + 200);
                 assert_eq!(balance(&state, env.escrow, env.launch), 0);
@@ -4951,6 +5040,7 @@ fn fixed_zero_proceeds_settlement_burns_once_and_keeps_manual_completion_on_auth
     let creator_collateral = balance(&env.state, creator, COLLATERAL);
     let supply = token_supply(&env.state, env.launch);
     let mut expected = initial.clone();
+    expected.closure_observed = true;
     expected.settlement_progress = lbp_core::SettlementProgress::ManualComplete;
     for _ in 0..2 {
         env.execute(
@@ -4998,6 +5088,7 @@ fn weighted_seed_only_settlement_completes_manual_route_and_retries_keep_the_end
     let creator_collateral = balance(&state, creator, COLLATERAL);
     let supply = token_supply(&state, launch);
     let mut expected = initial.clone();
+    expected.closure_observed = true;
     expected.recorded_collateral = 0;
     expected.seed_returned = true;
     expected.settlement_progress = lbp_core::SettlementProgress::ManualComplete;
@@ -5287,6 +5378,7 @@ fn assert_lbp_graduated(
     };
     let proceeds = initial.recorded_collateral - seed;
     let mut expected = initial.clone();
+    expected.closure_observed = true;
     expected.recorded_collateral = 0;
     expected.accrued_fees = 0;
     expected.seed_returned = true;
@@ -5489,7 +5581,7 @@ fn weighted_graduation_returns_seed_to_the_current_creator_after_consented_role_
     let initial = fixed_pool(&env.state, env.pool);
     let supply = token_supply(&env.state, env.launch);
     let caller = PrivateKey::try_new([96; 32]).unwrap();
-    factory_execute_at(
+    let events = factory_execute_events_at(
         &mut env.state,
         env.factory,
         &env.actors,
@@ -5501,6 +5593,15 @@ fn weighted_graduation_returns_seed_to_the_current_creator_after_consented_role_
         300_000,
     )
     .unwrap();
+    assert_lbp_settlement_events(
+        &events,
+        env.pool,
+        &initial,
+        next_creator,
+        NEXT_TREASURY,
+        Some(lbp_adapter(&env).account_id),
+    );
+    assert_lbp_graduated_event(&events, &env, true, initial.recorded_collateral - 100);
     assert_lbp_graduated(&env, true, &initial, 0, supply, false, false);
     assert_eq!(balance(&env.state, old_creator, COLLATERAL), old_collateral);
     assert_eq!(balance(&env.state, next_creator, COLLATERAL), 100);
@@ -5574,7 +5675,18 @@ fn lbp_zero_first_graduation_burns_once_and_returns_only_the_weighted_seed() {
         let initial = fixed_pool(&env.state, env.pool);
         let collateral = balance(&env.state, creator, COLLATERAL);
         let supply = token_supply(&env.state, env.launch);
-        env.execute(lbp_hook_message(creator), 300_000).unwrap();
+        let events = env
+            .execute_events(lbp_hook_message(creator), 300_000)
+            .unwrap();
+        assert_lbp_settlement_events(
+            &events,
+            env.pool,
+            &initial,
+            creator,
+            NEXT_TREASURY,
+            Some(lbp_adapter(&env).account_id),
+        );
+        assert_lbp_graduated_event(&events, &env, weighted, 0);
         assert_lbp_graduated(&env, weighted, &initial, collateral, supply, false, false);
         reject_lbp_factory(
             &mut env,
@@ -5582,8 +5694,11 @@ fn lbp_zero_first_graduation_burns_once_and_returns_only_the_weighted_seed() {
             300_000,
             "AlreadySettled",
         );
-        env.execute(lbp_manual_message(weighted, creator), 300_000)
-            .unwrap();
+        assert!(
+            env.execute_events(lbp_manual_message(weighted, creator), 300_000)
+                .unwrap()
+                .is_empty()
+        );
         assert_lbp_graduated(&env, weighted, &initial, collateral, supply, false, false);
     }
 }
@@ -5926,7 +6041,23 @@ fn lbp_graduation_late_faults_roll_back_every_effect_and_repaired_retry_pays_onc
                     Program::new(Cow::Borrowed(launchpad_methods::LBP_ELF)).unwrap(),
                 )]);
             }
-            env.execute(lbp_hook_message(creator), 300_000).unwrap();
+            let events = env
+                .execute_events(lbp_hook_message(creator), 300_000)
+                .unwrap();
+            assert_lbp_settlement_events(
+                &events,
+                env.pool,
+                &initial,
+                creator,
+                NEXT_TREASURY,
+                Some(lbp_adapter(&env).account_id),
+            );
+            assert_lbp_graduated_event(
+                &events,
+                &env,
+                weighted,
+                initial.recorded_collateral - if weighted { 100 } else { 0 },
+            );
             assert_lbp_graduated(&env, weighted, &initial, collateral, supply, true, false);
             reject_lbp_factory(
                 &mut env,
@@ -6207,4 +6338,1208 @@ fn lbp_public_callers_cannot_select_a_route_or_forge_pool_finalization() {
             assert_eq!(env.state.get_account_by_id(creator).nonce, nonce);
         }
     }
+}
+
+use curve_core::events::{
+    AllocationReleaseV1, ClosureReasonV1, EventSubjectV1, EventTimeBoundsV1, PayoutPurposeV1,
+    PricingEngineV1, SaleEventKindV1, SaleEventV1, SettlementEffectV1, SettlementRouteV1,
+    SettlementStepV1, TradeFormV1, WeightedPauseChanged,
+};
+use lee_core::program::TransactionEvent;
+
+fn event_selector(name: &str) -> [u8; 8] {
+    use risc0_zkvm::sha::{Impl, Sha256 as _};
+    Impl::hash_bytes(name.as_bytes()).as_bytes()[..8]
+        .try_into()
+        .unwrap()
+}
+
+fn pool_subject(pool: AccountId) -> EventSubjectV1 {
+    EventSubjectV1::Pool {
+        pool: *pool.value(),
+    }
+}
+
+fn launch_subject(factory: AccountId, pool: AccountId) -> EventSubjectV1 {
+    EventSubjectV1::Launch {
+        factory: *factory.value(),
+        pool: *pool.value(),
+    }
+}
+
+fn sale_events(
+    events: &[TransactionEvent],
+    program: AccountId,
+    subject: EventSubjectV1,
+) -> Vec<SaleEventV1> {
+    events
+        .iter()
+        .filter(|event| {
+            event.account_id == program
+                && event.event.selector == event_selector(SaleEventV1::SELECTOR_NAME)
+        })
+        .map(|event| borsh::from_slice::<SaleEventV1>(&event.event.data).unwrap())
+        .filter(|event| event.subject == subject)
+        .inspect(|event| {
+            assert_eq!(event.version, SaleEventV1::VERSION);
+            assert_eq!(event.namespace, *NAMESPACE.value());
+        })
+        .collect()
+}
+
+fn sale_event_kinds(
+    events: &[TransactionEvent],
+    program: AccountId,
+    subject: EventSubjectV1,
+) -> Vec<SaleEventKindV1> {
+    sale_events(events, program, subject)
+        .into_iter()
+        .map(|event| event.kind)
+        .collect()
+}
+
+fn expected_lbp_settlement_events(
+    initial: &lbp_core::PoolAccount,
+    creator: AccountId,
+    treasury: AccountId,
+    adapter: Option<AccountId>,
+) -> Vec<SaleEventKindV1> {
+    let mut events = vec![];
+    if !initial.closure_observed {
+        let (reason, bounds) = if matches!(
+            initial.ending_policy,
+            lbp_core::EndingPolicy::Depletion | lbp_core::EndingPolicy::Either
+        ) && initial.remaining_inventory == 0
+        {
+            (
+                ClosureReasonV1::Depleted {
+                    definition: *initial.token_definition_id.value(),
+                },
+                EventTimeBoundsV1 {
+                    at_least: None,
+                    before: None,
+                },
+            )
+        } else {
+            let end = initial.end_timestamp.unwrap();
+            (
+                ClosureReasonV1::ScheduledEnd { timestamp: end },
+                EventTimeBoundsV1 {
+                    at_least: Some(end),
+                    before: None,
+                },
+            )
+        };
+        events.push(SaleEventKindV1::Closed {
+            reason,
+            inclusion_bounds: bounds,
+        });
+    }
+    if initial.accrued_fees != 0 {
+        events.push(SaleEventKindV1::FeesCollected {
+            definition: *COLLATERAL.value(),
+            treasury: *treasury.value(),
+            liability_discharged: initial.accrued_fees,
+            tokens_transferred: if treasury
+                == lbp_core::compute_pool_pda(
+                    initial.namespace,
+                    LBP,
+                    initial.token_definition_id,
+                    COLLATERAL,
+                    initial.factory_owner,
+                ) {
+                0
+            } else {
+                initial.accrued_fees
+            },
+        });
+    }
+    if initial.remaining_inventory != 0 {
+        events.push(SaleEventKindV1::Settlement {
+            step: SettlementStepV1::UnsoldBurned,
+            route: None,
+            effects: vec![SettlementEffectV1::Burn {
+                definition: *initial.token_definition_id.value(),
+                amount: initial.remaining_inventory,
+            }],
+        });
+    }
+    let seed = if initial.seed_returned {
+        0
+    } else {
+        let lbp_core::PoolMode::Weighted {
+            collateral_seed, ..
+        } = initial.mode
+        else {
+            panic!("fixed seed was not returned")
+        };
+        collateral_seed
+    };
+    let buyer_proceeds = initial.recorded_collateral - seed;
+    let route = if adapter.is_some() {
+        SettlementRouteV1::Graduation
+    } else {
+        SettlementRouteV1::Manual
+    };
+    for (amount, recipient, purpose, step, step_route) in [
+        (
+            seed,
+            creator,
+            PayoutPurposeV1::CreatorSeed,
+            SettlementStepV1::SeedReturned,
+            None,
+        ),
+        (
+            buyer_proceeds,
+            adapter.unwrap_or(creator),
+            PayoutPurposeV1::CreatorProceeds,
+            SettlementStepV1::Payout,
+            Some(route),
+        ),
+    ] {
+        if amount != 0 {
+            events.push(SaleEventKindV1::Settlement {
+                step,
+                route: step_route,
+                effects: vec![SettlementEffectV1::Payout {
+                    definition: *COLLATERAL.value(),
+                    recipient: *recipient.value(),
+                    purpose,
+                    liability_discharged: amount,
+                    tokens_transferred: amount,
+                }],
+            });
+        }
+    }
+    events.push(SaleEventKindV1::Settlement {
+        step: SettlementStepV1::Completed,
+        route: Some(route),
+        effects: vec![],
+    });
+    events
+}
+
+fn assert_lbp_settlement_events(
+    events: &[TransactionEvent],
+    pool: AccountId,
+    initial: &lbp_core::PoolAccount,
+    creator: AccountId,
+    treasury: AccountId,
+    adapter: Option<AccountId>,
+) {
+    let decoded = sale_events(events, LBP, pool_subject(pool));
+    let engine = if matches!(initial.mode, lbp_core::PoolMode::Weighted { .. }) {
+        PricingEngineV1::Weighted
+    } else {
+        PricingEngineV1::FixedPrice
+    };
+    assert!(decoded.iter().all(|event| event.engine == engine));
+    assert_eq!(
+        decoded
+            .into_iter()
+            .map(|event| event.kind)
+            .collect::<Vec<_>>(),
+        expected_lbp_settlement_events(initial, creator, treasury, adapter)
+    );
+}
+
+fn assert_lbp_graduated_event(
+    events: &[TransactionEvent],
+    env: &FixedFactoryEnv,
+    weighted: bool,
+    collateral: u128,
+) {
+    let decoded = sale_events(
+        events,
+        LBP_FACTORY_PROGRAM,
+        launch_subject(env.factory, env.pool),
+    );
+    assert!(decoded.iter().all(|event| event.engine
+        == if weighted {
+            PricingEngineV1::Weighted
+        } else {
+            PricingEngineV1::FixedPrice
+        }));
+    assert_eq!(
+        decoded
+            .into_iter()
+            .map(|event| event.kind)
+            .collect::<Vec<_>>(),
+        vec![SaleEventKindV1::Graduated {
+            adapter_program: *LBP_HOOK_PROGRAM.value(),
+            adapter_custody: *lbp_adapter(env).account_id.value(),
+            launch_tokens: 0,
+            collateral,
+        }]
+    );
+    let relevant: Vec<_> = events
+        .iter()
+        .filter(|event| event.event.selector == event_selector(SaleEventV1::SELECTOR_NAME))
+        .collect();
+    assert_eq!(relevant.last().unwrap().account_id, LBP_FACTORY_PROGRAM);
+    assert!(matches!(
+        borsh::from_slice::<SaleEventV1>(&relevant.last().unwrap().event.data)
+            .unwrap()
+            .kind,
+        SaleEventKindV1::Graduated { .. }
+    ));
+}
+
+fn curve_event_env(end: Option<u64>) -> (V03State, AccountId, PrivateKey) {
+    let key = PrivateKey::try_new([21; 32]).unwrap();
+    let owner = AccountId::from(&PublicKey::new_from_private_key(&key));
+    let bob = AccountId::from(&PublicKey::new_from_private_key(
+        &PrivateKey::try_new([22; 32]).unwrap(),
+    ));
+    let (state, original_pool) = seeded_state(owner, bob, end);
+    let mut pool_state = PoolAccount::decode(
+        state
+            .get_account_by_id(original_pool)
+            .data
+            .actor_state(CURVE),
+    )
+    .unwrap();
+    pool_state.owner = owner;
+    pool_state.allowed_input_token = None;
+    pool_state.trade_control = curve_core::TradeControl::Running;
+    let pool = curve_core::compute_pool_pda(NAMESPACE, CURVE, LAUNCH, COLLATERAL, owner);
+    let role = curve_core::compute_pool_owner_role(NAMESPACE, pool, CURVE);
+    let state = state
+        .with_named_programs([(
+            factory_core::AUTHORITY_PROGRAM_ACCOUNT_ID,
+            Program::new(Cow::Borrowed(lez_compat_methods::COMPAT_AUTHORITY_ELF)).unwrap(),
+        )])
+        .with_public_accounts([
+            account(Actor::new(pool, CURVE), borsh::to_vec(&pool_state).unwrap()),
+            seeded_role(role, owner),
+            token_holding(pool, LAUNCH, 4_000),
+            token_holding(pool, COLLATERAL, 0),
+            token_holding(owner, LAUNCH, 0),
+            token_holding(owner, COLLATERAL, 2_000),
+            token_holding(TREASURY, COLLATERAL, 0),
+            token_holding(NEXT_TREASURY, COLLATERAL, 0),
+        ]);
+    (fixed_config(state, 1_000, TREASURY, false), pool, key)
+}
+
+fn curve_execute_events_at(
+    state: &mut V03State,
+    pool: AccountId,
+    key: &PrivateKey,
+    instruction: CurveMessage,
+    timestamp: u64,
+) -> Result<Vec<TransactionEvent>, lee::error::LeeError> {
+    let owner = AccountId::from(&PublicKey::new_from_private_key(key));
+    let collect = matches!(instruction, CurveMessage::CollectFees);
+    let mut actors = vec![
+        Actor::new(owner, CURVE),
+        Actor::new(pool, CURVE),
+        Actor::new(curve_core::compute_config_pda(NAMESPACE, CURVE), CURVE),
+        Actor::new(
+            curve_core::compute_pool_owner_role(NAMESPACE, pool, CURVE),
+            factory_core::AUTHORITY_PROGRAM_ACCOUNT_ID,
+        ),
+        Actor::new(owner, factory_core::AUTHORITY_PROGRAM_ACCOUNT_ID),
+        Actor::new(
+            clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID,
+            clock_core::clock_account_id(),
+        ),
+    ];
+    for account in [owner, pool, TREASURY, NEXT_TREASURY] {
+        actors.extend([
+            Actor::new(account, TOKEN_PROGRAM_ACCOUNT_ID),
+            holding(account, LAUNCH),
+            holding(account, COLLATERAL),
+        ]);
+    }
+    let nonces = if collect {
+        BTreeMap::new()
+    } else {
+        BTreeMap::from([(owner, state.get_account_by_id(owner).nonce)])
+    };
+    let instruction = if collect {
+        instruction
+    } else {
+        CurveMessage::Execute {
+            pool,
+            instruction: Box::new(instruction),
+        }
+    };
+    let mut message = Message::try_new(
+        Actor::new(if collect { pool } else { owner }, CURVE),
+        actors,
+        nonces,
+        instruction,
+    )
+    .unwrap();
+    message.admission_evidence = vec![
+        lee::PublicAccountEvidence::Pda {
+            program: CURVE,
+            seed: curve_core::compute_pool_pda_seed(NAMESPACE, LAUNCH, COLLATERAL, owner),
+        },
+        lee::PublicAccountEvidence::Pda {
+            program: CURVE,
+            seed: curve_core::compute_pool_owner_role_seed(NAMESPACE, pool),
+        },
+    ];
+    for account in [owner, pool, TREASURY, NEXT_TREASURY] {
+        for definition in [LAUNCH, COLLATERAL] {
+            message
+                .admission_evidence
+                .push(lee::PublicAccountEvidence::Pda {
+                    program: TOKEN_PROGRAM_ACCOUNT_ID,
+                    seed: token::holding_seed(account, definition),
+                });
+        }
+    }
+    let keys = [key];
+    let witnesses = WitnessSet::for_message(&message, if collect { &[] } else { &keys });
+    state.transition_from_public_transaction(
+        &PublicTransaction::new(message, witnesses),
+        1,
+        timestamp,
+    )
+}
+
+#[test]
+fn signed_curve_trade_events_match_both_buy_forms_and_sells_with_actual_token_effects() {
+    for (sell, exact_output) in [(false, false), (false, true), (true, false)] {
+        let (mut state, pool, key) = curve_event_env(None);
+        let trader = AccountId::from(&PublicKey::new_from_private_key(&key));
+        if sell {
+            curve_execute_events_at(
+                &mut state,
+                pool,
+                &key,
+                CurveMessage::SwapExactInput {
+                    membership: None,
+                    token_in: COLLATERAL,
+                    amount_in: 100,
+                    min_amount_out: 1,
+                    now: 1,
+                },
+                1_000,
+            )
+            .unwrap();
+        }
+        let token_in = if sell { LAUNCH } else { COLLATERAL };
+        let token_out = if sell { COLLATERAL } else { LAUNCH };
+        let before_in = balance(&state, trader, token_in);
+        let before_out = balance(&state, trader, token_out);
+        let mut preview =
+            PoolAccount::decode(state.get_account_by_id(pool).data.actor_state(CURVE))
+                .unwrap()
+                .pool;
+        let side = if sell {
+            pool::TokenSide::Token0
+        } else {
+            pool::TokenSide::Token1
+        };
+        let (instruction, outcome) = if exact_output {
+            let amount_out = if sell { 5 } else { 50 };
+            (
+                CurveMessage::SwapExactOutput {
+                    membership: None,
+                    token_in,
+                    amount_out,
+                    max_amount_in: 1_000,
+                    now: 1,
+                },
+                preview
+                    .swap_exact_output(pool::ExactOutputSwap {
+                        token_in: side,
+                        amount_out,
+                        max_amount_in: 1_000,
+                        pool_fee_bps: 0,
+                        protocol_fee_bps: 1_000,
+                        now: 1,
+                    })
+                    .unwrap(),
+            )
+        } else {
+            (
+                CurveMessage::SwapExactInput {
+                    membership: None,
+                    token_in,
+                    amount_in: 100,
+                    min_amount_out: 1,
+                    now: 1,
+                },
+                preview
+                    .swap_exact_input(pool::ExactInputSwap {
+                        token_in: side,
+                        amount_in: 100,
+                        min_amount_out: 1,
+                        pool_fee_bps: 0,
+                        protocol_fee_bps: 1_000,
+                        now: 1,
+                    })
+                    .unwrap(),
+            )
+        };
+        let events = curve_execute_events_at(&mut state, pool, &key, instruction, 1_000).unwrap();
+        let decoded = sale_events(&events, CURVE, pool_subject(pool));
+        assert_eq!(decoded.len(), 1);
+        assert_eq!(decoded[0].engine, PricingEngineV1::Curve);
+        assert_eq!(
+            decoded[0].kind,
+            SaleEventKindV1::Trade {
+                trader: *trader.value(),
+                form: if exact_output {
+                    TradeFormV1::ExactOutput
+                } else {
+                    TradeFormV1::ExactInput
+                },
+                token_in: *token_in.value(),
+                token_out: *token_out.value(),
+                amount_in: outcome.amount_in,
+                pricing_input: outcome.effective_amount_in,
+                gross_output: outcome.raw_amount_out,
+                amount_out: outcome.amount_out,
+                fee_definition: *COLLATERAL.value(),
+                fee_amount: outcome.protocol_fee,
+
+                fee_bps: 1_000,
+                pricing_time: None,
+            }
+        );
+        assert_eq!(
+            before_in - balance(&state, trader, token_in),
+            outcome.amount_in
+        );
+        assert_eq!(
+            balance(&state, trader, token_out) - before_out,
+            outcome.amount_out
+        );
+        assert!(sale_events(&events, LBP, pool_subject(pool)).is_empty());
+        assert!(sale_events(&events, CURVE, pool_subject(AccountId::new([255; 32]))).is_empty());
+    }
+}
+
+#[test]
+fn signed_lbp_trade_events_match_both_forms_engine_and_accounting_deltas() {
+    for weighted in [false, true] {
+        for exact_output in [false, true] {
+            let key = PrivateKey::try_new([21; 32]).unwrap();
+            let trader = AccountId::from(&PublicKey::new_from_private_key(&key));
+            let (mut state, pool) = if weighted {
+                weighted_state(trader)
+            } else {
+                fixed_state(trader, Some(200))
+            };
+            let initial = fixed_pool(&state, pool);
+            let before_in = balance(&state, trader, COLLATERAL);
+            let before_out = balance(&state, trader, LAUNCH);
+            let instruction = match (weighted, exact_output) {
+                (false, false) => lbp_core::Message::BuyExactInput {
+                    membership: None,
+                    amount_in: 101,
+                    min_amount_out: 1,
+                    now: 100,
+                },
+                (false, true) => lbp_core::Message::BuyExactOutput {
+                    membership: None,
+                    amount_out: 10,
+                    max_amount_in: 200,
+                    now: 100,
+                },
+                (true, false) => lbp_core::Message::BuyWeightedExactInput {
+                    membership: None,
+                    amount_in: 50,
+                    min_amount_out: 1,
+                },
+                (true, true) => lbp_core::Message::BuyWeightedExactOutput {
+                    membership: None,
+                    amount_out: 10,
+                    max_amount_in: 200,
+                },
+            };
+            let events =
+                fixed_execute_events_at(&mut state, pool, &key, instruction, 100_000).unwrap();
+            let updated = fixed_pool(&state, pool);
+            let amount_in = before_in - balance(&state, trader, COLLATERAL);
+            let amount_out = balance(&state, trader, LAUNCH) - before_out;
+            let fee = updated.accrued_fees - initial.accrued_fees;
+            let net = updated.recorded_collateral - initial.recorded_collateral;
+            assert_eq!(amount_in, net + fee);
+            let decoded = sale_events(&events, LBP, pool_subject(pool));
+            assert_eq!(decoded.len(), 1);
+            assert_eq!(
+                decoded[0].engine,
+                if weighted {
+                    PricingEngineV1::Weighted
+                } else {
+                    PricingEngineV1::FixedPrice
+                }
+            );
+            assert_eq!(
+                decoded[0].kind,
+                SaleEventKindV1::Trade {
+                    trader: *trader.value(),
+                    form: if exact_output {
+                        TradeFormV1::ExactOutput
+                    } else {
+                        TradeFormV1::ExactInput
+                    },
+                    token_in: *COLLATERAL.value(),
+                    token_out: *LAUNCH.value(),
+                    amount_in,
+                    pricing_input: net,
+                    gross_output: amount_out,
+                    amount_out,
+                    fee_definition: *COLLATERAL.value(),
+                    fee_amount: fee,
+
+                    fee_bps: 333,
+                    pricing_time: if weighted { Some(100) } else { None },
+                }
+            );
+            let checkpoints: Vec<_> = events
+                .iter()
+                .filter(|event| {
+                    event.account_id == LBP
+                        && event.event.selector
+                            == event_selector(curve_core::events::WeightedCheckpoint::SELECTOR_NAME)
+                })
+                .collect();
+            assert_eq!(checkpoints.len(), usize::from(weighted));
+            if weighted {
+                let checkpoint: curve_core::events::WeightedCheckpoint =
+                    borsh::from_slice(&checkpoints[0].event.data).unwrap();
+                assert_eq!(
+                    (checkpoint.time, checkpoint.token_weight),
+                    (100, lbp_core::WEIGHT_TOTAL / 2)
+                );
+                let checkpoint_position = events
+                    .iter()
+                    .position(|event| {
+                        event.account_id == LBP
+                            && event.event.selector
+                                == event_selector(
+                                    curve_core::events::WeightedCheckpoint::SELECTOR_NAME,
+                                )
+                    })
+                    .unwrap();
+                let trade_position = events
+                    .iter()
+                    .position(|event| {
+                        event.account_id == LBP
+                            && event.event.selector == event_selector(SaleEventV1::SELECTOR_NAME)
+                    })
+                    .unwrap();
+                assert!(checkpoint_position < trade_position);
+            }
+        }
+    }
+}
+
+#[test]
+fn signed_pause_events_report_changed_controls_and_omit_authenticated_noops() {
+    let (mut state, pool, key) = curve_event_env(None);
+    for (paused, changed) in [(true, true), (true, false), (false, true), (false, false)] {
+        let events = curve_execute_events_at(
+            &mut state,
+            pool,
+            &key,
+            CurveMessage::SetPaused { paused },
+            1_000,
+        )
+        .unwrap();
+        assert_eq!(
+            sale_event_kinds(&events, CURVE, pool_subject(pool)),
+            if changed {
+                vec![SaleEventKindV1::PauseChanged { paused }]
+            } else {
+                vec![]
+            }
+        );
+        if !changed {
+            assert!(events.is_empty());
+        }
+    }
+    for weighted in [false, true] {
+        let mut env = lbp_graduation_env(weighted, true, vec![], Some(lbp_kind(weighted)));
+        env.state = clock_state(env.state, 299_000);
+        let creator = env.creator();
+        for (paused, changed) in [(true, true), (true, false), (false, true), (false, false)] {
+            let events = env
+                .execute_events(
+                    factory_core::Message::SetPaused { creator, paused },
+                    299_000,
+                )
+                .unwrap();
+            assert_eq!(
+                sale_event_kinds(&events, LBP, pool_subject(env.pool)),
+                if changed {
+                    vec![SaleEventKindV1::PauseChanged { paused }]
+                } else {
+                    vec![]
+                }
+            );
+            assert!(
+                sale_events(
+                    &events,
+                    LBP_FACTORY_PROGRAM,
+                    launch_subject(env.factory, env.pool)
+                )
+                .is_empty()
+            );
+            let legacy: Vec<_> = events
+                .iter()
+                .filter(|event| {
+                    event.account_id == LBP
+                        && event.event.selector
+                            == event_selector(WeightedPauseChanged::SELECTOR_NAME)
+                })
+                .collect();
+            assert_eq!(legacy.len(), usize::from(weighted && changed));
+            if let Some(event) = legacy.first() {
+                assert_eq!(
+                    borsh::from_slice::<WeightedPauseChanged>(&event.event.data)
+                        .unwrap()
+                        .paused,
+                    paused
+                );
+            }
+            if !changed {
+                assert!(events.is_empty());
+            }
+        }
+    }
+}
+
+#[test]
+fn signed_fee_events_report_nonzero_discharge_and_actual_transfers_then_silence_on_retry() {
+    for weighted in [false, true] {
+        let key = PrivateKey::try_new([21; 32]).unwrap();
+        let trader = AccountId::from(&PublicKey::new_from_private_key(&key));
+        let (mut state, pool) = if weighted {
+            weighted_state(trader)
+        } else {
+            fixed_state(trader, Some(200))
+        };
+        let buy = if weighted {
+            lbp_core::Message::BuyWeightedExactInput {
+                membership: None,
+                amount_in: 50,
+                min_amount_out: 1,
+            }
+        } else {
+            lbp_core::Message::BuyExactInput {
+                membership: None,
+                amount_in: 101,
+                min_amount_out: 1,
+                now: 100,
+            }
+        };
+        fixed_execute_events_at(&mut state, pool, &key, buy, 100_000).unwrap();
+        let fees = fixed_pool(&state, pool).accrued_fees;
+        let vault = balance(&state, pool, COLLATERAL);
+        let events = fixed_execute_events_at(
+            &mut state,
+            pool,
+            &key,
+            lbp_core::Message::CollectFees,
+            100_000,
+        )
+        .unwrap();
+        assert_eq!(
+            sale_event_kinds(&events, LBP, pool_subject(pool)),
+            vec![SaleEventKindV1::FeesCollected {
+                definition: *COLLATERAL.value(),
+                treasury: *TREASURY.value(),
+                liability_discharged: fees,
+                tokens_transferred: fees,
+            }]
+        );
+        assert_eq!(balance(&state, TREASURY, COLLATERAL), fees);
+        assert_eq!(balance(&state, pool, COLLATERAL), vault - fees);
+        assert_eq!(fixed_pool(&state, pool).accrued_fees, 0);
+        assert!(
+            fixed_execute_events_at(
+                &mut state,
+                pool,
+                &key,
+                lbp_core::Message::CollectFees,
+                100_000
+            )
+            .unwrap()
+            .is_empty()
+        );
+    }
+    for self_treasury in [false, true] {
+        let (mut state, pool, key) = curve_event_env(None);
+        let treasury = if self_treasury { pool } else { TREASURY };
+        state = fixed_config(state, 1_000, treasury, false);
+        curve_execute_events_at(
+            &mut state,
+            pool,
+            &key,
+            CurveMessage::SwapExactInput {
+                membership: None,
+                token_in: COLLATERAL,
+                amount_in: 100,
+                min_amount_out: 1,
+                now: 1,
+            },
+            1_000,
+        )
+        .unwrap();
+        let before =
+            PoolAccount::decode(state.get_account_by_id(pool).data.actor_state(CURVE)).unwrap();
+        assert_eq!(
+            (
+                before.pool.real_reserve1,
+                before.pool.fees_accrued,
+                balance(&state, pool, COLLATERAL)
+            ),
+            (90, 10, 100)
+        );
+        let events =
+            curve_execute_events_at(&mut state, pool, &key, CurveMessage::CollectFees, 1_000)
+                .unwrap();
+        assert_eq!(
+            sale_event_kinds(&events, CURVE, pool_subject(pool)),
+            vec![SaleEventKindV1::FeesCollected {
+                definition: *COLLATERAL.value(),
+                treasury: *treasury.value(),
+                liability_discharged: 10,
+                tokens_transferred: if self_treasury { 0 } else { 10 },
+            }]
+        );
+        let after =
+            PoolAccount::decode(state.get_account_by_id(pool).data.actor_state(CURVE)).unwrap();
+        assert_eq!((after.pool.real_reserve1, after.pool.fees_accrued), (90, 0));
+        assert_eq!(
+            balance(&state, pool, COLLATERAL),
+            if self_treasury { 100 } else { 90 }
+        );
+        assert!(
+            curve_execute_events_at(&mut state, pool, &key, CurveMessage::CollectFees, 1_000)
+                .unwrap()
+                .is_empty()
+        );
+    }
+}
+
+#[test]
+fn signed_allocation_read_emits_no_closure_and_settlement_emits_one_bound_closure_before_effects() {
+    for weighted in [false, true] {
+        for graduation in [false, true] {
+            let mut env = lbp_graduation_env(weighted, true, vec![], Some(lbp_kind(weighted)));
+            env.state = fixed_config(env.state, 100, NEXT_TREASURY, true);
+            let creator = env.creator();
+            let events = env
+                .execute_events(lbp_allocation_message(weighted, creator), 300_000)
+                .unwrap();
+            assert_eq!(
+                sale_event_kinds(
+                    &events,
+                    LBP_FACTORY_PROGRAM,
+                    launch_subject(env.factory, env.pool)
+                ),
+                vec![SaleEventKindV1::AllocationReleased {
+                    definition: *env.launch.value(),
+                    recipient: *creator.value(),
+                    amount: 200,
+                    release: AllocationReleaseV1::AfterEnd
+                }]
+            );
+            assert!(sale_event_kinds(&events, LBP, pool_subject(env.pool)).is_empty());
+            assert!(!fixed_pool(&env.state, env.pool).closure_observed);
+            assert!(
+                env.execute_events(lbp_allocation_message(weighted, creator), 300_000)
+                    .unwrap()
+                    .is_empty()
+            );
+            let initial = fixed_pool(&env.state, env.pool);
+            let instruction = if graduation {
+                lbp_hook_message(creator)
+            } else {
+                lbp_manual_message(weighted, creator)
+            };
+            let before = env.state.clone();
+            let nonce = env.state.get_account_by_id(creator).nonce;
+            let rejected = env.execute_events(instruction.clone(), 299_999);
+            assert!(
+                matches!(rejected, Err(lee::error::LeeError::OutOfValidityWindow)),
+                "{rejected:?}"
+            );
+            assert!(env.state == before);
+            assert_eq!(env.state.get_account_by_id(creator).nonce, nonce);
+            let events = env.execute_events(instruction, 300_000).unwrap();
+            let adapter = graduation.then(|| lbp_adapter(&env).account_id);
+            assert_lbp_settlement_events(
+                &events,
+                env.pool,
+                &initial,
+                creator,
+                NEXT_TREASURY,
+                adapter,
+            );
+            if graduation {
+                assert_lbp_graduated_event(
+                    &events,
+                    &env,
+                    weighted,
+                    initial.recorded_collateral - if weighted { 100 } else { 0 },
+                );
+            } else {
+                assert!(
+                    sale_events(
+                        &events,
+                        LBP_FACTORY_PROGRAM,
+                        launch_subject(env.factory, env.pool)
+                    )
+                    .is_empty()
+                );
+            }
+            assert!(fixed_pool(&env.state, env.pool).closure_observed);
+            assert!(
+                env.execute_events(lbp_manual_message(weighted, creator), 300_000)
+                    .unwrap()
+                    .is_empty()
+            );
+        }
+    }
+}
+
+#[test]
+fn signed_empty_manual_events_are_final_and_retries_do_not_repeat_effects() {
+    for weighted in [false, true] {
+        let mut env = lbp_graduation_env(weighted, false, vec![], Some(lbp_kind(weighted)));
+        env.state = fixed_config(env.state, 100, NEXT_TREASURY, true);
+        let creator = env.creator();
+        let initial = fixed_pool(&env.state, env.pool);
+        let events = env
+            .execute_events(lbp_manual_message(weighted, creator), 300_000)
+            .unwrap();
+        assert_lbp_settlement_events(&events, env.pool, &initial, creator, NEXT_TREASURY, None);
+        assert!(
+            matches!(sale_event_kinds(&events, LBP, pool_subject(env.pool)).last(),
+            Some(SaleEventKindV1::Settlement { step: SettlementStepV1::Completed, route: Some(SettlementRouteV1::Manual), effects }) if effects.is_empty())
+        );
+        let settled = fixed_pool(&env.state, env.pool);
+        assert!(
+            env.execute_events(lbp_manual_message(weighted, creator), 300_000)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(fixed_pool(&env.state, env.pool), settled);
+        reject_lbp_factory(
+            &mut env,
+            lbp_hook_message(creator),
+            300_000,
+            "ManualPayoutStarted",
+        );
+        assert!(lbp_adapter_state(&env).receipt.is_none());
+    }
+}
+
+#[test]
+fn signed_fixed_sellout_buy_is_the_only_closure_event_before_allocation_and_settlement() {
+    let mut env = lbp_graduation_env(false, false, vec![], Some(lbp_kind(false)));
+    let creator = env.creator();
+    env.state = clock_state(
+        env.state
+            .with_public_accounts([token_holding(creator, COLLATERAL, 2_000)]),
+        100_000,
+    );
+    let events = fixed_execute_events_at(
+        &mut env.state,
+        env.pool,
+        &env.key,
+        lbp_core::Message::BuyExactOutput {
+            membership: Some(env.path.clone()),
+            amount_out: 800,
+            max_amount_in: 2_000,
+            now: 100,
+        },
+        100_000,
+    )
+    .unwrap();
+    let kinds = sale_event_kinds(&events, LBP, pool_subject(env.pool));
+    assert_eq!(kinds.len(), 2);
+    assert!(matches!(kinds[0], SaleEventKindV1::Trade { .. }));
+    assert_eq!(
+        kinds[1],
+        SaleEventKindV1::Closed {
+            reason: ClosureReasonV1::Depleted {
+                definition: *env.launch.value()
+            },
+            inclusion_bounds: EventTimeBoundsV1 {
+                at_least: None,
+                before: None
+            }
+        }
+    );
+    assert!(fixed_pool(&env.state, env.pool).closure_observed);
+    env.state = clock_state(env.state, 300_000);
+    let allocation = env
+        .execute_events(lbp_allocation_message(false, creator), 300_000)
+        .unwrap();
+    assert!(sale_event_kinds(&allocation, LBP, pool_subject(env.pool)).is_empty());
+    let initial = fixed_pool(&env.state, env.pool);
+    let events = env
+        .execute_events(lbp_manual_message(false, creator), 300_000)
+        .unwrap();
+    assert_lbp_settlement_events(&events, env.pool, &initial, creator, TREASURY, None);
+    assert!(
+        !sale_event_kinds(&events, LBP, pool_subject(env.pool))
+            .iter()
+            .any(|kind| matches!(kind, SaleEventKindV1::Closed { .. }))
+    );
+    assert!(
+        env.execute_events(lbp_manual_message(false, creator), 300_000)
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn signed_curve_sellout_buy_emits_one_closure_and_withdrawal_does_not_repeat_it() {
+    let (mut state, pool, key) = curve_event_env(None);
+    let events = curve_execute_events_at(
+        &mut state,
+        pool,
+        &key,
+        CurveMessage::SwapExactOutput {
+            membership: None,
+            token_in: COLLATERAL,
+            amount_out: 4_000,
+            max_amount_in: 2_000,
+            now: 1,
+        },
+        1_000,
+    )
+    .unwrap();
+    let kinds = sale_event_kinds(&events, CURVE, pool_subject(pool));
+    assert_eq!(kinds.len(), 2);
+    assert!(matches!(kinds[0], SaleEventKindV1::Trade { .. }));
+    assert_eq!(
+        kinds[1],
+        SaleEventKindV1::Closed {
+            reason: ClosureReasonV1::Depleted {
+                definition: *LAUNCH.value()
+            },
+            inclusion_bounds: EventTimeBoundsV1 {
+                at_least: None,
+                before: None
+            }
+        }
+    );
+    assert!(
+        PoolAccount::decode(state.get_account_by_id(pool).data.actor_state(CURVE))
+            .unwrap()
+            .closure_observed
+    );
+    let events = curve_execute_events_at(
+        &mut state,
+        pool,
+        &key,
+        CurveMessage::WithdrawReserves { now: 1 },
+        1_000,
+    )
+    .unwrap();
+    let kinds = sale_event_kinds(&events, CURVE, pool_subject(pool));
+    assert!(
+        !kinds
+            .iter()
+            .any(|kind| matches!(kind, SaleEventKindV1::Closed { .. }))
+    );
+    assert!(matches!(
+        kinds.last(),
+        Some(SaleEventKindV1::Settlement {
+            step: SettlementStepV1::ReservesWithdrawn,
+            ..
+        })
+    ));
+}
+
+#[test]
+fn signed_curve_expiry_closure_uses_the_end_bound_and_manual_close_is_reported_once() {
+    for manual in [false, true] {
+        let (mut state, pool, key) = curve_event_env(Some(200));
+        if manual {
+            let events = curve_execute_events_at(
+                &mut state,
+                pool,
+                &key,
+                CurveMessage::ClosePool { now: 100 },
+                100_000,
+            )
+            .unwrap();
+            assert_eq!(
+                sale_event_kinds(&events, CURVE, pool_subject(pool)),
+                vec![SaleEventKindV1::Closed {
+                    reason: ClosureReasonV1::Manual,
+                    inclusion_bounds: EventTimeBoundsV1 {
+                        at_least: None,
+                        before: Some(200)
+                    },
+                }]
+            );
+        } else {
+            let before = state.clone();
+            let creator = AccountId::from(&PublicKey::new_from_private_key(&key));
+            let nonce = state.get_account_by_id(creator).nonce;
+            let rejected = curve_execute_events_at(
+                &mut state,
+                pool,
+                &key,
+                CurveMessage::WithdrawReserves { now: 9_999 },
+                199_999,
+            );
+            assert!(
+                matches!(rejected, Err(lee::error::LeeError::OutOfValidityWindow)),
+                "{rejected:?}"
+            );
+            assert!(state == before);
+            assert_eq!(state.get_account_by_id(creator).nonce, nonce);
+        }
+        let events = curve_execute_events_at(
+            &mut state,
+            pool,
+            &key,
+            CurveMessage::WithdrawReserves { now: 9_999 },
+            200_000,
+        )
+        .unwrap();
+        let creator = AccountId::from(&PublicKey::new_from_private_key(&key));
+        let mut expected = vec![];
+        if !manual {
+            expected.push(SaleEventKindV1::Closed {
+                reason: ClosureReasonV1::ScheduledEnd { timestamp: 200 },
+                inclusion_bounds: EventTimeBoundsV1 {
+                    at_least: Some(200),
+                    before: None,
+                },
+            });
+        }
+        expected.push(SaleEventKindV1::Settlement {
+            step: SettlementStepV1::ReservesWithdrawn,
+            route: None,
+            effects: vec![SettlementEffectV1::Payout {
+                definition: *LAUNCH.value(),
+                recipient: *creator.value(),
+                purpose: PayoutPurposeV1::Reserve,
+                liability_discharged: 4_000,
+                tokens_transferred: 4_000,
+            }],
+        });
+        assert_eq!(
+            sale_event_kinds(&events, CURVE, pool_subject(pool)),
+            expected
+        );
+    }
+}
+
+#[test]
+fn signed_scheduled_sellout_does_not_emit_early_closure() {
+    let mut env = fixed_factory_env_with_ending(
+        Some(300),
+        factory_core::CreatorAllocationRelease::AfterEnd,
+        curve_core::PausePolicy::Disabled,
+        lbp_core::EndingPolicy::Scheduled,
+    );
+    let creator = env.creator();
+    env.state = env
+        .state
+        .with_public_accounts([token_holding(creator, COLLATERAL, 2_000)]);
+    let events = fixed_execute_events_at(
+        &mut env.state,
+        env.pool,
+        &env.key,
+        lbp_core::Message::BuyExactOutput {
+            membership: Some(env.path.clone()),
+            amount_out: 800,
+            max_amount_in: 2_000,
+            now: 100,
+        },
+        100_000,
+    )
+    .unwrap();
+    assert!(matches!(
+        sale_event_kinds(&events, LBP, pool_subject(env.pool)).as_slice(),
+        [SaleEventKindV1::Trade { .. }]
+    ));
+    let initial = fixed_pool(&env.state, env.pool);
+    assert_eq!(initial.remaining_inventory, 0);
+    assert!(!initial.closure_observed);
+    let before = env.state.clone();
+    assert!(matches!(
+        env.execute_events(lbp_manual_message(false, creator), 299_999),
+        Err(lee::error::LeeError::OutOfValidityWindow)
+    ));
+    assert!(env.state == before);
+    let events = env
+        .execute_events(lbp_manual_message(false, creator), 300_000)
+        .unwrap();
+    assert_lbp_settlement_events(&events, env.pool, &initial, creator, TREASURY, None);
+    assert!(matches!(
+        sale_event_kinds(&events, LBP, pool_subject(env.pool)).first(),
+        Some(SaleEventKindV1::Closed {
+            reason: ClosureReasonV1::ScheduledEnd { timestamp: 300 },
+            ..
+        })
+    ));
+
+    let (state, pool, key) = curve_event_env(Some(200));
+    let mut sale =
+        PoolAccount::decode(state.get_account_by_id(pool).data.actor_state(CURVE)).unwrap();
+    sale.pool.ending_policy = curve_core::EndingPolicy::Scheduled;
+    sale.pool.close_on_depletion = None;
+    sale.pool.validate_policy().unwrap();
+    let mut state = state.with_public_accounts([account(
+        Actor::new(pool, CURVE),
+        borsh::to_vec(&sale).unwrap(),
+    )]);
+    let events = curve_execute_events_at(
+        &mut state,
+        pool,
+        &key,
+        CurveMessage::SwapExactOutput {
+            membership: None,
+            token_in: COLLATERAL,
+            amount_out: 4_000,
+            max_amount_in: 2_000,
+            now: 1,
+        },
+        1_000,
+    )
+    .unwrap();
+    assert!(matches!(
+        sale_event_kinds(&events, CURVE, pool_subject(pool)).as_slice(),
+        [SaleEventKindV1::Trade { .. }]
+    ));
+    let sale = PoolAccount::decode(state.get_account_by_id(pool).data.actor_state(CURVE)).unwrap();
+    assert_eq!(sale.pool.real_reserve0, 0);
+    assert!(!sale.closure_observed);
+    let before = state.clone();
+    assert!(matches!(
+        curve_execute_events_at(
+            &mut state,
+            pool,
+            &key,
+            CurveMessage::WithdrawReserves { now: 200 },
+            199_999
+        ),
+        Err(lee::error::LeeError::OutOfValidityWindow)
+    ));
+    assert!(state == before);
+    let events = curve_execute_events_at(
+        &mut state,
+        pool,
+        &key,
+        CurveMessage::WithdrawReserves { now: 200 },
+        200_000,
+    )
+    .unwrap();
+    assert!(matches!(
+        sale_event_kinds(&events, CURVE, pool_subject(pool)).first(),
+        Some(SaleEventKindV1::Closed {
+            reason: ClosureReasonV1::ScheduledEnd { timestamp: 200 },
+            ..
+        })
+    ));
 }

@@ -1,6 +1,7 @@
 #[path = "support/lbp_pause_forwarding.rs"]
 mod lbp_pause_forwarding;
 
+use factory_core::events::*;
 use factory_core::{
     CreatorAllocationRelease, Error, FixedPrice, FixedPriceInputs, Message, SaleStart,
     compute_factory_pda, handle,
@@ -479,6 +480,7 @@ fn final_setup_funds_inventory_and_keeps_after_end_allocation_locked() {
         factory_core::FixedPriceCreationStage::Complete
     );
     assert!(!complete.creator_allocation_released);
+    assert!(response.events.is_empty());
     let funding = response
         .sync_messages
         .iter()
@@ -561,6 +563,9 @@ fn final_setup_releases_after_setup_allocation_to_the_current_creator() {
         factory_core::FixedPriceLaunchState::decode(response.post_state.as_ref().unwrap())
             .unwrap()
             .creator_allocation_released
+    );
+    assert!(
+        matches!(&launch_events(&response)[..], [SaleEventV1 { kind: SaleEventKindV1::AllocationReleased { amount: 200, release: AllocationReleaseV1::AfterSetup, recipient, .. }, .. }] if recipient == id(42).value())
     );
     let payout = response
         .sync_messages
@@ -987,6 +992,9 @@ fn after_end_allocation_claim_at_expiry_does_not_settle_proceeds() {
     let (input, state) = completed();
     let pool = active_pool(&state, input.receiver);
     let response = claim_allocation(&input, &state, &pool, 999, 217).unwrap();
+    assert!(
+        matches!(&launch_events(&response)[..], [SaleEventV1 { kind: SaleEventKindV1::AllocationReleased { amount: 200, release: AllocationReleaseV1::AfterEnd, recipient, .. }, .. }] if recipient == id(42).value())
+    );
     let claimed =
         factory_core::FixedPriceLaunchState::decode(response.post_state.as_ref().unwrap()).unwrap();
     assert!(claimed.creator_allocation_released);
@@ -1029,6 +1037,7 @@ fn released_allocation_retry_keeps_selected_close_bound_without_another_transfer
         factory_core::FixedPriceLaunchState::decode(response.post_state.as_ref().unwrap()).unwrap();
     let repeated = claim_allocation(&input, &claimed, &pool, 0, 0).unwrap();
     assert!(repeated.sync_messages.is_empty());
+    assert!(repeated.events.is_empty());
     assert_eq!(repeated.validity.timestamps.start(), Some(200_000));
     assert_eq!(repeated.validity.timestamps.end(), None);
     assert_eq!(
@@ -1168,6 +1177,7 @@ fn zero_and_after_setup_allocations_never_emit_a_second_token_payout() {
             .creator_allocation_released
     );
     assert!(response.sync_messages.is_empty());
+    assert!(response.events.is_empty());
     assert_eq!(response.validity.timestamps.start(), Some(200_000));
     assert_eq!(response.validity.timestamps.end(), None);
     state.creator_allocation = 200;
@@ -1176,6 +1186,7 @@ fn zero_and_after_setup_allocations_never_emit_a_second_token_payout() {
     let pool = active_pool(&state, input.receiver);
     let response = claim_allocation(&input, &state, &pool, 100, 0).unwrap();
     assert!(response.sync_messages.is_empty());
+    assert!(response.events.is_empty());
 }
 
 #[test]
@@ -1898,6 +1909,8 @@ fn manual_progress_changes_only_after_exact_pool_completion() {
         },
     );
     let finalize = handle(&applied).unwrap();
+    assert!(pending.events.is_empty());
+    assert!(finalize.events.is_empty());
     assert_eq!(
         factory_core::LbpLaunchState::decode(finalize.post_state.as_ref().unwrap())
             .unwrap()
@@ -1937,6 +1950,7 @@ fn manual_progress_changes_only_after_exact_pool_completion() {
     complete.from = Some(receipt.pool);
     let response = handle(&complete).unwrap();
     assert!(response.sync_messages.is_empty());
+    assert!(response.events.is_empty());
     let state =
         factory_core::LbpLaunchState::decode(response.post_state.as_ref().unwrap()).unwrap();
     assert_eq!(
@@ -1964,6 +1978,7 @@ fn manual_progress_changes_only_after_exact_pool_completion() {
     pool.settlement_progress = state.settlement_progress;
     retry = reply(&retry, &read, borsh::to_vec(&pool).unwrap());
     let noop = handle(&retry).unwrap();
+    assert!(noop.events.is_empty());
     assert!(noop.sync_messages.is_empty());
     assert_eq!(noop.validity.timestamps.start(), Some(200_000));
 }
@@ -2158,6 +2173,8 @@ fn fixed_hook_resolves_current_creator_then_guards_both_completion_hashes() {
         },
     );
     let callback = handle(&applied).unwrap();
+    assert!(pending.events.is_empty());
+    assert!(callback.events.is_empty());
     assert!(callback.sync_messages[0].pda_seeds.is_empty());
     let AdapterMessage::Graduate { request } =
         borsh::from_slice(&callback.sync_messages[0].message).unwrap()
@@ -2186,6 +2203,7 @@ fn fixed_hook_resolves_current_creator_then_guards_both_completion_hashes() {
     forged.from = Some(Actor::new(result.from.unwrap().account_id, id(99)));
     assert_eq!(handle(&forged).err(), Some(Error::Unauthorized));
     let finalize = handle(&result).unwrap();
+    assert!(finalize.events.is_empty());
     assert_eq!(
         factory_core::LbpLaunchState::decode(finalize.post_state.as_ref().unwrap())
             .unwrap()
@@ -2201,6 +2219,23 @@ fn fixed_hook_resolves_current_creator_then_guards_both_completion_hashes() {
         },
     );
     let response = handle(&completed).unwrap();
+    assert_eq!(
+        launch_events(&response),
+        vec![SaleEventV1::new(
+            *state.namespace.value(),
+            PricingEngineV1::FixedPrice,
+            EventSubjectV1::Launch {
+                factory: *input.receiver.account_id.value(),
+                pool: *state.pool_id.value()
+            },
+            SaleEventKindV1::Graduated {
+                adapter_program: *id(9).value(),
+                adapter_custody: *pool.graduation_adapter.unwrap().account_id.value(),
+                launch_tokens: 0,
+                collateral: 4
+            }
+        )]
+    );
     assert_eq!(
         factory_core::LbpLaunchState::decode(response.post_state.as_ref().unwrap())
             .unwrap()
@@ -2229,6 +2264,8 @@ fn fixed_zero_manual_completion_is_final_but_zero_first_graduation_is_available(
         },
     );
     let finalize = handle(&applied).unwrap();
+    assert!(pending.events.is_empty());
+    assert!(finalize.events.is_empty());
     let completed = settlement_callback(
         &input,
         &finalize,
@@ -2238,6 +2275,7 @@ fn fixed_zero_manual_completion_is_final_but_zero_first_graduation_is_available(
         },
     );
     let response = handle(&completed).unwrap();
+    assert!(response.events.is_empty());
     assert_eq!(
         factory_core::LbpLaunchState::decode(response.post_state.as_ref().unwrap())
             .unwrap()
@@ -2258,7 +2296,7 @@ fn fixed_zero_manual_completion_is_final_but_zero_first_graduation_is_available(
     })
     .unwrap();
     assert_eq!(handle(&retry).err(), Some(Error::ManualPayoutStarted));
-    let (input, resolve, state, _) = fixed_hook_resolve(SettlementProgress::Unselected, 0);
+    let (input, resolve, state, pool) = fixed_hook_resolve(SettlementProgress::Unselected, 0);
     let resolved = settlement_callback(
         &input,
         &resolve,
@@ -2275,6 +2313,63 @@ fn fixed_zero_manual_completion_is_final_but_zero_first_graduation_is_available(
             route: factory_core::SettlementRoute::Graduation,
             ..
         }
+    ));
+    let receipt = factory_core::SettlementReceipt {
+        factory: input.receiver,
+        pool: Actor::new(state.pool_id, state.lbp_program_id),
+        route: factory_core::SettlementRoute::Graduation,
+        creator: id(99),
+        adapter: pool.graduation_adapter,
+        amounts: factory_core::SettlementAmounts {
+            launch_tokens: 0,
+            collateral: 0,
+        },
+        seed_payment: 0,
+        progress: SettlementProgress::Graduated,
+    };
+    let applied = settlement_callback(
+        &input,
+        &pending,
+        &SettlementReply::Applied {
+            receipt: receipt.clone(),
+        },
+    );
+    let callback = handle(&applied).unwrap();
+    assert!(callback.events.is_empty());
+    let factory_core::AdapterMessage::Graduate { request } =
+        borsh::from_slice(&callback.sync_messages[0].message).unwrap()
+    else {
+        panic!("graduate");
+    };
+    let result = settlement_callback(
+        &input,
+        &callback,
+        &factory_core::GraduationResult {
+            factory: input.receiver.account_id,
+            request_hash: request.hash(),
+        },
+    );
+    let finalize = handle(&result).unwrap();
+    assert!(finalize.events.is_empty());
+    let completed = settlement_callback(
+        &input,
+        &finalize,
+        &SettlementReply::Completed {
+            receipt_hash: receipt.hash(),
+            progress: receipt.progress,
+        },
+    );
+    let response = handle(&completed).unwrap();
+    assert!(matches!(
+        &launch_events(&response)[..],
+        [SaleEventV1 {
+            kind: SaleEventKindV1::Graduated {
+                launch_tokens: 0,
+                collateral: 0,
+                ..
+            },
+            ..
+        }]
     ));
 }
 
@@ -2462,4 +2557,59 @@ fn released_after_setup_allocation_retry_stays_available_while_fixed_sale_is_ope
         factory_core::LbpLaunchState::decode(repeated.post_state.as_ref().unwrap()).unwrap(),
         state
     );
+}
+
+fn launch_events(response: &lee_core::program::Response) -> Vec<SaleEventV1> {
+    response
+        .events
+        .iter()
+        .map(|event| {
+            let payload: SaleEventV1 = borsh::from_slice(&event.data).unwrap();
+            assert_eq!(
+                event.selector,
+                curve_core::sale_event(payload.clone()).selector
+            );
+            payload
+        })
+        .collect()
+}
+
+#[test]
+fn fixed_created_event_names_the_launch_and_saved_terms_once() {
+    let input = creation();
+    let response = handle(&input).unwrap();
+    let state =
+        factory_core::LbpLaunchState::decode(response.post_state.as_ref().unwrap()).unwrap();
+    assert_eq!(
+        launch_events(&response),
+        vec![SaleEventV1::new(
+            *state.namespace.value(),
+            PricingEngineV1::FixedPrice,
+            EventSubjectV1::Launch {
+                factory: *input.receiver.account_id.value(),
+                pool: *state.pool_id.value()
+            },
+            SaleEventKindV1::Created {
+                creator: *id(42).value(),
+                creator_role: *state.creator_role_id.value(),
+                token_definition: *state.token_definition_id.value(),
+                collateral_definition: *state.collateral_definition_id.value(),
+                sale_inventory: 800,
+                creator_allocation: 200,
+                curve_reserve: 0,
+                collateral_seed: 0,
+                start_timestamp: Some(0),
+                end_timestamp: Some(200),
+                policies: EventPoliciesV1 {
+                    ending: state.ending_policy,
+                    pause: state.pause_policy
+                }
+            }
+        )]
+    );
+    let (_, minted) = minted();
+    assert!(minted.events.is_empty());
+    let mut replay = input;
+    replay.pre_state = minted.post_state.unwrap();
+    assert_eq!(handle(&replay).err(), Some(Error::AlreadyInitialized));
 }

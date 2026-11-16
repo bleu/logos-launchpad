@@ -1,6 +1,6 @@
 # ADR 0031: Shared launch setup and reusable pool policies
 
-Status: Shared setup, public buy eligibility, fee arithmetic, optional pause/resume, supported fee/ending decisions, settlement route rules with duplicate-payout protection and cross-engine graduation implemented. Common events remain incomplete. Private routes, real proofs and deployment readiness pending.
+Status: Shared setup, public buy eligibility, fee arithmetic, optional pause/resume, supported fee/ending decisions, settlement route rules with duplicate-payout protection, cross-engine graduation and common program events implemented. Private routes, real proofs and deployment readiness pending.
 
 Date: 2026-10-13; policy amendment: 2026-11-09; ending and namespace-fee amendment: 2026-11-13
 
@@ -37,6 +37,12 @@ Use the shared ending and namespace-fee rules above; preserve payouts, live name
 Optional pause/resume is implemented through `PausePolicy` and `TradeControl`. Creation fixes pause as disabled or authority-controlled. The current creator controls factory sales; the current owner controls direct pools. Authenticate every call, including retries. Pause blocks swaps, but permits fee collection and safe settlement. Resume must not move the schedule or clear emergency freeze. Controls reject ended sales under the selected ending policy.
 
 Test shared policies through each engine's interface. Signed guest tests must check token effects, rollback and retries. Callback success does not prove DEX liquidity.
+
+## Program events
+
+`SaleEventV1` identifies the namespace, pricing engine and pool or launch. Programs emit public changes for setup, trades, controls, fees, allocation, closure, settlement and graduation. Source declarations define payloads and selectors in the generated IDL. Weighted legacy selectors and payload bytes are unchanged. Changed shared event payloads require updated decoders; they are not wire-compatible with earlier payloads.
+
+Closure is recorded once by a successful pool operation, with its reason and inclusion bounds. Time passing alone emits nothing. Allocation reads do not record closure. Fee events distinguish discharged liability from tokens transferred. Authenticated no-ops emit no change event. Failed transactions commit neither changes nor events. Indexer delivery and history remain outside this contract.
 
 ## Consequences
 

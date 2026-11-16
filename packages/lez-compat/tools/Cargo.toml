@@ -13,3 +13,4 @@ hex = "0.4"
 serde_json = "1"
 syn = { version = "2", features = ["full"] }
 quote = "1"
+risc0-zkvm.workspace = true

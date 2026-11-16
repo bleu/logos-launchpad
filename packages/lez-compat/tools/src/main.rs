@@ -125,6 +125,103 @@ fn resolve_qualified_types(
     }
 }
 
+fn source_events(
+    module_name: &str,
+    source: &syn::File,
+    types: &Value,
+    events: &mut serde_json::Map<String, Value>,
+    selectors: &mut std::collections::BTreeSet<[u8; 8]>,
+) -> Result<(), Box<dyn Error>> {
+    use risc0_zkvm::sha::rust_crypto::{Digest as _, Sha256};
+
+    for item in &source.items {
+        let syn::Item::Impl(item) = item else {
+            continue;
+        };
+        if item.trait_.is_some() {
+            continue;
+        }
+        for constant in &item.items {
+            let syn::ImplItem::Const(constant) = constant else {
+                continue;
+            };
+            if constant.ident != "SELECTOR_NAME" {
+                continue;
+            }
+            let syn::Type::Path(payload) = item.self_ty.as_ref() else {
+                return Err("event payload must be a named Borsh type".into());
+            };
+            let payload = payload
+                .path
+                .get_ident()
+                .ok_or("event payload must be a local type")?
+                .to_string();
+            if types.get(&payload).is_none() {
+                return Err(
+                    format!("event payload {module_name}::{payload} has no Borsh schema").into(),
+                );
+            }
+            let syn::Expr::Lit(expression) = &constant.expr else {
+                return Err("SELECTOR_NAME must be a string literal".into());
+            };
+            let syn::Lit::Str(name) = &expression.lit else {
+                return Err("SELECTOR_NAME must be a string literal".into());
+            };
+            let name = name.value();
+            if name.is_empty() {
+                return Err("SELECTOR_NAME must not be empty".into());
+            }
+            let digest = Sha256::digest(name.as_bytes());
+            let selector: [u8; 8] = digest[..8].try_into().unwrap();
+            if !selectors.insert(selector) {
+                return Err(format!("duplicate event selector: {name}").into());
+            }
+            let qualified = format!("{module_name}::{payload}");
+            if events
+                .insert(
+                    qualified.clone(),
+                    json!({
+                        "name": name,
+                        "selector": hex::encode(selector),
+                        "payload": qualified,
+                    }),
+                )
+                .is_some()
+            {
+                return Err("duplicate event payload".into());
+            }
+        }
+    }
+    Ok(())
+}
+
+fn source_imports(
+    tree: &syn::UseTree,
+    registered: &std::collections::BTreeSet<String>,
+    dependencies: &mut std::collections::BTreeSet<String>,
+) {
+    let mut insert = |name: String| {
+        let name = name.strip_suffix("_core").unwrap_or(&name);
+        if registered.contains(name) {
+            dependencies.insert(name.to_owned());
+        }
+    };
+    match tree {
+        syn::UseTree::Path(path) => {
+            insert(path.ident.to_string());
+            source_imports(&path.tree, registered, dependencies);
+        }
+        syn::UseTree::Group(group) => {
+            for item in &group.items {
+                source_imports(item, registered, dependencies);
+            }
+        }
+        syn::UseTree::Name(name) => insert(name.ident.to_string()),
+        syn::UseTree::Rename(rename) => insert(rename.ident.to_string()),
+        syn::UseTree::Glob(_) => {}
+    }
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.as_slice() {
@@ -153,20 +250,28 @@ fn main() -> Result<(), Box<dyn Error>> {
                 modules.insert(name.to_string(), module(&source, true)?);
                 parsed.insert(name, syn::parse_file(&source)?);
             }
+            let mut events = serde_json::Map::new();
+            let mut selectors = std::collections::BTreeSet::new();
+            for (name, source) in &parsed {
+                source_events(name, source, &modules[*name], &mut events, &mut selectors)?;
+            }
+            let registered = parsed.keys().map(|name| (*name).to_owned()).collect();
             let mut imports = std::collections::BTreeMap::<String, std::collections::BTreeSet<String>>::new();
             for (parent, source) in &parsed {
                 for item in &source.items {
-                    if let syn::Item::Use(item) = item
-                        && let syn::UseTree::Path(path) = &item.tree
-                    {
-                        let name = path.ident.to_string();
-                        let name = name.strip_suffix("_core").unwrap_or(&name);
-                        if parsed.contains_key(name) && name != *parent {
-                            imports.entry(parent.to_string()).or_default().insert(name.to_string());
-                        }
+                    if let syn::Item::Use(item) = item {
+                        let dependencies = imports.entry(parent.to_string()).or_default();
+                        source_imports(&item.tree, &registered, dependencies);
+                        dependencies.remove(*parent);
                     }
                     if let syn::Item::Mod(child) = item {
                         let name = child.ident.to_string();
+                        if matches!(child.vis, syn::Visibility::Public(_))
+                            && parsed.contains_key(name.as_str())
+                            && name != *parent
+                        {
+                            imports.entry(parent.to_string()).or_default().insert(name.clone());
+                        }
                         if parsed.get(name.as_str()).is_some_and(|source| {
                             source.items.iter().any(|item| {
                                 matches!(item, syn::Item::Use(item)
@@ -178,7 +283,6 @@ fn main() -> Result<(), Box<dyn Error>> {
                     }
                 }
             }
-            let registered = parsed.keys().map(|name| (*name).to_owned()).collect();
             for (name, module) in &mut modules {
                 let mut dependencies = std::collections::BTreeSet::new();
                 resolve_qualified_types(module, &registered, &mut dependencies);
@@ -189,7 +293,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
             println!("{}", serde_json::to_string_pretty(&json!({
                 "encoding": "borsh", "version": 1, "modules": modules,
-                "imports": imports,
+                "imports": imports, "events": events,
                 "upstream_types": {
                     "AccountId": "[u8;32]", "PdaSeed": "[u8;32]",
                     "Actor": [{"name": "account_id", "type": "AccountId"}, {"name": "program_account_id", "type": "AccountId"}],

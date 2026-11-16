@@ -53,6 +53,7 @@ fn pool_snapshot() -> (curve_core::PoolAccount, curve_core::Config) {
         trade_control: curve_core::TradeControl::Unrestricted,
         allowed_input_token: None,
         funded: true,
+        closure_observed: false,
         namespace: AccountId::new([0xAD; 32]),
         token0_definition_id: AccountId::new([2; 32]),
         token1_definition_id: AccountId::new([5; 32]),
