@@ -2,11 +2,16 @@
 
 pub use curve_core::{AllowlistPolicy, BuyPolicy, MembershipPath};
 use sale_policy::{EndingError, TimeBounds};
-pub use sale_policy::{EndingPolicy, PausePolicy, SettlementProgress, TradeControl};
+pub use sale_policy::{
+    EndingPolicy, PausePolicy, SettlementAmounts, SettlementProgress, SettlementRoute, TradeControl,
+};
 
+#[path = "settlement.rs"]
+mod lbp_settlement;
 mod pricing;
 pub mod pricing_clock;
 mod trading;
+pub use lbp_settlement::{SettlementReceipt, SettlementReply};
 mod weighted_lifecycle;
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
@@ -48,6 +53,7 @@ pub struct FixedPricePoolInputs {
     pub buy_policy: BuyPolicy,
     pub pause_policy: PausePolicy,
     pub ending_policy: EndingPolicy,
+    pub graduation_adapter: Option<Actor>,
     pub namespace: AccountId,
     pub namespace_program_id: AccountId,
     pub factory_program_id: AccountId,
@@ -75,6 +81,7 @@ pub struct WeightedPoolInputs {
     pub buy_policy: BuyPolicy,
     pub pause_policy: PausePolicy,
     pub ending_policy: EndingPolicy,
+    pub graduation_adapter: Option<Actor>,
     pub namespace: AccountId,
     pub namespace_program_id: AccountId,
     pub factory_program_id: AccountId,
@@ -162,6 +169,14 @@ pub enum Message {
     SetPaused {
         paused: bool,
     },
+    Settle {
+        route: SettlementRoute,
+        creator: AccountId,
+        adapter: Option<Actor>,
+    },
+    FinalizeSettlement {
+        receipt_hash: [u8; 32],
+    },
 }
 pub type Instruction = Message;
 
@@ -188,6 +203,7 @@ pub struct PoolAccount {
     pub buy_policy: BuyPolicy,
     pub trade_control: TradeControl,
     pub ending_policy: EndingPolicy,
+    pub graduation_adapter: Option<Actor>,
     pub mode: PoolMode,
     pub funded: bool,
     pub namespace: AccountId,
@@ -207,6 +223,7 @@ pub struct PoolAccount {
     pub recorded_collateral: u128,
     pub accrued_fees: u128,
     pub settlement_progress: SettlementProgress,
+    pub seed_returned: bool,
     pending: Option<Pending>,
 }
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -554,6 +571,9 @@ fn advance_setup_steps(
 // ---------------------------------------------------------------------------
 
 pub fn handle(input: &ReceiveInput) -> Result<Response, Error> {
+    if let Some(result) = lbp_settlement::resume(input) {
+        return result;
+    }
     if let Some(result) = weighted_lifecycle::resume_poke(input) {
         return result;
     }
@@ -618,6 +638,7 @@ pub fn handle(input: &ReceiveInput) -> Result<Response, Error> {
                 buy_policy: inputs.buy_policy,
                 trade_control: TradeControl::new(inputs.pause_policy),
                 ending_policy: inputs.ending_policy,
+                graduation_adapter: inputs.graduation_adapter,
                 mode: PoolMode::FixedPrice,
                 funded: false,
                 namespace: inputs.namespace,
@@ -637,6 +658,7 @@ pub fn handle(input: &ReceiveInput) -> Result<Response, Error> {
                 recorded_collateral: 0,
                 accrued_fees: 0,
                 settlement_progress: crate::SettlementProgress::Unselected,
+                seed_returned: true,
                 pending: Some(Pending {
                     activate: false,
                     step: 0,
@@ -736,6 +758,7 @@ pub fn handle(input: &ReceiveInput) -> Result<Response, Error> {
                 buy_policy: inputs.buy_policy,
                 trade_control: TradeControl::new(inputs.pause_policy),
                 ending_policy: inputs.ending_policy,
+                graduation_adapter: inputs.graduation_adapter,
                 mode: PoolMode::Weighted {
                     token_weight_start: inputs.token_weight_start,
                     token_weight_end: inputs.token_weight_end,
@@ -766,6 +789,7 @@ pub fn handle(input: &ReceiveInput) -> Result<Response, Error> {
                 recorded_collateral: 0,
                 accrued_fees: 0,
                 settlement_progress: crate::SettlementProgress::Unselected,
+                seed_returned: false,
                 pending: Some(Pending {
                     activate: false,
                     step: 0,
@@ -845,7 +869,8 @@ pub fn handle(input: &ReceiveInput) -> Result<Response, Error> {
             weighted_lifecycle::set_paused(input, paused)
         }
         Message::SetPaused { paused } => weighted_lifecycle::set_paused(input, paused),
-        Message::SettleWeighted { .. } => trading::begin(input, message),
+        Message::SettleWeighted { .. } | Message::Settle { .. } => trading::begin(input, message),
+        Message::FinalizeSettlement { .. } => Err(Error::InvalidState),
         Message::PokeWeighted => weighted_lifecycle::poke(input),
         Message::ReadState => {
             PoolAccount::decode(&input.pre_state)?.validate_address(input.receiver)?;

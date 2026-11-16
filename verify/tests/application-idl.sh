@@ -25,10 +25,14 @@ assert 'creator_nft_definition' not in {field['name'] for field in creation['fie
 state_fields = {field['name'] for field in factory['FactoryState']['fields']}
 assert 'creator_role_id' in state_fields
 assert not {'creator_nft_definition', 'creator_commitment'} & state_fields
-bootstrap = compat['modules']['authority']['Message']['variants'][-1]
-assert bootstrap['name'] == 'BootstrapTransferOnly'
+authority_messages = compat['modules']['authority']['Message']['variants']
+bootstrap = next(message for message in authority_messages if message['name'] == 'BootstrapTransferOnly')
 assert bootstrap['tag'] == 12
 assert [field['name'] for field in bootstrap['fields']] == ['authority']
+resolve = authority_messages[-1]
+assert resolve['name'] == 'Resolve'
+assert resolve['tag'] == 13
+assert resolve['fields'] == []
 assert not (root / 'private_buy.json').exists()
 PY
 printf 'application-idl: generated actor messages and dependencies\n'

@@ -6,7 +6,7 @@ use lee_core::{
     program::{ReceiveInput, Response, StateReply, SyncMessage},
 };
 use lez_compat_core::token::{self, TokenKind, TokenState};
-use sale_policy::{FeeError, FeeRate, SettlementAmounts};
+use sale_policy::{FeeError, FeeRate};
 use weighted_math_core::{QuoteError, try_calc_in_given_out, try_calc_out_given_in};
 
 #[derive(BorshSerialize, BorshDeserialize)]
@@ -69,7 +69,9 @@ impl Pending {
             || (self.step == 3
                 && matches!(
                     self.message,
-                    Message::SettleFixedPrice { .. } | Message::SettleWeighted { .. }
+                    Message::SettleFixedPrice { .. }
+                        | Message::SettleWeighted { .. }
+                        | Message::Settle { .. }
                 ))
         {
             return self.finish(receiver);
@@ -142,6 +144,22 @@ impl Pending {
                 self.state,
                 receiver,
                 creator,
+                config.treasury,
+                self.balances,
+                expiry,
+            );
+        }
+        if let Message::Settle {
+            route,
+            creator,
+            adapter,
+        } = self.message
+        {
+            let expiry = self.state.close_time_bound()?;
+            return crate::lbp_settlement::apply(
+                self.state,
+                receiver,
+                (route, creator, adapter),
                 config.treasury,
                 self.balances,
                 expiry,
@@ -459,11 +477,25 @@ pub(super) fn begin(input: &ReceiveInput, message: Message) -> Result<Response, 
     }
     if !matches!(
         message,
-        Message::CollectFees | Message::SettleFixedPrice { .. } | Message::SettleWeighted { .. }
+        Message::CollectFees
+            | Message::SettleFixedPrice { .. }
+            | Message::SettleWeighted { .. }
+            | Message::Settle { .. }
     ) {
         validate_buy_window(&state, &message)?;
     }
-    let buyer = if let Message::SettleFixedPrice { creator, .. } = message {
+    let buyer = if let Message::Settle {
+        route,
+        creator,
+        adapter,
+    } = message
+    {
+        if input.from != Some(Actor::new(state.factory_owner, state.factory_program_id)) {
+            return Err(Error::Unauthorized);
+        }
+        crate::lbp_settlement::validate_route(&state, route, creator, adapter)?;
+        creator
+    } else if let Message::SettleFixedPrice { creator, .. } = message {
         if state.mode != PoolMode::FixedPrice {
             return Err(Error::InvalidMessage);
         }
@@ -647,43 +679,39 @@ fn settlement_payout(
     balances: [u128; 3],
     expiry: Option<u64>,
 ) -> Result<Response, Error> {
-    if balances[1] < state.remaining_inventory {
+    let plan = crate::lbp_settlement::plan(&state, crate::SettlementRoute::Manual)?;
+    if balances[1] < plan.burn {
         return Err(Error::Underfunded);
     }
-    let fees = state.accrued_fees;
-    let proceeds = state.recorded_collateral;
-    let route_collateral = match state.mode {
-        PoolMode::FixedPrice => proceeds,
-        PoolMode::Weighted {
-            collateral_seed, ..
-        } => proceeds
-            .checked_sub(collateral_seed)
-            .ok_or(Error::InvalidState)?,
-    };
-    state
-        .settlement_progress
-        .record_manual_payout(SettlementAmounts {
-            launch_tokens: 0,
-            collateral: route_collateral,
-        })
-        .map_err(|_| Error::InvalidState)?;
-    state
-        .settlement_progress
-        .finish_manual()
-        .map_err(|_| Error::InvalidState)?;
+    state.settlement_progress = plan.progress;
+    state.seed_returned = true;
     state.accrued_fees = 0;
     state.recorded_collateral = 0;
     let response = curve_core::with_time_bounds(state.response(), expiry, None)
         .map_err(|_| Error::InvalidTerms)?;
+    Ok(custody_effects(
+        response, &state, receiver, creator, None, treasury, &plan,
+    ))
+}
+
+pub(super) fn custody_effects(
+    response: Response,
+    state: &PoolAccount,
+    receiver: Actor,
+    creator: AccountId,
+    adapter: Option<Actor>,
+    treasury: AccountId,
+    plan: &crate::lbp_settlement::CustodyPlan,
+) -> Response {
     let response = payout(
         response,
-        &state,
+        state,
         receiver,
         state.collateral_definition_id,
         treasury,
-        fees,
+        plan.fees,
     );
-    let response = if state.remaining_inventory == 0 {
+    let response = if plan.burn == 0 {
         response
     } else {
         response.send(
@@ -691,7 +719,7 @@ fn settlement_payout(
                 Actor::new(receiver.account_id, TOKEN_PROGRAM_ACCOUNT_ID),
                 &token::Message::Burn {
                     definition: state.token_definition_id,
-                    amount: state.remaining_inventory,
+                    amount: plan.burn,
                 },
             )
             .with_pda_seeds([compute_pool_pda_seed(
@@ -702,14 +730,33 @@ fn settlement_payout(
             )]),
         )
     };
-    Ok(payout(
-        response,
-        &state,
-        receiver,
-        state.collateral_definition_id,
-        creator,
-        proceeds,
-    ))
+    if let Some(adapter) = adapter {
+        let response = payout(
+            response,
+            state,
+            receiver,
+            state.collateral_definition_id,
+            creator,
+            plan.seed,
+        );
+        payout(
+            response,
+            state,
+            receiver,
+            state.collateral_definition_id,
+            adapter.account_id,
+            plan.amounts.collateral,
+        )
+    } else {
+        payout(
+            response,
+            state,
+            receiver,
+            state.collateral_definition_id,
+            creator,
+            plan.seed + plan.amounts.collateral,
+        )
+    }
 }
 
 #[cfg(test)]
@@ -748,6 +795,7 @@ mod tests {
             buy_policy: crate::BuyPolicy::Open,
             trade_control: TradeControl::Paused,
             ending_policy: crate::EndingPolicy::Either,
+            graduation_adapter: None,
             mode: PoolMode::FixedPrice,
             funded: true,
             namespace,
@@ -770,6 +818,7 @@ mod tests {
             recorded_collateral: 0,
             accrued_fees: 0,
             settlement_progress: crate::SettlementProgress::Unselected,
+            seed_returned: true,
             pending: None,
         };
         (state, config)

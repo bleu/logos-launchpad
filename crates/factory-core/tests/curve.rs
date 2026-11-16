@@ -429,7 +429,7 @@ fn settlement(
     input.pre_state = previous.post_state.clone().unwrap();
     input.from = None;
     input.message = borsh::to_vec(&if hook {
-        Message::ExecuteGraduationHook { now: 200 }
+        Message::ExecuteGraduationHook { creator_hint: None }
     } else {
         Message::WithdrawFactoryProceeds {
             creator: id(42),
@@ -719,7 +719,7 @@ fn adapter_state(factory: Actor, ready: bool) -> Vec<u8> {
             factory_program_id: id(7),
             namespace: id(40),
             launch_salt: [3; 32],
-            ready,
+            accepted_intent: ready.then_some(GraduationIntentKind::CurveReserves),
         })
         .unwrap(),
     })
@@ -775,8 +775,10 @@ fn hook_finalization_pays_custody_without_factory_grant_and_waits_for_authentica
                 launch_salt: [3; 32],
                 token_definition_id: state.token_definition_id,
                 collateral_definition_id: state.collateral_definition_id,
-                dex_seed_reserve: 100,
-                collateral_amount: 50,
+                intent: GraduationIntent::CurveReserves {
+                    launch_tokens: 100,
+                    collateral: 50
+                },
                 configuration: b"route".to_vec()
             }
         }
@@ -792,14 +794,30 @@ fn hook_finalization_pays_custody_without_factory_grant_and_waits_for_authentica
             .iter()
             .all(|m| m.pda_seeds.contains(&compute_factory_seed(id(40), [3; 32])))
     );
+    let AdapterMessage::Graduate { request } =
+        borsh::from_slice(&response.sync_messages.last().unwrap().message).unwrap()
+    else {
+        panic!("graduate");
+    };
     input.pre_state = response.post_state.unwrap();
     input.message = borsh::to_vec(&GraduationResult {
         factory: input.receiver.account_id,
+        request_hash: request.hash(),
     })
     .unwrap();
     input.from = Some(Actor::new(custody, id(99)));
     assert!(matches!(handle(&input), Err(Error::Unauthorized)));
     input.from = Some(Actor::new(custody, id(9)));
+    let valid = input.message.clone();
+    input.message = borsh::to_vec(&GraduationResult {
+        factory: input.receiver.account_id,
+        request_hash: [0; 32],
+    })
+    .unwrap();
+    assert_eq!(handle(&input).err(), Some(Error::InvalidState));
+    input.message = borsh::to_vec(&Message::ReadState).unwrap();
+    assert_eq!(handle(&input).err(), Some(Error::InvalidMessage));
+    input.message = valid;
     let complete = handle(&input).unwrap();
     assert_eq!(
         FactoryState::decode(complete.post_state.as_ref().unwrap())
@@ -867,7 +885,7 @@ fn manual_r_payout_with_zero_collateral_is_complete_and_cannot_reopen_the_hook()
         SettlementStage::Complete
     );
     input.pre_state = complete.post_state.unwrap();
-    input.message = borsh::to_vec(&Message::ExecuteGraduationHook { now: 200 }).unwrap();
+    input.message = borsh::to_vec(&Message::ExecuteGraduationHook { creator_hint: None }).unwrap();
     assert!(matches!(handle(&input), Err(Error::ManualPayoutStarted)));
 }
 #[test]
@@ -987,7 +1005,8 @@ fn zero_manual_completion_blocks_hooks_but_a_zero_hook_can_finish_first() {
     assert!(complete.sync_messages.is_empty());
     manual_input.pre_state = complete.post_state.unwrap();
     manual_input.from = None;
-    manual_input.message = borsh::to_vec(&Message::ExecuteGraduationHook { now: 200 }).unwrap();
+    manual_input.message =
+        borsh::to_vec(&Message::ExecuteGraduationHook { creator_hint: None }).unwrap();
     assert!(matches!(
         handle(&manual_input),
         Err(Error::ManualPayoutStarted)
@@ -1003,21 +1022,29 @@ fn zero_manual_completion_blocks_hooks_but_a_zero_hook_can_finish_first() {
         borsh::from_slice::<AdapterMessage>(&response.sync_messages[0].message).unwrap(),
         AdapterMessage::Graduate {
             request: GraduationRequest {
-                dex_seed_reserve: 0,
-                collateral_amount: 0,
+                intent: GraduationIntent::CurveReserves {
+                    launch_tokens: 0,
+                    collateral: 0
+                },
                 ..
             }
         }
     ));
+    let AdapterMessage::Graduate { request } =
+        borsh::from_slice(&response.sync_messages[0].message).unwrap()
+    else {
+        panic!("graduate");
+    };
     input.pre_state = response.post_state.unwrap();
     input.from = Some(response.sync_messages[0].to);
     input.message = borsh::to_vec(&GraduationResult {
         factory: input.receiver.account_id,
+        request_hash: request.hash(),
     })
     .unwrap();
     let complete = handle(&input).unwrap();
     input.pre_state = complete.post_state.unwrap();
-    input.message = borsh::to_vec(&Message::ExecuteGraduationHook { now: 200 }).unwrap();
+    input.message = borsh::to_vec(&Message::ExecuteGraduationHook { creator_hint: None }).unwrap();
     assert!(matches!(handle(&input), Err(Error::AlreadySettled)));
 }
 
@@ -1788,7 +1815,7 @@ fn selected_ending_controls_allocation_proceeds_and_hook_payouts() {
                         creator: id(42),
                         now: 999,
                     },
-                    _ => Message::ExecuteGraduationHook { now: 999 },
+                    _ => Message::ExecuteGraduationHook { creator_hint: None },
                 };
                 input.message = borsh::to_vec(&command).unwrap();
                 let mut response = handle(&input).unwrap();
@@ -2015,7 +2042,7 @@ fn curve_settlement_entrypoints_keep_route_errors_and_hook_configuration_precede
             request.pre_state = borsh::to_vec(&state).unwrap().into();
             request.from = None;
             request.message = borsh::to_vec(&if hook {
-                Message::ExecuteGraduationHook { now: 200 }
+                Message::ExecuteGraduationHook { creator_hint: None }
             } else {
                 Message::WithdrawFactoryProceeds {
                     creator: id(42),

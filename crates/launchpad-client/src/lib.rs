@@ -596,39 +596,117 @@ pub fn build_claim_creator_allocation_invocation(
     .with_holding(creator, sale.collateral_definition)
 }
 
+/// Persisted terms select the adapter. A creator hint only admits the resolved payout accounts.
+#[derive(Debug, Clone, Copy)]
+pub enum GraduationTarget<'a> {
+    Curve {
+        sale: FactorySale,
+        state: &'a FactoryState,
+    },
+    Lbp {
+        sale: LbpSale,
+        state: &'a factory_core::LbpLaunchState,
+        creator_hint: AccountId,
+    },
+}
+
 /// The callback has a fixed typed context and no arbitrary account extension.
 pub fn build_graduation_invocation(
-    sale: FactorySale,
-    state: &FactoryState,
+    target: GraduationTarget<'_>,
     treasury: AccountId,
-    now: u64,
 ) -> Result<PublicInvocation<FactoryInstruction>> {
-    validate_factory_state(sale, state)?;
-    let hook = state
-        .graduation_hook
-        .as_ref()
-        .ok_or(ClientError::GraduationNotConfigured)?;
-    let a = factory_pool_addresses(sale);
-    let custody = factory_core::compute_graduation_pda(hook.program_id, a.factory);
-    let mut actors = factory_actors(sale, custody, Some(treasury));
-    actors.push(Actor::new(custody, hook.program_id));
-    Ok(admit_factory_accounts(
-        invocation(
-            Actor::new(a.factory, sale.factory_program_id),
-            actors,
-            vec![],
-            FactoryInstruction::ExecuteGraduationHook { now },
-        ),
-        sale,
-    )
-    .with_pda(
+    let (mut call, factory, hook, definition, collateral) = match target {
+        GraduationTarget::Curve { sale, state } => {
+            validate_factory_state(sale, state)?;
+            let hook = state
+                .graduation_hook
+                .as_ref()
+                .ok_or(ClientError::GraduationNotConfigured)?;
+            let a = factory_pool_addresses(sale);
+            let custody = factory_core::compute_graduation_pda(hook.program_id, a.factory);
+            let call = admit_factory_accounts(
+                invocation(
+                    Actor::new(a.factory, sale.factory_program_id),
+                    factory_actors(sale, custody, Some(treasury)),
+                    vec![],
+                    FactoryInstruction::ExecuteGraduationHook { creator_hint: None },
+                ),
+                sale,
+            );
+            (
+                call,
+                a.factory,
+                hook,
+                a.token_definition,
+                sale.collateral_definition,
+            )
+        }
+        GraduationTarget::Lbp {
+            sale,
+            state,
+            creator_hint,
+        } => {
+            validate_lbp_factory_state(sale, state)?;
+            let hook = state
+                .graduation_hook
+                .as_ref()
+                .ok_or(ClientError::GraduationNotConfigured)?;
+            let a = lbp_addresses(sale);
+            let mut call = lbp_setup_invocation(
+                sale,
+                creator_hint,
+                FactoryInstruction::ExecuteGraduationHook {
+                    creator_hint: Some(creator_hint),
+                },
+            );
+            call.signer_accounts.clear();
+            (
+                call,
+                a.factory,
+                hook,
+                a.token_definition,
+                sale.collateral_definition,
+            )
+        }
+    };
+    let custody = factory_core::compute_graduation_pda(hook.program_id, factory);
+    call.actors.push(Actor::new(custody, hook.program_id));
+    call.actors.push(token_actor(custody));
+    for owner in [custody, treasury] {
+        for token in [definition, collateral] {
+            call.actors
+                .push(token_actor(associated_token_account(owner, token)));
+            call = call.with_holding(owner, token);
+        }
+    }
+    let mut seen = std::collections::HashSet::new();
+    call.actors.retain(|actor| seen.insert(*actor));
+    Ok(call.with_pda(
         hook.program_id,
-        factory_core::compute_graduation_seed(a.factory),
-    )
-    .with_holding(custody, a.token_definition)
-    .with_holding(custody, sale.collateral_definition)
-    .with_holding(treasury, a.token_definition)
-    .with_holding(treasury, sale.collateral_definition))
+        factory_core::compute_graduation_seed(factory),
+    ))
+}
+
+fn validate_lbp_factory_state(sale: LbpSale, state: &factory_core::LbpLaunchState) -> Result<()> {
+    let a = lbp_addresses(sale);
+    if state.namespace != sale.namespace
+        || state.launch_salt != sale.launch_salt
+        || state.namespace_program_id != sale.namespace_program_id
+        || state.lbp_program_id != sale.lbp_program_id
+        || state.collateral_definition_id != sale.collateral_definition
+        || state.token_definition_id != a.token_definition
+        || state.creator_escrow_id != a.creator_escrow
+        || state.pool_id != a.pool
+        || state.creator_role_id
+            != factory_core::compute_creator_role_pda(
+                sale.namespace,
+                sale.factory_program_id,
+                sale.launch_salt,
+            )
+    {
+        return Err(ClientError::FactorySaleMismatch);
+    }
+    Ok(())
 }
 
 fn trade_invocation(

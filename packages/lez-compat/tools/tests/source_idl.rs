@@ -170,3 +170,115 @@ fn source_idl_does_not_assign_wire_tags_to_unencoded_errors() {
     let idl: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert!(idl["modules"]["sale"].get("Error").is_none());
 }
+
+#[test]
+fn application_settlement_schema_links_pool_receipts_and_shared_rules() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+    let output = Command::new(env!("CARGO_BIN_EXE_lez-compat-tools"))
+        .current_dir(root)
+        .args([
+            "idl-source",
+            "eligibility_policy=crates/eligibility-policy/src/lib.rs",
+            "sale_policy=crates/sale-policy/src/lib.rs",
+            "controls=crates/sale-policy/src/controls.rs",
+            "settlement=crates/sale-policy/src/settlement.rs",
+            "terms=crates/sale-policy/src/terms.rs",
+            "curve=crates/curve-core/src/lib.rs",
+            "pool=crates/pool/src/lib.rs",
+            "factory=crates/factory-core/src/lib.rs",
+            "lbp_setup=crates/factory-core/src/lbp_setup.rs",
+            "hook=crates/factory-core/src/hook.rs",
+            "lbp=crates/lbp-core/src/lib.rs",
+            "lbp_settlement=crates/lbp-core/src/settlement.rs",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let idl: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    for (module, dependency) in [
+        ("factory", "lbp"),
+        ("lbp_setup", "factory"),
+        ("lbp_setup", "lbp"),
+        ("lbp", "lbp_settlement"),
+        ("lbp", "sale_policy"),
+        ("sale_policy", "settlement"),
+    ] {
+        assert!(
+            idl["imports"][module]
+                .as_array()
+                .unwrap()
+                .contains(&serde_json::json!(dependency)),
+            "missing schema dependency {module} -> {dependency}"
+        );
+    }
+    assert_eq!(idl["imports"]["lbp_settlement"], serde_json::json!(["lbp"]));
+    assert!(
+        !idl["imports"]["lbp"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!("settlement"))
+    );
+    for name in [
+        "SettlementReceipt",
+        "SettlementReply",
+        "AwaitFactoryFinalize",
+    ] {
+        assert!(idl["modules"]["lbp_settlement"].get(name).is_some());
+        assert!(idl["modules"]["settlement"].get(name).is_none());
+    }
+    assert!(
+        idl["modules"]["settlement"]
+            .get("SettlementAmounts")
+            .is_some()
+    );
+    assert!(idl["modules"]["lbp"].get("PoolAccount").is_some());
+    for (name, field, field_type) in [
+        ("SettlementReceipt", "amounts", "SettlementAmounts"),
+        ("SettlementReceipt", "route", "SettlementRoute"),
+        ("SettlementReceipt", "progress", "SettlementProgress"),
+        ("AwaitFactoryFinalize", "state", "PoolAccount"),
+        ("AwaitFactoryFinalize", "receipt", "SettlementReceipt"),
+    ] {
+        assert!(
+            idl["modules"]["lbp_settlement"][name]["fields"]
+                .as_array()
+                .unwrap()
+                .contains(&serde_json::json!({"name": field, "type": field_type}))
+        );
+    }
+}
+
+#[test]
+fn compatibility_idl_exposes_resolution_without_private_role_state() {
+    let output = Command::new(env!("CARGO_BIN_EXE_lez-compat-tools"))
+        .arg("idl")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let idl: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let authority = &idl["modules"]["authority"];
+    let variants = authority["Message"]["variants"].as_array().unwrap();
+    assert_eq!(variants.len(), 14);
+    assert_eq!(variants[12]["name"], "BootstrapTransferOnly");
+    assert_eq!(variants[12]["tag"], 12);
+    assert_eq!(
+        variants[13],
+        serde_json::json!({"tag": 13, "name": "Resolve", "fields": []})
+    );
+    assert_eq!(
+        authority["CurrentAuthority"]["fields"],
+        serde_json::json!([
+            {"name": "role", "type": "AccountId"},
+            {"name": "authority", "type": "AccountId"}
+        ])
+    );
+    assert!(authority.get("Role").is_none());
+}

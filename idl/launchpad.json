@@ -10,6 +10,7 @@
       "curve",
       "eligibility_policy",
       "hook",
+      "lbp",
       "lbp_setup"
     ],
     "hook": [
@@ -17,7 +18,11 @@
     ],
     "lbp": [
       "curve",
+      "lbp_settlement",
       "sale_policy"
+    ],
+    "lbp_settlement": [
+      "lbp"
     ],
     "lbp_setup": [
       "curve",
@@ -827,8 +832,8 @@
           {
             "fields": [
               {
-                "name": "now",
-                "type": "u64"
+                "name": "creator_hint",
+                "type": "Option<AccountId>"
               }
             ],
             "name": "ExecuteGraduationHook",
@@ -1074,8 +1079,8 @@
                 "type": "[u8;32]"
               },
               {
-                "name": "ready",
-                "type": "bool"
+                "name": "accepted_intent",
+                "type": "Option<GraduationIntentKind>"
               }
             ],
             "name": "Initialize",
@@ -1105,8 +1110,8 @@
             "type": "Actor"
           },
           {
-            "name": "ready",
-            "type": "bool"
+            "name": "accepted_intent",
+            "type": "Option<GraduationIntentKind>"
           },
           {
             "name": "receipt",
@@ -1115,6 +1120,63 @@
           {
             "name": "pending",
             "type": "Option<(GraduationRequest,u8)>"
+          }
+        ]
+      },
+      "GraduationIntent": {
+        "variants": [
+          {
+            "fields": [
+              {
+                "name": "launch_tokens",
+                "type": "u128"
+              },
+              {
+                "name": "collateral",
+                "type": "u128"
+              }
+            ],
+            "name": "CurveReserves",
+            "tag": 0
+          },
+          {
+            "fields": [
+              {
+                "name": "collateral",
+                "type": "u128"
+              }
+            ],
+            "name": "FixedPriceProceeds",
+            "tag": 1
+          },
+          {
+            "fields": [
+              {
+                "name": "collateral",
+                "type": "u128"
+              }
+            ],
+            "name": "WeightedBuyerProceeds",
+            "tag": 2
+          }
+        ]
+      },
+      "GraduationIntentKind": {
+        "variants": [
+          {
+            "fields": [],
+            "name": "CurveReserves",
+            "tag": 0
+          },
+          {
+            "fields": [],
+            "name": "FixedPriceProceeds",
+            "tag": 1
+          },
+          {
+            "fields": [],
+            "name": "WeightedBuyerProceeds",
+            "tag": 2
           }
         ]
       },
@@ -1141,12 +1203,8 @@
             "type": "AccountId"
           },
           {
-            "name": "dex_seed_reserve",
-            "type": "u128"
-          },
-          {
-            "name": "collateral_amount",
-            "type": "u128"
+            "name": "intent",
+            "type": "GraduationIntent"
           },
           {
             "name": "configuration",
@@ -1159,6 +1217,10 @@
           {
             "name": "factory",
             "type": "AccountId"
+          },
+          {
+            "name": "request_hash",
+            "type": "[u8;32]"
           }
         ]
       }
@@ -1203,6 +1265,10 @@
           {
             "name": "ending_policy",
             "type": "EndingPolicy"
+          },
+          {
+            "name": "graduation_adapter",
+            "type": "Option<Actor>"
           },
           {
             "name": "namespace",
@@ -1438,6 +1504,34 @@
             ],
             "name": "SetPaused",
             "tag": 15
+          },
+          {
+            "fields": [
+              {
+                "name": "route",
+                "type": "SettlementRoute"
+              },
+              {
+                "name": "creator",
+                "type": "AccountId"
+              },
+              {
+                "name": "adapter",
+                "type": "Option<Actor>"
+              }
+            ],
+            "name": "Settle",
+            "tag": 16
+          },
+          {
+            "fields": [
+              {
+                "name": "receipt_hash",
+                "type": "[u8;32]"
+              }
+            ],
+            "name": "FinalizeSettlement",
+            "tag": 17
           }
         ]
       },
@@ -1466,6 +1560,10 @@
           {
             "name": "ending_policy",
             "type": "EndingPolicy"
+          },
+          {
+            "name": "graduation_adapter",
+            "type": "Option<Actor>"
           },
           {
             "name": "mode",
@@ -1544,6 +1642,10 @@
             "type": "SettlementProgress"
           },
           {
+            "name": "seed_returned",
+            "type": "bool"
+          },
+          {
             "name": "pending",
             "type": "Option<Pending>"
           }
@@ -1601,6 +1703,10 @@
           {
             "name": "ending_policy",
             "type": "EndingPolicy"
+          },
+          {
+            "name": "graduation_adapter",
+            "type": "Option<Actor>"
           },
           {
             "name": "namespace",
@@ -1661,6 +1767,96 @@
         ]
       }
     },
+    "lbp_settlement": {
+      "AwaitFactoryFinalize": {
+        "fields": [
+          {
+            "name": "tag",
+            "type": "[u8;8]"
+          },
+          {
+            "name": "state",
+            "type": "PoolAccount"
+          },
+          {
+            "name": "receipt",
+            "type": "SettlementReceipt"
+          },
+          {
+            "name": "receipt_hash",
+            "type": "[u8;32]"
+          },
+          {
+            "name": "expiry",
+            "type": "Option<u64>"
+          }
+        ]
+      },
+      "SettlementReceipt": {
+        "fields": [
+          {
+            "name": "factory",
+            "type": "Actor"
+          },
+          {
+            "name": "pool",
+            "type": "Actor"
+          },
+          {
+            "name": "route",
+            "type": "SettlementRoute"
+          },
+          {
+            "name": "creator",
+            "type": "AccountId"
+          },
+          {
+            "name": "adapter",
+            "type": "Option<Actor>"
+          },
+          {
+            "name": "amounts",
+            "type": "SettlementAmounts"
+          },
+          {
+            "name": "seed_payment",
+            "type": "u128"
+          },
+          {
+            "name": "progress",
+            "type": "SettlementProgress"
+          }
+        ]
+      },
+      "SettlementReply": {
+        "variants": [
+          {
+            "fields": [
+              {
+                "name": "receipt",
+                "type": "SettlementReceipt"
+              }
+            ],
+            "name": "Applied",
+            "tag": 0
+          },
+          {
+            "fields": [
+              {
+                "name": "receipt_hash",
+                "type": "[u8;32]"
+              },
+              {
+                "name": "progress",
+                "type": "SettlementProgress"
+              }
+            ],
+            "name": "Completed",
+            "tag": 1
+          }
+        ]
+      }
+    },
     "lbp_setup": {
       "FixedPriceInputs": {
         "fields": [
@@ -1675,6 +1871,10 @@
           {
             "name": "ending_policy",
             "type": "EndingPolicy"
+          },
+          {
+            "name": "graduation_hook",
+            "type": "Option<GraduationHook>"
           },
           {
             "name": "namespace",
@@ -1777,6 +1977,10 @@
             "type": "EndingPolicy"
           },
           {
+            "name": "graduation_hook",
+            "type": "Option<GraduationHook>"
+          },
+          {
             "name": "format",
             "type": "[u8;8]"
           },
@@ -1795,6 +1999,10 @@
           {
             "name": "creation_stage",
             "type": "LbpCreationStage"
+          },
+          {
+            "name": "settlement_progress",
+            "type": "SettlementProgress"
           },
           {
             "name": "namespace",
@@ -1871,6 +2079,84 @@
           {
             "name": "pending",
             "type": "Option<Pending>"
+          },
+          {
+            "name": "settlement_pending",
+            "type": "Option<LbpSettlementPhase>"
+          }
+        ]
+      },
+      "LbpSettlementPhase": {
+        "variants": [
+          {
+            "fields": [
+              {
+                "name": "pool",
+                "type": "lbp::PoolAccount"
+              },
+              {
+                "name": "creator_hint",
+                "type": "AccountId"
+              },
+              {
+                "name": "step",
+                "type": "u8"
+              }
+            ],
+            "name": "AdapterHoldings",
+            "tag": 0
+          },
+          {
+            "fields": [
+              {
+                "name": "pool",
+                "type": "lbp::PoolAccount"
+              },
+              {
+                "name": "creator_hint",
+                "type": "AccountId"
+              }
+            ],
+            "name": "Creator",
+            "tag": 1
+          },
+          {
+            "fields": [
+              {
+                "name": "receipt",
+                "type": "SettlementReceipt"
+              }
+            ],
+            "name": "PoolApplied",
+            "tag": 2
+          },
+          {
+            "fields": [
+              {
+                "name": "receipt",
+                "type": "SettlementReceipt"
+              },
+              {
+                "name": "request_hash",
+                "type": "[u8;32]"
+              }
+            ],
+            "name": "AdapterResult",
+            "tag": 3
+          },
+          {
+            "fields": [
+              {
+                "name": "receipt_hash",
+                "type": "[u8;32]"
+              },
+              {
+                "name": "progress",
+                "type": "SettlementProgress"
+              }
+            ],
+            "name": "PoolCompleted",
+            "tag": 4
           }
         ]
       },
@@ -1938,6 +2224,10 @@
           {
             "name": "ending_policy",
             "type": "EndingPolicy"
+          },
+          {
+            "name": "graduation_hook",
+            "type": "Option<GraduationHook>"
           },
           {
             "name": "namespace",

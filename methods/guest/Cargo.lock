@@ -1159,6 +1159,7 @@ dependencies = [
 name = "launchpad_programs"
 version = "0.1.0"
 dependencies = [
+ "borsh",
  "curve-core",
  "factory-core",
  "lbp-core",
@@ -1186,6 +1187,7 @@ dependencies = [
  "integer-math",
  "lee_core",
  "lez-compat-core",
+ "risc0-zkvm",
  "sale-policy",
  "serde",
  "weighted-math-core",

@@ -19,6 +19,7 @@ fn inputs() -> WeightedInputs {
         buy_policy: curve_core::BuyPolicy::Open,
         pause_policy: curve_core::PausePolicy::AuthorityControlled,
         ending_policy: factory_core::EndingPolicy::Scheduled,
+        graduation_hook: None,
         namespace: id(40),
         launch_salt: [3; 32],
         name: "Weighted".into(),
@@ -696,13 +697,25 @@ fn scheduled_weighted_allocation_keeps_deadline_and_settlement_delegates_to_pool
     request.message =
         borsh::to_vec(&Message::WithdrawWeightedProceeds { creator: id(42) }).unwrap();
     let response = handle(&request).unwrap();
-    let response = handle(&weighted_authorized(&request, &response)).unwrap();
-    // The bound pool checks the selected close before settlement effects.
-    assert_eq!(response.validity.timestamps.start(), None);
-    assert_eq!(response.sync_messages.len(), 1);
+    request = weighted_authorized(&request, &response);
+    let response = handle(&request).unwrap();
     assert_eq!(
         borsh::from_slice::<lbp_core::Message>(&response.sync_messages[0].message).unwrap(),
-        lbp_core::Message::SettleWeighted { creator: id(42) }
+        lbp_core::Message::ReadState
+    );
+    request = reply(&request, &response, borsh::to_vec(&pool).unwrap());
+    let response = handle(&request).unwrap();
+    assert_eq!(response.validity.timestamps.start(), Some(300_000));
+    assert!(!response.validity.timestamps.is_valid_for(299_999));
+    assert!(response.validity.timestamps.is_valid_for(300_000));
+    assert_eq!(response.sync_messages.len(), 2);
+    assert_eq!(
+        borsh::from_slice::<lbp_core::Message>(&response.sync_messages[1].message).unwrap(),
+        lbp_core::Message::Settle {
+            route: factory_core::SettlementRoute::Manual,
+            creator: id(42),
+            adapter: None
+        }
     );
 }
 
@@ -732,6 +745,283 @@ fn weighted_malformed_saved_policies_cannot_resume_or_forward_payouts() {
             borsh::to_vec(&Message::WithdrawWeightedProceeds { creator: id(42) }).unwrap();
         assert_eq!(handle(&next).err(), Some(Error::InvalidState));
     }
+}
+
+fn weighted_callback<T: borsh::BorshSerialize>(
+    input: &ReceiveInput,
+    response: &Response,
+    message: &T,
+) -> ReceiveInput {
+    ReceiveInput {
+        receiver: input.receiver,
+        from: Some(response.sync_messages.last().unwrap().to),
+        is_authorized: false,
+        pre_state: response.post_state.clone().unwrap(),
+        message: borsh::to_vec(message).unwrap(),
+    }
+}
+
+#[test]
+fn weighted_hook_saves_adapter_binding_and_keeps_seed_outside_the_intent() {
+    use factory_core::{
+        AdapterMessage, GraduationIntent, GraduationIntentKind, GraduationResult,
+        SettlementAmounts, SettlementProgress, SettlementReceipt, SettlementReply, SettlementRoute,
+    };
+    let mut terms = inputs();
+    terms.graduation_hook = Some(factory_core::GraduationHook {
+        program_id: id(9),
+        configuration: b"weighted".to_vec(),
+    });
+    let (mut input, prepared, bytes) = prepared_with_terms(terms.clone());
+    let mut state = LbpLaunchState::decode(prepared.post_state.as_ref().unwrap()).unwrap();
+    assert_eq!(state.graduation_hook, terms.graduation_hook);
+    let mut pool = lbp_core::PoolAccount::decode(&bytes).unwrap();
+    let adapter = Actor::new(
+        factory_core::compute_graduation_pda(id(9), input.receiver.account_id),
+        id(9),
+    );
+    assert_eq!(pool.graduation_adapter, Some(adapter));
+    let mut changed = pool.clone();
+    changed.graduation_adapter = None;
+    assert_eq!(
+        advance(
+            &input,
+            &prepared,
+            vec![
+                borsh::to_vec(&changed).unwrap(),
+                holding(state.pool_id, state.token_definition_id, 0),
+                holding(state.pool_id, state.collateral_definition_id, 0),
+                holding(id(42), state.collateral_definition_id, 100)
+            ]
+        )
+        .err(),
+        Some(Error::InvalidCustody)
+    );
+    state.creation_stage = LbpCreationStage::Complete;
+    pool.funded = true;
+    pool.remaining_inventory = 0;
+    pool.recorded_collateral = 125;
+    pool.accrued_fees = 3;
+    input.pre_state = borsh::to_vec(&state).unwrap().into();
+    input.from = None;
+    input.message = borsh::to_vec(&Message::ExecuteGraduationHook {
+        creator_hint: Some(id(99)),
+    })
+    .unwrap();
+    let response = handle(&input).unwrap();
+    input = reply(&input, &response, borsh::to_vec(&pool).unwrap());
+    let response = handle(&input).unwrap();
+    let adapter_state = factory_core::handle_adapter(&ReceiveInput {
+        receiver: adapter,
+        from: None,
+        is_authorized: false,
+        pre_state: vec![].into(),
+        message: borsh::to_vec(&AdapterMessage::Initialize {
+            factory_program_id: id(7),
+            namespace: state.namespace,
+            launch_salt: state.launch_salt,
+            accepted_intent: Some(GraduationIntentKind::WeightedBuyerProceeds),
+        })
+        .unwrap(),
+    })
+    .unwrap()
+    .post_state
+    .unwrap();
+    input = reply(&input, &response, adapter_state.to_vec());
+    let mut response = handle(&input).unwrap();
+    assert_eq!(response.validity.timestamps.start(), Some(300_000));
+    assert!(!response.validity.timestamps.is_valid_for(299_999));
+    for definition in [state.token_definition_id, state.collateral_definition_id] {
+        input = reply(
+            &input,
+            &response,
+            holding(adapter.account_id, definition, 0),
+        );
+        response = handle(&input).unwrap();
+    }
+    assert_eq!(
+        response.sync_messages[0].to,
+        Actor::new(
+            state.creator_role_id,
+            factory_core::AUTHORITY_PROGRAM_ACCOUNT_ID
+        )
+    );
+    input = weighted_callback(
+        &input,
+        &response,
+        &lez_compat_core::authority::CurrentAuthority {
+            role: state.creator_role_id,
+            authority: id(99),
+        },
+    );
+    let pending = handle(&input).unwrap();
+    assert_eq!(pending.validity.timestamps.start(), Some(300_000));
+    assert_eq!(
+        borsh::from_slice::<lbp_core::Message>(&pending.sync_messages.last().unwrap().message)
+            .unwrap(),
+        lbp_core::Message::Settle {
+            route: SettlementRoute::Graduation,
+            creator: id(99),
+            adapter: Some(adapter)
+        }
+    );
+    let receipt = SettlementReceipt {
+        factory: input.receiver,
+        pool: Actor::new(state.pool_id, state.lbp_program_id),
+        route: SettlementRoute::Graduation,
+        creator: id(99),
+        adapter: Some(adapter),
+        amounts: SettlementAmounts {
+            launch_tokens: 0,
+            collateral: 25,
+        },
+        seed_payment: 100,
+        progress: SettlementProgress::Graduated,
+    };
+    for case in 0..3 {
+        let mut changed = receipt.clone();
+        match case {
+            0 => changed.seed_payment = 0,
+            1 => changed.amounts.collateral = 125,
+            _ => changed.amounts.launch_tokens = 1,
+        }
+        let bad = weighted_callback(
+            &input,
+            &pending,
+            &SettlementReply::Applied { receipt: changed },
+        );
+        assert_eq!(handle(&bad).err(), Some(Error::InvalidState));
+    }
+    input = weighted_callback(
+        &input,
+        &pending,
+        &SettlementReply::Applied {
+            receipt: receipt.clone(),
+        },
+    );
+    let callback = handle(&input).unwrap();
+    assert!(callback.sync_messages[0].pda_seeds.is_empty());
+    let AdapterMessage::Graduate { request } =
+        borsh::from_slice(&callback.sync_messages[0].message).unwrap()
+    else {
+        panic!("graduate");
+    };
+    assert_eq!(
+        request.intent,
+        GraduationIntent::WeightedBuyerProceeds { collateral: 25 }
+    );
+    assert_eq!(
+        LbpLaunchState::decode(callback.post_state.as_ref().unwrap())
+            .unwrap()
+            .settlement_progress,
+        SettlementProgress::Unselected
+    );
+    input = weighted_callback(
+        &input,
+        &callback,
+        &GraduationResult {
+            factory: input.receiver.account_id,
+            request_hash: request.hash(),
+        },
+    );
+    let finalize = handle(&input).unwrap();
+    assert_eq!(
+        borsh::from_slice::<lbp_core::Message>(&finalize.sync_messages[0].message).unwrap(),
+        lbp_core::Message::FinalizeSettlement {
+            receipt_hash: receipt.hash()
+        }
+    );
+    input = weighted_callback(
+        &input,
+        &finalize,
+        &SettlementReply::Completed {
+            receipt_hash: receipt.hash(),
+            progress: receipt.progress,
+        },
+    );
+    let completed = handle(&input).unwrap();
+    assert_eq!(
+        LbpLaunchState::decode(completed.post_state.as_ref().unwrap())
+            .unwrap()
+            .settlement_progress,
+        SettlementProgress::Graduated
+    );
+}
+
+#[test]
+fn weighted_seed_only_manual_completion_is_final_and_acknowledged_once() {
+    use factory_core::{
+        SettlementAmounts, SettlementProgress, SettlementReceipt, SettlementReply, SettlementRoute,
+    };
+    let (mut input, prepared, bytes) = prepared(CreatorAllocationRelease::AfterEnd);
+    let mut state = LbpLaunchState::decode(prepared.post_state.as_ref().unwrap()).unwrap();
+    state.creation_stage = LbpCreationStage::Complete;
+    let mut pool = lbp_core::PoolAccount::decode(&bytes).unwrap();
+    pool.funded = true;
+    pool.recorded_collateral = 100;
+    input.pre_state = borsh::to_vec(&state).unwrap().into();
+    input.from = None;
+    input.message = borsh::to_vec(&Message::WithdrawWeightedProceeds { creator: id(42) }).unwrap();
+    let response = handle(&input).unwrap();
+    input = weighted_authorized(&input, &response);
+    let response = handle(&input).unwrap();
+    input = reply(&input, &response, borsh::to_vec(&pool).unwrap());
+    let pending = handle(&input).unwrap();
+    assert_eq!(pending.validity.timestamps.start(), Some(300_000));
+    let receipt = SettlementReceipt {
+        factory: input.receiver,
+        pool: Actor::new(state.pool_id, state.lbp_program_id),
+        route: SettlementRoute::Manual,
+        creator: id(42),
+        adapter: None,
+        amounts: SettlementAmounts {
+            launch_tokens: 0,
+            collateral: 0,
+        },
+        seed_payment: 100,
+        progress: SettlementProgress::ManualComplete,
+    };
+    input = weighted_callback(
+        &input,
+        &pending,
+        &SettlementReply::Applied {
+            receipt: receipt.clone(),
+        },
+    );
+    let finalize = handle(&input).unwrap();
+    assert_eq!(
+        LbpLaunchState::decode(finalize.post_state.as_ref().unwrap())
+            .unwrap()
+            .settlement_progress,
+        SettlementProgress::Unselected
+    );
+    input = weighted_callback(
+        &input,
+        &finalize,
+        &SettlementReply::Completed {
+            receipt_hash: receipt.hash(),
+            progress: receipt.progress,
+        },
+    );
+    let completed = handle(&input).unwrap();
+    let state = LbpLaunchState::decode(completed.post_state.as_ref().unwrap()).unwrap();
+    assert_eq!(
+        state.settlement_progress,
+        SettlementProgress::ManualComplete
+    );
+    pool.settlement_progress = state.settlement_progress;
+    pool.seed_returned = true;
+    pool.recorded_collateral = 0;
+    input.pre_state = completed.post_state.unwrap();
+    input.from = None;
+    input.message = borsh::to_vec(&Message::WithdrawWeightedProceeds { creator: id(42) }).unwrap();
+    let response = handle(&input).unwrap();
+    input = weighted_authorized(&input, &response);
+    let response = handle(&input).unwrap();
+    input = reply(&input, &response, borsh::to_vec(&pool).unwrap());
+    let noop = handle(&input).unwrap();
+    assert!(noop.sync_messages.is_empty());
+    assert_eq!(noop.validity.timestamps.start(), Some(300_000));
 }
 
 #[test]

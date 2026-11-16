@@ -273,6 +273,7 @@ fn fixed_creation() -> factory_core::FixedPriceInputs {
         }),
         pause_policy: curve_core::PausePolicy::Disabled,
         ending_policy: curve_core::EndingPolicy::Either,
+        graduation_hook: None,
         namespace: sale.namespace,
         launch_salt: sale.launch_salt,
         name: "Sale".into(),
@@ -436,6 +437,7 @@ fn weighted_creation() -> factory_core::WeightedInputs {
         buy_policy: fixed.buy_policy,
         pause_policy: curve_core::PausePolicy::AuthorityControlled,
         ending_policy: curve_core::EndingPolicy::Scheduled,
+        graduation_hook: None,
         namespace: fixed.namespace,
         launch_salt: fixed.launch_salt,
         name: fixed.name,
@@ -769,8 +771,14 @@ fn graduation_admits_adapter_custody_and_its_payout_holdings_without_authorizati
         program_id: adapter,
         configuration: vec![],
     });
-    let call =
-        super::build_graduation_invocation(sale(), &state, AccountId::new([10; 32]), 0).unwrap();
+    let call = super::build_graduation_invocation(
+        super::GraduationTarget::Curve {
+            sale: sale(),
+            state: &state,
+        },
+        AccountId::new([10; 32]),
+    )
+    .unwrap();
     let a = super::factory_pool_addresses(sale());
     let custody = factory_core::compute_graduation_pda(adapter, a.factory);
     for account in [
@@ -1324,8 +1332,14 @@ fn graduation_builder_uses_typed_callback_and_adapter_custody() {
         program_id: adapter,
         configuration: vec![7, 11],
     });
-    let call =
-        super::build_graduation_invocation(sale(), &state, AccountId::new([4; 32]), 0).unwrap();
+    let call = super::build_graduation_invocation(
+        super::GraduationTarget::Curve {
+            sale: sale(),
+            state: &state,
+        },
+        AccountId::new([4; 32]),
+    )
+    .unwrap();
     assert!(call.signer_accounts.is_empty());
     assert!(call.actors.contains(&Actor::new(
         factory_core::compute_graduation_pda(
@@ -1336,7 +1350,7 @@ fn graduation_builder_uses_typed_callback_and_adapter_custody() {
     )));
     assert_eq!(
         call.instruction,
-        factory_core::Message::ExecuteGraduationHook { now: 0 }
+        factory_core::Message::ExecuteGraduationHook { creator_hint: None }
     );
 }
 
@@ -1879,5 +1893,282 @@ fn loaded_factory_pool_matches_each_selected_ending() {
             super::validate_factory_pool(sale(), &state, &changed),
             Err(ClientError::FactorySaleMismatch)
         ));
+    }
+}
+
+fn valid_lbp_factory_state(weighted: bool) -> factory_core::LbpLaunchState {
+    let sale = lbp_sale();
+    let a = super::lbp_addresses(sale);
+    let mut bytes = Vec::new();
+    macro_rules! field {
+        ($value:expr) => {
+            bytes.extend(borsh::to_vec(&$value).unwrap());
+        };
+    }
+    field!(curve_core::BuyPolicy::Open);
+    field!(curve_core::PausePolicy::Disabled);
+    field!(if weighted {
+        curve_core::EndingPolicy::Scheduled
+    } else {
+        curve_core::EndingPolicy::Either
+    });
+    field!(Some(factory_core::GraduationHook {
+        program_id: AccountId::new([19; 32]),
+        configuration: vec![7, 11]
+    }));
+    field!(if weighted { *b"LZWGLAUN" } else { *b"LZFXLAUN" });
+    field!(4u16);
+    field!(factory_core::compute_creator_role_pda(
+        sale.namespace,
+        sale.factory_program_id,
+        sale.launch_salt
+    ));
+    field!(if weighted {
+        factory_core::LbpSetupMode::Weighted {
+            collateral_seed: 100,
+            token_weight_start: lbp_core::WEIGHT_TOTAL / 2 + 1,
+            token_weight_end: lbp_core::WEIGHT_TOTAL / 2 - 1,
+        }
+    } else {
+        factory_core::LbpSetupMode::FixedPrice
+    });
+    field!(factory_core::LbpCreationStage::Complete);
+    field!(lbp_core::SettlementProgress::Unselected);
+    field!(sale.namespace);
+    field!(sale.launch_salt);
+    field!(a.token_definition);
+    field!(sale.collateral_definition);
+    field!(a.creator_escrow);
+    field!(a.pool);
+    field!(sale.namespace_program_id);
+    field!(sale.lbp_program_id);
+    field!(800u128);
+    field!(200u128);
+    field!(1_000u128);
+    field!(if weighted {
+        lbp_core::FixedPrice {
+            collateral_units: 0,
+            token_units: 0,
+        }
+    } else {
+        lbp_core::FixedPrice {
+            collateral_units: 25,
+            token_units: 10,
+        }
+    });
+    field!(9u64);
+    field!(Some(100u64));
+    field!(factory_core::CreatorAllocationRelease::AfterEnd);
+    field!(false);
+    field!("Sale".to_owned());
+    field!("ipfs://sale".to_owned());
+    field!(None::<u8>);
+    field!(None::<u8>);
+    factory_core::LbpLaunchState::decode(&bytes).unwrap()
+}
+
+#[test]
+fn lbp_graduation_admits_setup_callback_and_custody_without_creator_authorization() {
+    let sale = lbp_sale();
+    let a = super::lbp_addresses(sale);
+    for weighted in [false, true] {
+        let state = valid_lbp_factory_state(weighted);
+        for creator_hint in [AccountId::new([21; 32]), AccountId::new([22; 32])] {
+            let treasury = AccountId::new([23; 32]);
+            let call = super::build_graduation_invocation(
+                super::GraduationTarget::Lbp {
+                    sale,
+                    state: &state,
+                    creator_hint,
+                },
+                treasury,
+            )
+            .unwrap();
+            assert_eq!(
+                call.destination,
+                Actor::new(a.factory, sale.factory_program_id)
+            );
+            assert!(call.signer_accounts.is_empty());
+            assert_eq!(
+                call.instruction,
+                factory_core::Message::ExecuteGraduationHook {
+                    creator_hint: Some(creator_hint)
+                }
+            );
+            assert!(
+                call.account_mentions()
+                    .iter()
+                    .all(|mention| !mention.authorizes)
+            );
+            let custody_program = state.graduation_hook.as_ref().unwrap().program_id;
+            let custody = factory_core::compute_graduation_pda(custody_program, a.factory);
+            for actor in [
+                Actor::new(
+                    state.creator_role_id,
+                    curve_core::AUTHORITY_PROGRAM_ACCOUNT_ID,
+                ),
+                Actor::new(creator_hint, curve_core::AUTHORITY_PROGRAM_ACCOUNT_ID),
+                Actor::new(a.factory, sale.lbp_program_id),
+                Actor::new(a.pool, sale.lbp_program_id),
+                Actor::new(custody, custody_program),
+                Actor::new(
+                    curve_core::compute_config_pda(sale.namespace, sale.namespace_program_id),
+                    sale.namespace_program_id,
+                ),
+                super::clock_actor(),
+                super::token_actor(a.token_definition),
+                super::token_actor(sale.collateral_definition),
+            ] {
+                assert!(call.actors.contains(&actor), "missing {actor:?}");
+            }
+            let mentions = call.account_mentions();
+            for owner in [
+                a.factory,
+                a.pool,
+                a.creator_escrow,
+                creator_hint,
+                custody,
+                treasury,
+            ] {
+                for definition in [a.token_definition, sale.collateral_definition] {
+                    let holding =
+                        super::token_actor(super::associated_token_account(owner, definition));
+                    assert!(mentions.iter().any(|m| m.actor() == holding
+                        && !m.authorizes
+                        && matches!(m.identity, wallet::AccountIdentity::PublicPda { .. })));
+                }
+            }
+            assert_eq!(
+                call.actors.len(),
+                call.actors
+                    .iter()
+                    .collect::<std::collections::HashSet<_>>()
+                    .len()
+            );
+        }
+    }
+}
+
+#[test]
+fn lbp_graduation_rejects_foreign_identity_and_requires_a_saved_hook() {
+    let sale = lbp_sale();
+    let hint = AccountId::new([21; 32]);
+    let treasury = AccountId::new([23; 32]);
+    for weighted in [false, true] {
+        let state = valid_lbp_factory_state(weighted);
+        for index in 0..9 {
+            let mut bad = state.clone();
+            let foreign = AccountId::new([99; 32]);
+            match index {
+                0 => bad.namespace = foreign,
+                1 => bad.launch_salt = [99; 32],
+                2 => bad.namespace_program_id = foreign,
+                3 => bad.lbp_program_id = foreign,
+                4 => bad.collateral_definition_id = foreign,
+                5 => bad.token_definition_id = foreign,
+                6 => bad.creator_escrow_id = foreign,
+                7 => bad.pool_id = foreign,
+                _ => bad.creator_role_id = foreign,
+            }
+            assert!(matches!(
+                super::build_graduation_invocation(
+                    super::GraduationTarget::Lbp {
+                        sale,
+                        state: &bad,
+                        creator_hint: hint,
+                    },
+                    treasury
+                ),
+                Err(ClientError::FactorySaleMismatch)
+            ));
+        }
+        let mut no_hook = state;
+        no_hook.graduation_hook = None;
+        assert!(matches!(
+            super::build_graduation_invocation(
+                super::GraduationTarget::Lbp {
+                    sale,
+                    state: &no_hook,
+                    creator_hint: hint,
+                },
+                treasury
+            ),
+            Err(ClientError::GraduationNotConfigured)
+        ));
+    }
+}
+
+#[test]
+fn typed_lbp_creation_keeps_the_complete_immutable_hook() {
+    let hook = factory_core::GraduationHook {
+        program_id: AccountId::new([19; 32]),
+        configuration: vec![3, 7, 11],
+    };
+    let mut fixed = fixed_creation();
+    fixed.graduation_hook = Some(hook.clone());
+    let fixed_call =
+        super::build_create_fixed_price_invocation(lbp_sale().factory_program_id, fixed.clone());
+    assert_eq!(
+        fixed_call.instruction,
+        factory_core::Message::CreateFixedPriceLbp { inputs: fixed }
+    );
+    let mut weighted = weighted_creation();
+    weighted.graduation_hook = Some(hook);
+    let weighted_call =
+        super::build_create_weighted_invocation(lbp_sale().factory_program_id, weighted.clone());
+    assert_eq!(
+        weighted_call.instruction,
+        factory_core::Message::CreateWeightedLbp { inputs: weighted }
+    );
+}
+
+#[test]
+fn curve_resume_rejects_hook_program_configuration_and_presence_changes_at_each_stage() {
+    let hook = factory_core::GraduationHook {
+        program_id: AccountId::new([19; 32]),
+        configuration: vec![3, 7],
+    };
+    for stage in [
+        CreationStage::Minted,
+        CreationStage::Allocated,
+        CreationStage::PoolPrepared,
+        CreationStage::Active,
+    ] {
+        let mut state = valid_factory_state(sale());
+        state.creation_stage = stage;
+        state.graduation_hook = Some(hook.clone());
+        let mut request = creation();
+        request.graduation_hook = Some(hook.clone());
+        assert!(
+            super::next_creation_invocation(
+                sale(),
+                AccountId::new([9; 32]),
+                request.clone(),
+                Some(&state)
+            )
+            .is_ok()
+        );
+        for changed in [
+            None,
+            Some(factory_core::GraduationHook {
+                program_id: AccountId::new([20; 32]),
+                ..hook.clone()
+            }),
+            Some(factory_core::GraduationHook {
+                configuration: vec![3, 8],
+                ..hook.clone()
+            }),
+        ] {
+            request.graduation_hook = changed;
+            assert!(matches!(
+                super::next_creation_invocation(
+                    sale(),
+                    AccountId::new([9; 32]),
+                    request.clone(),
+                    Some(&state)
+                ),
+                Err(ClientError::LaunchParametersMismatch)
+            ));
+        }
     }
 }

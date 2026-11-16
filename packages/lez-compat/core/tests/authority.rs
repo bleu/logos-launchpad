@@ -363,3 +363,222 @@ fn a_pda_approval_does_not_grant_its_seed_to_another_authority_program() {
     };
     assert!(authority::approve_pda(&input, PROGRAM).is_err());
 }
+
+fn resolve(state: ActorState) -> ReceiveInput {
+    let caller = Actor::new(AccountId::new([9; 32]), AccountId::new([7; 32]));
+    let request = ReceiveInput {
+        from: Some(caller),
+        ..input(ROLE, state, false, Message::Resolve)
+    };
+    let response = authority::handle(&request).unwrap();
+    assert!(response.post_state.is_none());
+    assert_eq!(response.sync_messages.len(), 1);
+    let callback = &response.sync_messages[0];
+    assert_eq!(callback.to, caller);
+    assert!(callback.pda_seeds.is_empty());
+    ReceiveInput {
+        receiver: callback.to,
+        from: Some(request.receiver),
+        is_authorized: false,
+        pre_state: ActorState::empty(),
+        message: callback.message.clone(),
+    }
+}
+
+#[test]
+fn unsigned_resolution_returns_the_current_holder_to_the_calling_actor() {
+    let expected = Actor::new(ROLE, PROGRAM);
+    assert_eq!(
+        authority::verify_resolved(&resolve(bootstrap()), expected),
+        Ok(ALICE)
+    );
+    let transferred = transfer_with_consent(bootstrap_with(Message::BootstrapTransferOnly {
+        authority: ALICE,
+    }));
+    let bob = AccountId::new([3; 32]);
+    assert_eq!(
+        authority::verify_resolved(&resolve(transferred), expected),
+        Ok(bob)
+    );
+}
+
+#[test]
+fn resolution_verifies_the_full_sender_and_payload_role() {
+    let expected = Actor::new(ROLE, PROGRAM);
+    let reply = resolve(bootstrap());
+    for sender in [
+        None,
+        Some(Actor::new(AccountId::new([5; 32]), PROGRAM)),
+        Some(Actor::new(ROLE, AccountId::new([6; 32]))),
+    ] {
+        assert_eq!(
+            authority::verify_resolved(
+                &ReceiveInput {
+                    from: sender,
+                    ..reply.clone()
+                },
+                expected
+            ),
+            Err(lez_compat_core::Error::Unauthorized)
+        );
+    }
+    let wrong_role = ReceiveInput {
+        message: borsh::to_vec(&authority::CurrentAuthority {
+            role: AccountId::new([5; 32]),
+            authority: ALICE,
+        })
+        .unwrap(),
+        ..reply
+    };
+    assert_eq!(
+        authority::verify_resolved(&wrong_role, expected),
+        Err(lez_compat_core::Error::Unauthorized)
+    );
+}
+
+#[test]
+fn resolution_rejects_zero_authority_and_malformed_replies() {
+    let expected = Actor::new(ROLE, PROGRAM);
+    let reply = resolve(bootstrap());
+    let zero = ReceiveInput {
+        message: borsh::to_vec(&authority::CurrentAuthority {
+            role: ROLE,
+            authority: AccountId::default(),
+        })
+        .unwrap(),
+        ..reply.clone()
+    };
+    assert_eq!(
+        authority::verify_resolved(&zero, expected),
+        Err(lez_compat_core::Error::Unauthorized)
+    );
+    let mut trailing = reply.message.clone();
+    trailing.push(0);
+    for message in [Vec::new(), reply.message[..63].to_vec(), trailing] {
+        assert_eq!(
+            authority::verify_resolved(
+                &ReceiveInput {
+                    message,
+                    ..reply.clone()
+                },
+                expected
+            ),
+            Err(lez_compat_core::Error::InvalidMessage)
+        );
+    }
+}
+
+#[test]
+fn resolution_requires_a_caller_and_valid_role_state() {
+    let request = input(ROLE, bootstrap(), false, Message::Resolve);
+    assert!(matches!(
+        authority::handle(&request),
+        Err(lez_compat_core::Error::Unauthorized)
+    ));
+    let caller = Actor::new(AccountId::new([9; 32]), PROGRAM);
+    let malformed = ReceiveInput {
+        from: Some(caller),
+        ..input(ROLE, ActorState::empty(), false, Message::Resolve)
+    };
+    assert!(matches!(
+        authority::handle(&malformed),
+        Err(lez_compat_core::Error::InvalidState)
+    ));
+    let creation = input(
+        ROLE,
+        ActorState::empty(),
+        true,
+        Message::Bootstrap { authority: ALICE },
+    );
+    let pending = authority::handle(&creation).unwrap().post_state.unwrap();
+    let request = ReceiveInput {
+        pre_state: pending,
+        ..malformed
+    };
+    assert!(matches!(
+        authority::handle(&request),
+        Err(lez_compat_core::Error::Renounced)
+    ));
+}
+
+#[test]
+fn a_renounced_role_cannot_resolve_a_holder() {
+    let request = input(
+        ALICE,
+        ActorState::empty(),
+        true,
+        Message::Renounce { role: ROLE },
+    );
+    let forwarded = authority::handle(&request).unwrap().sync_messages.remove(0);
+    let state = authority::handle(&ReceiveInput {
+        receiver: forwarded.to,
+        from: Some(request.receiver),
+        is_authorized: false,
+        pre_state: bootstrap(),
+        message: forwarded.message,
+    })
+    .unwrap()
+    .post_state
+    .unwrap();
+    let request = ReceiveInput {
+        from: Some(Actor::new(ALICE, PROGRAM)),
+        ..input(ROLE, state, false, Message::Resolve)
+    };
+    assert!(matches!(
+        authority::handle(&request),
+        Err(lez_compat_core::Error::Renounced)
+    ));
+}
+
+#[test]
+fn resolving_a_holder_adds_no_action_rights() {
+    let state = bootstrap();
+    let reply = resolve(state.clone());
+    assert_eq!(
+        authority::verify_resolved(&reply, Actor::new(ROLE, PROGRAM)),
+        Ok(ALICE)
+    );
+    let outsider = reply.receiver.account_id;
+    let callback = reply.receiver;
+    for message in [
+        Message::Check {
+            role: ROLE,
+            callback,
+        },
+        Message::Transfer {
+            role: ROLE,
+            successor: outsider,
+        },
+        Message::Renounce { role: ROLE },
+    ] {
+        assert!(matches!(
+            authority::handle(&input(ALICE, ActorState::empty(), false, message)),
+            Err(lez_compat_core::Error::Unauthorized)
+        ));
+    }
+    assert!(matches!(
+        check(state.clone(), outsider),
+        Err(lez_compat_core::Error::Unauthorized)
+    ));
+    for message in [
+        Message::Assert {
+            authority: ALICE,
+            callback,
+        },
+        Message::Propose {
+            authority: ALICE,
+            successor: outsider,
+        },
+        Message::Revoke { authority: ALICE },
+    ] {
+        let request = ReceiveInput {
+            from: Some(reply.receiver),
+            ..input(ROLE, state.clone(), false, message)
+        };
+        assert!(matches!(
+            authority::handle(&request),
+            Err(lez_compat_core::Error::Unauthorized)
+        ));
+    }
+    assert!(check(state, ALICE).is_ok());
+}
