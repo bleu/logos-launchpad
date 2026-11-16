@@ -1,6 +1,6 @@
 # ADR 0031: Shared launch setup and reusable pool policies
 
-Status: Shared setup and public buy eligibility implemented. Selectable ending and fee policies and cross-engine graduation remain incomplete. Private routes, real proofs and deployment readiness pending.
+Status: Shared setup, public buy eligibility and fee arithmetic implemented. Selectable ending and fee policies and cross-engine graduation remain incomplete. Private routes, real proofs and deployment readiness pending.
 
 Date: 2026-10-13; policy amendment: 2026-11-09
 
@@ -14,7 +14,7 @@ This record partially supersedes [ADR 0005](0005-mechanism-boundaries.md). It fi
 
 Use the existing launch factory for common new-token creation, allocation, namespace binding and setup validation when the rules are the same. Keep typed bonding-curve, fixed-price sale, and weighted-sale inputs separate.
 
-The current programs keep bonding-curve, fixed-price and weighted pricing, custody and lifecycle implementations separate. Shared public buy eligibility is implemented under [ADR 0021](0021-modes-and-open-limits.md). Independently selectable ending and fee policies remain the target described below.
+The current programs keep bonding-curve, fixed-price and weighted pricing, custody and lifecycle implementations separate. Shared public buy eligibility is implemented under [ADR 0021](0021-modes-and-open-limits.md). `crates/sale-policy` shares checked fee splitting and exact-output gross-up; callers retain each engine's fee incidence and accounting. Fixed-price arithmetic is separate from the trade handler, as curve and weighted arithmetic already are. Independently selectable ending and fee policies remain the target described below.
 
 Weighted creation uses four stages: mint the exact supply and create the creator role; split sale inventory and creator allocation; prepare the weighted pool and vaults; fund and activate the pool. Keep typed creation messages separate. Use one setup record with an explicit sale mode. The weighted-setup change kept the existing fixed-price message tags and state bytes unchanged. The later shared eligibility change adds policy fields and changes the state encoding.
 

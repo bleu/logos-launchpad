@@ -6,10 +6,12 @@ members = [
     "crates/curve-math",
     "crates/eligibility-policy",
     "crates/factory-core",
+    "crates/integer-math",
     "crates/lbp-core",
     "crates/launchpad-client",
     "crates/pool",
     "crates/private-flow-core",
+    "crates/sale-policy",
     "cli",
 ]
 default-members = [
@@ -17,9 +19,11 @@ default-members = [
     "crates/curve-math",
     "crates/eligibility-policy",
     "crates/factory-core",
+    "crates/integer-math",
     "crates/lbp-core",
     "crates/pool",
     "crates/private-flow-core",
+    "crates/sale-policy",
 ]
 exclude = [
     "methods",
@@ -46,6 +50,8 @@ lez-compat-core = { path = "packages/lez-compat/core" }
 
 curve-math = { path = "crates/curve-math" }
 eligibility-policy = { path = "crates/eligibility-policy" }
+integer-math = { path = "crates/integer-math" }
+sale-policy = { path = "crates/sale-policy" }
 weighted-math-core = { path = "packages/weighted-math/crates/weighted-math-core" }
 pool = { path = "crates/pool" }
 curve-core = { path = "crates/curve-core" }

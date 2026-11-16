@@ -6,6 +6,7 @@ use lee_core::{
     program::{ReceiveInput, Response, StateReply, SyncMessage},
 };
 use lez_compat_core::token::{self, TokenKind, TokenState};
+use sale_policy::{FeeError, FeeRate};
 use weighted_math_core::{QuoteError, try_calc_in_given_out, try_calc_out_given_in};
 
 #[derive(BorshSerialize, BorshDeserialize)]
@@ -184,8 +185,11 @@ impl Pending {
             return Err(Error::Underfunded);
         }
 
-        let fee = mul_div(amount_in, u128::from(config.protocol_fee_bps), 10_000, true)?;
-        let net_in = amount_in.checked_sub(fee).ok_or(Error::Arithmetic)?;
+        let collateral = FeeRate::new(config.protocol_fee_bps)
+            .and_then(|rate| rate.split(amount_in))
+            .map_err(fee_error)?;
+        let fee = collateral.fee;
+        let net_in = collateral.net;
         if matches!(self.state.mode, PoolMode::FixedPrice) && net_in == 0 {
             return Err(Error::InvalidAmount);
         }
@@ -313,17 +317,14 @@ fn fixed_price_amounts(
             min_amount_out,
             ..
         } => {
-            let fee = mul_div(*amount_in, u128::from(fee_bps), 10_000, true)?;
-            let net = amount_in.checked_sub(fee).ok_or(Error::Arithmetic)?;
+            let net = FeeRate::new(fee_bps)
+                .and_then(|rate| rate.split(*amount_in))
+                .map_err(fee_error)?
+                .net;
             if net == 0 {
                 return Err(Error::InvalidAmount);
             }
-            let out = mul_div(
-                net,
-                state.price.token_units,
-                state.price.collateral_units,
-                false,
-            )?;
+            let out = state.price.amount_out(net)?;
             if out < *min_amount_out {
                 return Err(Error::Slippage);
             }
@@ -334,13 +335,11 @@ fn fixed_price_amounts(
             max_amount_in,
             ..
         } => {
-            let input = mul_div(
-                *amount_out,
-                state.price.collateral_units,
-                state.price.token_units,
-                true,
-            )?;
-            let input = mul_div(input, 10_000, 10_000 - u128::from(fee_bps), true)?;
+            let input = state.price.amount_in(*amount_out)?;
+            let input = FeeRate::new(fee_bps)
+                .and_then(|rate| rate.gross_up(input))
+                .map_err(fee_error)?
+                .gross;
             if input > *max_amount_in {
                 return Err(Error::Slippage);
             }
@@ -398,6 +397,14 @@ fn weighted_amounts(
             Ok((amount_in, *amount_out))
         }
         _ => Err(Error::InvalidMessage),
+    }
+}
+
+fn fee_error(error: FeeError) -> Error {
+    match error {
+        FeeError::RateAboveDenominator => Error::InvalidFee,
+        FeeError::InputConsumedByFees => Error::InvalidAmount,
+        FeeError::Arithmetic => Error::Arithmetic,
     }
 }
 
@@ -580,24 +587,6 @@ fn payout(
             state.factory_owner,
         )]),
     )
-}
-
-fn mul_div(value: u128, multiplier: u128, divisor: u128, ceil: bool) -> Result<u128, Error> {
-    if divisor == 0 {
-        return Err(Error::InvalidTerms);
-    }
-    let whole = (value / divisor)
-        .checked_mul(multiplier)
-        .ok_or(Error::Arithmetic)?;
-    let numerator = (value % divisor)
-        .checked_mul(multiplier)
-        .ok_or(Error::Arithmetic)?;
-    let floor = whole
-        .checked_add(numerator / divisor)
-        .ok_or(Error::Arithmetic)?;
-    floor
-        .checked_add(u128::from(ceil && numerator % divisor != 0))
-        .ok_or(Error::Arithmetic)
 }
 
 /// Validate admission bounds. Weighted pricing time arrives later in a clock reply.

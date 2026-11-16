@@ -592,6 +592,9 @@ dependencies = [
 [[package]]
 name = "curve-math"
 version = "0.1.0"
+dependencies = [
+ "integer-math",
+]
 
 [[package]]
 name = "darling"
@@ -1040,6 +1043,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "integer-math"
+version = "0.1.0"
+
+[[package]]
 name = "itertools"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1175,8 +1182,10 @@ dependencies = [
  "borsh",
  "clock_core",
  "curve-core",
+ "integer-math",
  "lee_core",
  "lez-compat-core",
+ "sale-policy",
  "serde",
  "weighted-math-core",
 ]
@@ -1396,6 +1405,7 @@ version = "0.1.0"
 dependencies = [
  "borsh",
  "curve-math",
+ "sale-policy",
 ]
 
 [[package]]
@@ -1808,6 +1818,13 @@ name = "rustversion"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
+
+[[package]]
+name = "sale-policy"
+version = "0.1.0"
+dependencies = [
+ "integer-math",
+]
 
 [[package]]
 name = "schemars"
