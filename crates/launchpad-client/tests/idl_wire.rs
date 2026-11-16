@@ -1232,6 +1232,7 @@ fn weighted_factory_messages_keep_distinct_tags_and_normalized_weights() {
         buy_policy: curve_core::BuyPolicy::Open,
         pause_policy: curve_core::PausePolicy::AuthorityControlled,
         ending_policy: curve_core::EndingPolicy::Scheduled,
+        trade_mode: factory_core::TradeMode::BuyOnly,
         graduation_hook: None,
         namespace: creator,
         launch_salt: [6; 32],
@@ -1253,7 +1254,7 @@ fn weighted_factory_messages_keep_distinct_tags_and_normalized_weights() {
     let message = factory_core::Message::CreateWeightedLbp {
         inputs: inputs.clone(),
     };
-    let mut expected = vec![8, 0, 1, 1, 0];
+    let mut expected = vec![8, 0, 1, 1, 0, 0];
     expected.extend_from_slice(creator.value());
     expected.extend_from_slice(&[6; 32]);
     expected.extend_from_slice(&[1, 0, 0, 0, b'W', 1, 0, 0, 0, b'u']);
@@ -1437,6 +1438,7 @@ fn fixed_pool_state_tuple_places_policies_after_trade_control() {
         curve_core::BuyPolicy::Open,
         curve_core::TradeControl::Unrestricted,
         lbp_core::EndingPolicy::Either,
+        factory_core::TradeMode::BuyOnly,
         None::<lee_core::account::Actor>,
         lbp_core::PoolMode::FixedPrice,
         (true, false),
@@ -1542,6 +1544,7 @@ fn fixed_pool_terminal_states_use_progress_tags_instead_of_boolean_completion() 
             curve_core::BuyPolicy::Open,
             curve_core::TradeControl::Unrestricted,
             lbp_core::EndingPolicy::Either,
+            factory_core::TradeMode::BuyOnly,
             None::<lee_core::account::Actor>,
             lbp_core::PoolMode::FixedPrice,
             (true, true),
@@ -1782,6 +1785,11 @@ fn immutable_graduation_terms_follow_the_ending_policy_on_wire() {
             .unwrap();
         assert_eq!(
             fields[index + 1],
+            json!({"name":"trade_mode","type":"TradeMode"}),
+            "{module}::{name}"
+        );
+        assert_eq!(
+            fields[index + 2],
             json!({"name":next,"type":ty}),
             "{module}::{name}"
         );
@@ -1843,6 +1851,7 @@ fn weighted_pool_keeps_the_adapter_and_outstanding_seed_separate_from_progress()
         curve_core::BuyPolicy::Open,
         curve_core::TradeControl::Unrestricted,
         lbp_core::EndingPolicy::Scheduled,
+        factory_core::TradeMode::BuyOnly,
         Some(adapter),
         lbp_core::PoolMode::Weighted {
             token_weight_start: lbp_core::WEIGHT_TOTAL / 2 + 1,
@@ -1877,7 +1886,7 @@ fn weighted_pool_keeps_the_adapter_and_outstanding_seed_separate_from_progress()
     bytes.push(0);
     let pool = lbp_core::PoolAccount::decode(&bytes).unwrap();
     assert!(!pool.closure_observed);
-    assert_eq!(&bytes[..4], &[0, 0, 1, 1]);
+    assert_eq!(&bytes[..5], &[0, 0, 1, 0, 1]);
     assert_eq!(pool.graduation_adapter, Some(adapter));
     assert!(!pool.seed_returned);
     assert_eq!(pool.outstanding_seed().unwrap(), 100);
@@ -2276,4 +2285,66 @@ fn generated_event_metadata_binds_selectors_to_concrete_payload_types() {
             "events::WeightedPauseChanged": {"name":"lbp::WeightedPauseChanged","selector":"6d8c1803e82b3a9d","payload":"events::WeightedPauseChanged"}
         })
     );
+}
+
+#[test]
+fn shared_trade_modes_have_independent_wire_tags() {
+    for (mode, tag, name) in [
+        (factory_core::TradeMode::BuyOnly, 0, "BuyOnly"),
+        (factory_core::TradeMode::BuyAndSell, 1, "BuyAndSell"),
+    ] {
+        assert_wire(mode, &format!("{tag:02x}"));
+        assert_eq!(
+            variant("terms", "TradeMode", name),
+            json!({"tag":tag,"name":name,"fields":[]})
+        );
+    }
+}
+
+#[test]
+fn lbp_sells_append_tags_without_membership_or_weighted_caller_time() {
+    for (message, name, tag, timed) in [
+        (
+            lbp_core::Message::SellExactInput {
+                amount_in: 25,
+                min_amount_out: 10,
+                now: 9,
+            },
+            "SellExactInput",
+            18u8,
+            true,
+        ),
+        (
+            lbp_core::Message::SellWeightedExactInput {
+                amount_in: 25,
+                min_amount_out: 10,
+            },
+            "SellWeightedExactInput",
+            19u8,
+            false,
+        ),
+    ] {
+        let payload = format!(
+            "190000000000000000000000000000000a000000000000000000000000000000{}",
+            if timed { "0900000000000000" } else { "" }
+        );
+        let mut fields = vec![
+            json!({"name":"amount_in","type":"u128"}),
+            json!({"name":"min_amount_out","type":"u128"}),
+        ];
+        if timed {
+            fields.push(json!({"name":"now","type":"u64"}));
+        }
+        assert_eq!(
+            variant("lbp", "Message", name),
+            json!({"tag":tag,"name":name,"fields":fields})
+        );
+        assert_wire(
+            lbp_core::Message::Execute {
+                pool: AccountId::new([3; 32]),
+                instruction: Box::new(message),
+            },
+            &format!("06{}{tag:02x}{payload}", "03".repeat(32)),
+        );
+    }
 }

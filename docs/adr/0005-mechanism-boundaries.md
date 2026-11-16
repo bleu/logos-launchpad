@@ -10,7 +10,7 @@ Bonding-curve, fixed-price, and weighted sales have different pricing, state, co
 
 ## Partial supersession
 
-[ADR 0031](0031-shared-launch-factory.md) supersedes the separate-factory requirement for matching launch setup. Its 2026-11-09 amendment also sets the target of reusable ending, fee and eligibility policies across pricing engines. Shared public buy eligibility is implemented under [ADR 0021](0021-modes-and-open-limits.md). Shared ending choices, namespace fees and optional pause/resume are implemented under ADR 0031; new sells and retained fees remain future work. Independent pricing state, custody and settlement safety boundaries remain; older requirements below to keep those policies tied to a mechanism are superseded.
+[ADR 0031](0031-shared-launch-factory.md) supersedes the separate-factory requirement for matching launch setup. Its 2026-11-09 amendment also sets the target of reusable ending, fee and eligibility policies across pricing engines. Shared public buy eligibility is implemented under [ADR 0021](0021-modes-and-open-limits.md). Shared ending choices, namespace fees and optional pause/resume are implemented under ADR 0031. Retained creator fees remain future work. Independent pricing state, custody and settlement safety boundaries remain; older requirements below to keep those policies tied to a mechanism are superseded.
 
 ## Amendment
 

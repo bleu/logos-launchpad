@@ -1,6 +1,6 @@
 //! TEMPORARY timestamp-read protocol. Replace with the verified LEZ clock API.
 //! The pinned LEZ clock cannot return time. Enable only for local fixtures with
-//! LAUNCHPAD_MOCK_CLOCK=1; normal builds reject weighted buys.
+//! LAUNCHPAD_MOCK_CLOCK=1; normal builds reject weighted trades.
 use crate::Error;
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{

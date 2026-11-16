@@ -15,6 +15,7 @@ fn prepare() -> ReceiveInput {
         buy_policy: curve_core::BuyPolicy::Open,
         pause_policy: lbp_core::PausePolicy::Disabled,
         ending_policy: lbp_core::EndingPolicy::Either,
+        trade_mode: lbp_core::TradeMode::BuyOnly,
         graduation_adapter: None,
         namespace: id(40),
         namespace_program_id: id(6),
@@ -428,7 +429,18 @@ fn operation(
     if !matches!(message, Message::CollectFees) {
         values.extend([
             holding(input.receiver.account_id, id(41), balances[1]),
-            holding(id(50), id(42), balances[2]),
+            holding(
+                id(50),
+                if matches!(
+                    message,
+                    Message::SellExactInput { .. } | Message::SellWeightedExactInput { .. }
+                ) {
+                    id(41)
+                } else {
+                    id(42)
+                },
+                balances[2],
+            ),
         ]);
     }
     for bytes in values {
@@ -1802,6 +1814,7 @@ fn fixed_price_policy_survives_every_prepare_and_activation_callback() {
         root: [9; 32],
     });
     inputs.buy_policy = policy.clone();
+    inputs.trade_mode = lbp_core::TradeMode::BuyAndSell;
     inputs.graduation_adapter = Some(Actor::new(id(70), id(71)));
     input.message = borsh::to_vec(&Message::PrepareFixedPrice { inputs }).unwrap();
     let factory = input.from;
@@ -1835,6 +1848,7 @@ fn fixed_price_policy_survives_every_prepare_and_activation_callback() {
             let saved =
                 lbp_core::PoolAccount::decode(response.post_state.as_ref().unwrap()).unwrap();
             assert_eq!(saved.buy_policy, policy);
+            assert_eq!(saved.trade_mode, lbp_core::TradeMode::BuyAndSell);
             assert!(saved.seed_returned);
             assert_eq!(saved.graduation_adapter, Some(Actor::new(id(70), id(71))));
             assert_eq!(
@@ -2880,4 +2894,299 @@ fn guarded_settlement_emits_completion_only_after_exact_factory_finalization() {
         }
     );
     assert!(state_of(&done).closure_observed);
+}
+
+#[test]
+fn fixed_sells_use_reverse_floor_and_record_gross_output_fee_separately() {
+    use curve_core::events::{SaleEventKindV1, TradeFormV1};
+    use lbp_core::{QuoteRequest, quote_trade};
+    let (input, mut state) = funded();
+    state.trade_mode = lbp_core::TradeMode::BuyAndSell;
+    state.recorded_collateral = 100;
+    state.accrued_fees = 3;
+    for fee_bps in [0_u16, 100, 3333, 9000] {
+        let request = QuoteRequest::SellExactInput {
+            tokens_in: 20,
+            min_collateral_out: 0,
+        };
+        let quoted = quote_trade(&state, request, fee_bps, 100).unwrap();
+        // The saved price is three collateral units for two token units.
+        assert_eq!(quoted.gross_collateral, 30);
+        assert_eq!(quoted.amount_in, 20);
+        assert_eq!(
+            quoted.amount_out,
+            30 - (30 * u128::from(fee_bps)).div_ceil(10_000)
+        );
+        let response = operation(
+            &input,
+            &state,
+            Message::SellExactInput {
+                amount_in: 20,
+                min_amount_out: quoted.amount_out,
+                now: 100,
+            },
+            config(fee_bps, id(43), false),
+            [1103, 800, 20],
+        )
+        .unwrap();
+        let next = state_of(&response);
+        assert_eq!(next.recorded_collateral, 70);
+        assert_eq!(next.accrued_fees, 3 + quoted.protocol_fee);
+        assert_eq!(next.remaining_inventory, 820);
+        assert_eq!(response.validity.timestamps.start(), Some(100_000));
+        assert_eq!(response.validity.timestamps.end(), Some(200_000));
+        let calls: Vec<lez_compat_core::token::Message> = response
+            .sync_messages
+            .iter()
+            .map(|c| borsh::from_slice(&c.message).unwrap())
+            .collect();
+        assert_eq!(
+            calls,
+            vec![
+                lez_compat_core::token::Message::Transfer {
+                    definition: id(41),
+                    recipient: input.receiver.account_id,
+                    amount: 20
+                },
+                lez_compat_core::token::Message::Transfer {
+                    definition: id(42),
+                    recipient: id(50),
+                    amount: quoted.amount_out
+                },
+            ]
+        );
+        assert_eq!(
+            sale_events(&response)[0].kind,
+            SaleEventKindV1::Trade {
+                trader: *id(50).value(),
+                form: TradeFormV1::ExactInput,
+                token_in: *id(41).value(),
+                token_out: *id(42).value(),
+                amount_in: 20,
+                pricing_input: 20,
+                gross_output: 30,
+                amount_out: quoted.amount_out,
+                fee_definition: *id(42).value(),
+                fee_amount: quoted.protocol_fee,
+                fee_bps,
+                pricing_time: None,
+            }
+        );
+    }
+    assert_eq!(
+        quote_trade(
+            &state,
+            QuoteRequest::SellExactInput {
+                tokens_in: 3,
+                min_collateral_out: 0
+            },
+            0,
+            100
+        )
+        .unwrap()
+        .gross_collateral,
+        4
+    );
+}
+
+#[test]
+fn fixed_sells_reject_unavailable_budget_limits_and_invalid_lifecycle() {
+    use lbp_core::{Error, QuoteRequest, quote_trade};
+    let (input, mut state) = funded();
+    let request = QuoteRequest::SellExactInput {
+        tokens_in: 20,
+        min_collateral_out: 0,
+    };
+    assert_eq!(
+        quote_trade(&state, request, 0, 100),
+        Err(Error::TradeDirectionUnsupported)
+    );
+    state.trade_mode = lbp_core::TradeMode::BuyAndSell;
+    state.recorded_collateral = 29;
+    state.accrued_fees = 100;
+    let message = Message::SellExactInput {
+        amount_in: 20,
+        min_amount_out: 0,
+        now: 100,
+    };
+    assert_eq!(
+        operation(
+            &input,
+            &state,
+            message.clone(),
+            config(0, id(43), false),
+            [10_000, 800, 20]
+        )
+        .err(),
+        Some(Error::Underfunded)
+    );
+    state.recorded_collateral = 100;
+    assert_eq!(
+        operation(
+            &input,
+            &state,
+            message.clone(),
+            config(0, id(43), true),
+            [200, 800, 20]
+        )
+        .err(),
+        Some(Error::Frozen)
+    );
+    for balances in [[199, 800, 20], [200, 799, 20], [200, 800, 19]] {
+        assert_eq!(
+            operation(
+                &input,
+                &state,
+                message.clone(),
+                config(0, id(43), false),
+                balances
+            )
+            .err(),
+            Some(Error::Underfunded)
+        );
+    }
+    assert_eq!(
+        quote_trade(
+            &state,
+            QuoteRequest::SellExactInput {
+                tokens_in: 20,
+                min_collateral_out: 31
+            },
+            0,
+            100
+        ),
+        Err(Error::Slippage)
+    );
+    for time in [99, 200] {
+        assert_eq!(quote_trade(&state, request, 0, time), Err(Error::Closed));
+    }
+    assert_eq!(
+        quote_trade(&state, request, 10_000, 100),
+        Err(Error::InvalidFee)
+    );
+    for progress in [
+        lbp_core::SettlementProgress::ManualStarted,
+        lbp_core::SettlementProgress::ManualComplete,
+        lbp_core::SettlementProgress::Graduated,
+    ] {
+        let mut completed = state.clone();
+        completed.settlement_progress = progress;
+        assert_eq!(quote_trade(&completed, request, 0, 100), Err(Error::Closed));
+    }
+    state.trade_control = lbp_core::TradeControl::Paused;
+    assert_eq!(quote_trade(&state, request, 0, 100), Err(Error::Paused));
+}
+
+#[test]
+fn fixed_scheduled_sellout_can_replenish_but_selected_depletion_is_final() {
+    let (input, original) = funded();
+    for ending in [
+        lbp_core::EndingPolicy::Scheduled,
+        lbp_core::EndingPolicy::Depletion,
+        lbp_core::EndingPolicy::Either,
+    ] {
+        let mut state = original.clone();
+        state.trade_mode = lbp_core::TradeMode::BuyAndSell;
+        state.ending_policy = ending;
+        state.remaining_inventory = 0;
+        state.recorded_collateral = 100;
+        if ending == lbp_core::EndingPolicy::Depletion {
+            state.end_timestamp = None;
+        }
+        let result = operation(
+            &input,
+            &state,
+            Message::SellExactInput {
+                amount_in: 20,
+                min_amount_out: 30,
+                now: 100,
+            },
+            config(0, id(43), false),
+            [100, 0, 20],
+        );
+        if ending == lbp_core::EndingPolicy::Scheduled {
+            let response = result.unwrap();
+            let next = state_of(&response);
+            assert_eq!(next.remaining_inventory, 20);
+            assert!(!next.closure_observed);
+            let buy = operation(
+                &input,
+                &next,
+                exact_in(5),
+                config(0, id(43), false),
+                [70, 20, 5],
+            )
+            .unwrap();
+            assert_eq!(state_of(&buy).remaining_inventory, 17);
+        } else {
+            assert_eq!(result.err(), Some(lbp_core::Error::Closed));
+        }
+    }
+}
+
+#[test]
+fn fixed_sell_bypasses_buy_membership_but_keeps_participant_and_callback_authentication() {
+    let (mut input, mut state) = funded();
+    state.trade_mode = lbp_core::TradeMode::BuyAndSell;
+    state.recorded_collateral = 100;
+    state.buy_policy = lbp_core::BuyPolicy::Allowlist(lbp_core::AllowlistPolicy {
+        version: 1,
+        namespace: *state.namespace.value(),
+        sale_policy_id: *input.receiver.account_id.value(),
+        root: [9; 32],
+    });
+    let message = Message::SellExactInput {
+        amount_in: 20,
+        min_amount_out: 0,
+        now: 100,
+    };
+    let _ = operation(
+        &input,
+        &state,
+        message.clone(),
+        config(0, id(43), false),
+        [100, 800, 20],
+    )
+    .unwrap();
+    for from in [None, Some(input.receiver), Some(Actor::new(id(50), id(99)))] {
+        input.from = from;
+        input.pre_state = borsh::to_vec(&state).unwrap().into();
+        input.message = borsh::to_vec(&message).unwrap();
+        assert_eq!(handle(&input).err(), Some(lbp_core::Error::Unauthorized));
+    }
+}
+
+#[test]
+fn fixed_sell_execute_is_appended_and_requires_transaction_authority() {
+    let mut input = prepare();
+    input.receiver = Actor::new(id(50), input.receiver.program_account_id);
+    input.pre_state = vec![].into();
+    let sell = Message::SellExactInput {
+        amount_in: 20,
+        min_amount_out: 0,
+        now: 100,
+    };
+    assert_eq!(borsh::to_vec(&sell).unwrap()[0], 18);
+    assert_eq!(
+        borsh::to_vec(&Message::SellWeightedExactInput {
+            amount_in: 20,
+            min_amount_out: 0
+        })
+        .unwrap()[0],
+        19
+    );
+    input.message = borsh::to_vec(&Message::Execute {
+        pool: id(90),
+        instruction: Box::new(sell.clone()),
+    })
+    .unwrap();
+    input.is_authorized = false;
+    assert_eq!(handle(&input).err(), Some(lbp_core::Error::Unauthorized));
+    input.is_authorized = true;
+    let response = handle(&input).unwrap();
+    assert_eq!(response.sync_messages[0].to.account_id, id(90));
+    assert_eq!(
+        borsh::from_slice::<Message>(&response.sync_messages[0].message).unwrap(),
+        sell
+    );
 }

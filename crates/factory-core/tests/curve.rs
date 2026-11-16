@@ -941,7 +941,15 @@ fn public_supply_and_address_rules_preserve_the_original_factory_contract() {
         validate_curve_parameters(800, pool::VIRTUAL_RESERVE_BOUND, 100),
         Err(CreateError::VirtualReserveAboveBound)
     );
-    assert_eq!(TradeMode::try_from(2), Err(CreateError::InvalidTradeMode));
+    assert!(TradeMode::try_from(2).is_err());
+    let mut invalid_mode = creation();
+    let mut message: Message = borsh::from_slice(&invalid_mode.message).unwrap();
+    let Message::CreateFactoryPool { trade_mode, .. } = &mut message else {
+        unreachable!()
+    };
+    *trade_mode = 2;
+    invalid_mode.message = borsh::to_vec(&message).unwrap();
+    assert_eq!(handle(&invalid_mode).err(), Some(Error::InvalidTerms));
     let addresses = [
         compute_factory_pda(id(40), id(7), [3; 32]),
         compute_definition_pda(id(40), id(7), [3; 32]),

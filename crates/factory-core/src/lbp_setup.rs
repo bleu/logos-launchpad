@@ -13,6 +13,7 @@ pub struct FixedPriceInputs {
     pub buy_policy: curve_core::BuyPolicy,
     pub pause_policy: PausePolicy,
     pub ending_policy: EndingPolicy,
+    pub trade_mode: TradeMode,
     pub graduation_hook: Option<GraduationHook>,
     pub namespace: AccountId,
     pub launch_salt: [u8; 32],
@@ -35,6 +36,7 @@ pub struct WeightedInputs {
     pub buy_policy: curve_core::BuyPolicy,
     pub pause_policy: PausePolicy,
     pub ending_policy: EndingPolicy,
+    pub trade_mode: TradeMode,
     pub graduation_hook: Option<GraduationHook>,
     pub namespace: AccountId,
     pub launch_salt: [u8; 32],
@@ -97,6 +99,7 @@ pub struct LbpLaunchState {
     pub buy_policy: curve_core::BuyPolicy,
     pub pause_policy: PausePolicy,
     pub ending_policy: EndingPolicy,
+    pub trade_mode: TradeMode,
     pub graduation_hook: Option<GraduationHook>,
     format: [u8; 8],
     version: u16,
@@ -154,6 +157,7 @@ struct SetupInputs {
     buy_policy: curve_core::BuyPolicy,
     pause_policy: PausePolicy,
     ending_policy: EndingPolicy,
+    trade_mode: TradeMode,
     graduation_hook: Option<GraduationHook>,
     namespace: AccountId,
     launch_salt: [u8; 32],
@@ -184,6 +188,7 @@ pub(super) fn create_fixed(
             buy_policy: inputs.buy_policy,
             pause_policy: inputs.pause_policy,
             ending_policy: inputs.ending_policy,
+            trade_mode: inputs.trade_mode,
             graduation_hook: inputs.graduation_hook,
             namespace: inputs.namespace,
             launch_salt: inputs.launch_salt,
@@ -222,6 +227,7 @@ pub(super) fn create_weighted(
             buy_policy: inputs.buy_policy,
             pause_policy: inputs.pause_policy,
             ending_policy: inputs.ending_policy,
+            trade_mode: inputs.trade_mode,
             graduation_hook: inputs.graduation_hook,
             namespace: inputs.namespace,
             launch_salt: inputs.launch_salt,
@@ -324,6 +330,7 @@ fn create(input: &ReceiveInput, inputs: SetupInputs, command: Message) -> Result
         buy_policy: inputs.buy_policy,
         pause_policy: inputs.pause_policy,
         ending_policy: inputs.ending_policy,
+        trade_mode: inputs.trade_mode,
         graduation_hook: inputs.graduation_hook,
         format: match inputs.mode {
             LbpSetupMode::FixedPrice => *b"LZFXLAUN",
@@ -688,6 +695,7 @@ pub(super) fn resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
                 .map_err(|_| Error::InvalidState)?;
             if pool.graduation_adapter != state.adapter(input.receiver)
                 || pool.ending_policy != state.ending_policy
+                || pool.trade_mode != state.trade_mode
             {
                 return Err(Error::InvalidCustody);
             }
@@ -795,6 +803,7 @@ pub(super) fn resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
                     .map_err(|_| Error::InvalidState)?;
                 if pool.graduation_adapter != state.adapter(input.receiver)
                     || pool.ending_policy != state.ending_policy
+                    || pool.trade_mode != state.trade_mode
                 {
                     return Err(Error::InvalidCustody);
                 }
@@ -919,6 +928,7 @@ pub(super) fn resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
                             buy_policy: state.buy_policy.clone(),
                             pause_policy: state.pause_policy,
                             ending_policy: state.ending_policy,
+                            trade_mode: state.trade_mode,
                             graduation_adapter: state.adapter(input.receiver),
                             namespace: state.namespace,
                             namespace_program_id: state.namespace_program_id,
@@ -944,6 +954,7 @@ pub(super) fn resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
                             buy_policy: state.buy_policy.clone(),
                             pause_policy: state.pause_policy,
                             ending_policy: state.ending_policy,
+                            trade_mode: state.trade_mode,
                             graduation_adapter: state.adapter(input.receiver),
                             namespace: state.namespace,
                             namespace_program_id: state.namespace_program_id,
@@ -1275,6 +1286,7 @@ impl LbpLaunchState {
         self.validate_factory(factory)?;
         if pool.graduation_adapter != self.adapter(factory)
             || pool.ending_policy != self.ending_policy
+            || pool.trade_mode != self.trade_mode
         {
             return Err(Error::InvalidCustody);
         }

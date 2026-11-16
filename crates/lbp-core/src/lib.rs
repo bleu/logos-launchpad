@@ -1,15 +1,18 @@
-//! Fixed-price and weighted sale setup, buys and fees and mechanism-specific settlement.
+//! Fixed-price and weighted sale setup, trades, fees and mechanism-specific settlement.
 
 pub use curve_core::{AllowlistPolicy, BuyPolicy, MembershipPath};
 use sale_policy::{EndingError, TimeBounds};
 pub use sale_policy::{
-    EndingPolicy, PausePolicy, SettlementAmounts, SettlementProgress, SettlementRoute, TradeControl,
+    EndingPolicy, PausePolicy, SettlementAmounts, SettlementProgress, SettlementRoute,
+    TradeControl, TradeMode,
 };
 
 mod events;
 #[path = "settlement.rs"]
 mod lbp_settlement;
 mod pricing;
+mod quote;
+pub use quote::{QuoteRequest, TradeQuote, quote_trade};
 pub mod pricing_clock;
 mod trading;
 pub use lbp_settlement::{SettlementReceipt, SettlementReply};
@@ -54,6 +57,7 @@ pub struct FixedPricePoolInputs {
     pub buy_policy: BuyPolicy,
     pub pause_policy: PausePolicy,
     pub ending_policy: EndingPolicy,
+    pub trade_mode: TradeMode,
     pub graduation_adapter: Option<Actor>,
     pub namespace: AccountId,
     pub namespace_program_id: AccountId,
@@ -82,6 +86,7 @@ pub struct WeightedPoolInputs {
     pub buy_policy: BuyPolicy,
     pub pause_policy: PausePolicy,
     pub ending_policy: EndingPolicy,
+    pub trade_mode: TradeMode,
     pub graduation_adapter: Option<Actor>,
     pub namespace: AccountId,
     pub namespace_program_id: AccountId,
@@ -178,6 +183,15 @@ pub enum Message {
     FinalizeSettlement {
         receipt_hash: [u8; 32],
     },
+    SellExactInput {
+        amount_in: u128,
+        min_amount_out: u128,
+        now: u64,
+    },
+    SellWeightedExactInput {
+        amount_in: u128,
+        min_amount_out: u128,
+    },
 }
 pub type Instruction = Message;
 
@@ -190,7 +204,7 @@ pub enum PoolMode {
         token_weight_end: u128,
         /// Immutable creator seed. Surplus does not change this value.
         collateral_seed: u128,
-        /// Seed plus net successful buyer inputs. Fees and custody are separate.
+        /// Seed plus net buys minus gross sells. Fees and custody are separate.
         pricing_collateral: u128,
         /// Last observed pricing second. Zero means no checkpoint recorded.
         checkpoint_time: u64,
@@ -204,6 +218,7 @@ pub struct PoolAccount {
     pub buy_policy: BuyPolicy,
     pub trade_control: TradeControl,
     pub ending_policy: EndingPolicy,
+    pub trade_mode: TradeMode,
     pub graduation_adapter: Option<Actor>,
     pub mode: PoolMode,
     pub funded: bool,
@@ -259,6 +274,7 @@ pub enum Error {
     PowerUnderflow,
     Underfunded,
     PauseDisabled,
+    TradeDirectionUnsupported,
 }
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -667,6 +683,7 @@ pub fn handle(input: &ReceiveInput) -> Result<Response, Error> {
                 buy_policy: inputs.buy_policy,
                 trade_control: TradeControl::new(inputs.pause_policy),
                 ending_policy: inputs.ending_policy,
+                trade_mode: inputs.trade_mode,
                 graduation_adapter: inputs.graduation_adapter,
                 mode: PoolMode::FixedPrice,
                 funded: false,
@@ -788,6 +805,7 @@ pub fn handle(input: &ReceiveInput) -> Result<Response, Error> {
                 buy_policy: inputs.buy_policy,
                 trade_control: TradeControl::new(inputs.pause_policy),
                 ending_policy: inputs.ending_policy,
+                trade_mode: inputs.trade_mode,
                 graduation_adapter: inputs.graduation_adapter,
                 mode: PoolMode::Weighted {
                     token_weight_start: inputs.token_weight_start,
@@ -880,6 +898,8 @@ pub fn handle(input: &ReceiveInput) -> Result<Response, Error> {
                         | Message::BuyExactOutput { .. }
                         | Message::BuyWeightedExactInput { .. }
                         | Message::BuyWeightedExactOutput { .. }
+                        | Message::SellExactInput { .. }
+                        | Message::SellWeightedExactInput { .. }
                 )
             {
                 return Err(Error::Unauthorized);
@@ -893,6 +913,8 @@ pub fn handle(input: &ReceiveInput) -> Result<Response, Error> {
         | Message::BuyExactOutput { .. }
         | Message::BuyWeightedExactInput { .. }
         | Message::BuyWeightedExactOutput { .. }
+        | Message::SellExactInput { .. }
+        | Message::SellWeightedExactInput { .. }
         | Message::SettleFixedPrice { .. }
         | Message::CollectFees => trading::begin(input, message),
         Message::SetWeightedPaused { paused } => {

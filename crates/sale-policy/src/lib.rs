@@ -8,7 +8,10 @@ mod settlement;
 pub use controls::{PauseError, PausePolicy, TradeControl};
 pub use settlement::{SettlementAmounts, SettlementError, SettlementProgress, SettlementRoute};
 mod terms;
-pub use terms::{EndingDecision, EndingError, EndingPolicy, EndingReason, TimeBounds};
+pub use terms::{
+    EndingDecision, EndingError, EndingPolicy, EndingReason, InvalidTradeMode, TimeBounds,
+    TradeMode,
+};
 
 use integer_math::{Rounding, mul_div};
 
