@@ -1,7 +1,7 @@
 # Domain docs
 
-Use one root `CONTEXT.md` and `docs/adr/` for now.
+Read root [CONTEXT.md](../../CONTEXT.md) and the relevant [ADRs](../adr/README.md) before work. Use their terms. Keep fixed-price, bonding-curve and weighted sale rules separate.
 
-Before exploring, read the context and relevant ADRs. If `CONTEXT-MAP.md` is introduced, follow it to relevant contexts. If domain docs are absent, continue without creating them automatically.
+Check code and tests before stating that a feature works. An internal decision marked `To be reviewed by Logos team` is not an approved external commitment. Source reviews do not establish implementation. Report conflicts instead of silently choosing a rule.
 
-Use the defined terms. Keep curve, fixed-price sale and weighted sale meanings separate. Flag ADR conflicts rather than silently changing decisions. Check status: an internal design marked `To be reviewed by Logos team` is not an approved external commitment. Reviewed PoC sources are evidence unless an ADR explicitly adopts a decision. Public documentation must not cite private tickets.
+Follow the [documentation rules](../../AGENTS.md#documentation-and-comments). Keep private ticket references out of public docs and source comments.

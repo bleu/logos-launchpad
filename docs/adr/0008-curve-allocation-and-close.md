@@ -2,13 +2,13 @@
 
 Status: Accepted internally; To be reviewed by Logos team
 
-Date: 2026-09-29
-
 ## Decision
 
-The curve factory keeps three allocations separate: purchasable `D`, owner-reserved `R` for DEX seeding, and the creator allocation. `R` remains untouched until close. This prevents trading from spending tokens reserved for settlement.
+Keep purchasable curve allocation `D`, owner-reserved DEX-seed allocation `R` and the separate creator allocation distinct. Trading cannot spend `R`; it remains untouched until close.
 
-Allocation policy belongs to the factory, not the neutral pool. [ADR 0025](0025-sale-closing.md) supersedes this record's earlier closing rules and governs unsold `D`. [ADR 0020](0020-settlement-and-graduation.md) governs post-close payouts, including manual settlement when `R` is not used for graduation. These rules do not define fixed-price or weighted-sale allocations.
+## Reason and limits
+
+Factory allocation policy protects settlement inventory without adding launch terms to the neutral curve pool. [Ending rules](0025-sale-closing.md) govern unsold `D`. [Settlement](0020-settlement-and-graduation.md) governs payouts, including manual recovery of `R` when it is not used for graduation. These rules do not define fixed-price or weighted allocations. External Logos review remains pending.
 
 ## Sources
 

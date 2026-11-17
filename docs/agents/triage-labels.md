@@ -1,11 +1,11 @@
 # Triage labels
 
-| Role | Label | Meaning |
-| --- | --- | --- |
-| needs-triage | needs-triage | Needs maintainer review |
-| needs-info | needs-info | Needs more information |
-| ready-for-agent | ready-for-agent | Ready for agent implementation |
-| ready-for-human | ready-for-human | Needs human implementation |
-| wontfix | wontfix | Will not be implemented |
+| Label | Meaning |
+| --- | --- |
+| needs-triage | Needs maintainer review. |
+| needs-info | Needs more information. |
+| ready-for-agent | Ready for an agent to implement. |
+| ready-for-human | Needs a person to implement. |
+| wontfix | Will not be implemented. |
 
-This setup records names only. Check existing Linear labels before use; ask before creating missing labels.
+Check existing Linear labels before use. Ask before creating a missing label.

@@ -1,8 +1,7 @@
 //! Overflow-envelope tests backing `docs/overflow-proof.md`.
 //!
-//! Runs in both debug and release (release wraps silently). Each check is
-//! an invariant a wrapped intermediate would break; the `should_panic`
-//! tests prove the envelope asserts fire in release.
+//! Run in debug and release to detect wrapped intermediates and verify
+//! that envelope checks also panic in release.
 
 #![cfg_attr(not(test), warn(unused_crate_dependencies))]
 

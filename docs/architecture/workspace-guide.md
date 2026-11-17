@@ -1,6 +1,6 @@
 # Workspace guide
 
-The application uses the [selected LEZ actor revision](../../plans/lez-v04-migration.md). There is no second supported legacy platform. See [repository layout](repository-layout.md) for package roles and [ADR 0034](../adr/0034-lez-v04-migration.md) for the decision.
+The application uses one selected LEZ actor revision. There is no supported legacy lane or deployed state to migrate. [ADR 0034](../adr/0034-lez-v04-migration.md) owns the revision decision; [repository layout](repository-layout.md) defines package roles.
 
 ## Light development checks
 
@@ -58,9 +58,13 @@ Application, SDK and CLI timestamps use Unix seconds. Programs convert stored bo
 
 Add `--execution` to `check-builds.sh` to select the optional node-free token, seeded sale and role-authority fixtures. The script builds the application and compatibility guests and locates the pinned upstream clock guest; `LAUNCHPAD_CLOCK_ELF` can override that path. Execution needs local processes and IPC. A sandbox rejection is not a passing result. Token-only rollback checks do not prove sale rollback.
 
-The [sale tests](../../methods/tests/actor_sale.rs) and [role-authority tests](../../crates/launchpad-client/tests/role_authority_guest.rs) exercise signed setup, trades, controls and settlement through the guests. Fault tests check rollback and retries. Use disposable state; replacing a test fault adapter does not establish live adapter replacement.
+The [sale tests](../../methods/tests/actor_sale.rs) and [role-authority tests](../../crates/launchpad-client/tests/role_authority_guest.rs) cover signed setup for all engines, trades, curve administration and role transfer, controls, fees, manual settlement and graduation callback rollback. Fault tests check full state rollback and retries. The [allowlist evidence](allowlist-proof.md#public-execution-evidence) records dated signed coverage and cycle measurements. Use disposable state; replacing a test fault adapter does not establish live adapter replacement.
 
-Host tests do not prove guest execution. Local guest execution does not establish real proofs, live clock support, wallet/service integration, package loading or DEX liquidity. Private routes are unsupported because compatibility token holdings are public only. See the [package README](../../packages/launchpad/README.md) for package requirements.
+Earlier local checks covered locked builds, host/client/wire checks, seeded sale execution and signed curve setup/manual settlement. The three `.lgx` archives passed a Nix build. Installation, loading and `Test backend` were blocked by missing Basecamp and `lgpm`; there was no `Backend OK` result. Linux CI was not checked. See the [package evidence](../../packages/launchpad/README.md). These results do not establish current release readiness.
+
+Host tests do not prove guest execution. Local guest execution does not establish real proofs, live clock support, wallet/service integration, package loading or DEX liquidity. Curve failed-setup recovery and adapter-initiated reentry lack focused guest tests. General adapter size/cost and live DEX integration remain unverified. Private routes are unsupported because compatibility token holdings are public only. See the [private evidence requirements](private-participation.md#evidence-still-required) and [package requirements](../../packages/launchpad/README.md).
+
+Ordinary post-close settlement has local execution coverage. The separate delayed-settlement scope item remains unresolved. [ADR 0032](../adr/0032-fixed-price-lbp-setup.md) lists the remaining cancellation, expired-setup recovery and complete SDK/CLI flow gaps.
 
 For stable release image IDs, the build script requires `/tmp/logos-launchpad-release/source` with `--release`. Build paths can change guest binaries and IDs; cross-OS identity remains unverified. See [verification boundaries](../adr/0022-verification-boundaries.md).
 
@@ -70,8 +74,23 @@ The curve packages use the root [MIT license](../../LICENSE). Weighted math reta
 
 ## Temporary weighted pricing clock
 
-Weighted buy messages no longer contain pricing windows. The sale requests one timestamp through a temporary read-and-reply interface. Normal builds reject weighted buys with `ClockUnavailable`. Build with `LAUNCHPAD_MOCK_CLOCK=1` only for local tests. The fake clock uses fixture state at a separate actor address. It does not replace the canonical clock used for setup. Changes to this variable rebuild the sale guests.
+[ADR 0026](../adr/0026-lbp-clock-and-poke.md) defines timestamp reads, setup bounds and observer checkpoints. The [temporary clock module](../../crates/lbp-core/src/pricing_clock.rs) uses a fixture provider. Normal builds return `ClockUnavailable` for weighted trades.
 
-Run `bash verify/check-weighted-clock.sh` for host and guest checks with the fake clock. To include these buys in the full execution gate, run `LAUNCHPAD_MOCK_CLOCK=1 bash verify/check-builds.sh --execution` with the normal emergency-authority setup. Keep that variable unset for normal builds. See [ADR 0026](../adr/0026-lbp-clock-and-poke.md#clock-read-amendment-2026-11-05).
+Set `LAUNCHPAD_MOCK_CLOCK=1` only for local tests. Changing it rebuilds sale guests. Run `bash verify/check-weighted-clock.sh`, or `LAUNCHPAD_MOCK_CLOCK=1 bash verify/check-builds.sh --execution` with the emergency-authority setup above. Keep the variable unset for normal builds.
 
-The local fixture models previous-block milliseconds. It can hold that value while inclusion time advances. These checks do not prove real clock reads, live clock updates, private execution or production readiness. A future LEZ clock API must replace the temporary provider and pass these checks again.
+The [host tests](../../crates/lbp-core/tests/weighted_trading.rs) and [guest tests](../../methods/tests/actor_sale.rs) cover sender and phase checks, malformed clock state, freeze, fractional schedules, stale-clock inclusion rejection and late output-transfer rollback. Fake-clock checks do not prove real timestamp reads, freshness, private execution or production readiness.
+
+Before replacing the provider, verify sender identity, units, update order, freshness and transaction behavior. Then repeat host, wire and guest checks with the real provider. Remove temporary wire and test paths that are no longer needed. The current dependency pin does not supply timestamp replies.
+
+## Platform replacement checklist
+
+The migration is complete for the selected public actor interfaces, not for all product or readiness requirements. The [dated upstream source check](../research/logos-v02-v04-migration-check.md) is background evidence, not a current compatible dependency set. Temporary support and its source/evidence record remain in the [development base guide](../../packages/lez-compat/README.md).
+
+Each replacement must switch client/program interfaces together, remove superseded temporary code and rerun affected host, wire and guest checks with fresh disposable state. Preserve canonical addresses, token-definition checks, authority, custody, accounting and atomic rollback. No deployed-state conversion or backward compatibility is required.
+
+- [ ] <a id="upstream-token-ata"></a> Replace temporary token/ATA support when actor-compatible upstream versions cover required definitions, exact supply, metadata, holdings, minting, transfers and burns with signer/PDA authority and checked balances. Do not build a general token product.
+- [ ] <a id="upstream-authority"></a> Replace temporary role authority when compatible support exists. Preserve bootstrap, current-holder checks, consented transfer and each role's renunciation rules under [ADR 0006](../adr/0006-namespaces-and-authority.md).
+- [ ] <a id="upstream-framework"></a> Replace temporary conversion/generation helpers where supported LEZ/SPEL helpers fit. Keep useful repository build, pin, IDL and verification commands; a full framework is not required.
+- [ ] <a id="upstream-wallet"></a> Integrate compatible wallet/provider and module interfaces under [ADR 0029](../adr/0029-wallet-integration.md). Use platform network-fee handling; missing support is a platform dependency, not grounds for a replacement wallet or fee mechanism. Finish package loading and backend smoke checks without replacing the existing shells.
+- [ ] <a id="release-check"></a> Compare the official v0.4 release with the selected revision. Update dependency pins and generated artifacts together, then repeat affected checks.
+- [ ] <a id="deferred-evidence"></a> Complete deferred service integration, real proofs, live verification and focused guest gaps listed above. Use host tests for routine work; do not require a full network. Full private-route completion remains separate work under [ADR 0018](../adr/0018-private-participation.md).

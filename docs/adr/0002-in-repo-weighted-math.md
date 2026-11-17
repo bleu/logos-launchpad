@@ -2,21 +2,13 @@
 
 Status: Accepted
 
-Date: 2026-09-29
-
-## Context
-
-The weighted kernel has numerical tests and guest-parity evidence, but it has not been audited. Weighted-sale integration will need input qualification and may require kernel changes. An external-only dependency adds a separate release step to this work.
-
 ## Decision
 
-The imported weighted-math source is an independent workspace in `packages/weighted-math/`, with its own kernel package, harness, fixtures, proof material and guest-parity workspace. A future weighted sale can consume the kernel through a local Cargo path dependency. Keep its API free of LEZ accounts and launch policy so other applications can reuse it.
+Maintain weighted math in `packages/weighted-math/` as an independent workspace with its kernel, harness, fixtures, proof material and guest-parity workspace. Sale code can use a local Cargo path dependency. Keep LEZ accounts and launch policy outside the kernel.
 
-The import is clean and has no source history. Bleu owns its code. Keep the math's MIT license and required third-party notices. Archive the old math repository only after the checked import is merged.
+## Reason and limits
 
-## Consequences
-
-Math and weighted-sale changes can be reviewed together without merging their responsibilities. Independent package tests remain required. Copying the kernel neither audits it nor qualifies all production inputs. Package publication is a separate decision.
+Local maintenance permits related math and sale changes without a separate release. Keep the MIT license and required third-party notices. Independent tests and input qualification remain required. The kernel is unaudited; package publication is a separate decision.
 
 ## Sources
 

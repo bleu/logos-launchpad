@@ -2,15 +2,13 @@
 
 Status: Accepted and implemented for all three sale types; production-readiness limits remain; live DEX integration deferred
 
-Date: 2026-09-29; amended 2026-10-01 and 2026-11-12
+## Reason
 
-## Context
-
-The original inactive hook provided no executable adapter boundary. A post-close callback allows adapter integration without choosing a DEX or promising a liquidity result.
+A post-close callback permits adapter integration without choosing a DEX or promising a liquidity result.
 
 ## Decision
 
-This amendment supersedes the inactive-hook decision. Keep creator-authorized manual settlement and add an optional adapter program and opaque configuration saved at creation. Configuration requires an adapter program. Neither can change or be overridden at execution. The adapter interprets its settings and checks its result.
+Keep creator-authorized manual settlement and add an optional adapter program and opaque configuration saved at creation. Configuration requires an adapter program. Neither can change or be overridden at execution. The adapter interprets its settings and checks its result.
 
 After creation completes and the sale closes, anyone can submit the separate hook transaction. Closure does not call it. Hook execution is public only. Private manual settlement is unsupported on the selected actor revision because the temporary token implementation has no private holdings. Automation and payer policy are deferred.
 
@@ -26,7 +24,7 @@ The final transfers, callback and `Graduated` marker must succeed or roll back t
 
 ## Consequences
 
-Settlement is atomic per transaction, not across the whole workflow. An immutable adapter cannot be replaced to repair a bad choice. The hook preserves existing manual payouts and allocation rights. See the [curve overview](../product/curve-contract.md#release-compatibility) for release compatibility and [verification boundaries](0022-verification-boundaries.md) for required evidence.
+Settlement is atomic per transaction, not across the whole workflow. An immutable adapter cannot be replaced to repair a bad choice. The hook preserves existing manual payouts and allocation rights. See the [workspace guide](../architecture/workspace-guide.md#execution-and-evidence-limits) for compatibility limits and [verification boundaries](0022-verification-boundaries.md) for required evidence.
 
 ## Sources
 

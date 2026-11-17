@@ -1,52 +1,34 @@
 # ADR 0026: Weighted-sale clock reads and pricing
 
-Status: Accepted local design; temporary fake clock. Real LEZ timestamp reads and live clock freshness remain unverified.
+Status: Accepted local design; temporary fake clock; real timestamp reads and freshness unverified.
 
-Date: 2026-09-29; checkpoint and interpolation review: 2026-10-02; time-window amendment: 2026-10-29; inclusion-time amendment: 2026-11-04; poke and checkpoint amendment: 2026-11-05
+## Decision
 
-## Context
+### Pricing clock
 
-Weighted-sale prices depend on a time-based weight schedule. The selected LEZ actor clock can check a time interval. It cannot return its time to the sale program. An exact-second check gives too little time to prepare and submit a buy, including private-route work.
+Each weighted trade requests one timestamp through a separate read-and-reply interface. Accept a reply only from the configured clock actor during the pending clock-read phase. The trader cannot choose that actor or provide its time. Messages carry amounts and price limits, not buyer-selected pricing windows.
 
-The [historical clock experiment](https://github.com/bleu/logos-launchpad/blob/f1198315569cfc8ada9f6c39964cb77314e2520c/crates/launchpad-client/tests/clock_probe.rs) used an older interface. It does not establish actor clock reads. The current clock stores Unix milliseconds. It is updated at the end of a block. Checks use the last recorded block time.
+The temporary local provider returns Unix milliseconds from fixture state. Divide by 1000 for the pricing second. Model previous-block time, not exact inclusion time. Require the second to be at or after scheduled start and before scheduled end. Interpolate collateral weight at that second, flooring the interpolation, and use the exact token-weight complement. Use current recorded pricing reserves, qualified math limits and participant price limits. [ADR 0015](0015-fee-accounting.md) defines fees; [ADR 0030](0030-lbp-pricing-collateral.md) defines pricing collateral.
 
-## Clock-read amendment: 2026-11-05
+Attach immutable sale start and end as inclusion-time bounds. Saved clock time cannot enforce deadlines when stale. LEZ checks validity against the inclusion-block timestamp; starts are inclusive and ends exclusive. Keep setup's canonical clock assertions separate. Fixed-price and curve rules are unchanged. See [ending rules](0025-sale-closing.md).
 
-This amendment supersedes the buyer-selected pricing windows below. Weighted buys now supply amounts and price limits only. Each buy requests one timestamp through a separate read-and-reply interface. The reply is accepted only from the configured clock actor during the pending clock-read phase. The buyer cannot select that actor or supply its time.
+### Setup weights and bounds
 
-The temporary local provider returns Unix milliseconds from fixture state. Divide by 1000 to select the pricing second. Model previous-block time, not exact execution time. Require the pricing second to be at or after the scheduled start and before the scheduled end. Interpolate the collateral weight at that second and use its exact token-weight complement. Use current recorded reserves and retain the math limits and buyer price limits. Namespace fees use net-input pricing and exact-output gross-up under [ADR 0031](0031-shared-launch-factory.md).
+Store immutable linear endpoints as normalized integer weights with fixed total `10^18`. Each side must be in `10^16..=99 * 10^16` (1% through 99%). Do not store whole percentages. Math scales remain `2^52` and `2^62` under [ADR 0011](0011-weighted-precision.md); this does not adopt Balancer's power implementation.
 
-Attach the immutable sale start and end as inclusion-time bounds. These bounds remain necessary when saved clock time is stale. Setup keeps its existing canonical clock assertions. Fixed-price and bonding-curve behavior is unchanged. No checkpoint is needed for pricing.
+Require an explicit scheduled start and a later schedule end. At creation, assert canonical clock time at or before start and require inclusion at or before start. Convert the inclusive millisecond limit to an exclusive upper bound with checked addition. No weighted start-now option is available without trusted timestamp reads. Every incomplete setup stage and activation must enter before end, even if saved clock time is stale. Convert with checked arithmetic and intersect response windows; never erase an earlier bound.
 
-A permissionless poke message reads the pricing clock and records the current token weight as an observer checkpoint. Successful buys also update the checkpoint when the trusted timestamp changes from the last recorded value. Each changed checkpoint emits the same event for buys and pokes. Same-timestamp buys leave the checkpoint unchanged and emit no checkpoint event. Pricing and checkpoints use one weight calculation. Failed buys and pokes commit no checkpoint, event or state changes. The checkpoint does not affect pricing or settlement; it is an observation record only.
+### Observer checkpoints
 
-The pinned LEZ clock cannot return a timestamp. `LAUNCHPAD_MOCK_CLOCK=1` enables the temporary provider for local tests. Normal builds reject weighted buys with `ClockUnavailable`. The fixture has a separate actor address and no public time-setting message. Replace the provisional interface when a verified LEZ timestamp-read API is available. The future capability is a project assumption, not implemented platform behavior.
+Permissionless poke reads the pricing clock and records the pricing second and token weight. Successful buys update that observation when the trusted timestamp changes. Changed checkpoints emit the same event for buys and pokes; same-timestamp buys emit no checkpoint event. Use the same weight calculation for pricing and observations. Failed buys and pokes commit no checkpoint, event or state change.
 
-This design removes the buyer's choice of pricing time. It also makes weighted buys depend on an API that is not yet available on the selected platform. Local host and guest tests use a fake clock. They do not establish real clock support, freshness, private execution or deployment readiness. See the [workspace guide](../architecture/workspace-guide.md#temporary-weighted-pricing-clock).
+No checkpoint or poke is needed for pricing or settlement. A checkpoint grants no payout rights. Namespace freeze stops trades, not the schedule or poke, and cannot extend the end.
 
-## Earlier window decision (superseded for weighted buy pricing)
+## Reason and limits
 
-This amendment supersedes the earlier rule that each buy uses weights from an exact trusted execution timestamp. It also supersedes the timestamp-keyed buy and poke checkpoint rules. Weighted buys use a buyer-selected time window and the least favourable scheduled weights for the buyer within that window.
+One trusted timestamp removes trader choice of pricing time. The selected canonical LEZ clock checks intervals but cannot return time; its saved timestamp is updated at block end and can describe the previous block. That differs from inclusion-block validity checks.
 
-Each weighted buy supplies `valid_from` and `valid_until` in Unix seconds. The window includes `valid_from` and excludes `valid_until`. Require `sale_start <= valid_from < valid_until <= sale_end`. Reject an invalid window. Do not shorten it without the buyer's instruction. Use the canonical clock to check `valid_from * 1000 <= clock_time < valid_until * 1000`. Convert bounds with checked arithmetic. Also attach the same half-open interval as a response validity window. LEZ must check it against the inclusion-block timestamp. Saved clock data alone cannot enforce the sale boundaries. Intersect added bounds with existing response bounds. A failed check fails the whole transaction.
-
-Use immutable linear weight endpoints with a fixed total of `10^18`. Each token weight must be at least `10^16` (1%) and at most `99 * 10^16` (99%). Store normalized integer weights, not whole percentages. This gives smooth schedules without whole-percentage steps. The internal math scales remain `2^52` and `2^62`, as specified in [ADR 0011](0011-weighted-precision.md). This change does not adopt Balancer's power implementation.
-
-Use an explicit scheduled start for weighted creation. Check that the canonical clock is at or before this start when creation executes. Also require creation inclusion at or before the scheduled start; convert its inclusive millisecond bound to an exclusive upper bound with checked addition. Do not provide a start-now option until the clock can return a trusted time. Every incomplete setup stage and pool activation must enter before the sale end. Enforce this with an inclusion-time upper bound, even when the saved clock is stale. See [ADR 0031](0031-shared-launch-factory.md) for factory setup.
-
-Use these endpoints for interpolation. Floor the collateral weight's interpolation and calculate the token weight as its exact complement. Evaluate the pair at `valid_from` and `valid_until - 1`, the last included Unix second. Select the smaller collateral weight and its token complement. This pair gives the least token output for exact input and the greatest collateral input for exact output. Linear schedules are monotone, so no interior timestamp gives a worse pair. Apply the same rule to rising, falling and constant schedules.
-
-Price each buy with this pair and the current recorded pricing reserves. Check minimum output or maximum input against that result. Fee incidence is superseded by [ADR 0031](0031-shared-launch-factory.md); pricing collateral follows [ADR 0030](0030-lbp-pricing-collateral.md). The buyer selects the window and price limits. Do not replace them during execution.
-
-A buy does not require a poke or checkpoint. A stored pair must not select a later price. Poke and observer checkpoints are implemented in the clock-read amendment above.
-
-The [namespace emergency freeze](0028-token-custody-and-freeze.md) stops buys. It does not stop the schedule or extend a validity window. The original sale end still closes trading. Fixed-price and bonding-curve time rules are unchanged. For weighted-sale weights, this record supersedes the execution-time rule in [ADR 0017](0017-quotes-and-slippage.md).
-
-## Consequences
-
-A wider window gives more time to execute but can give the buyer a worse scheduled price. This replaces exact execution-time pricing. The window protects the sale from a favourable historical pair selected by the buyer. Slippage limits protect the buyer from an unacceptable reserve change.
-
-Host tests cover window bounds, time conversion, both buy forms, both schedule directions, constant weights, price limits and current reserves. Seeded guest tests cover successful buys, validity windows and rollback. Clock update checks, observation records and full private-route checks remain pending. Failed buys must commit no reserve, fee or transfer changes.
+`LAUNCHPAD_MOCK_CLOCK=1` enables only the temporary local provider. Its actor address is separate and has no public time-setting message. Normal builds reject weighted trades with `ClockUnavailable`. Replace the provisional interface when a verified timestamp-read API exists. That future API is an assumption, not platform behavior. Host and guest fixtures do not prove real clock support, freshness, private execution or deployment readiness. See the [temporary clock guide](../architecture/workspace-guide.md#temporary-weighted-pricing-clock).
 
 ## Sources
 
