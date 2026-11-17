@@ -2,8 +2,6 @@
 
 Status: Product and recovery requirements accepted; platform, wallet and proof verification pending.
 
-Date: 2026-10-01; allowlist amendments: 2026-11-09 and 2026-11-10 ([ADR 0021](../adr/0021-modes-and-open-limits.md)).
-
 This is the shared private-flow specification for curve buys, curve sells, fixed-price sale buys and weighted sale buys. It defines required behavior, not implemented production behavior. The selected actor revision's temporary token support has no private holdings. Existing private purchase and authority helpers return explicit unsupported errors. See [ADR 0018](../adr/0018-private-participation.md), [migration limits](../adr/0034-lez-v04-migration.md) and [allowlist policy](../adr/0021-modes-and-open-limits.md).
 
 ## Transaction contract
@@ -26,7 +24,7 @@ Private and public routes use the same mechanism state, custody checks, price ru
 | --- | --- | --- | --- |
 | Curve buy | Collateral | Launch tokens | Deducted from collateral input. |
 | Curve sell | Launch tokens | Collateral | Deducted from collateral output. The output limit uses the applicable net result. |
-| Fixed-price sale buy | Collateral | Launch tokens | Deducted before pricing. Exact output grosses up required net collateral; the input limit caps gross payment ([ADR 0035](../adr/0035-fixed-price-swap-fees.md)). |
+| Fixed-price sale buy | Collateral | Launch tokens | Deducted before pricing. Exact output grosses up required net collateral; the input limit caps gross payment ([ADR 0015](../adr/0015-fee-accounting.md)). |
 | Weighted sale buy | Collateral | Launch tokens | Deducted before pricing. Exact output grosses up required net collateral; the input limit caps gross payment ([ADR 0031](../adr/0031-shared-launch-factory.md)). |
 
 Public exact-input sells are available in all factory engines when `BuyAndSell` permits them. This does not add private execution or complete private sell routes for fixed-price and weighted sales. Fixed-price and weighted sale buys retain their separate price rules. All three engines use the selected ending policy. Selected depletion is final; `Scheduled` does not permit early payouts on empty inventory. Weighted `Either` retains the schedule end as a fallback. See [sale closing](../adr/0025-sale-closing.md), [weighted sale clock](../adr/0026-lbp-clock-and-poke.md) and [fee accounting](../adr/0015-fee-accounting.md).
@@ -39,19 +37,9 @@ Public-state changes can invalidate a private proof even when the displayed pric
 
 ## Allowlist policy
 
-Optional allowlists apply to buys in all three pricing engines under [ADR 0021](../adr/0021-modes-and-open-limits.md). The 2026-11-10 amendment replaces private approved-account enrollment with pre-approved public traders. The [plain-English design](allowlist-proof.md) explains that decision; the earlier checking-account protocol is superseded. The maintained `crates/eligibility-policy` module now enforces public buy admission in all three engines. Signed development tests cover native `Execute` authority and replay rejection; see [public execution evidence](../../plans/allowlist-program-integration.md#public-execution-evidence). Weighted public buys use the pinned upstream clock, with the limits in [ADR 0026](../adr/0026-lbp-clock-and-poke.md). Wallet support and complete private execution remain unverified.
+The [allowlist design](allowlist-proof.md) owns the public-account enrollment, membership format and privacy limits. [Signed public evidence](allowlist-proof.md#public-execution-evidence) covers admission and native `Execute` authority, not private execution. The policy gates buys only and adds no sells.
 
-- Each sale has a fixed private list of regular public trading accounts. Participants can precompute batches locally and send only public addresses to the creator before sale creation locks the context/root in the initial terms. Staged setup cannot change that policy. No keys or private funding/return account IDs go to the creator. Protected membership delivery happens once; buying must not depend on the creator's service afterward. There is no list update, replenishment or revocation feature in this version.
-- Both funding routes must prove membership and control of the actual approved public trader, bound to the sale, purchase and destinations. There is no separate approval-only or private checking account. Membership information alone cannot transfer permission, and another address derived by the same wallet is not automatically approved.
-- The wallet prefers an unused approved address per attempt. Approved addresses can still make repeated and independent concurrent buys when normal native state permits. There is no allowlist collateral cap, purchase counter or consumed allowance. Normal balances, inventory, reserves, pricing, fees, trade limits, pause and end rules still apply.
-- The full roster is not published, but the trader address and trade effects are public. The membership path also reveals the used salt, index and sibling hashes; structure and roster-size secrecy are not guaranteed. Keep unused salts and enrollment bundles protected. The creator can link addresses submitted together; address reuse links purchases publicly. Fresh addresses do not guarantee unlinkability. Private funding/return IDs and private proof secrets stay protected, and no persistent cross-sale private participant ID is required.
-- Membership data may be reused for a new authorized purchase by the same approved trader. Reject invalid proofs, authorization copied to a different trader, sale, purchase or destination, and transaction replay. Replaying the same transaction must not create another trade.
-
-List capacity counts addresses, not people. Exhausting unused batch addresses must be reported; deliberate reuse after a privacy warning remains permitted. This does not weaken required private funding and complete private returns.
-
-Enforce membership and purchase-bound account control on-chain for both routes. SDK checks alone are insufficient. Signatures, nonces and native private-state nullifiers remain required where applicable; no sale-level one-buy nullifier or allowance state is required. DistributionX remains a reference, not the selected method. This policy gates buys only and adds no sells.
-
-Approved-account control does not prove that each account belongs to a different person or prevent full-key sharing. Do not claim human uniqueness or identity checks.
+Private funding must preserve membership and purchase-bound control of the actual approved public trader. It must not introduce a private checking account, allowance or one-buy nullifier. Normal signatures, nonces and native private-state spend/replay checks still apply. The wallet's address-selection and recovery duties are in the transaction contract above. Required private acceptance scenarios are below.
 
 ## Responsibilities
 
@@ -165,6 +153,10 @@ For transaction failures, inspect the selected platform's pool state, public bal
 - Private-funded execution of the selected membership method and native account authorization bound to the actual approved public trader, sale and purchase for all pricing engines. Public-funded execution has separate signed evidence linked above. Private funding/return IDs must stay protected without a separate private eligibility-checking account.
 - Precomputed public-account batches, fixed-list enrollment and protected membership delivery, address selection and recovery, repeat and concurrent authorized buys, transaction replay rejection and no per-buy creator dependency.
 - Reconciliation and restart tests covering lost responses, missing hashes, authoritative terminal outcomes and no duplicate trades.
-- Agreement with the accepted custody, fee, clock, event and SDK interface decisions before final design acceptance.
+- Agreement on private-route test seams before implementation, including success for every engine, late output/input/gas-return failures, incompatible targets, call/cycle limits, native replay/spend checks and lost-result recovery.
+- Full-route local proof time and cost after successful execution. Do not publish inner receipts, journals or witnesses.
+- Agreement with accepted custody, fee, clock, event and SDK interface decisions, followed by final user review of evidence and limits. The private feature remains incomplete until that review.
 
 The [platform research](../research/private-route-transaction-patterns.md) records the old curve-buy graph, call limit and missing returns before the actor migration. Those observations do not define the selected revision's runtime limits or establish a supported private route. Private execution remains unsupported until compatible holdings and the complete transaction contract are implemented and verified. See [verification boundaries](../adr/0022-verification-boundaries.md).
+
+This specification does not authorize deployment, live funds, platform-limit changes or tool installation.

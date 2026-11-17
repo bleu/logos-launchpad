@@ -2,21 +2,13 @@
 
 Status: Accepted
 
-Date: 2026-09-29
-
-## Context
-
-The curve program and weighted-math PoCs are separate public sources. The three sale types need common developer tools, a shared core bridge and product packages. Maintaining separate bonding-curve implementations would split fixes and review evidence.
-
 ## Decision
 
-Use this repository as the maintained repository for all three sale types, SDK/core bridge, CLI, QML packages and integration checks. Retain useful curve package boundaries. Keep weighted math as a separate package inside this repository.
+Maintain all three sale types, SDK, shared core, CLI, QML packages and integration checks in this repository. Keep useful curve package boundaries and weighted math as a separate package.
 
-Repository ownership does not require one Cargo workspace, one deployable artifact or a shared pool state model. Preserve guest and math build boundaries. A later import copies code directly from identified reviewed source snapshots and retains required licenses and copyright notices.
+## Reason and limits
 
-## Consequences
-
-Cross-component changes can be reviewed together. Each component still owns its tests and interfaces. This decision creates no working programs. Old repositories remain independent public sources.
+One repository keeps related changes and review evidence together. It does not require one Cargo workspace, one deployable artifact or shared pool state. Preserve guest and math build boundaries. Each component owns its tests and interfaces. Repository placement does not prove implementation or production readiness.
 
 ## Sources
 

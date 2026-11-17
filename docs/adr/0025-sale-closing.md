@@ -2,11 +2,9 @@
 
 Status: Accepted internally; expiry-validation departure: To be reviewed by Logos team
 
-Date: 2026-09-29; weighted controls and settlement evidence: 2026-11-06; shared-ending amendment: 2026-11-13
-
 ## Decision
 
-[ADR 0031](0031-shared-launch-factory.md) replaces mechanism-specific closing with an immutable ending policy checked at the pool boundary. This amends the earlier closing descriptions in [ADR 0008](0008-curve-allocation-and-close.md) and [ADR 0021](0021-modes-and-open-limits.md). No sale ends on a collateral-raised target.
+Check an immutable ending policy at the pool boundary. [ADR 0031](0031-shared-launch-factory.md) defines shared policy ownership. No sale ends on a collateral-raised target.
 
 | Policy | Trading and settlement | Supported creation |
 | --- | --- | --- |
@@ -27,7 +25,9 @@ Only the current creator-role holder can authorize fixed-price or weighted proce
 
 The separate `AfterEnd` allocation follows the selected ending policy and can be claimed before or after proceeds settlement. Keep `AfterSetup` behavior unchanged. Fee collection, settlement and allocation claims remain available while frozen. Controls reject ended sales; repeated authorized pause or resume calls otherwise succeed without another change event. Resume cannot clear namespace freeze.
 
-Signed fixed-price guest tests cover settlement transfers, burns and rollback. Local [guest tests](../../methods/tests/actor_sale.rs) also cover weighted controls, scheduled close, both payout orders, frozen payouts and retries. Forced fee-credit, burn, proceeds-credit and allocation-credit failures preserve full state and signer nonce. Repaired retries pay and burn once. The earlier checks used the temporary pricing clock for setup trades. Results on the upstream clock revision are recorded in the workspace guide. Local guest checks do not prove live sequencer behavior, private execution or production readiness. See the [workspace evidence](../architecture/workspace-guide.md#execution-and-evidence-limits) and [fee policy](0016-lbp-live-fees.md).
+## Reason and limits
+
+Trading and payout eligibility must follow the same saved policy. Local guest checks cover transfers, burns, rollback and retries, not live clock support, private execution or production readiness. See [workspace evidence](../architecture/workspace-guide.md#execution-and-evidence-limits) and [fee policy](0015-fee-accounting.md).
 
 ## Sources
 

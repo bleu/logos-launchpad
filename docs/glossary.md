@@ -1,6 +1,6 @@
 # Plain-English glossary
 
-This page explains technical shorthand used in this repository. [CONTEXT.md](../CONTEXT.md) is the canonical domain language, and the [ADRs](adr/README.md) decide behavior and status. This glossary does not add product rules, implementation claims or policy.
+This page explains technical terms. [CONTEXT.md](../CONTEXT.md) defines the domain language. [ADRs](adr/README.md) state decisions, and the [workspace guide](architecture/workspace-guide.md#execution-and-evidence-limits) states evidence limits. Definitions here do not add product rules or implementation claims.
 
 ## Product and sale terms
 
@@ -11,32 +11,32 @@ This page explains technical shorthand used in this repository. [CONTEXT.md](../
 | Bonding-curve sale | A sale whose price follows a mathematical curve as tokens are bought or sold. |
 | AMM | Automated market maker: a program that prices trades from a formula and token balances. |
 | Pool | Mechanism state and token custody. A curve pool is state and custody for one ordered token pair. A direct curve pool is an internal primitive, not a separate sale product. |
-| Factory | Shared launch adapter that can create new tokens, set allocations, bind a sale to its namespace and validate setup where rules match. Fixed-price, bonding-curve and weighted sale pools keep separate pricing and custody, with shared eligibility, namespace fee and ending decisions. |
+| Factory | Shared adapter for sale setup and common policies. Each pricing engine keeps its own state and custody. |
 | Token0 / token1 | The ordered token roles in a curve pool. A curve factory sale uses the launch token as token0 and collateral as token1. |
 | Collateral | The token used to buy the sale token and pay protocol fees. |
 | Real reserve / virtual reserve | Real reserves are tokens that can fund swap output. Virtual reserves are pricing-only values. |
-| Invariant / `k` | A formula value that pricing must preserve under its stated rules. The curve's creation-time product is immutable `initial_k`. Quotes use current `k`, which grows with retained sell collateral under [ADR 0009](adr/0009-curve-arithmetic.md). |
+| Invariant / `k` | A value or relation that must hold under the pricing rules. For the curve's reserve product, see [ADR 0009](adr/0009-curve-arithmetic.md). |
 | `D` / `R` | `D` is the purchasable curve allocation. `R` is the curve allocation reserved for possible DEX seeding after close. |
 | Allocation / supply | Tokens assigned to a purpose in a sale, or the total tokens available for that purpose. |
-| Fixed-price sale | A sale with a strictly positive exact price in collateral and launch-token smallest units; token decimals are for display. Locked local verification of its four-stage setup passed using development receipts; trading, real proofs and deployment readiness remain pending. See [ADR 0032](adr/0032-fixed-price-lbp-setup.md). |
-| Weighted sale | A sale whose pricing uses token balances and weights that change on a set schedule. Setup, trades, controls, settlement and observer checkpoints are implemented. See [ADR 0026](adr/0026-lbp-clock-and-poke.md) for clock rules. |
+| Fixed-price sale | A sale with a fixed positive price, expressed in collateral and launch-token smallest units. Token decimals affect display only. |
+| Weighted sale | A sale priced from token balances and weights that change on a schedule. |
 | Weight / weight schedule | A pricing input that changes over time for a weighted sale. The schedule defines its start, end and progress. |
 | Quote | A price calculation from current state. It does not reserve that price for later execution. |
 | Exact-input / exact-output | A trade where the input is fixed and output is calculated, or where the desired output is fixed and required input is calculated. |
 | Slippage limit | A participant-selected execution bound, such as minimum output or maximum input, that rejects an unfavourable trade. |
 | Protocol fee / accrued fee | The protocol charge on a trade, and the amount recorded but not yet transferred to the treasury. |
-| Fee-first buy | A buy that deducts the collateral fee before pricing tokens. Exact-output buys gross up the required net collateral; fixed-price and weighted recorded proceeds are net. See [ADR 0035](adr/0035-fixed-price-swap-fees.md). |
-| Namespace fee | A collateral fee on buy input or sell output. Buys price net input and gross up exact output; fees stay separate from recorded collateral. |
+| Fee-first buy | A buy priced after the collateral fee is deducted. See [fee rules](adr/0015-fee-accounting.md). |
+| Namespace fee | A collateral charge on buy input or sell output, owed to the namespace treasury. |
 | Live fee rate / current treasury | A namespace setting read at execution or collection time, rather than a value frozen when the sale was created. |
 | Treasury | The current namespace destination for collected protocol fees. |
 | Lifecycle / close / settlement | A sale's allowed state changes; ending trading; and the separate post-close transfer of allowed fees, allocations or proceeds. |
-| Graduation / DEX | Moving liquidity to a decentralized exchange. |
+| Graduation / DEX | The planned move of sale liquidity to a decentralized exchange. The `Graduated` state confirms a completed adapter callback, not DEX liquidity. |
 | Graduation hook | A call to another program after a sale closes. Its rules are in [ADR 0020](adr/0020-settlement-and-graduation.md). |
 | Ending policy | The fixed rule that ends trading and permits settlement: `Manual`, `Scheduled`, `Depletion` or `Either`. `Manual` is direct-only; weighted sales require a schedule end. See [ADR 0025](adr/0025-sale-closing.md). |
 | Expiry / end timestamp | The configured end used by `Scheduled` or as the fallback for `Either`. |
 | `poke` | A permissionless weighted-sale call that reads the pricing clock and records the current token weight as an observer checkpoint without changing the price schedule. |
 | Pause / freeze | Controls that stop specified actions. Their platform integration and policy remain separate from namespace administration. |
-| Allowlist / proof / nullifier | A fixed private list of approved public trading accounts, evidence that the actual trader is a member and controls the purchase, and a value that prevents spent private state from being used again. Participants can precompute batches of public addresses; approval is not consumed by a buy. Private accounts can still fund trades and receive returns. All three engines implement public buy admission under [ADR 0021](adr/0021-modes-and-open-limits.md), with signed development authority and replay checks; wallet support and complete private execution remain open. |
+| Allowlist / proof / nullifier | An approved set of public trading accounts; evidence of membership or control; and a value that prevents private state from being spent twice. See the [allowlist design](architecture/allowlist-proof.md) for privacy and repeat-buy rules. |
 | Dust / oversized trade / input envelope | Very small trades, trades that are too large, and the tested range of values that an implementation accepts safely. |
 
 ## Roles, accounts and custody
@@ -46,13 +46,13 @@ This page explains technical shorthand used in this repository. [CONTEXT.md](../
 | Namespace | An independent launchpad identity with its own administrator, fee rate and treasury. Sales remain bound to their creation namespace. |
 | Namespace state | Logical per-namespace administration and configuration state used for creation validation and applicable runtime checks. This term does not select a registry, shared physical schema or cross-factory account owner. |
 | Namespace administrator | The holder of namespace-configuration rights. This role does not receive creator rights or approve every permitted creator action. |
-| Creator | The sale authority holder with permitted creation and lifecycle actions. Curve and fixed-price sales create a separate per-sale role for their creator. |
+| Creator | The holder of a sale's separate creator authority role. |
 | Participant | A person or client that uses a configured sale to inspect, quote or trade. |
 | Pool owner | A separate authority role for an applicable pool. |
 | Authority | Permission to perform a defined action. It is checked per action and role. |
 | App placement | Which mini-app presents a flow. The admin app presents namespace administration only, while the configured-sales app presents creator and participant flows. Placement does not change authority. |
-| `AccountId` | The account identifier used for namespace administration in the planned design. |
-| Role authority | A role's own authority state. Roles share code, not permissions. Current holders can transfer curve creator and direct pool-owner roles with successor consent. Those two roles cannot renounce. |
+| `AccountId` | An account identifier used by LEZ. |
+| Role authority | Permission state held separately for each role. See [role rules](adr/0006-namespaces-and-authority.md) for transfer and renunciation. |
 | Authority NFT / NFT master | The legacy PoC role mechanism: a unique token whose holder could act. Launchpad role checks now use separate role authority. |
 | Token definition / mint authority | The token's defining record, and authority to create or manage that token definition when platform rules allow it. |
 | Custody / vault | Control of tokens, and an account that holds tokens for a program or sale. |
@@ -69,7 +69,7 @@ This page explains technical shorthand used in this repository. [CONTEXT.md](../
 | Shielded / deshield / re-shield | Protected private balance state; moving assets to a public account; and moving received or unused assets back to protected state. |
 | Fresh public trading account | An account the wallet prefers to use for one private-route attempt. For an allowlisted buy, its address must already be approved, for example from a precomputed batch. One-use is a wallet privacy preference, not an on-chain purchase restriction. |
 | Public trade effects | Pool state and trade results visible on the public chain. The route does not make them private. |
-| ZK / zero knowledge / zkVM | A proof system that can show a computation was valid without exposing all inputs; a zkVM is a virtual machine that can produce such proofs. RISC Zero is a zkVM project name, but this repository does not select or implement it. |
+| ZK / zero knowledge / zkVM | A proof method that verifies a computation without exposing all inputs; a zkVM is a virtual machine that can produce such proofs. RISC Zero supplies the project's zkVM tools. |
 | Proving readiness | Evidence that an implementation can meet the proof-related requirements that apply to it. Existing documents make no such production claim. |
 
 ## Platform, interfaces and packages

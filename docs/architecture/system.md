@@ -1,58 +1,48 @@
 # System overview
 
-This is the planned architecture. The full production implementation is not built. Fixed-price sale setup has a four-stage implementation that passed locked local verification using development receipts; real proofs and deployment readiness remain pending.
+Public setup, trading, controls, fee collection, settlement and graduation use the selected LEZ actor interface. Local checks do not establish live readiness. The QML apps and shared core are package placeholders; wallet, indexed reads and private routes remain incomplete. See [evidence limits](workspace-guide.md#execution-and-evidence-limits).
 
 ## Components
 
 ```mermaid
 flowchart TB
-    Admin[Admin app] --> Core[Shared core and SDK]
-    Sales[Sales app] --> Core
-    CLI[CLI] -->|SDK calls| Core
-    Core -->|State and transaction requests| LEZ[LEZ access]
-    Core -->|Read listings and history| Indexer[Existing indexer]
-    Core -.->|Awaiting development| Wallet[LP-0021 Wallet Provider SDK]
+    Admin[Admin app: planned workflows] -.-> Core[Shared core: planned SDK and read boundary]
+    Sales[Configured-sales app: planned workflows] -.-> Core
+    Core -.-> Wallet[LP-0021 wallet provider: pending integration]
+    Core -.-> Indexer[Existing indexer: pending integration]
+    Core -.-> Client[Launchpad client]
+    CLI[CLI] --> Client
+    Client --> LEZ[LEZ actor execution]
 
-    subgraph Programs[On-chain components]
-        Namespace[Namespace settings]
-        LaunchFactory[Shared launch factory] -->|Curve-specific setup| CurvePool[Curve pool]
-        LaunchFactory -->|Fixed-price sale setup and funding| FixedPriceSale[Fixed-price sale pool]
-        LaunchFactory -.->|Future weighted-sale setup| WeightedSale[Weighted sale pool]
-        LaunchFactory -.-> Namespace
-        CurvePool -.-> Namespace
-        FixedPriceSale -.-> Namespace
-        WeightedSale -.-> Namespace
+    subgraph Programs[Public program boundary]
+        Namespace[Namespace settings and separate role authorities]
+        Factory[Shared launch factory]
+        Curve[Curve pool]
+        LBP[Fixed-price and weighted pools]
+        Factory --> Curve
+        Factory --> LBP
+        Factory --> Namespace
+        Curve --> Namespace
+        LBP --> Namespace
     end
 
-    LEZ -->|Namespace administration| Namespace
-    LEZ -->|Curve creation and settlement| LaunchFactory
-    LEZ -->|Fixed-price sale setup| LaunchFactory
-    LEZ -->|Curve trades| CurvePool
-    LEZ -.->|Future fixed-price sale operations| FixedPriceSale
-    LEZ -.->|Future weighted sale operations| WeightedSale
-    Programs -->|Events| Indexer
-    WeightedSale -.->|Future library calls| Math[Weighted math]
+    LEZ --> Factory
+    LEZ --> Curve
+    LEZ --> LBP
+    LEZ --> Namespace
+    LBP --> Math[Weighted math: unaudited]
+    Programs -.->|Event delivery unverified| Indexer
 ```
 
-The admin app manages namespaces. Creators and participants use the sales app. Both apps read indexed data through the shared core. The CLI calls the SDK directly.
+Solid lines show implemented code boundaries. Dashed lines show pending integration. The factory shares setup and policies, not pricing state or custody. Weighted trades use the [upstream pricing clock](workspace-guide.md#weighted-pricing-clock). A successful graduation callback does not prove DEX liquidity.
 
-The indexer provides listings and history. Its data can lag behind the chain. Programs check current state before they accept an action. Dashed lines show dependencies or an open integration.
+The admin app is for namespace administration. The configured-sales app is for creators and participants. Planned QML reads go through the shared-core backend module API. Indexed data can lag; programs enforce current state.
 
-The curve branch of the shared launch factory can call a saved adapter through the SDK or CLI. See [ADR 0020](../adr/0020-settlement-and-graduation.md) for hook policy and the [curve overview](../product/curve-contract.md#acceptance-evidence) for implementation limits.
+## Flows and contracts
 
-## Flows
-
-- [Create a curve pool](sequence-diagrams/create-curve-pool.md)
-- [Create a fixed-price sale pool](sequence-diagrams/create-lbp-pool.md)
-- [Make a private purchase](sequence-diagrams/private-purchase.md)
-
-## Details
-
-- [Factory and pool boundaries](../adr/0005-mechanism-boundaries.md)
-- [Shared launch setup](../adr/0031-shared-launch-factory.md)
-- [Fixed-price sale setup](../adr/0032-fixed-price-lbp-setup.md)
-- [Namespaces and authority](../adr/0006-namespaces-and-authority.md)
-- [App packages and interfaces](../adr/0019-product-packages.md)
-- [Wallet Provider SDK integration](../adr/0029-wallet-integration.md)
-- [Package layout and checks](repository-layout.md)
-- [Glossary](../glossary.md)
+- [Creation and private-purchase flows](sequence-diagrams/README.md)
+- [Shared launch setup and policies](../adr/0031-shared-launch-factory.md)
+- [Namespace and role authority](../adr/0006-namespaces-and-authority.md)
+- [Settlement and graduation](../adr/0020-settlement-and-graduation.md)
+- [Package responsibilities](repository-layout.md)
+- [Private participation and recovery](private-participation.md)

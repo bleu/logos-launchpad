@@ -53,29 +53,13 @@ Start at the leaf. At each level, the low bit of the current index selects wheth
 
 In the original experiment with 100,000 synthetic addresses, list construction took about 0.65 seconds and one path took about 0.14 ms to prepare. Signed local verification took about 41 ms and 260,365 cycles, below the unchanged 10,000,000-cycle gate. A later signed run using the maintained verifier adapter used 271,709 cycles; the original timings were not rerun. These were single self-execution measurements with cached local tools, not pool buys, native private proofs or latency guarantees. Guest time excluded compilation. The [research snapshot](https://github.com/bleu/logos-launchpad/blob/b17de27db81bf2f0acbae891580c8d230c9f56db/packages/eligibility-proof-lite/README.md#measured-results) preserves the full report; the experiment is not part of this program change.
 
-## Buying with private funds
+## Purchase authorization
 
-Alex chooses account A for the first purchase. In one transaction, the wallet must arrange:
+The pool checks membership and control of the actual public trader, even when a caller bypasses the app or factory. Membership data alone is insufficient. Spending from funding accounts also requires valid authority.
 
-1. Deshield the required private funds into the public trading and gas accounts.
-2. Buy through approved public account A, within Alex's chosen limits.
-3. Shield the purchased tokens, unused input and unused gas back into private accounts that Alex controls. Actual fees are paid, not returned.
+An approved address can make repeated or independent concurrent buys when current native and sale state permit. There is no allowlist spending cap, purchase counter or consumed allowance. A new address from the same wallet is not automatically approved. List capacity counts addresses, not people.
 
-For example, Alex makes 80 collateral units available for a purchase. If the full payment is 72, the remaining 8 must return privately with the purchased tokens. Unused gas funding must also return privately.
-
-All steps must succeed together. A required return failure must reject the purchase's application changes. A rejected transaction may still cost transaction fees. There is no separately completed purchase followed by a shielding retry.
-
-The pool must check that A is approved for this sale and that Alex authorized the actual purchase. Membership data alone is not enough. Spending from funding accounts also needs valid authority. These checks must hold even when a caller bypasses the app or factory.
-
-## The next purchase
-
-For a new purchase, the wallet prefers B, then C. Using each public address for only one attempt reduces address reuse. It is a wallet privacy rule, not an on-chain purchase limit.
-
-The same approved address can still make new authorized buys. There is no allowlist spending cap, purchase counter or consumed allowance. Normal balances, prices, inventory, fees, account nonces and private-state spending checks still apply. Independent purchases can succeed when their funding and current pool state permit.
-
-The list is fixed. A new address from Alex's wallet is not automatically approved. If there are no unused approved addresses left, the wallet must say so. It must not silently reuse an address or use an unapproved one. Alex can deliberately choose an approved address again after a warning that its purchases will be linked. List capacity counts addresses, not people.
-
-Changing addresses must never become an automatic retry. If A's transaction result is unknown, the wallet must resolve that attempt before sending a replacement through B. Replaying the original transaction must not create another trade.
+The [private transaction contract](private-participation.md#transaction-contract) owns funding, complete returns, wallet address selection and unresolved-attempt rules. See the [private-purchase flow](sequence-diagrams/private-purchase.md) for the planned sequence.
 
 ## Privacy limits
 
@@ -87,12 +71,10 @@ Public paths reveal the used address's salt, position and sibling hashes. These 
 
 Account approval does not prove that each account belongs to a different person. Sharing full account keys can transfer control.
 
-## What is still missing?
+## Public execution evidence
 
-Public pools now store immutable policy and check admission for all three engines. Signed development tests cover actual-trader authority through native `Execute`, replay rejection and complete public buys, including fresh staged setup that preserves the policy. See the [program integration plan](../../plans/allowlist-program-integration.md#public-execution-evidence) for evidence and limits. Weighted public buys use the pinned upstream clock, with the limits in [ADR 0026](../adr/0026-lbp-clock-and-poke.md). Safe wallet account preparation and recovery still need implementation. These checks do not establish real proofs or deployment readiness.
+Public pools store immutable policy and check admission for all three engines. [Workspace evidence](workspace-guide.md#execution-and-evidence-limits) covers actual-trader authority, replay rejection and complete public buys. Weighted public buys use the pinned upstream clock, which normal builds use. This evidence does not establish native private proving or deployment readiness.
 
-The private route still needs a native privacy proof. We do not claim that public-funded buys need the old private eligibility guest or that this change reduces native privacy proof time.
+## Remaining private work
 
-The current compatibility token layer supports public holdings only. Private token holdings, complete private returns, late-failure behavior and full transaction cost remain blockers to a working private route. This enrollment decision does not solve them.
-
-See [private participation and recovery](private-participation.md) for the full transaction contract and [ADR 0031](../adr/0031-shared-launch-factory.md) for reusable pool policies.
+Wallet preparation, protected membership delivery and recovery, native private holdings, complete private returns and full-route proof time/cost remain unverified. Their requirements and final-review gate are in [private participation](private-participation.md#evidence-still-required). Public-funded buys do not need the old private eligibility guest. No reduction in native privacy proof time is claimed.

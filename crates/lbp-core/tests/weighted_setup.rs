@@ -110,8 +110,6 @@ fn holding(owner: AccountId, definition: AccountId, balance: u128) -> Vec<u8> {
     .unwrap()
 }
 
-/// Drive the prepare → namespace → definitions → custody handshake through
-/// to completion. Returns (final_input, final_response).
 fn prepared() -> (ReceiveInput, lee_core::program::Response) {
     let inputs = weighted_inputs();
     let factory = prepare().from.unwrap().account_id;
@@ -175,7 +173,6 @@ fn weighted_preparation_rejects_invalid_terms() {
                 lbp_core::Error::InvalidTerms
             }
             7 => {
-                // end_timestamp <= start_timestamp
                 inputs.end_timestamp = 100;
                 lbp_core::Error::InvalidTerms
             }
@@ -231,7 +228,6 @@ fn weighted_preparation_saves_pending_terms_and_initializes_vaults() {
         compute_pool_pda(id(40), id(8), id(41), id(42), state.factory_owner)
     );
     assert!(response.async_messages.is_empty());
-    // mode must be Weighted
     assert!(matches!(state.mode, lbp_core::PoolMode::Weighted { .. }));
 }
 
@@ -280,7 +276,6 @@ fn weighted_activation_funds_and_records_seed_collateral() {
         pricing_collateral,
         ..
     } if collateral_seed == inputs.collateral_seed && pricing_collateral == inputs.collateral_seed));
-    // double-funding must fail
     input.pre_state = response.post_state.unwrap();
     input.from = prepare().from;
     input.message = borsh::to_vec(&Message::ActivateWeighted).unwrap();

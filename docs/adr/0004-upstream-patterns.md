@@ -2,21 +2,15 @@
 
 Status: Accepted
 
-Date: 2026-09-29
-
-## Context
-
-The platform AMM is a useful reference for token custody, program calls and module packaging. Its constant-product implementation does not supply the full launchpad product or SDK private workflow.
-
 ## Decision
 
-Continue the launchpad PoCs as this codebase. Adopt applicable patterns from `lez-programs/programs/amm`: LP-0015 tail-call settlement, LP-0014 associated token accounts, shared core with thin interfaces, and separate `.lgx` modules. Do not import the full AMM repository as a fork.
+Use applicable patterns from `lez-programs/programs/amm`: LP-0015 tail-call settlement, LP-0014 associated token accounts, shared core with thin interfaces, and separate `.lgx` modules. Do not fork the full AMM repository.
 
-For each copied source fragment, record its upstream revision and retain required notices. For patterns alone, cite the reference and verify the actual target-platform API before implementation.
+Record the upstream revision and required notices for copied fragments. For patterns alone, cite the reference and check the target-platform API before use.
 
-## Consequences
+## Reason and limits
 
-This repository owns launchpad behavior and maintenance. Shared platform conventions reduce unnecessary differences, but do not prove custody, administration, event or package compatibility. Those checks need executable evidence on the selected LEZ version. AMM behavior must not be presented as an implemented SDK privacy guarantee.
+The AMM provides useful platform patterns, but not the launchpad product or its SDK private route. Verify custody, authority, events and packaging on the selected LEZ revision. AMM behavior does not establish a launchpad privacy guarantee.
 
 ## Sources
 

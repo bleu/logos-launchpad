@@ -1,6 +1,6 @@
 # Workspace guide
 
-The application uses the [selected LEZ actor revision](../../plans/lez-v04-migration.md). There is no second supported legacy platform. See [repository layout](repository-layout.md) for package roles and [ADR 0034](../adr/0034-lez-v04-migration.md) for the decision.
+The application uses one selected LEZ actor revision. There is no supported legacy lane or deployed state to migrate. [ADR 0034](../adr/0034-lez-v04-migration.md) owns the revision decision; [repository layout](repository-layout.md) defines package roles.
 
 ## Light development checks
 
@@ -10,7 +10,7 @@ Plain `cargo test --locked` selects only the root core crates. Client and CLI te
 
 ## Build contexts
 
-Full checks use LEZ `cb075d5777cb812ba44216429d4f2837ea8518bd`, host Rust 1.98.1, guest Rust 1.94.1, RISC0 3.1.0 and zkOS wrapper 2.2.3. The [development base guide](../../packages/lez-compat/README.md) gives installation requirements. Check local tools with `bash verify/check-builds.sh --preflight`. Scaffold and SPEL CLI are not required.
+Full checks use LEZ `cb075d5777cb812ba44216429d4f2837ea8518bd`, host Rust 1.98.1, guest Rust 1.94.1, RISC0 3.1.0 and zkOS wrapper 2.2.3. The RISC0 build library is 3.0.7; it has a separate version from the zkVM and executor. The [development base guide](../../packages/lez-compat/README.md) gives installation requirements. Check local tools with `bash verify/check-builds.sh --preflight`. Scaffold and SPEL CLI are not required.
 
 Curve host and guest builds require `CURVE_EMERGENCY_AUTHORITY`, a nonzero 64-character hex account ID. For local tests, run this from the repository root:
 
@@ -58,9 +58,17 @@ Application, SDK and CLI timestamps use Unix seconds. Programs convert stored bo
 
 Add `--execution` to `check-builds.sh` to select the optional node-free token, seeded sale and role-authority fixtures. The script builds the application and compatibility guests and locates the pinned upstream clock guest; `LAUNCHPAD_CLOCK_ELF` can override that path. Execution needs local processes and IPC. A sandbox rejection is not a passing result. Token-only rollback checks do not prove sale rollback.
 
-The [sale tests](../../methods/tests/actor_sale.rs) and [role-authority tests](../../crates/launchpad-client/tests/role_authority_guest.rs) exercise signed setup, trades, controls and settlement through the guests. Fault tests check rollback and retries. Use disposable state; replacing a test fault adapter does not establish live adapter replacement.
+The [sale tests](../../methods/tests/actor_sale.rs) and [role-authority tests](../../crates/launchpad-client/tests/role_authority_guest.rs) cover signed setup for all engines, trades, curve administration and role transfer, controls, fees, manual settlement and graduation callback rollback. Fault tests check full state rollback and retries. See the [allowlist proof design](allowlist-proof.md). Use disposable state; replacing a test fault adapter does not establish live adapter replacement.
 
-Host tests do not prove guest execution. Local guest execution does not establish real proofs, live sequencer timing, wallet/service integration, package loading or DEX liquidity. Private routes are unsupported because compatibility token holdings are public only. See the [package README](../../packages/launchpad/README.md) for package requirements.
+On 10 November 2026, 32 signed public sale tests passed, including allowlisted buys within the 10,000,000-cycle budget. Exact-input, exact-output and fresh-setup buys used 658,565/658,680/665,182 cycles for curve sales, 758,814/758,859/758,828 for fixed-price sales and 838,557/840,447/870,899-874,364 for weighted sales. That weighted run used a fake clock. These historical counts are not current performance guarantees or native private-proof evidence.
+
+Local verification on 17 November 2026 included main commit `554f71d` with the selected upstream clock revision. The development gate passed 613 host tests. Release host/client/CLI tests, application and compatibility guest builds, weighted-math parity, release-overflow checks and token execution passed. Separate signed runs passed 82 sale tests and 38 curve, role-authority and settlement tests. IDL and wire checks, shell regressions, formatting and strict host lints passed with unchanged lockfiles. These checks used development receipts. They are evidence for that revision, not later changes.
+
+The three `.lgx` archives passed an earlier Nix build. Installation, loading and `Test backend` were blocked by missing Basecamp and `lgpm`; there was no `Backend OK` result. See the [package evidence](../../packages/launchpad/README.md). These results do not establish current release readiness.
+
+Host tests do not prove guest execution. Local guest execution does not establish real proofs, live sequencer timing, wallet/service integration, package loading or DEX liquidity. Curve failed-setup recovery and adapter-initiated reentry lack focused guest tests. General adapter size/cost and live DEX integration remain unverified. Private routes are unsupported because compatibility token holdings are public only. See the [private evidence requirements](private-participation.md#evidence-still-required) and [package requirements](../../packages/launchpad/README.md).
+
+Ordinary post-close settlement has local execution coverage. The separate delayed-settlement scope item remains unresolved. [ADR 0032](../adr/0032-fixed-price-lbp-setup.md) lists the remaining cancellation, expired-setup recovery and complete SDK/CLI flow gaps.
 
 For stable release image IDs, the build script requires `/tmp/logos-launchpad-release/source` with `--release`. Build paths can change guest binaries and IDs; cross-OS identity remains unverified. See [verification boundaries](../adr/0022-verification-boundaries.md).
 
@@ -70,32 +78,23 @@ The curve packages use the root [MIT license](../../LICENSE). Weighted math reta
 
 ## Weighted pricing clock
 
-Normal builds use the pinned upstream clock. Weighted buys, sells and poke send `ReadTimestamp { granularity: 1 }` to the canonical actor. The reply contains Unix milliseconds. Pricing divides by 1000. There is no mock guest or build flag. See [ADR 0026](../adr/0026-lbp-clock-and-poke.md#upstream-clock-amendment-2026-11-09).
+Normal builds use the upstream clock under [ADR 0026](../adr/0026-lbp-clock-and-poke.md). There is no mock guest or build flag. Run `bash verify/check-weighted-clock.sh` for focused host and sale guest checks, or `bash verify/check-builds.sh --execution` for the full gate with the emergency-authority setup above. Commands use locked dependencies.
 
-Actor execution fixtures use the upstream `test-utils` feature in debug host builds. LEZ rejects that feature in release builds. Guest binaries and production host checks still use release builds. Release-overflow checks keep their release profile.
+Actor execution fixtures use upstream `test-utils` in debug host builds. LEZ rejects that feature in release builds. Guest binaries and production host checks still use release builds. Release-overflow checks keep their release profile.
 
-Run `bash verify/check-weighted-clock.sh` for focused host and sale guest checks. Run `bash verify/check-builds.sh --execution` with the emergency-authority fixture set for the full local gate. Commands use locked dependencies. The focused tests execute the pinned clock artifact. They retain explicit stale-state fixtures as separate cases.
+The [host tests](../../crates/lbp-core/tests/weighted_trading.rs) and [guest tests](../../methods/tests/actor_sale.rs) cover authenticated reads, malformed and block-ID replies, replay rejection, setup bounds, freeze, fractional schedules, checkpoint events and rollback. A real upstream `Tick` changes a later price. Stale-clock fixtures also check inclusion-time rejection without state or nonce changes. These checks do not prove sequencer ordering, timestamp trust or proof generation time.
 
-The clock is updated at the end of a block. A node-free `Tick` test checks the real guest's state update and a later weighted price. It also holds saved time before expiry while inclusion reaches expiry. The transaction is rejected without state or nonce changes. This does not prove sequencer ordering, timestamp trust, network operation or proof generation time.
+An earlier five-test native-token probe on feature-branch pin `f94ca8a7550fa0012222b9fb5990dfe44c54a3dc` checked private funding, a public clock read and atomic private returns. A changed clock reply passed when the return stayed fixed. A return changed from 100 to 99 failed with `CrossMessageMismatch` despite a minimum of 98; a fresh proof passed. Failures preserved state. The probe used development receipts and a small payout guest, not launchpad token programs. It has not been repeated on the selected `dev` pin and does not complete the launchpad private route.
 
-Earlier fake-clock evidence is historical. The 9 November results below used feature-branch pin `f94ca8a7550fa0012222b9fb5990dfe44c54a3dc`. They do not establish behavior on the current `dev` pin.
+## Platform replacement checklist
 
-A separate local native-token probe at the earlier feature-branch pin checked private funding, a public clock read and atomic private returns. This probe has not been repeated on the current `dev` pin. A changed clock reply passed when the return stayed fixed. A changed return failed with `CrossMessageMismatch` despite an acceptable minimum output. A fresh proof passed. Failed attempts preserved all state. The five-test probe used development receipts and a small payout guest. It did not run launchpad token programs or complete a launchpad private route.
+The migration is complete for the selected public actor interfaces, not for all product or readiness requirements. The [dated upstream source check](../research/logos-v02-v04-migration-check.md) is background evidence, not a current compatible dependency set. Temporary support and its source/evidence record remain in the [development base guide](../../packages/lez-compat/README.md).
 
-Before the checkpoint merge on 9 November 2026, `bash verify/check-builds.sh --execution` passed on the pinned clock revision with unchanged lockfiles. It includes 22 sale guest tests and 31 curve, role-authority and settlement guest tests. The sale tests cover real clock reads and a real `Tick`, saved-clock and inclusion bounds, both weighted buy forms, full weighted setup and rollback. Setup rejects saved time past its bound even when inclusion would pass. The host development gate, IDL and wire checks, all shell regressions, strict host lints and formatting also passed locally. Linux CI has not run for this change. Service integration, full private routes and real proofs remain separate checks.
+Each replacement must switch client/program interfaces together, remove superseded temporary code and rerun affected host, wire and guest checks with fresh disposable state. Preserve canonical addresses, token-definition checks, authority, custody, accounting and atomic rollback. No deployed-state conversion or backward compatibility is required.
 
-After the checkpoint merge on 9 November 2026, the full locked execution gate passed with unchanged lockfiles. All 28 sale guest tests and 31 curve, role-authority and settlement guest tests passed. The sale suite retains settlement and allocation rollback checks. It also checks real clock ticks, same-second checkpoint event suppression, later checkpoints, and poke at the sale end and after settlement. Host tests reject forged, malformed, block-ID and replayed poke replies. The host development gate, generated IDL and wire checks, shell regressions, formatting and strict host lints passed. These local checks use development execution. Live sequencer timing, full private routes, real proofs and deployment readiness remain unverified.
-
-## Dev pin verification: 2026-11-16
-
-The first check used `dev` revision `cb075d5777cb812ba44216429d4f2837ea8518bd` before the allowlist merge below. The full locked execution gate passed with unchanged lockfiles. All 28 sale guest tests and 31 curve, role-authority and settlement guest tests passed. The gate also passed release host tests, guest builds, weighted-math parity, release-overflow checks and token execution. The development gate passed 327 host tests. IDL and wire checks, all shell regressions, workspace formatting and strict workspace lints passed. Generated interfaces did not change. The merged clock still returns saved previous-block time; current inclusion-block timestamp reads are unavailable through this API. Live sequencer checks, the earlier private-return probe on this pin, real proofs and deployment readiness remain unverified.
-
-## Main merge verification: 2026-11-16
-
-Main commit `5e64eba` was merged with the upstream clock integration on LEZ revision `cb075d5777cb812ba44216429d4f2837ea8518bd`. The full locked gate passed all 34 sale guest tests and 31 curve, role-authority and settlement guest tests. The sale suite includes allowlisted public buys and fresh setup for all three engines. Weighted cases use the upstream clock and retain their cycle limits. The development gate passed 375 host tests. IDL and wire checks, all shell regressions, formatting and strict workspace lints passed. Verification did not change lockfiles. The generated interface matches the merged source. Live sequencer timing, private execution, real proofs and deployment readiness remain unverified.
-
-## Shared-policy merge verification: 2026-11-17
-
-Main commit `554f71d` is included with LEZ revision `cb075d5777cb812ba44216429d4f2837ea8518bd`. The development gate passed 613 host tests. Release host, client and CLI tests, application and compatibility guest builds, weighted-math parity, release-overflow checks and token execution passed. After the fixture fixes, separate signed execution runs passed all 82 sale tests and 38 curve, role-authority and settlement tests. Weighted buys, sells, setup and poke use the upstream clock.
-
-IDL and wire checks, all eight shell regressions, formatting and strict root host lints passed. Execution-test host lints also passed with guest compilation skipped; guest builds and execution were checked separately. The inclusion-boundary test passed again after its lint fix. Lockfiles stayed unchanged. These local checks use development receipts. Live sequencer timing, private execution, real proofs, package loading and deployment readiness remain unverified.
+- [ ] <a id="upstream-token-ata"></a> Replace temporary token/ATA support when actor-compatible upstream versions cover required definitions, exact supply, metadata, holdings, minting, transfers and burns with signer/PDA authority and checked balances. Do not build a general token product.
+- [ ] <a id="upstream-authority"></a> Replace temporary role authority when compatible support exists. Preserve bootstrap, current-holder checks, consented transfer and each role's renunciation rules under [ADR 0006](../adr/0006-namespaces-and-authority.md).
+- [ ] <a id="upstream-framework"></a> Replace temporary conversion/generation helpers where supported LEZ/SPEL helpers fit. Keep useful repository build, pin, IDL and verification commands; a full framework is not required.
+- [ ] <a id="upstream-wallet"></a> Integrate compatible wallet/provider and module interfaces under [ADR 0029](../adr/0029-wallet-integration.md). Use platform network-fee handling; missing support is a platform dependency, not grounds for a replacement wallet or fee mechanism. Finish package loading and backend smoke checks without replacing the existing shells.
+- [ ] <a id="release-check"></a> Compare the official v0.4 release with the selected revision. Update dependency pins and generated artifacts together, then repeat affected checks.
+- [ ] <a id="deferred-evidence"></a> Complete deferred service integration, real proofs, live verification and focused guest gaps listed above. Use host tests for routine work; do not require a full network. Full private-route completion remains separate work under [ADR 0018](../adr/0018-private-participation.md).

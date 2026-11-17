@@ -2,8 +2,6 @@
 
 Status: Accepted
 
-Date: 2026-09-29
-
 ## Decision
 
 Integrations must obtain fresh quotes and set limits from the participant's selected slippage tolerance. Never silently use an unrestricted trade. The program checks limits against current pricing reserves and applicable fees. Actor execution and SDK quotes share pricing calculations and immutable trade-mode checks under [ADR 0021](0021-modes-and-open-limits.md). Weighted trades use provider time under [ADR 0026](0026-lbp-clock-and-poke.md); SDK timestamps are advisory and prove neither provider support nor inclusion time.
