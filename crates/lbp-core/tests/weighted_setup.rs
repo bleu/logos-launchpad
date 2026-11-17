@@ -609,7 +609,7 @@ fn malformed_weighted_policies_cannot_bypass_pool_entry_or_setup_replies() {
 }
 
 #[test]
-fn snapshot_quotes_work_without_a_provider_but_weighted_sells_require_one() {
+fn snapshot_quotes_and_weighted_sells_use_the_same_saved_time() {
     let (mut input, response) = activation(1_000_000, 100);
     let mut state = lbp_core::PoolAccount::decode(response.post_state.as_ref().unwrap()).unwrap();
     state.trade_mode = lbp_core::TradeMode::BuyAndSell;
@@ -636,19 +636,43 @@ fn snapshot_quotes_work_without_a_provider_but_weighted_sells_require_one() {
     )
     .unwrap();
     assert!(quoted.amount_out > 0);
-    if !cfg!(local_mock_clock) {
-        input.from = Some(Actor::new(id(50), input.receiver.program_account_id));
-        input.pre_state = borsh::to_vec(&state).unwrap().into();
-        input.message = borsh::to_vec(&Message::SellWeightedExactInput {
-            amount_in: 1000,
-            min_amount_out: 0,
-        })
-        .unwrap();
-        assert_eq!(
-            handle(&input).err(),
-            Some(lbp_core::Error::ClockUnavailable)
-        );
+    let trader = id(50);
+    input.from = Some(Actor::new(trader, input.receiver.program_account_id));
+    input.pre_state = borsh::to_vec(&state).unwrap().into();
+    input.message = borsh::to_vec(&Message::SellWeightedExactInput {
+        amount_in: 1000,
+        min_amount_out: quoted.amount_out,
+    })
+    .unwrap();
+    let mut response = handle(&input).unwrap();
+    for bytes in [
+        namespace_state(),
+        holding(input.receiver.account_id, id(42), state.recorded_collateral),
+        holding(input.receiver.account_id, id(41), state.remaining_inventory),
+        holding(trader, id(41), 1000),
+    ] {
+        let source = response.sync_messages.last().unwrap().to;
+        input = reply(&input, &response, source, bytes);
+        response = handle(&input).unwrap();
     }
+    assert_eq!(response.sync_messages.len(), 1);
+    let request = &response.sync_messages[0];
+    assert_eq!(request.to, clock_core::clock_actor());
+    assert_eq!(
+        borsh::from_slice::<clock_core::Message>(&request.message).unwrap(),
+        clock_core::Message::ReadTimestamp { granularity: 1 }
+    );
+    input.pre_state = response.post_state.unwrap();
+    input.from = Some(clock_core::clock_actor());
+    input.message = borsh::to_vec(&clock_core::Reply::Timestamp(150_999)).unwrap();
+    let response = handle(&input).unwrap();
+    let saved = lbp_core::PoolAccount::decode(response.post_state.as_ref().unwrap()).unwrap();
+    assert_eq!(
+        saved.recorded_collateral,
+        state.recorded_collateral - quoted.gross_collateral
+    );
+    assert_eq!(saved.accrued_fees, quoted.protocol_fee);
+    assert_eq!(saved.remaining_inventory, state.remaining_inventory + 1000);
 }
 
 #[test]

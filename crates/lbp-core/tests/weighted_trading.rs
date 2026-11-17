@@ -2537,10 +2537,7 @@ fn pending_poke_rechecks_saved_policy_and_schedule_before_clock_reply() {
             from: Some(lbp_core::pricing_clock::actor()),
             is_authorized: false,
             pre_state: borsh::to_vec(&(*b"LZLBPOKE", state)).unwrap().into(),
-            message: borsh::to_vec(&lbp_core::pricing_clock::Reply {
-                timestamp_ms: 1_500_000,
-            })
-            .unwrap(),
+            message: borsh::to_vec(&clock_core::Reply::Timestamp(1_500_000)).unwrap(),
         };
         assert_eq!(handle(&callback).err(), Some(expected));
     }
@@ -3230,6 +3227,12 @@ fn weighted_setup_events_preserve_configured_seed_and_activated_accounting() {
         input = reply(&input, &response, source, bytes);
         response = handle(&input).unwrap();
     }
+    assert!(sale_events(&response).is_empty());
+    assert_eq!(response.sync_messages[0].to, clock_core::clock_actor());
+    input.pre_state = response.post_state.unwrap();
+    input.from = Some(clock_core::clock_actor());
+    input.message = borsh::to_vec(&clock_core::Reply::Timestamp(1_000_000)).unwrap();
+    response = handle(&input).unwrap();
     assert_eq!(sale_events(&response).len(), 1);
     assert_eq!(
         sale_events(&response)[0].kind,

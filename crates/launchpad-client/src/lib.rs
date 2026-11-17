@@ -1062,14 +1062,6 @@ fn lbp_trade_invocation(
             actors.push(token_actor(associated_token_account(owner, definition)));
         }
     }
-    if matches!(
-        &instruction,
-        lbp_core::Message::BuyWeightedExactInput { .. }
-            | lbp_core::Message::BuyWeightedExactOutput { .. }
-            | lbp_core::Message::SellWeightedExactInput { .. }
-    ) {
-        actors.push(lbp_core::pricing_clock::actor());
-    }
     let mut call = invocation(
         Actor::new(participant, sale.lbp_program_id),
         actors,

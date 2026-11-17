@@ -4890,30 +4890,34 @@ fn factory_creation_rejects_invalid_ending_matrix_without_state_changes() {
     let mut state = fixed_config(
         clock_state(
             V03State::new()
-                .with_named_programs([
-                    (
-                        FACTORY,
-                        Program::new(Cow::Borrowed(launchpad_methods::FACTORY_ELF)).unwrap(),
-                    ),
-                    (
-                        CURVE,
-                        Program::new(Cow::Borrowed(launchpad_methods::CURVE_ELF)).unwrap(),
-                    ),
-                    (
-                        LBP,
-                        Program::new(Cow::Borrowed(launchpad_methods::LBP_ELF)).unwrap(),
-                    ),
-                    (
-                        TOKEN_PROGRAM_ACCOUNT_ID,
-                        Program::new(Cow::Borrowed(lez_compat_methods::COMPAT_TOKEN_ELF)).unwrap(),
-                    ),
-                    (
-                        authority,
-                        Program::new(Cow::Borrowed(lez_compat_methods::COMPAT_AUTHORITY_ELF))
-                            .unwrap(),
-                    ),
-                    (clock_core::clock_account_id(), programs::clock()),
-                ])
+                .with_programs_at(
+                    [
+                        (
+                            FACTORY,
+                            Program::new(Cow::Borrowed(launchpad_methods::FACTORY_ELF)).unwrap(),
+                        ),
+                        (
+                            CURVE,
+                            Program::new(Cow::Borrowed(launchpad_methods::CURVE_ELF)).unwrap(),
+                        ),
+                        (
+                            LBP,
+                            Program::new(Cow::Borrowed(launchpad_methods::LBP_ELF)).unwrap(),
+                        ),
+                        (
+                            TOKEN_PROGRAM_ACCOUNT_ID,
+                            Program::new(Cow::Borrowed(lez_compat_methods::COMPAT_TOKEN_ELF))
+                                .unwrap(),
+                        ),
+                        (
+                            authority,
+                            Program::new(Cow::Borrowed(lez_compat_methods::COMPAT_AUTHORITY_ELF))
+                                .unwrap(),
+                        ),
+                        (clock_core::clock_account_id(), programs::clock()),
+                    ]
+                    .map(|(address, program)| (address, program, true)),
+                )
                 .with_public_accounts([
                     account(
                         Actor::new(COLLATERAL, TOKEN_PROGRAM_ACCOUNT_ID),
@@ -5547,13 +5551,16 @@ fn lbp_graduation_env(
         }
         env
     };
-    env.state = env.state.with_named_programs([(
-        LBP_HOOK_PROGRAM,
-        Program::new(Cow::Borrowed(
-            launchpad_methods::GRADUATION_FAULT_ADAPTER_ELF,
-        ))
-        .unwrap(),
-    )]);
+    env.state = env.state.with_programs_at(
+        [(
+            LBP_HOOK_PROGRAM,
+            Program::new(Cow::Borrowed(
+                launchpad_methods::GRADUATION_FAULT_ADAPTER_ELF,
+            ))
+            .unwrap(),
+        )]
+        .map(|(address, program)| (address, program, true)),
+    );
     initialize_lbp_adapter(&mut env, accepted_intent);
     let saved = lbp_launch(&env);
     assert_eq!(
@@ -6260,11 +6267,16 @@ fn lbp_graduation_late_faults_roll_back_every_effect_and_repaired_retry_pays_onc
                     "InsufficientBalance"
                 }
                 "completed" => {
-                    env.state = env.state.with_named_programs([(
-                        LBP,
-                        Program::new(Cow::Borrowed(launchpad_methods::LBP_COMPLETION_FAULT_ELF))
+                    env.state = env.state.with_programs_at(
+                        [(
+                            LBP,
+                            Program::new(Cow::Borrowed(
+                                launchpad_methods::LBP_COMPLETION_FAULT_ELF,
+                            ))
                             .unwrap(),
-                    )]);
+                        )]
+                        .map(|(address, program)| (address, program, true)),
+                    );
                     "InvalidState"
                 }
                 "callback" => "callback rejected",
@@ -6282,16 +6294,23 @@ fn lbp_graduation_late_faults_roll_back_every_effect_and_repaired_retry_pays_onc
             }
             // These program mappings exist only in this disposable fault fixture.
             if matches!(fault, "callback" | "ack" | "hash") {
-                env.state = env.state.with_named_programs([(
-                    LBP_HOOK_PROGRAM,
-                    Program::new(Cow::Borrowed(launchpad_methods::GRADUATION_ADAPTER_ELF)).unwrap(),
-                )]);
+                env.state = env.state.with_programs_at(
+                    [(
+                        LBP_HOOK_PROGRAM,
+                        Program::new(Cow::Borrowed(launchpad_methods::GRADUATION_ADAPTER_ELF))
+                            .unwrap(),
+                    )]
+                    .map(|(address, program)| (address, program, true)),
+                );
             }
             if fault == "completed" {
-                env.state = env.state.with_named_programs([(
-                    LBP,
-                    Program::new(Cow::Borrowed(launchpad_methods::LBP_ELF)).unwrap(),
-                )]);
+                env.state = env.state.with_programs_at(
+                    [(
+                        LBP,
+                        Program::new(Cow::Borrowed(launchpad_methods::LBP_ELF)).unwrap(),
+                    )]
+                    .map(|(address, program)| (address, program, true)),
+                );
             }
             let events = env
                 .execute_events(lbp_hook_message(creator), 300_000)
@@ -6498,10 +6517,13 @@ fn lbp_nested_adapter_calls_cannot_reenter_pending_factory_or_pool_and_retry_pay
                 lbp_core::SettlementProgress::Unselected
             );
             assert!(lbp_adapter_state(&env).receipt.is_none());
-            env.state = env.state.with_named_programs([(
-                LBP_HOOK_PROGRAM,
-                Program::new(Cow::Borrowed(launchpad_methods::GRADUATION_ADAPTER_ELF)).unwrap(),
-            )]);
+            env.state = env.state.with_programs_at(
+                [(
+                    LBP_HOOK_PROGRAM,
+                    Program::new(Cow::Borrowed(launchpad_methods::GRADUATION_ADAPTER_ELF)).unwrap(),
+                )]
+                .map(|(address, program)| (address, program, true)),
+            );
             env.execute(lbp_hook_message(creator), 300_000).unwrap();
             assert_lbp_graduated(&env, weighted, &initial, collateral, supply, false, false);
             assert_eq!(
@@ -6864,10 +6886,13 @@ fn curve_event_env_with_sell_fee(
     let pool = curve_core::compute_pool_pda(NAMESPACE, CURVE, LAUNCH, COLLATERAL, owner);
     let role = curve_core::compute_pool_owner_role(NAMESPACE, pool, CURVE);
     let state = state
-        .with_named_programs([(
-            factory_core::AUTHORITY_PROGRAM_ACCOUNT_ID,
-            Program::new(Cow::Borrowed(lez_compat_methods::COMPAT_AUTHORITY_ELF)).unwrap(),
-        )])
+        .with_programs_at(
+            [(
+                factory_core::AUTHORITY_PROGRAM_ACCOUNT_ID,
+                Program::new(Cow::Borrowed(lez_compat_methods::COMPAT_AUTHORITY_ELF)).unwrap(),
+            )]
+            .map(|(address, program)| (address, program, true)),
+        )
         .with_public_accounts([
             account(Actor::new(pool, CURVE), borsh::to_vec(&pool_state).unwrap()),
             seeded_role(role, owner),
