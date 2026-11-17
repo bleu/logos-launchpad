@@ -33,7 +33,7 @@ bash verify/check-idl.sh --actor
 bash verify/check-builds.sh --actor
 ```
 
-The final command now selects repository-wide checks, including the root application and weighted math. The `--actor` flag is retained as an alias for the same platform. See the [workspace guide](../../docs/architecture/workspace-guide.md) for the current scope, passed local checks and remaining gaps. Add `--execution` to include the optional token and seeded curve fixtures. The token fixture's separate command is:
+The final command selects repository-wide checks, including the root application and weighted math. `--actor` is an alias for the same platform. See the [workspace guide](../../docs/architecture/workspace-guide.md) for current check scope and evidence limits. Add `--execution` to include the optional token and seeded curve fixtures. The token fixture's separate command is:
 
 ```sh
 RISC0_BUILD_LOCKED=1 cargo +1.98.1 test --manifest-path packages/lez-compat/execution/Cargo.toml --locked
@@ -41,7 +41,7 @@ RISC0_BUILD_LOCKED=1 cargo +1.98.1 test --manifest-path packages/lez-compat/exec
 
 The executor needs permission to start a local process and use local IPC. A filesystem sandbox can reject it with `Operation not permitted`. This is not a passing execution result. No network service or real-proof mode is needed. The fixture uses upstream fee-exempt test transactions; it does not establish wallet submission or network-fee behavior.
 
-Commands with or without `--actor` select the same actor platform. The CI workflow is configured for repository checks; Linux CI has not run. Foundation evidence below stays separate from the application results in the [workspace guide](../../docs/architecture/workspace-guide.md#execution-and-evidence-limits).
+Foundation evidence below is separate from application results in the [workspace guide](../../docs/architecture/workspace-guide.md#execution-and-evidence-limits).
 
 ## Interfaces and addresses
 
@@ -81,4 +81,4 @@ The token and authority handlers are repository code that adapts reviewed behavi
 
 Use the selected upstream [wallet](https://github.com/logos-blockchain/logos-execution-zone/blob/578ce58a71b79c49d48e97e51c520bf71f0252d9/lez/wallet/src/lib.rs), [native fees](https://github.com/logos-blockchain/logos-execution-zone/blob/578ce58a71b79c49d48e97e51c520bf71f0252d9/lez/programs/fee/core/src/lib.rs), [clock](https://github.com/logos-blockchain/logos-execution-zone/blob/578ce58a71b79c49d48e97e51c520bf71f0252d9/lez/programs/clock/core/src/lib.rs) and [event](https://github.com/logos-blockchain/logos-execution-zone/blob/578ce58a71b79c49d48e97e51c520bf71f0252d9/lee/state_machine/core/src/program/mod.rs) interfaces for application integration. This package does not replace them or supply an execution engine.
 
-Replace local token/ATA support when an actor-compatible upstream package covers the required operations and authorization checks. Replace role-authority support when an upstream package covers the adopted lifecycle. Compare behavior and wire formats, switch callers and guests together, remove superseded code and repeat the relevant checks. Keep the repository build, pin and IDL tools where useful. The [migration checklist](../../plans/lez-v04-migration.md#follow-up-tasks) tracks removal and the official-release compatibility check. See [ADR 0034](../../docs/adr/0034-lez-v04-migration.md) for the decision.
+The workspace guide tracks replacement of [token/ATA support](../../docs/architecture/workspace-guide.md#upstream-token-ata) and [role authority](../../docs/architecture/workspace-guide.md#upstream-authority), plus the [official-release compatibility check](../../docs/architecture/workspace-guide.md#release-check). Keep repository build, pin and IDL tools where useful. See [ADR 0034](../../docs/adr/0034-lez-v04-migration.md) for the decision.

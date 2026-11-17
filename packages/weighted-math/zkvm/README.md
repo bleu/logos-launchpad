@@ -14,7 +14,7 @@ The guest protocol is unchanged: input starts with the operation and case count,
 
 ## Tools
 
-The nested lockfiles select RISC0 3.0.5. The checked local tools are `cargo-risczero` 3.0.5, `r0vm` 3.0.5 and the `risc0` Rust toolchain reporting `1.94.1-dev (06e01cb0d 2026-04-09)`. Use host Rust 1.94.0. The root lockfiles resolve RISC0 3.0.6; this workspace does not change them or prove compatibility between these selections.
+The nested lockfiles select RISC0 3.0.5. The [qualification record](../docs/qualification.md) lists the historical proof toolchain. For current builds, use the selected tools in [`verify/build-tools.env`](../../../verify/build-tools.env) and the [workspace guide](../../../docs/architecture/workspace-guide.md#build-contexts). Historical proof results do not verify a rebuilt guest image.
 
 Install missing tools with the [RISC0 installation guide](https://dev.risczero.com/api/zkvm/install). Select the recorded versions rather than an unpinned latest release. Verify them before recording evidence:
 

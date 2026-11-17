@@ -138,7 +138,6 @@ fn prepared() -> (ReceiveInput, lee_core::program::Response) {
     (input, response)
 }
 
-/// Drive preparation + activation to a ready-to-trade state.
 fn funded() -> (ReceiveInput, lbp_core::PoolAccount) {
     let inputs = weighted_inputs();
     let factory = AccountId::for_public_pda(&id(7), &PdaSeed::new([3; 32]));
@@ -164,7 +163,7 @@ fn funded() -> (ReceiveInput, lbp_core::PoolAccount) {
     (input, state)
 }
 
-/// Drive a buy or collect-fees message through all synchronous reply steps.
+/// Complete a trade or fee collection with fixture replies.
 fn operation_at(
     timestamp_ms: u64,
     input: &ReceiveInput,
@@ -906,9 +905,7 @@ fn weighted_buy_closes_when_remaining_inventory_hits_zero() {
 
 #[test]
 fn weighted_buy_prices_fall_as_weights_shift() {
-    // At t=start: token_weight=95, cheap tokens (high price in collateral per token)
-    // At t=end:   token_weight=50, more tokens out (lower price per token)
-    // For the same amount_in, amount_out should be LARGER at end than at start.
+    // With unchanged reserves, a lower token weight gives more tokens for the same input.
     let (input, state) = funded();
     let inputs = weighted_inputs();
 
@@ -1175,8 +1172,7 @@ fn weighted_schedule_bounds_reject_millisecond_overflow() {
 // Settlement helper
 // ---------------------------------------------------------------------------
 
-/// Drive a settlement or collect-fees message through all synchronous reply steps.
-/// Settlement reads namespace config + pool collateral vault + pool token vault, then finishes.
+/// Complete settlement or fee collection with fixture replies.
 fn settle(
     input: &ReceiveInput,
     state: &lbp_core::PoolAccount,
@@ -1238,7 +1234,6 @@ fn weighted_repeated_pause_succeeds_without_event() {
     input.from = Some(Actor::new(state.factory_owner, state.factory_program_id));
     input.pre_state = borsh::to_vec(&state).unwrap().into();
 
-    // First pause emits event
     input.message = borsh::to_vec(&Message::SetWeightedPaused { paused: true }).unwrap();
     let response = handle(&input).unwrap();
     assert!(!response.events.is_empty(), "first pause should emit event");
@@ -1246,7 +1241,6 @@ fn weighted_repeated_pause_succeeds_without_event() {
         lbp_core::PoolAccount::decode(response.post_state.as_ref().unwrap()).unwrap();
     assert!(paused_state.trade_control.is_paused());
 
-    // Repeated pause succeeds but emits no event
     input.pre_state = response.post_state.unwrap();
     let response = handle(&input).unwrap();
     assert!(
@@ -1254,13 +1248,11 @@ fn weighted_repeated_pause_succeeds_without_event() {
         "repeated pause should not emit event"
     );
 
-    // Resume emits event
     input.pre_state = response.post_state.unwrap();
     input.message = borsh::to_vec(&Message::SetWeightedPaused { paused: false }).unwrap();
     let response = handle(&input).unwrap();
     assert!(!response.events.is_empty(), "resume should emit event");
 
-    // Repeated resume (already unpaused) succeeds silently
     input.pre_state = response.post_state.unwrap();
     let response = handle(&input).unwrap();
     assert!(
@@ -1397,8 +1389,6 @@ fn weighted_settlement_pays_inventory_and_recorded_collateral_and_collects_fees(
     assert_eq!(next.recorded_collateral, 0);
     assert_eq!(next.accrued_fees, 0);
 
-    // Check the response has transfers and burns
-    // Fees go to the treasury; both sale assets go to the creator.
     let messages = &response.sync_messages;
     assert!(
         messages.len() >= 2,
@@ -1409,7 +1399,6 @@ fn weighted_settlement_pays_inventory_and_recorded_collateral_and_collects_fees(
 #[test]
 fn weighted_settlement_requires_factory_authorization() {
     let (mut input, state) = funded();
-    // Random caller cannot settle
     input.from = Some(Actor::new(id(50), id(8)));
     input.pre_state = borsh::to_vec(&state).unwrap().into();
     input.message = borsh::to_vec(&Message::SettleWeighted { creator: id(50) }).unwrap();
@@ -1447,7 +1436,6 @@ fn weighted_settlement_is_idempotent() {
     let settled = state_of(&response);
     assert!(settled.settlement_progress.is_complete());
 
-    // Second settlement returns state unchanged (no-op)
     let mut input2 = input.clone();
     input2.from = Some(Actor::new(
         settled.factory_owner,
@@ -1456,7 +1444,6 @@ fn weighted_settlement_is_idempotent() {
     input2.pre_state = borsh::to_vec(&settled).unwrap().into();
     input2.message = borsh::to_vec(&Message::SettleWeighted { creator: id(50) }).unwrap();
     let response2 = handle(&input2).unwrap();
-    // Idempotent: no transfers, state preserved
     let still_settled = state_of(&response2);
     assert!(still_settled.settlement_progress.is_complete());
     assert_eq!(still_settled.recorded_collateral, 0);
@@ -1500,8 +1487,6 @@ fn weighted_settlement_with_zero_fees_and_no_unsold() {
     .unwrap();
     let next = state_of(&response);
     assert!(next.settlement_progress.is_complete());
-    // Empty inventory needs no launch-token transfer.
-    // No fee payout when accrued_fees is 0
 }
 
 #[test]
@@ -1588,7 +1573,6 @@ fn weighted_settlement_surplus_not_paid_to_creator() {
 #[test]
 fn weighted_fixed_price_settlement_rejects_weighted_pool() {
     let (input, state) = funded();
-    // SettleFixedPrice on a weighted pool should fail
     let mut input2 = input.clone();
     input2.from = Some(Actor::new(state.factory_owner, state.factory_program_id));
     input2.pre_state = borsh::to_vec(&state).unwrap().into();
@@ -1854,7 +1838,6 @@ fn poke_at(
     // Anyone can send poke — use a random sender
     input.from = Some(Actor::new(id(99), id(8)));
     let response = handle(&input)?;
-    // The response should request a clock read
     let source = response.sync_messages.last().unwrap().to;
     assert_eq!(source, lbp_core::pricing_clock::actor());
     let input = ReceiveInput {
@@ -1903,7 +1886,6 @@ fn assert_checkpoint_events_match(
 #[test]
 fn poke_is_permissionless_and_records_checkpoint() {
     let (input, state) = funded();
-    // Checkpoint starts at zero
     assert_eq!(checkpoint(&state), (0, 0));
     let response = poke_at(1_500_000, &input, &state).unwrap();
     let after = state_of(&response);
@@ -1912,7 +1894,6 @@ fn poke_is_permissionless_and_records_checkpoint() {
     // At midpoint of 1000..3000, token weight interpolates between 95% and 50%
     let expected = interpolate_weight(weight(95), weight(50), 1000, 3000, 1500);
     assert_eq!(token_w, expected);
-    // Should emit a checkpoint event
     assert_eq!(checkpoint_events(&response).len(), 1);
     use risc0_zkvm::sha::{Impl, Sha256 as _};
     let hash = Impl::hash_bytes(b"lbp::WeightedCheckpoint");
@@ -1951,7 +1932,6 @@ fn repeated_poke_at_same_time_is_idempotent_no_event() {
     assert_eq!(checkpoint_events(&first).len(), 1);
     let after_first = state_of(&first);
     let second = poke_at(1_500_000, &input, &after_first).unwrap();
-    // Same checkpoint — no event
     assert_eq!(checkpoint_events(&second).len(), 0);
     assert_eq!(checkpoint(&state_of(&second)), checkpoint(&after_first));
 }
@@ -2004,7 +1984,6 @@ fn buy_updates_checkpoint_on_new_timestamp() {
 #[test]
 fn buy_at_same_timestamp_does_not_change_checkpoint() {
     let (input, state) = funded();
-    // First buy at t=1500
     let first = operation_at(
         1_500_000,
         &input,
@@ -2021,7 +2000,6 @@ fn buy_at_same_timestamp_does_not_change_checkpoint() {
     let after_first = state_of(&first);
     let cp1 = checkpoint(&after_first);
     assert_eq!(cp1.0, 1500);
-    // Second buy also at t=1500 — checkpoint should not change
     let second = operation_at(
         1_500_000,
         &input,
@@ -2043,7 +2021,6 @@ fn buy_at_same_timestamp_does_not_change_checkpoint() {
 #[test]
 fn buy_at_different_timestamp_updates_checkpoint() {
     let (input, state) = funded();
-    // Buy at t=1500
     let first = operation_at(
         1_500_000,
         &input,
@@ -2059,7 +2036,6 @@ fn buy_at_different_timestamp_updates_checkpoint() {
     .unwrap();
     let after_first = state_of(&first);
     let cp1 = checkpoint(&after_first);
-    // Buy at t=2000 — checkpoint should update
     let second = operation_at(
         2_000_000,
         &input,
@@ -2139,11 +2115,9 @@ fn exact_output_checkpoint_event_matches_poke_with_fractional_weights() {
 #[test]
 fn failed_buy_does_not_change_checkpoint() {
     let (input, state) = funded();
-    // Poke to set a checkpoint first
     let poked = poke_at(1_500_000, &input, &state).unwrap();
     let after_poke = state_of(&poked);
     let cp = checkpoint(&after_poke);
-    // Attempt a buy that fails due to slippage
     let result = operation_at(
         2_000_000,
         &input,
@@ -2166,7 +2140,6 @@ fn poke_on_settled_pool_still_works() {
     let (input, mut state) = funded();
     state.settlement_progress = lbp_core::SettlementProgress::ManualComplete;
     state.recorded_collateral = 0;
-    // Poke on a settled pool should still record checkpoint
     let response = poke_at(1_500_000, &input, &state).unwrap();
     let (time, _) = checkpoint(&state_of(&response));
     assert_eq!(time, 1500);

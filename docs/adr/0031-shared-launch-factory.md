@@ -1,55 +1,47 @@
 # ADR 0031: Shared launch setup and reusable pool policies
 
-Status: Shared setup, public buy eligibility, fee arithmetic, optional pause/resume, supported fee/ending decisions, settlement route rules with duplicate-payout protection, cross-engine graduation and common program events implemented. Private routes, real proofs and deployment readiness pending.
-
-Date: 2026-10-13; policy amendment: 2026-11-09; ending and namespace-fee amendment: 2026-11-13
-
-## Context
-
-Bonding-curve, fixed-price, and weighted sales all need new-token creation, allocation, namespace binding and setup checks. Those operations can use one launch factory when their rules match. Their pricing and custody rules do not match; fee and ending decisions can be shared.
-
-This record partially supersedes [ADR 0005](0005-mechanism-boundaries.md). It first replaced the separate-factory requirement for common launch setup. The 2026-11-09 amendment also replaces the requirement to keep fee and ending policies tied to each mechanism. It does not make their pricing state, custody or settlement effects interchangeable.
+Status: Accepted; shared policies and public paths implemented; private routes and readiness pending.
 
 ## Decision
 
-Use the existing launch factory for common new-token creation, allocation, namespace binding and setup validation when the rules are the same. Keep typed bonding-curve, fixed-price sale, and weighted-sale inputs separate.
+### Factory and mechanism boundaries
 
-The current programs keep bonding-curve, fixed-price and weighted pricing, custody and lifecycle implementations separate. Shared public buy eligibility is implemented under [ADR 0021](0021-modes-and-open-limits.md). `crates/sale-policy` shares namespace fee, ending and two-asset payout decisions; callers retain custody accounting. Creation persists supported choices; pool entry, setup and resumed clients reject substitutions. Factory curve and fixed-price sales support `Scheduled`, `Depletion` and `Either`. Weighted sales support `Scheduled` and `Either`, with a required schedule end for interpolation and settlement fallback. Explicit `Manual` is direct-only. See [ADR 0025](0025-sale-closing.md). Namespace fees always use collateral buy input or sell output. Weighted buys now price net input and gross up exact output; [ADR 0030](0030-lbp-pricing-collateral.md) defines seed-inclusive accounting. Shared factory trade modes are implemented under [ADR 0021](0021-modes-and-open-limits.md). Retained sell fees are implemented under [ADR 0015](0015-fee-accounting.md).
+Use the launch factory for common new-token creation, allocation, namespace binding and setup validation when rules match. Keep typed bonding-curve, fixed-price and weighted inputs separate. Namespace state is logical per-namespace configuration; this does not select a registry, shared physical schema, cross-factory account owner or deployment layout.
 
-Weighted creation uses four stages: mint the exact supply and create the creator role; split sale inventory and creator allocation; prepare the weighted pool and vaults; fund and activate the pool. Keep typed creation messages separate. Use one setup record with an explicit sale mode. The weighted-setup change kept the existing fixed-price message tags and state bytes unchanged. The later shared eligibility change adds policy fields and changes the state encoding.
+Keep each engine's pricing, pool state, custody and lifecycle effects separate. The neutral ordered-pair curve pool owns pricing, real-reserve solvency, trading, custody and neutral lifecycle operations. The curve factory owns launch supply, allocations, creator rights and settlement policy. Product curve sales use the factory; direct curve pools are internal primitives and test surfaces. Keep launch vocabulary outside pure curve math and neutral APIs.
 
-The final weighted stage transfers the full collateral seed from the current creator authority. It also transfers the sale inventory from factory custody. A prior vault donation does not replace the seed. Check the seed balance and vault capacity before transfer. Activate only when inventory and seed are backed. Release an `AfterSetup` allocation in the same transaction. Keep an `AfterEnd` allocation in escrow. All effects must roll back if any operation fails.
+Reuse libraries, platform adapters, serialization and errors only where behavior matches. Do not force engines into a generic pool-state model. Curve staged creation, pending guards and factory custody do not define fixed-price or weighted setup. Each engine must enforce its own backing and account checks.
 
-Weighted weights and start rules are in [ADR 0026](0026-lbp-clock-and-poke.md). The factory does not share weighted pool pricing or buy rules with fixed-price pools.
+### Shared setup
 
-## Pool-policy amendment
+Fixed-price and weighted setup use four stages: claim the exact mint and creator role; split sale inventory and creator allocation; prepare the pool and vaults; then fund and activate. Use a setup record with an explicit sale mode and separate typed messages. [ADR 0032](0032-fixed-price-lbp-setup.md) defines fixed-price setup.
 
-Treat bonding-curve, fixed-price and weighted calculations as pricing engines. Ending, fee and optional eligibility policies must be reusable across engines and available to any pool. Keep small typed configurations and validate supported combinations at creation; do not add a runtime plugin system. Neutral direct pools can use explicit open defaults. Configured policies must hold at the pool boundary, including calls that bypass the factory or SDK.
-
-Separate permission to trade from permission to settle. Reuse policy checks without merging engine-specific reserve state, token custody or settlement effects. Preserve authority, freeze, inclusion-time bounds, allocation, seed backing, vault coverage and retry behavior. Shared ending decisions preserve inclusive starts and exclusive ends. Selected depletion is final and needs no scheduled-end payout bound. `Scheduled` ignores depletion; empty buys remain unavailable without early payouts. Payout cannot supply new depletion evidence. Direct curve pools retain owner close rights under explicit `Manual` and their supported depletion-side choices.
-
-The allowlist is a shared buy-admission policy, with pre-approved public trading accounts and unlimited repeated purchases under [ADR 0021](0021-modes-and-open-limits.md). All three engines use the maintained `crates/eligibility-policy` verifier and preserve the initial policy through staged setup. The [integration evidence](../../plans/allowlist-program-integration.md#public-execution-evidence) covers signed public buys; weighted tests use a mock clock and normal weighted buys remain unsupported. Private accounts remain planned funding and return endpoints. Policy reuse does not supply private token holdings or a complete private route.
+The final weighted stage transfers the full saved collateral seed from the current creator and inventory from factory custody. A vault donation cannot replace the seed. Check creator balance and vault capacity before transfer. Activate only with backed inventory and seed. Pay an `AfterSetup` allocation in the same transaction; keep `AfterEnd` allocation in escrow. Any failed operation rolls back all effects. [ADR 0026](0026-lbp-clock-and-poke.md) defines weighted start and weights; the factory does not share weighted pricing with fixed-price pools.
 
 ## Policy contract
 
-Use the shared ending and namespace-fee rules above, with live namespace settings and buy-only allowlist admission. Creation also binds the immutable graduation policy through setup and pool terms. All engines use the common split and required adapter route in [ADR 0020](0020-settlement-and-graduation.md); factory and pool entry points must reject manual bypass. This accepted amendment replaces curve `R`, unsold burns and separate weighted seed recovery. Pricing and sell-budget seed protection remain unchanged. See [ADR 0025](0025-sale-closing.md) for payout eligibility.
+Treat the calculations as pricing engines. Share ending, fee and optional eligibility policies through small typed configurations, not a runtime plugin system. `crates/sale-policy` owns common decisions; each caller owns custody accounting. Creation saves supported choices. Pool entry, setup and resumed clients reject substitutions. Policies must hold at the pool boundary even when callers bypass the factory or SDK. Direct pools can use explicit open defaults.
 
-Optional pause/resume is implemented through `PausePolicy` and `TradeControl`. Creation fixes pause as disabled or authority-controlled. The current creator controls factory sales; the current owner controls direct pools. Authenticate every call, including retries. Pause blocks swaps, but permits fee collection and safe settlement. Resume must not move the schedule or clear emergency freeze. Controls reject ended sales under the selected ending policy.
+Separate permission to trade from permission to settle. Preserve authority, freeze, inclusion-time bounds, allocations, seed backing, vault coverage and retries. Shared [ending rules](0025-sale-closing.md) keep inclusive starts and exclusive ends. Selected depletion is final and needs no scheduled-end payout bound; `Scheduled` ignores depletion for payouts. Empty inventory blocks buys. Settlement payouts cannot create depletion evidence. Direct curve `Manual` pools retain owner close rights and their supported depletion-side choices.
 
-Test shared policies through each engine's interface. Signed guest tests must check token effects, rollback and retries. Callback success does not prove DEX liquidity.
+All engines use collateral namespace fees and immutable factory trade modes. See [fees](0015-fee-accounting.md), [modes](0021-modes-and-open-limits.md), [weighted accounting](0030-lbp-pricing-collateral.md) and [settlement routes](0020-settlement-and-graduation.md). New policy choices require explicit accounting rules. All engines save the shared immutable graduation policy at creation.
+
+The shared buy allowlist uses `crates/eligibility-policy`, pre-approved public account batches and repeated authorized purchases. Setup preserves the initial policy. [Public execution evidence](../architecture/allowlist-proof.md#public-execution-evidence) does not supply private holdings or complete private routes; weighted tests use a mock clock.
+
+Creation fixes `PausePolicy` as disabled or authority-controlled. The current creator controls factory sales; the current owner controls direct pools. Authenticate every call, including retries. Pause blocks swaps but permits fees and safe settlement. Resume cannot move the schedule, clear emergency freeze or reopen an ended sale. Authorized unchanged controls emit no change event.
 
 ## Program events
 
-`SaleEventV1` identifies the namespace, pricing engine and pool or launch. Programs emit public changes for setup, trades, controls, fees, allocation, closure, settlement and graduation. Source declarations define payloads and selectors in the generated IDL. Creation and settlement events report saved payout terms and actual two-asset payouts, without obsolete DEX-seed-reserve or unsold-burn fields. Changed payloads require updated decoders; they are not wire-compatible with earlier payloads.
+`SaleEventV1` identifies namespace, pricing engine and pool or launch. Emit public changes for setup, trades, controls, fees, allocation, closure, settlement and graduation. Source declarations define generated IDL payloads and selectors. Weighted legacy selectors and payload bytes remain unchanged. Changed shared payloads require updated decoders; do not claim old wire compatibility.
 
-Closure is recorded once by a successful pool operation, with its reason and inclusion bounds. Time passing alone emits nothing. Allocation reads do not record closure. Fee events distinguish discharged liability from tokens transferred. Authenticated no-ops emit no change event. Failed transactions commit neither changes nor events. Indexer delivery and history remain outside this contract.
+Record closure once through a successful pool operation, with reason and inclusion bounds. Time passing alone emits nothing. Allocation reads do not record closure. Fee events distinguish discharged liability from tokens transferred. Authenticated no-ops emit no change event. Failed transactions commit neither changes nor events. Indexer delivery and history are outside this contract; see [ADR 0027](0027-events-and-history.md).
 
-## Consequences
+## Reason and limits
 
-A common factory can create and prepare sales without making sale state interchangeable. Ending choices now control trading and payout eligibility; engine-specific settlement effects remain separate. Fixed-price sale creation and funding rules are in [ADR 0032](0032-fixed-price-lbp-setup.md). Separate creator-allocation release and full seed funding remain unchanged; seed payout priority is removed under ADR 0020. The project is undeployed and needs no compatibility migration.
+Shared decisions reduce policy drift without making pricing state or custody interchangeable. Test through each engine's interface. Signed guest tests must check token effects, rollback and retries; callback success does not prove DEX liquidity. See [execution limits](../architecture/workspace-guide.md#execution-and-evidence-limits). Private routes, real proofs and deployment readiness remain pending.
 
 ## Sources
 
-- [Mechanism boundaries](0005-mechanism-boundaries.md)
+- [Neutral curve pool boundary](https://github.com/bleu/lez-bonding-curve-launchpad/blob/778f92169ac08edf3cff02bbf2e45d770f176283/docs/adr/0006-neutral-bounded-pool-interface.md)
 - [Typed sale inputs](0007-typed-sale-inputs.md)
 - [Fixed-price and weighted sale proposal](https://github.com/logos-co/rfp/issues/119)

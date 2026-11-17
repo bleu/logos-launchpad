@@ -1,6 +1,6 @@
 # Weighted-math qualification
 
-Recorded on 2026-10-02, based on main `a80eb64`. This is evidence for the standalone, unaudited kernel at public scale 52 and internal scale 62, not a working weighted-sale program.
+Recorded on 2026-10-02, based on main `a80eb64`. This is historical evidence for the standalone, unaudited kernel at public scale 52 and internal scale 62. It does not establish current weighted-sale program support. Later checked-quote evidence is recorded separately below.
 
 ## Accuracy
 
@@ -21,7 +21,7 @@ The tests include public regressions for the rounding-carry fix. Proptest emitte
 
 One local composite proof passed within the 30-minute cap: 5.908625 seconds to prove, then 0.013822 seconds to verify. It used 11,243 kernel cycles and 65,536 total cycles. Development proving was disabled; no remote prover was used.
 
-The machine was an Apple M3 Pro with 11 logical CPUs and 18 GiB RAM. Host Rust was 1.94.0, guest Rust was 1.94.1-dev (`06e01cb0d`), and nested RISC0 tools/dependencies were 3.0.5. Root lockfiles remain at 3.0.6.
+The machine was an Apple M3 Pro with 11 logical CPUs and 18 GiB RAM. Host Rust was 1.94.0, guest Rust was 1.94.1-dev (`06e01cb0d`), and nested RISC0 tools/dependencies were 3.0.5. Root lockfiles then used 3.0.6.
 
 Proved image: `8ba0ec41bd7dd3af32d861b84679967807c644d2ec95f223dcd586c58916513a`.
 

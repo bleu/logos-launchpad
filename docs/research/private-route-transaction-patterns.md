@@ -8,16 +8,16 @@ The findings use LEZ revision `a58fbce2ff48c58b7bb5001b1a27e64b9596ee3a`, pinned
 
 | Flow | What happens | Failure risk |
 | --- | --- | --- |
-| One transaction | Move private funds to fresh public accounts, trade, then return funds to private accounts. All application changes must finish together. | The current route exceeds the call limit. Complete returns and wallet support still need tests. |
+| One transaction | Move private funds to fresh public accounts, trade, then return funds to private accounts. All application changes must finish together. | The historical route exceeds the reviewed call limit. Complete returns and wallet support were not established. |
 | Three transactions | Fund public accounts, trade, then return funds in separate transactions. | A failed trade can leave the input public. A failed return can leave purchased tokens public. |
 
 LEZ checks the whole transaction before applying its application changes. Three submissions have three separate completion points. One wallet approval does not make them one transaction. [State checks][state], [wallet submission][wallet].
 
 Both flows expose public trade amounts and pool changes. Three transactions also leave public balances between steps. Fresh accounts reduce address reuse, but do not guarantee that trades cannot be linked. [Public transaction data][message], [official transfer guide][visibility].
 
-## Why the current buy fails
+## Historical call-limit failure
 
-The private proving code allows 10 total program runs, including the first program. The current buy needs 14:
+The reviewed private proving code allows 10 total program runs, including the first program. The historical buy needs 14:
 
 | Work | Program runs |
 | --- | --- |
@@ -29,7 +29,7 @@ The private proving code allows 10 total program runs, including the first progr
 | Return purchased tokens to the private account | 2 |
 | Total | 14 |
 
-The 11th run is rejected. The limit counts all runs, not just nested calls. The [existing test](https://github.com/bleu/logos-launchpad/blob/5b6927cbd3b5a12941f3956bcab8458446ed52db/crates/launchpad-client/tests/private_authority.rs#L401-L410) expects this failure; it does not show a successful purchase. [Private proving code][runner], [current route](https://github.com/bleu/logos-launchpad/blob/5b6927cbd3b5a12941f3956bcab8458446ed52db/methods/guest/src/bin/private_buy.rs#L108-L189), [trade calls](https://github.com/bleu/logos-launchpad/blob/5b6927cbd3b5a12941f3956bcab8458446ed52db/crates/curve-core/src/dispatch.rs#L562-L585).
+The 11th run is rejected. The limit counts all runs, not just nested calls. The [existing test](https://github.com/bleu/logos-launchpad/blob/5b6927cbd3b5a12941f3956bcab8458446ed52db/crates/launchpad-client/tests/private_authority.rs#L401-L410) expects this failure; it does not show a successful purchase. [Private proving code][runner], [historical route](https://github.com/bleu/logos-launchpad/blob/5b6927cbd3b5a12941f3956bcab8458446ed52db/methods/guest/src/bin/private_buy.rs#L108-L189), [trade calls](https://github.com/bleu/logos-launchpad/blob/5b6927cbd3b5a12941f3956bcab8458446ed52db/crates/curve-core/src/dispatch.rs#L562-L585).
 
 Code review found two more gaps:
 

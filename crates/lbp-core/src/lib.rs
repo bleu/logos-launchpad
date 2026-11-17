@@ -121,7 +121,6 @@ pub struct WeightedPoolInputs {
 
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum Message {
-    // Fixed-price (tags 0–6, unchanged)
     PrepareFixedPrice {
         inputs: FixedPricePoolInputs,
     },
@@ -148,7 +147,6 @@ pub enum Message {
         creator: AccountId,
         now: u64,
     },
-    // Weighted LBP (tags 8–11)
     PrepareWeighted {
         inputs: WeightedPoolInputs,
     },
@@ -398,9 +396,8 @@ pub fn compute_pool_pda_seed(
 // Shared pending-step state machine for setup handshakes
 // ---------------------------------------------------------------------------
 
-/// Advance the shared 6-step namespace + definitions + custody validation.
-/// Returns `Ok(Some(response))` when a step completed, `Ok(None)` if this
-/// message is not for the step state machine, `Err(_)` on a validation fault.
+/// Resume namespace, token definition and custody validation.
+/// Returns `None` when setup is not pending.
 fn advance_setup_steps(
     input: &ReceiveInput,
     state: &mut PoolAccount,
@@ -592,7 +589,6 @@ fn advance_setup_steps(
         )));
     }
 
-    // step == 0: expecting the namespace config reply
     if pending.step == 0 {
         let expected = Actor::new(
             curve_core::compute_config_pda(state.namespace, state.namespace_program_id),

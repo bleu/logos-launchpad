@@ -1,97 +1,65 @@
-# zkVM cycle cost of the weighted-math kernel
+# Historical weighted-math guest cycles
 
-Measured 2026-07-14 with the RISC0 3.0.5 executor (no proving), guest rust
-toolchain 1.94.1, `SCALE = 52`, guest built in release with
-`overflow-checks = true` — the same semantics the on-chain program would
-ship. Reproduce with `cd zkvm && cargo run --release` (see `zkvm/README.md`).
-This table feeds RFP-016 P3.
+Measured on 2026-07-14 with the RISC0 3.0.5 executor, guest Rust 1.94.1 and `SCALE = 52`. The guest used a release build with `overflow-checks = true`. No proof was generated. These are historical standalone-kernel measurements for RFP-016 P3, not current LEZ compute units or full-sale costs. Use the [guest guide](../zkvm/README.md) for current commands and [qualification](qualification.md) for later evidence.
 
-## Host-vs-guest parity
+The original command, run from `packages/weighted-math`, was `cd zkvm && cargo run --release`. Use the guest guide for the current locked command and tool selection.
 
-`weighted-math-core` compiles unchanged for the RV32IM guest. Across the
-whole fixture set — 344 evaluations: 87 pow cases through each of `pow`,
-`pow_up`, `pow_down`, 11 ln, 12 exp, 12 expm1, 29 `calc_out_given_in`,
-19 `calc_in_given_out` — every guest output is bit-identical
-to the host's. The host harness (mpmath oracle gates in `crates/harness`)
-remains the source of truth for correctness; the guest is verified against
-it, and the executor run exits nonzero on any mismatch.
+## Host/guest parity
 
-Cycle counts are deterministic: repeated runs produce byte-identical output.
+The kernel compiled unchanged for the RV32IM guest. All 344 evaluations matched host outputs: 87 power cases through each of `pow`, `pow_up` and `pow_down`, 11 `ln`, 12 `exp`, 12 `expm1`, 29 `calc_out_given_in` and 19 `calc_in_given_out`. Parity checks integer agreement. Independent oracle checks in `crates/harness` assess numerical accuracy; parity does not replace them. The executor exits with an error on a mismatch.
 
-## Per-call cost (CU table)
+Repeated runs produced byte-identical cycle output.
 
-Cycles are RISC0 user cycles measured inside the guest with
-`env::cycle_count()` deltas, minus the 98-cycle measurement baseline. No
-LEZ fee schedule is published yet, so cycles are the compute unit here;
-multiply by the eventual price per cycle. Min/max spread within an op is
-input-dependent (normalization shift count, exp underflow early-exit, the
-zero-payout guard), not noise.
+## Per-call cycles
 
-| op                  | cases | net median | min    | max    | u128 divisions |
-|---------------------|------:|-----------:|-------:|-------:|---------------:|
-| `pow` (one power)   |    87 |      8,010 |  3,059 |  9,214 | 1 |
-| `pow_up` / `pow_down` | 87 each | 8,043 | 3,092 |  9,247 | 1 |
-| `ln`                |    11 |      4,608 |  2,722 |  5,023 | 1 |
-| `exp`               |    12 |      4,139 |     57 |  4,140 | 0 |
-| `expm1`             |    12 |      4,169 |     56 |  4,170 | 0 |
-| `calc_out_given_in` (full buy) | 29 | 11,522 | 721 | 11,950 | 3 |
-| `calc_in_given_out` |    19 |     14,195 | 10,974 | 14,913 | 4 |
+These are RISC0 user cycles measured with `env::cycle_count()` deltas, minus the 98-cycle measurement baseline. They do not establish a LEZ fee price. Costs vary with input: normalization shifts, exponential underflow and the zero-payout guard.
 
-Whole-program cost, running the batch-median case as a one-shot guest
-session (startup and I/O included; measured session overhead is ~4,080
-cycles on top of the call itself):
+| op | cases | net median | min | max | u128 divisions |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `pow` | 87 | 8,010 | 3,059 | 9,214 | 1 |
+| `pow_up` / `pow_down` | 87 each | 8,043 | 3,092 | 9,247 | 1 |
+| `ln` | 11 | 4,608 | 2,722 | 5,023 | 1 |
+| `exp` | 12 | 4,139 | 57 | 4,140 | 0 |
+| `expm1` | 12 | 4,169 | 56 | 4,170 | 0 |
+| `calc_out_given_in` | 29 | 11,522 | 721 | 11,950 | 3 |
+| `calc_in_given_out` | 19 | 14,195 | 10,974 | 14,913 | 4 |
 
-| program            | user cycles | padded segment cycles | segments |
-|--------------------|------------:|----------------------:|---------:|
-| one `pow`          |      12,191 | 65,536 (2^16 minimum) | 1 |
-| one full buy       |      15,702 | 65,536 (2^16 minimum) | 1 |
-| one exact-out sell |      18,375 | 65,536 (2^16 minimum) | 1 |
+The one-shot session measurements include startup and I/O for the batch-median case. Measured session overhead was about 4,080 cycles above the call itself.
 
-A single swap doesn't come close to filling even the minimum segment (a full
-buy occupies 24% of 2^16). Against RISC0's default 2^20 segment, one buy is
-about 1.1% of a segment, and a batched program fits roughly 90 buys per
-segment ((1,048,576 − 4,082) / 11,620).
+| program | user cycles | padded segment cycles | segments |
+| --- | ---: | ---: | ---: |
+| one `pow` | 12,191 | 65,536 (2^16 minimum) | 1 |
+| one exact-input trade | 15,702 | 65,536 (2^16 minimum) | 1 |
+| one exact-output trade | 18,375 | 65,536 (2^16 minimum) | 1 |
 
-## Division count and the hotspot
+The historical buy session used 24% of `2^16`; the kernel call used about 1.1% of a default `2^20` segment. The original batch estimate was about 90 kernel buys per default `2^20` segment: `(1,048,576 - 4,082) / 11,620`. This estimate excludes sale state, custody and platform costs.
 
-Division is the most expensive primitive in this cost model, and on RV32IM a
-`u128` division is a `compiler_builtins` software loop, not one instruction.
-Measured cost by operand shape (numerator bits / denominator bits):
+## Division costs
 
-| shape     | net cycles |
-|-----------|-----------:|
-| 124 / 64  |      2,623 |
-| 127 / 75  |      2,500 |
-| 127 / 65  |      2,392 |
-| 91 / 61   |      1,471 |
-| 117 / 64  |        351 |
-| 51 / 31   |        491 |
+On RV32IM, `u128` division uses a `compiler_builtins` software loop. The measured cost depends on operand shape, shown as numerator bits / denominator bits.
 
-Cost varies almost 8x with shape; wide-quotient divisions at the kernel's
-actual magnitudes sit at the expensive end, ~2.4–2.6k cycles each.
+| shape | net cycles |
+| --- | ---: |
+| 124 / 64 | 2,623 |
+| 127 / 75 | 2,500 |
+| 127 / 65 | 2,392 |
+| 91 / 61 | 1,471 |
+| 117 / 64 | 351 |
+| 51 / 31 | 491 |
 
-Static division counts, from the code (all confirmed by the measured deltas):
+Costs vary by almost 8x. Wide-quotient divisions at the measured kernel magnitudes cost about 2.4-2.6k cycles each.
 
-- `pow` and its wrappers: exactly 1 — forming `t = (m-1)/(m+1)` inside
-  `ln_inner`. That one division is ~2.5k of the 8.0k cycles, the largest
-  single-instruction cost in the pipeline (~31%).
-- `exp` / `expm1`: 0. Range reduction multiplies by a precomputed `1/ln2`.
-- `calc_out_given_in`: 3 — exponent formation, `ratio_up`, and the one
-  inside `pow`. Together roughly half the 11.5k-cycle buy.
-- `calc_in_given_out`: 4 — exponent, `ratio_down`, the pow division, and
-  the `(1-p)/p` inversion.
+The reviewed code uses these division counts:
 
-The largest *block* is different from the largest instruction: the 20-term exp Horner loop costs ~4.1k cycles (about half of `pow`), at roughly 210 cycles per 128-bit multiply-shift-add step. If the cycle budget ever needs trimming, exp term count is the first knob; [ADR 0012](../../../docs/adr/0012-weighted-series.md) chose 20 terms for error-bound headroom, not cost.
+- `pow` and its wrappers: one division for `t = (m-1)/(m+1)` in `ln_inner`, about 2.5k of 8.0k cycles (31%).
+- `exp` / `expm1`: none. Range reduction multiplies by a precomputed `1/ln2`.
+- `calc_out_given_in`: three, for the exponent, `ratio_up` and `pow`; about half the 11.5k-cycle call.
+- `calc_in_given_out`: four, for the exponent, `ratio_down`, `pow` and `(1-p)/p` inversion.
 
-A Balancer-style `LogExpMath.pow` uses a couple dozen divisions per call. At about 2.5k cycles each, that would cost about 60k cycles for division alone, roughly five times the measured buy path. The measurements support the integer-width choice in [ADR 0010](../../../docs/adr/0010-weighted-integer-arithmetic.md).
+The 20-term exponential Horner loop cost about 4.1k cycles, or about 210 cycles per 128-bit multiply-shift-add step. [ADR 0012](../../../docs/adr/0012-weighted-series.md) selects the term count for error bounds. A cost change needs a new accuracy review.
 
-## Caveats
+The historical Balancer-style comparison estimated about 60k cycles for a couple dozen divisions at 2.5k each, roughly five times the measured exact-input path. This is an estimate, not a measured Balancer guest result. See [ADR 0010](../../../docs/adr/0010-weighted-integer-arithmetic.md).
 
-- Executor user cycles, not proving time. Proving cost scales with padded
-  segment cycles (the 2^po2 column), which is why "fits the minimum
-  segment" is the number that matters for fees.
-- The guest wrapper reads inputs with `env::read_slice` and commits raw
-  words; a real LEZ program's serialization and state access are not
-  modeled. Its startup shows up only in the whole-program rows.
-- Numbers are for risc0 3.0.5 and rust 1.94.1; a circuit or toolchain
-  change moves them. Re-run the harness rather than trusting this file.
+## Limits
+
+Executor user cycles are not proof time. Padded segment cycles describe proof workload. The wrapper uses `env::read_slice` and commits raw words; it does not model LEZ serialization or state access. Circuit and toolchain changes can change costs. Run the harness again before using these numbers for a new build.

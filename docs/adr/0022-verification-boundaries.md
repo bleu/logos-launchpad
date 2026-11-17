@@ -2,11 +2,9 @@
 
 Status: Accepted
 
-Date: 2026-09-29; milestone-boundary review: 2026-10-08
-
 ## Context
 
-The imported curve CI omitted client/CLI tests and guest builds. Root Cargo commands do not cover every nested workspace. Math parity and host tests alone cannot prove production integration.
+Root Cargo commands do not cover every nested workspace. Math parity and host tests alone cannot prove production integration.
 
 ## Decision
 
@@ -18,7 +16,7 @@ For [curve settlement](0020-settlement-and-graduation.md), use handler tests for
 
 ### Milestone and interface boundary
 
-M1 owns public bonding-curve handlers and the planned fixed-price and weighted-sale handlers, on-chain source IDLs, generated artifacts and local guest evidence. Checks must cover authority, custody, trade limits, lifecycle, failed calls and [emergency controls](0028-token-custody-and-freeze.md#namespace-emergency-control). Record missing coverage. Development receipts do not prove production readiness.
+M1 owns public bonding-curve handlers and fixed-price and weighted-sale handlers, on-chain source IDLs, generated artifacts and local guest evidence. Checks must cover authority, custody, trade limits, lifecycle, failed calls and [emergency controls](0028-token-custody-and-freeze.md#namespace-emergency-control). Record missing coverage. Development receipts do not prove production readiness.
 
 Interfaces can change during development. Update handlers, source IDLs, generated artifacts and affected callers together. Review changes to stored accounts and wire formats. Existing callers must build and pass their checks. M2 owns complete SDK and CLI journeys. Private routes, allowlist proofs, event history, product apps, live deployment and production readiness are outside M1.
 

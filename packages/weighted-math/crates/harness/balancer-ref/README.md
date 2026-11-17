@@ -1,14 +1,8 @@
 # Balancer reference capture
 
-Offline only. CI reads the committed `../fixtures/balancer_pow.json` and
-never runs Foundry.
+CI reads the committed `../fixtures/balancer_pow.json` offline. It does not run Foundry.
 
-Balancer's `LogExpMath` is the secondary comparator ([ADR 0014](../../../../../docs/adr/0014-weighted-math-evidence.md)): the grader
-grades Balancer's real outputs against the mpmath truth within Balancer's
-*own* documented accuracy (1e-14 relative on its 1e18 grid, plus 2 wei of
-rounding). Passing here validates the grader machinery on an independent,
-production implementation of this math — a grader bug would fail Balancer,
-not just the kernel.
+Balancer's `LogExpMath` is the secondary comparator under [ADR 0014](../../../../../docs/adr/0014-weighted-math-evidence.md). The grader checks its captured outputs against the mpmath reference using Balancer's documented accuracy: 1e-14 relative on its 1e18 grid, plus 2 wei of rounding. This checks the grader against an independent implementation; it does not qualify the launchpad kernel by itself.
 
 ## Pinned source
 
@@ -20,11 +14,10 @@ The source is fetched at capture time into `src-external/` (gitignored), not ven
 
 ## Regenerate
 
+Run from this directory:
+
 ```sh
 ./capture.sh   # needs foundry + network; writes ../fixtures/balancer_pow.json
 ```
 
-`inputs_flat.json` (committed) is emitted by `../oracle/gen.py` from the
-shared pow fixture; the script reads it, runs `LogExpMath.pow` per case
-(try/catch for the 11 cases outside Balancer's exp domain, recorded as
-`null`), and writes the results.
+`../oracle/gen.py` emits the committed `inputs_flat.json` from the shared power fixture. The capture script reads it and runs `LogExpMath.pow` for each case. It records `null` for the 11 cases outside Balancer's exponential domain.

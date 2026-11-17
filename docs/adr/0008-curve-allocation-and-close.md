@@ -2,13 +2,13 @@
 
 Status: Accepted internally; To be reviewed by Logos team
 
-Date: 2026-09-29
-
 ## Decision
 
-The curve factory mints exactly purchasable `D` plus the separate creator allocation. This accepted amendment removes the previous `R` DEX-seed reserve, including its issuance, creation inputs and separate payout. The project is undeployed; no compatibility or data migration is required.
+Mint only purchasable curve allocation `D` and the separate creator allocation. Fund `D` into the pool; keep creator allocation in escrow until its release condition. Post-close payouts follow the shared [graduation policy](0020-settlement-and-graduation.md).
 
-Allocation policy belongs to the factory, not the neutral pool. [ADR 0025](0025-sale-closing.md) governs ending eligibility. Unsold `D` follows the common two-asset payout policy in [ADR 0020](0020-settlement-and-graduation.md), without a burn. The separate creator allocation keeps its release rule and is excluded from that split.
+## Reason and limits
+
+Factory allocation policy keeps launch terms outside the neutral curve pool. [Ending rules](0025-sale-closing.md) govern payout eligibility. These rules do not define fixed-price or weighted allocations. External Logos review remains pending.
 
 ## Sources
 

@@ -1,28 +1,20 @@
 # ADR 0027: Events and history
 
-Status: Accepted
-
-Date: 2026-09-29
-
-## Context
-
-Participants, creators and administrators need sale history and monitoring. The platform already provides `lez-indexer-module` and block-explorer tooling. The derived analytics view is outside this product scope.
+Status: Accepted internally; program emission implemented; failed-event retention: To be reviewed by Logos team; indexer delivery unverified.
 
 ## Decision
 
-Publish the LP-0012 events needed by the existing `lez-indexer-module` and block-explorer tooling. Do not build a separate indexer. QML apps request indexed listings, history and monitoring through a backend module read API, not direct HTTP calls to the indexer.
+Publish versioned public program events for successful sale changes. `SaleEventV1` identifies namespace, pricing engine and pool or launch. Source declarations define payloads and selectors in generated IDLs. See [program event rules](0031-shared-launch-factory.md#program-events).
 
-Use those events to preserve successful transaction history and support monitoring. Events from failed or reverted transactions may be discarded. This is an accepted internal departure from LP-0012 pre-failure retention, with external status `To be reviewed by Logos team`. Do not add persistent private participant identifiers to events. Public pool state and public trade effects remain visible. Excluding the derived analytics view does not exclude event history or monitoring.
+Use existing `lez-indexer-module` and block-explorer tooling; do not build a separate indexer. QML requests indexed listings, history and monitoring through a backend module read API, not direct indexer HTTP calls. The derived analytics view is excluded; history and monitoring remain in scope.
 
-## Consequences
+Do not add persistent private participant IDs to events. Pool state and trade effects remain public. Failed or reverted transactions commit no sale events. Discarding pre-failure events departs from LP-0012 retention and has status `To be reviewed by Logos team`.
 
-Event schemas require compatibility and privacy review. Product interfaces can consume existing indexed history through the backend module read API, but they must not claim that an excluded analytics view exists. Indexed state can lag and does not authorize a trade or replace a current-state check by a program.
+## Reason and limits
 
-The [historical event experiment](https://github.com/bleu/logos-launchpad/blob/f1198315569cfc8ada9f6c39964cb77314e2520c/packages/platform-probes/events/tests/event_roundtrip.rs) checked candidate LEZ `c31a6bca60537ec08f595cf786f1ae6275ab7f43`. Emission preserved the emitter, selector and payload. A later chained failure discarded earlier events; metered failure consumed the signer's nonce and replay was rejected. The sample decoder rejected unknown versions and truncated payloads. Its version byte was an application choice, not a platform compatibility guarantee.
+Common schemas support shared consumers without merging sale state. Review payload compatibility and privacy; decoders must handle schema changes. Indexed state can lag and never authorizes a trade or replaces current-state checks.
 
-At the time of that experiment, root adoption was blocked by missing event output and incompatible scaffold encoding and submission. Those pins are historical. The [actor migration](0034-lez-v04-migration.md) uses a revision with event output and repository-owned message tooling. Application event emission and indexer ingestion still need verification; the old experiment does not prove them.
-
-The experiment is no longer maintained. Results used development receipts, not production proofs or deployed nodes. Private event delivery and deployed indexer ingestion remain unverified. The inspected candidate indexer captured no events by default and limited range queries to 1,000 blocks; neither establishes an emission limit. No event byte/count limit or stable cross-version payload guarantee was established. Do not claim full LP-0012 compliance.
+Program emission is implemented. Indexer delivery, deployed ingestion, private delivery and complete history remain unverified. Local development execution is not a production proof. No stable cross-version payload guarantee or platform event byte/count limit is established. Do not claim full LP-0012 compliance. See [execution evidence](../architecture/workspace-guide.md#execution-and-evidence-limits).
 
 ## Sources
 

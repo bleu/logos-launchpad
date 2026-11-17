@@ -1,61 +1,34 @@
 # Create a curve pool
 
-This is the planned logical curve-sale creation flow. It shows the reviewed staged creation model without defining instruction names, account schemas or transaction construction. LP-0021 provider integration awaits SDK development; its final API is unavailable. See [ADR 0029](../../adr/0029-wallet-integration.md).
+This is the implemented staged actor flow, not a live app workflow. Local signed setup has [execution evidence](../workspace-guide.md#execution-and-evidence-limits). The configured-sales app and LP-0021 wallet integration remain planned.
 
-## Preconditions
-
-- The creator has the required creator authority and supplies `D` plus any separate creator allocation.
-- The target namespace exists with its per-namespace administration and configuration state.
-- Curve creation inputs are typed and immutable after acceptance. Exact input bounds still need mechanism specifications.
-- LP-0021 provider integration awaits SDK development; its final API is unavailable.
+The namespace must exist. The creator supplies typed sale terms, including `D`, the separate creator allocation and supported policies. [ADR 0031](../../adr/0031-shared-launch-factory.md) owns shared setup; [ADR 0008](../../adr/0008-curve-allocation-and-close.md) owns curve allocation rules.
 
 ```mermaid
 sequenceDiagram
     actor Creator
-    participant App as Configured-sales app
-    participant SDK as Shared core and SDK
-    participant Wallet as LP-0021 wallet provider
-    participant Factory as Curve factory
+    participant Factory as Shared launch factory
     participant Namespace as Namespace state
-    participant Pool as Curve pool and token custody
-    participant Indexer as Existing indexer
-    participant ReadAPI as Backend module read API
+    participant Tokens as Token custody
+    participant Pool as Curve pool
 
-    Creator->>App: Configure curve sale
-    App->>SDK: Validate and prepare creation
-    SDK->>Wallet: Request creation transaction approval
-    Note over Wallet: Account selection user approval signing and submission follow LP-0021. Integration awaits SDK development
-    Wallet->>Factory: Submit creation stage if supported
-    Factory->>Namespace: Check namespace binding and creation settings
-    Namespace-->>Factory: Namespace state
-    Factory->>Pool: Create pending pool in factory custody
-    Pool-->>Factory: Pending pool created
-    Factory-->>Wallet: Creation stage result
-    Wallet-->>SDK: Result from LP-0021 provider if available
-    SDK-->>App: Show pending creation status
-    Creator->>App: Confirm allocation funding
-    App->>SDK: Prepare funding stage
-    SDK->>Wallet: Request funding transaction approval
-    Wallet->>Factory: Submit funding stage if supported
-    Factory->>Pool: Fund D and activate when valid
-    Note over Factory: Save immutable payout terms; keep creator allocation separate
-    Pool-->>Factory: Active pool state
-    Factory-->>Indexer: Emit creation events
-    SDK-->>App: Show creation result
-    App->>ReadAPI: Request indexed sale status
-    ReadAPI->>Indexer: Read indexed creation events
-    Indexer-->>ReadAPI: Indexed sale status
-    ReadAPI-->>App: Return indexed sale status
+    Creator->>Factory: Create sale with immutable terms
+    Factory->>Namespace: Validate binding and settings
+    Factory->>Tokens: Mint exact supply
+    Factory->>Factory: Initialize creator role
+    Note over Factory: Stage: Minted
+    Creator->>Factory: Continue creation with current creator authority
+    Factory->>Tokens: Split D into factory custody and creator allocation into escrow
+    Note over Factory: Stage: Allocated
+    Creator->>Factory: Continue creation
+    Factory->>Pool: Prepare unfunded pool with saved policies
+    Note over Factory: Stage: PoolPrepared
+    Creator->>Factory: Continue creation
+    Factory->>Tokens: Transfer D to pool vault
+    Factory->>Pool: Activate after custody checks
+    Note over Factory,Pool: Stage: Active
 ```
 
-## Notes
+Each stage is atomic with its child calls. The workflow spans transactions and is not atomic as a whole. A prepared pool cannot trade before funding. Continuations recheck authority and custody. Namespace administration does not grant creator rights, and the administrator does not approve each stage.
 
-The curve factory validates the creation namespace and retains curve sale policy. The namespace administrator does not approve every creator action. The curve pool remains under factory program custody.
-
-This workflow can span transactions. A pending curve pool cannot trade before funding completes. Each curve stage rechecks the relevant authority and commits atomically with its child calls. The full workflow is not claimed to be atomic.
-
-The backend module read API exposes indexed status after events reach the existing indexer. It can lag. The factory and pool enforce authoritative current state.
-
-## Open details
-
-The final instruction names, account schema, transaction construction and input limits need implementation and platform review. LP-0021 integration awaits SDK development and its final API is unavailable. Closing and unsold-`D` rules are defined in [ADR 0025](../../adr/0025-sale-closing.md).
+The factory retains pool ownership. Saved graduation terms govern post-close payouts. See [settlement and graduation](../../adr/0020-settlement-and-graduation.md) and [ending rules](../../adr/0025-sale-closing.md). Failed-setup recovery remains an [evidence gap](../workspace-guide.md#execution-and-evidence-limits).

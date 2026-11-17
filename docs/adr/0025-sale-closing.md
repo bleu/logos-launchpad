@@ -2,11 +2,9 @@
 
 Status: Accepted internally; expiry-validation departure: To be reviewed by Logos team
 
-Date: 2026-09-29; weighted controls and settlement evidence: 2026-11-06; shared-ending amendment: 2026-11-13
-
 ## Decision
 
-[ADR 0031](0031-shared-launch-factory.md) replaces mechanism-specific closing with an immutable ending policy checked at the pool boundary. This amends the earlier closing descriptions in [ADR 0008](0008-curve-allocation-and-close.md) and [ADR 0021](0021-modes-and-open-limits.md). No sale ends on a collateral-raised target.
+Check an immutable ending policy at the pool boundary. [ADR 0031](0031-shared-launch-factory.md) defines shared policy ownership. No sale ends on a collateral-raised target.
 
 | Policy | Trading and settlement | Supported creation |
 | --- | --- | --- |
@@ -17,15 +15,17 @@ Date: 2026-09-29; weighted controls and settlement evidence: 2026-11-06; shared-
 
 Weighted sales require their schedule end for interpolation and as a settlement fallback, including with `Either`. They reject `Manual` and pure `Depletion`. Curve and fixed-price factory sales reject `Manual`. A creator cannot close a factory sale early. No final trade or separate close transaction is required for an automatic ending. The curve contract enforces no minimum expiry duration, an accepted internal departure from RFP-015 with external status `To be reviewed by Logos team`.
 
-Selected depletion is final: later trades cannot reopen that sale. `Scheduled` ignores depletion for ending decisions. Empty inventory still prevents buys, but does not permit early proceeds or `AfterEnd` allocation payouts. Only recorded trading depletion counts; payout cannot create depletion evidence. Pause and namespace freeze block trades without moving the schedule or changing settlement rights.
+Selected depletion is final: later trades cannot reopen that sale. `Scheduled` ignores depletion for ending decisions. Empty inventory still prevents buys, but does not permit early proceeds or `AfterEnd` allocation payouts. Only recorded trading depletion counts; settlement payouts cannot create depletion evidence. Pause and namespace freeze block trades without moving the schedule or changing settlement rights.
 
 Public application, SDK and CLI timestamps remain Unix seconds. Programs convert stored schedule bounds to LEZ milliseconds with checked arithmetic and attach response validity windows. LEZ checks these against the inclusion-block timestamp: starts are inclusive and ends are exclusive. Buys must enter before a configured end; scheduled payouts must enter at or after it. Saved clock data can be from the previous block and cannot enforce these deadlines. Caller `now` values remain hints; any lifecycle branch they select must have the matching inclusion-time bound. Selected depletion needs no scheduled-end lower bound, including for weighted `Either` payouts and retries. See the [time research note](../research/lez-clock-and-transaction-time.md) for upstream sources and producer-timestamp limits.
 
-The accepted payout amendment in [ADR 0020](0020-settlement-and-graduation.md) supersedes this record's unsold burns and unconditional creator proceeds payout. All three sales distribute accounted unsold launch tokens and recorded collateral through the saved route. No unsold inventory is burned. Selected launch-token depletion leaves zero unsold tokens. Preserve the accounted unsold count after withdrawal or payout and record completion separately, so payout cannot create depletion evidence. Partial withdrawals and duplicate payouts are not supported. The separate creator allocation is unchanged.
+All three engines settle unsold inventory and recorded collateral through the saved [payout route](0020-settlement-and-graduation.md). Manual settlement requires current creator authority and no configured adapter. Preserve the unsold count and record completion separately. Partial withdrawals and duplicate payouts are unsupported. Pricing collateral grants no separate payout right.
 
 The separate `AfterEnd` allocation follows the selected ending policy and can be claimed before or after proceeds settlement. Keep `AfterSetup` behavior unchanged. Fee collection, settlement and allocation claims remain available while frozen. Controls reject ended sales; repeated authorized pause or resume calls otherwise succeed without another change event. Resume cannot clear namespace freeze.
 
-See the [workspace guide](../architecture/workspace-guide.md#execution-and-evidence-limits) for local execution checks and limits, and [ADR 0016](0016-lbp-live-fees.md) for fee-policy review. Local checks do not prove live weighted clock support, private execution or production readiness.
+## Reason and limits
+
+Trading and payout eligibility must follow the same saved policy. Local guest checks cover transfers, burns, rollback and retries, not live clock support, private execution or production readiness. See [workspace evidence](../architecture/workspace-guide.md#execution-and-evidence-limits) and [fee policy](0015-fee-accounting.md).
 
 ## Sources
 

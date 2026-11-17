@@ -1,67 +1,43 @@
 # Logos launchpad
 
-Token sales on the Logos Execution Zone (LEZ), with three sale types: fixed-price sale, bonding-curve sale and weighted sale.
+Token sales on the Logos Execution Zone (LEZ). Creators set up sales. Participants buy tokens and, when the sale permits it, sell them back. Each namespace has its own administrator, fee settings and treasury.
 
-The target product lets creators launch sales and participants trade through clear, reusable tools. Independent namespaces give launchpad operators their own administration, fee settings and treasury. A future shared core can support all three sale types without making them use the same sale rules.
+## Sale types
 
-This repository contains an imported PoC baseline and design documentation. The baseline keeps the root curve crates, CLI, methods and on-chain program IDLs. Fixed-price creation, funding, public buys and fee collection are implemented. The repository does not implement the full production specification. Close, payout and weighted-sale handlers exist with local evidence limits; live weighted clock support, shared core and QML apps remain pending.
-
-Nothing from this project is deployed to testnet or production. The application is migrated to one fixed LEZ actor-development revision, using the [actor development base](packages/lez-compat/README.md). The [migration record](plans/lez-v04-migration.md) lists passed local checks and the remaining execution and package-loading gaps. There is no supported old-platform lane or deployed state to transfer.
-
-## Three sale types
-
-| Sale type | How it works | When it ends |
+| Sale type | Pricing | Ending policy |
 | --- | --- | --- |
-| Fixed-price sale | Tokens sell at a set price in collateral. | Under `Scheduled`, `Depletion` or `Either`. |
-| Bonding-curve sale | Reserve-based pricing changes as participants buy or sell. Selling back is available when the sale mode permits it. | Under `Scheduled`, `Depletion` or `Either`. |
-| Weighted sale | Pool weights change over a chosen time schedule to support price discovery. | Under `Scheduled` or `Either`, with a required schedule end. |
+| Fixed-price sale | A set price in collateral. | `Scheduled`, `Depletion` or `Either`. |
+| Bonding-curve sale | A price that changes with pool reserves. | `Scheduled`, `Depletion` or `Either`. |
+| Weighted sale | Token balances and weights that change on a schedule. | `Scheduled` or `Either`, with a required schedule end. |
 
-See [sale ending rules](docs/adr/0025-sale-closing.md). Selected depletion is final; `Scheduled` does not permit early payouts when inventory is empty.
+See the [product guide](docs/product/prd.md) for user flows and the [ending decision](docs/adr/0025-sale-closing.md) for policy rules.
 
-## Product view
+## Current state
 
-Two Basecamp QML mini-apps serve different users. The admin app handles namespace administration only. The configured-sales app handles creator and participant flows within a selected namespace. Both use a shared core module; it is not a third mini-app. App placement does not grant or merge authority roles.
+This is a pre-production project. Nothing is deployed to testnet or production. Public sale handlers have local tests, but these do not prove production readiness. Weighted trades need a test clock; normal builds reject them until a supported clock provider is available. Weighted math is unaudited.
 
-```mermaid
-flowchart TB
-    Admin[Namespace administrator] --> AdminApp[Admin app]
-    Creator[Sale creator] --> SalesApp[Configured-sales app]
-    Participant[Participant] --> SalesApp[Configured-sales app]
-    AdminApp --> Core[Shared core and SDK]
-    SalesApp --> Core
-    Core --> FixedPrice[Fixed-price sales]
-    Core --> Curve[Bonding-curve sales]
-    Core --> Weighted[Weighted sales]
-```
+The planned product has an admin app for namespace settings and a configured-sales app for creators and participants. The QML apps, wallet integration and private trading route are not ready. See the [system view](docs/architecture/system.md) and [checks and evidence limits](docs/architecture/workspace-guide.md#execution-and-evidence-limits).
 
-This is the planned product view. The QML apps and shared core are future work. Participants will be able to inspect sales, get quotes, choose slippage limits and view trade history. The [private-route design](docs/architecture/private-participation.md) combines deshield, trade and return of received tokens, unused input and unused gas in one transaction. Actual fees are excluded, and pool state and trade effects remain public. Runtime implementation, wallet support and allowlist proofs still need verification.
+## Development
 
-## RFPs and proposals
+Run `bash verify/check-dev.sh` for light host tests. See the [workspace guide](docs/architecture/workspace-guide.md) for tools, full checks and CI. Start with [CONTEXT.md](CONTEXT.md) for domain terms and [AGENTS.md](AGENTS.md) for contribution rules.
+
+## Documentation
+
+- [Product goals and user flows](docs/product/prd.md)
+- [Architecture and package layout](docs/architecture/system.md)
+- [Current design decisions](docs/adr/README.md)
+- [Plain-English glossary](docs/glossary.md)
+
+## Proposals
 
 | Product | Request | Proposal |
 | --- | --- | --- |
 | Bonding-curve launchpad | [RFP-015](https://github.com/logos-co/rfp/blob/master/RFPs/RFP-015-bonding-curve-launchpad.md) | [Proposal #118](https://github.com/logos-co/rfp/issues/118) |
 | Fixed-price and weighted sales | [RFP-016](https://github.com/logos-co/rfp/blob/master/RFPs/RFP-016-lbp-launchpad.md) | [Proposal #119](https://github.com/logos-co/rfp/issues/119) |
 
-## Development
-
-Run `bash verify/check-dev.sh` for light host tests. Plain `cargo test --locked` selects the core crates; client and CLI tests remain available with `--workspace`. Automatic CI runs light checks. Full checks are manual for now; see the [workspace guide](docs/architecture/workspace-guide.md#manual-full-checks).
-
-## Read more
-
-- [Product goals and use cases](docs/product/prd.md)
-- [Bonding-curve overview](docs/product/curve-contract.md)
-- [Namespace, custody, and fee contract](docs/product/namespace-fee-contract.md)
-- [Architecture and interfaces](docs/architecture/system.md)
-- [Private participation and recovery](docs/architecture/private-participation.md)
-- [Creation and private-route sequences](docs/architecture/sequence-diagrams/README.md)
-- [Repository baseline and planned layout](docs/architecture/repository-layout.md)
-- [Workspace commands](docs/architecture/workspace-guide.md)
-- [Domain terms](CONTEXT.md)
-- [Plain-English glossary](docs/glossary.md)
-- [Architecture decisions](docs/adr/README.md)
-- [Agent instructions](AGENTS.md)
+Internal decisions can differ from these requests. The [ADR index](docs/adr/README.md) identifies decisions that still need Logos-team review.
 
 ## License
 
-Project code is licensed under [MIT](LICENSE). Third-party dependencies retain their own licenses.
+Project code uses the [MIT license](LICENSE). Third-party code keeps its own licenses and notices.

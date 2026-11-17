@@ -1,7 +1,5 @@
-//! Differential tests against the mpmath oracle fixtures (ADR 0014):
-//! kernel gates with signed one-sided error bands, plus grader
-//! self-validation (Balancer's captured outputs, fixture sanity) proving
-//! the machinery independently of the kernel.
+//! Compare the kernel with mpmath fixtures using one-sided error bands (ADR 0014).
+//! Captured Balancer outputs and fixture checks test the grader separately.
 
 #![cfg_attr(not(test), warn(unused_crate_dependencies))]
 
@@ -30,9 +28,8 @@ fn assert_band(band: Band, what: &str, context: &dyn std::fmt::Debug) {
 // Grader self-validation: Balancer's captured outputs + fixture sanity
 // ---------------------------------------------------------------------------
 
-/// Grades Balancer's captured outputs against the mpmath truth within
-/// Balancer's own accuracy (1e-14 relative + 2 wei). Proves the fixture
-/// plumbing and band checking on a real implementation of this math.
+/// Test the grader with captured Balancer outputs at Balancer's accuracy bound
+/// (1e-14 relative + 2 wei).
 #[test]
 fn grader_validates_balancer_capture() {
     let inputs: Vec<BalancerInput> = load_fixture("balancer_inputs.json");
@@ -139,7 +136,7 @@ fn kernel_pow_gate() {
     }
 }
 
-/// Diagnostic tier: the internal bricks (ln, exp, expm1), two-sided.
+/// Two-sided error checks for ln, exp and expm1.
 #[test]
 fn kernel_ln_exp_diagnostics() {
     let fixture: LnExpFixture = load_fixture("ln_exp.json");

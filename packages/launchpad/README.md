@@ -1,6 +1,6 @@
 # Launchpad packages
 
-The Admin mini-app is for namespace administration. The Sales mini-app is for creators and participants within a configured namespace. Both use one shared Rust core. See [package roles](../../docs/adr/0019-product-packages.md).
+The admin app is for namespace administration. The configured-sales app is for creators and participants within a configured namespace. Both use one shared Rust core. See [package roles](../../docs/adr/0019-product-packages.md).
 
 Currently, both apps have only a `Test backend` button that displays `Backend OK`. Administration and sales workflows are not implemented yet.
 
@@ -24,7 +24,7 @@ nix --extra-experimental-features 'nix-command flakes' build --no-update-lock-fi
 
 ## Verification status
 
-The command above built all three archives during the actor migration. Installation, loading and the `Test backend` action remain blocked locally: `lgpm` is not available and no Basecamp executable was found. No `Backend OK` result is recorded. Archive builds do not prove module loading, wallet compatibility or sale execution.
+The command above built all three archives during the actor migration. Installation, loading and the `Test backend` action were not checked: the local environment lacked `lgpm` and a Basecamp executable. No `Backend OK` result is recorded. Archive builds do not prove module loading, wallet compatibility or sale execution. See the [workspace guide](../../docs/architecture/workspace-guide.md#execution-and-evidence-limits) for current project evidence.
 
 ## Install
 

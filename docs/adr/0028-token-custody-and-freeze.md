@@ -1,42 +1,30 @@
 # ADR 0028: Token custody and freeze boundaries
 
-Status: Accepted; fixed-price buys and weighted buys and payouts have local guest checks; broader platform checks pending
-
-Date: 2026-09-29; emergency-control review: 2026-10-08
-
-## Context
-
-Token or mint authority, ATA vault ownership, namespace administration and pause or freeze controls are distinct capabilities. An administration extension alone does not provide token custody or freeze support.
+Status: Accepted; local execution evidence has platform and readiness limits.
 
 ## Decision
 
-Use LP-0013 platform mechanisms for token and mint authority and associated token-account vault ownership. Keep namespace administration under [ADR 0006](0006-namespaces-and-authority.md), separate from creator authority and token custody.
-
-Treat RFP-002 pause and freeze integration as a separate concern. Reuse platform mechanisms where compatible, but verify compatibility and explicit instruction gates on the selected platform.
+Use compatible LP-0013 token/mint authority and ATA custody mechanisms. Namespace administration, creator authority, token custody and RFP-002 pause/freeze integration are separate capabilities. Verify explicit instruction gates on the selected platform; an administration extension does not supply token custody.
 
 ### Namespace emergency control
 
-Each namespace has its own emergency authority and freeze state. The deployment selects the initial authority. Namespace creation must check this selection. The initializer cannot select a different authority. Namespace state remains as defined in [ADR 0006](0006-namespaces-and-authority.md).
+Each namespace has separate emergency authority and freeze state. Deployment selects the initial authority; creation must check it and cannot accept an initializer's substitute. New namespaces start unfrozen. Namespace state follows [ADR 0006](0006-namespaces-and-authority.md).
 
-New namespaces start unfrozen. Freeze stops bonding-curve swaps and fixed-price and weighted-sale buys only. Other actions retain their normal checks. These include poke, fee collection, settlement, public recovery, administration and authority transfer. Creator resume cannot permit swaps while the namespace is frozen. Freeze does not stop weighted-sale weights or change sale end times. Controls in one namespace must not affect another.
+Freeze blocks trades in all three engines. Poke, fee collection, settlement, public recovery, administration and role transfer keep their normal checks. Creator resume cannot bypass freeze. Freeze does not stop weighted weights or move sale ends. Namespace controls must remain isolated.
 
-Only the current emergency authority can transfer its role. Transfer is immediate and keeps the freeze state. No successor acceptance is required. After setup, deployment and administrator roles cannot replace it. Renunciation is not permitted. One account can hold both administrator and emergency roles. Check each role separately. Administrator transfer or renunciation must keep the emergency authority and freeze state.
+Only the current emergency authority can transfer its role. Transfer is immediate, needs no successor acceptance and preserves freeze state. Deployment and administrator roles cannot replace it after setup. Renunciation is forbidden. An account can hold both roles, but each action checks its own authority. Administrator transfer or renunciation preserves emergency authority and freeze.
 
-Authorized repeated freeze and unfreeze calls succeed. Transfer to the current authority also succeeds. Unauthorized calls fail, including calls that change nothing.
+Authorized repeated freeze/unfreeze and transfer-to-self calls succeed without a change. Unauthorized calls fail even if they would change nothing. Token and mint freeze authority remain separate; engines retain separate handlers and state.
 
-This decision supersedes the [earlier freeze policy](https://github.com/bleu/logos-launchpad/blob/e88e70c/docs/adr/0028-token-custody-and-freeze.md). Token and mint freeze authority remain separate. Bonding-curve, fixed-price, and weighted sales keep separate handlers and state.
+## Reason and limits
 
-## Consequences
+Emergency control must survive administrator changes without granting administrator custody rights. The build selects initial authority through `CURVE_EMERGENCY_AUTHORITY`; missing, malformed and default IDs fail the build. Tests supply a fixture account.
 
-Curve controls are implemented in namespace configuration. The build selects the initial authority through `CURVE_EMERGENCY_AUTHORITY`; local test setup supplies an account from a test fixture. Missing, malformed and default account IDs reject the build. Current [emergency host tests](../../crates/curve-core/tests/emergency.rs) check authorization and role transfer. [Curve handler tests](../../crates/curve-core/src/tests.rs) check swap admission, and [IDL wire tests](../../crates/launchpad-client/tests/idl_wire.rs) check actor message encoding. These checks do not establish runtime token movement or rollback. See the [workspace guide](../architecture/workspace-guide.md#execution-and-evidence-limits) for current checks and gaps.
+The helper subset adapts reviewed authority and freeze behavior and retains its [MIT license](../../third-party/spel-emergency/LICENSE-MIT). Do not add automatic instruction wrapping, per-account freeze, administrator-selected or administrator-recoverable emergency authority, emergency renunciation or successor-signature checks. Those conflict with this policy.
 
-The [historical signed guest tests](https://github.com/bleu/logos-launchpad/blob/5b6927cbd3b5a12941f3956bcab8458446ed52db/crates/launchpad-client/tests/settlement.rs) covered freeze admission, permitted fee collection, close, withdrawal, settlement and recovery with real token transfers before the actor migration. They used development receipts, not production proofs. They do not establish compatibility on the selected actor revision. Current local fixed-price buy and weighted buy and payout checks are listed in the workspace guide. Broader platform compatibility remains unverified. See [M1 evidence requirements](0022-verification-boundaries.md#milestone-and-interface-boundary).
-
-The [historical authority experiment](https://github.com/bleu/logos-launchpad/blob/f1198315569cfc8ada9f6c39964cb77314e2520c/packages/platform-probes/authority/src/lib.rs) used freeze `a4743468bd3a87093931c48c965cc084aa4690c3` (v0.1.5) with the component stack recorded in [ADR 0006](0006-namespaces-and-authority.md). It checked fixed emergency authority, namespace isolation and swaps-only freeze admission. Fee collection, settlement and creator recovery remained available under their own checks. These were mock operations with saved creator/custody references, not real swaps or token transfers. Guest checks used controlled authorization flags and development receipts. The experiment is no longer maintained; lasting coverage belongs with the real bonding-curve controls. See the workspace guide for current fixed-price buy and weighted buy and payout checks.
+Host checks alone do not prove token movement or rollback. See [current execution evidence](../architecture/workspace-guide.md#execution-and-evidence-limits) and [verification requirements](0022-verification-boundaries.md#milestone-and-interface-boundary). Broader platform compatibility and production readiness remain unverified.
 
 ## Sources
-
-The curve adapts only the authority and freeze helper subset below to the pinned `lee_core`. The MIT license is retained in [LICENSE-MIT](../../third-party/spel-emergency/LICENSE-MIT). It omits SPEL macros and byte-window helpers. It rejects automatic instruction wrapping, per-account freezes, administrator-selected emergency authority, administrator transfer or recovery, emergency renunciation and successor-signature checks. Those behaviors conflict with the namespace controls above.
 
 - [Authority helper source](https://github.com/mmlado/spel-authority/blob/97af481b29b5364589776beb4c088ebe234ad7ed/src/lib.rs)
 - [Freeze helper source](https://github.com/mmlado/spel-freeze-authority/blob/a4743468bd3a87093931c48c965cc084aa4690c3/freeze-authority/src/config.rs)
