@@ -3705,7 +3705,8 @@ fn weighted_stale_clock_at_inclusion_boundary_preserves_state() {
     let transaction = fixed_transaction(&state, pool, &key, buy);
 
     // Inclusion time before start must be rejected
-    for timestamp in [149_999u64] {
+    {
+        let timestamp = 149_999u64;
         let mut rejected = state.clone();
         let before = rejected.clone();
         let nonce = rejected.get_account_by_id(creator).nonce;
