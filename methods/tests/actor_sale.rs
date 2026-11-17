@@ -4954,10 +4954,7 @@ fn factory_creation_rejects_invalid_ending_matrix_without_state_changes() {
                 factory_core::compute_curve_creator_role_pda(NAMESPACE, FACTORY, salt),
                 authority,
             ),
-            Actor::new(
-                clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID,
-                clock_core::clock_account_id(),
-            ),
+            clock_core::clock_actor(),
         ];
         for owner in [factory, mint, escrow, pool, creator, launch] {
             actors.extend([
@@ -6924,10 +6921,7 @@ fn curve_execute_events_at(
             factory_core::AUTHORITY_PROGRAM_ACCOUNT_ID,
         ),
         Actor::new(owner, factory_core::AUTHORITY_PROGRAM_ACCOUNT_ID),
-        Actor::new(
-            clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID,
-            clock_core::clock_account_id(),
-        ),
+        clock_core::clock_actor(),
     ];
     for account in [owner, pool, TREASURY, NEXT_TREASURY] {
         actors.extend([
