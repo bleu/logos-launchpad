@@ -30,6 +30,10 @@ Keep full private-route completion, fixed-price trading and settlement, weighted
 
 Local compatibility code adds temporary maintenance and requires a later comparison with upstream behavior. Following an interface does not establish that the implementations are equivalent. The final migration evidence must distinguish source compatibility, host checks, guest execution, package loading and deferred checks. No migration result establishes production readiness or deployment.
 
+## Initial migration evidence (historical)
+
+The following results describe the initial migration revision, before the clock amendment below. See the [workspace guide](../architecture/workspace-guide.md#execution-and-evidence-limits) for current coverage and limits.
+
 The small node-free token test was practical and is retained as an optional lane. It checks a successful transfer, insufficient balance and rollback after a source debit when the destination is undeclared. Host tests and locked guest builds passed for both the foundation and application. They alone do not establish sale execution or rollback. Separate seeded curve tests executed public buys, stale-cap rejection and clock-gated deadline checks through real guests, with unchanged state and nonce on rejection. The clock test uses the upstream assertion guest and seeded clock data, not sequencer `Tick`. This does not cover setup, factory clocks, settlement, graduation or fee execution. The listed local repository checks passed; Linux CI has not run. The three package archives built with Nix; installation, loading and the backend smoke action are blocked by missing local tools. Broader execution, service integration, wallet workflows and real proofs remain evidence gaps. See the [workspace guide](../architecture/workspace-guide.md) for current commands and limits.
 
 ## Clock revision amendment: 2026-11-09
