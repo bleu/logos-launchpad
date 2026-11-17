@@ -56,6 +56,12 @@ impl Cli {
     fn validate_route(&self) -> Result<()> {
         if let Command::CreateSale(args) = &self.command {
             let request = args.sale_request();
+            if args.graduation_hook_program_id.is_none()
+                && (request.graduation_policy.launch_bps != 0
+                    || request.graduation_policy.collateral_bps != 0)
+            {
+                eyre::bail!("nonzero graduation percentages require --graduation-hook-program-id");
+            }
             request
                 .ending_policy
                 .validate(None, request.end_timestamp)?;
@@ -260,7 +266,7 @@ struct CreateSaleArgs {
     #[arg(long)]
     pausable: bool,
     /// Saved adapter deployment address.
-    #[arg(long, value_parser = parse_public_account_id)]
+    #[arg(long, value_parser = parse_public_account_id, requires_all = ["graduation_launch_bps", "graduation_collateral_bps"])]
     graduation_hook_program_id: Option<lee::AccountId>,
     /// Saved opaque adapter configuration as hexadecimal bytes.
     #[arg(long, value_parser = parse_hook_configuration, requires = "graduation_hook_program_id")]
@@ -273,8 +279,12 @@ struct CreateSaleArgs {
     uri: String,
     #[arg(long = "sale-reserve", alias = "d")]
     sale_reserve: u128,
-    #[arg(long = "dex-seed-reserve", alias = "r")]
-    dex_seed_reserve: u128,
+    /// Adapter share of unsold launch tokens, in basis points.
+    #[arg(long, value_parser = clap::value_parser!(u16).range(0..=10_000))]
+    graduation_launch_bps: Option<u16>,
+    /// Adapter share of recorded collateral, in basis points.
+    #[arg(long, value_parser = clap::value_parser!(u16).range(0..=10_000))]
+    graduation_collateral_bps: Option<u16>,
     #[arg(long = "creator-allocation")]
     creator_allocation: u128,
     #[arg(long = "virtual-token-reserve", alias = "vt")]
@@ -337,7 +347,10 @@ impl CreateSaleArgs {
             name: self.name.clone(),
             uri: self.uri.clone(),
             sale_reserve: self.sale_reserve,
-            dex_seed_reserve: self.dex_seed_reserve,
+            graduation_policy: launchpad_client::GraduationPolicy {
+                launch_bps: self.graduation_launch_bps.unwrap_or(0),
+                collateral_bps: self.graduation_collateral_bps.unwrap_or(0),
+            },
             creator_allocation: self.creator_allocation,
             virtual_token_reserve: self.virtual_token_reserve,
             virtual_collateral_reserve: self.virtual_collateral_reserve,
@@ -444,6 +457,9 @@ struct FactoryLifecycleArgs {
 
 #[derive(Debug, Args)]
 struct GraduationArgs {
+    /// Current creator role holder. The factory verifies this hint through role authority.
+    #[arg(long, value_parser = parse_public_account_id)]
+    creator_hint: lee::AccountId,
     #[command(flatten)]
     launch: LaunchArgs,
     #[arg(long, value_parser = parse_public_account_id)]
@@ -619,8 +635,6 @@ fn settlement_stage_name(stage: launchpad_client::SettlementStage) -> &'static s
         SettlementStage::Unstarted => "unstarted",
         SettlementStage::Ready => "ready",
         SettlementStage::Withdrawn { .. } => "withdrawn",
-        SettlementStage::Burned { .. } => "burned",
-        SettlementStage::TokenPaid { .. } => "token_paid",
         SettlementStage::Complete => "complete",
         SettlementStage::HookReady { .. } => "hook_ready",
         SettlementStage::Graduated => "graduated",
@@ -653,6 +667,8 @@ enum QuoteMode {
 struct SaleSnapshot {
     trade_mode: TradeModeArg,
     graduation_hook: Option<HookSnapshot>,
+    graduation_launch_bps: u16,
+    graduation_collateral_bps: u16,
     settlement_stage: &'static str,
     namespace: String,
     protocol_fee_bps: u16,
@@ -906,6 +922,7 @@ async fn graduate(namespace: lee::AccountId, json: bool, args: GraduationArgs) -
         launchpad_client::GraduationTarget::Curve {
             sale,
             state: &state,
+            creator_hint: args.creator_hint,
         },
         treasury,
     )?;
@@ -1029,6 +1046,8 @@ async fn sale_snapshot(namespace: lee::AccountId, json: bool, args: LaunchReadAr
     let snapshot = SaleSnapshot {
         trade_mode: factory.trade_mode.into(),
         graduation_hook: factory.graduation_hook.as_ref().map(HookSnapshot::from),
+        graduation_launch_bps: factory.graduation_policy.launch_bps,
+        graduation_collateral_bps: factory.graduation_policy.collateral_bps,
         settlement_stage: settlement_stage_name(factory.settlement_stage),
         namespace: namespace.to_string(),
         protocol_fee_bps: config.protocol_fee_bps,
@@ -1083,6 +1102,10 @@ async fn sale_snapshot(namespace: lee::AccountId, json: bool, args: LaunchReadAr
             snapshot.real_collateral_reserve,
             snapshot.fees_accrued,
             snapshot.fees_collected
+        );
+        println!(
+            "graduation split: launch_bps={} collateral_bps={}",
+            snapshot.graduation_launch_bps, snapshot.graduation_collateral_bps,
         );
         if let Some(hook) = &snapshot.graduation_hook {
             println!(
@@ -1863,6 +1886,8 @@ mod tests {
         let mut base = vec![
             "launchpad",
             "graduate",
+            "--creator-hint",
+            "11111111111111111111111111111111",
             "--launch-salt",
             &salt,
             "--collateral-definition",
@@ -1889,6 +1914,8 @@ mod tests {
         let base = vec![
             "launchpad",
             "graduate",
+            "--creator-hint",
+            "11111111111111111111111111111111",
             "--fee-payer",
             "11111111111111111111111111111111",
             "--launch-salt",
@@ -1992,8 +2019,6 @@ mod tests {
             "https://example.invalid/e2e-token.json",
             "--sale-reserve",
             "800",
-            "--dex-seed-reserve",
-            "100",
             "--creator-allocation",
             "50",
             "--virtual-token-reserve",
@@ -2034,8 +2059,6 @@ mod tests {
             "https://example.invalid/token",
             "--sale-reserve",
             "800",
-            "--dex-seed-reserve",
-            "100",
             "--creator-allocation",
             "100",
             "--virtual-token-reserve",
@@ -2136,6 +2159,27 @@ mod tests {
             args.sale_request().pause_policy,
             launchpad_client::PausePolicy::AuthorityControlled
         );
+        for flag in ["--graduation-launch-bps", "--graduation-collateral-bps"] {
+            for value in ["0", "10000"] {
+                let mut selected = arguments.clone();
+                selected.extend([flag, value]);
+                let cli = Cli::try_parse_from(selected).unwrap();
+                assert_eq!(cli.validate_route().is_ok(), value == "0");
+            }
+            for value in ["10001", "65536", "-1"] {
+                let mut selected = arguments.clone();
+                selected.extend([flag, value]);
+                assert!(Cli::try_parse_from(selected).is_err());
+            }
+        }
+        let mut missing_split = arguments.clone();
+        missing_split.extend(["--graduation-hook-program-id", &program]);
+        assert!(Cli::try_parse_from(&missing_split).is_err());
+        for flag in ["--graduation-launch-bps", "--graduation-collateral-bps"] {
+            let mut selected = missing_split.clone();
+            selected.extend([flag, "0"]);
+            assert!(Cli::try_parse_from(selected).is_err());
+        }
         let mut configuration_without_program = arguments.clone();
         configuration_without_program.extend(["--graduation-hook-configuration", "070b"]);
         assert!(Cli::try_parse_from(configuration_without_program).is_err());
@@ -2153,7 +2197,14 @@ mod tests {
         ]);
         assert!(Cli::try_parse_from(invalid_configuration).is_err());
         let mut empty_configuration = arguments.clone();
-        empty_configuration.extend(["--graduation-hook-program-id", &program]);
+        empty_configuration.extend([
+            "--graduation-hook-program-id",
+            &program,
+            "--graduation-launch-bps",
+            "0",
+            "--graduation-collateral-bps",
+            "10000",
+        ]);
         let Command::CreateSale(args) = Cli::try_parse_from(empty_configuration).unwrap().command
         else {
             panic!("create sale")
@@ -2170,6 +2221,10 @@ mod tests {
             &program,
             "--graduation-hook-configuration",
             "070b",
+            "--graduation-launch-bps",
+            "2500",
+            "--graduation-collateral-bps",
+            "7500",
         ]);
         let cli = Cli::try_parse_from(arguments).unwrap();
         let Command::CreateSale(args) = cli.command else {
@@ -2279,6 +2334,8 @@ mod tests {
             let snapshot = SaleSnapshot {
                 trade_mode: TradeModeArg::BuyOnly,
                 graduation_hook: None,
+                graduation_launch_bps: 0,
+                graduation_collateral_bps: 0,
                 settlement_stage: "unstarted",
                 namespace: "namespace".to_owned(),
                 protocol_fee_bps: 5,
@@ -2330,14 +2387,12 @@ mod tests {
                 },
                 "withdrawn",
             ),
-            (SettlementStage::Burned { collateral_due: 12 }, "burned"),
-            (
-                SettlementStage::TokenPaid { collateral_due: 12 },
-                "token_paid",
-            ),
             (SettlementStage::Complete, "complete"),
             (
-                SettlementStage::HookReady { collateral_due: 12 },
+                SettlementStage::HookReady {
+                    unsold: 600,
+                    collateral_due: 12,
+                },
                 "hook_ready",
             ),
             (SettlementStage::Graduated, "graduated"),

@@ -13,6 +13,8 @@ Trade modes and the optional adapter hook are part of the implemented baseline. 
 
 Pricing uses virtual reserves; payouts require real reserves. Each trade changes custody by the same amount as its reserve and fee liabilities. Collection reduces custody and fees together, or clears fees already held by the treasury. Surplus deposits do not increase payout rights. Checked arithmetic and transaction rollback preserve these rules. See the [pool code](../../crates/pool/src/lib.rs) and [solvency tests](../../crates/pool/tests/proptest_invariants.rs).
 
+Curve supply is sale inventory plus the separate creator allocation, with no `R` reserve. Unsold inventory and recorded collateral follow the common payout policy in [ADR 0020](../adr/0020-settlement-and-graduation.md), without an unsold burn. A configured adapter requires its saved split; a broken adapter can lock payout.
+
 Adapter authors should use the [factory types](../../crates/factory-core/src/lib.rs) and [typed callback contract](../../crates/factory-core/src/hook.rs). See [ADR 0020](../adr/0020-settlement-and-graduation.md) for custody and permission rules. The [generated actor schema](../../idl/launchpad.json) defines the public wire interface.
 
 ## Release compatibility
@@ -26,7 +28,7 @@ Local guest tests cover fresh curve sales, namespace administration, both trade 
 - [Curve handlers](../../crates/curve-core/src/tests.rs): trade restrictions, fees, slippage and treasury aliases.
 - [Role-authority guest tests](../../crates/launchpad-client/tests/role_authority_guest.rs): signed setup, role transfer, direct-owner actions and program-controlled administration.
 - [Controls guest tests](../../crates/launchpad-client/tests/role_authority_guest/controls.rs): administration, freeze, trades, fees and close.
-- [Settlement guest tests](../../crates/launchpad-client/tests/role_authority_guest/settlement.rs): manual and hook payouts, burn, callback, rollback and retry.
+- [Settlement guest tests](../../crates/launchpad-client/tests/role_authority_guest/settlement.rs): manual and hook payouts, callback, rollback and retry.
 - [Factory graduation host tests](../../crates/factory-core/tests/graduation.rs): typed callback and custody checks.
 - [SDK](../../crates/launchpad-client/src/tests.rs) and [CLI](../../cli/src/main.rs): quotes, resume and transaction construction.
 - [Guest settlement](https://github.com/bleu/logos-launchpad/blob/5b6927cbd3b5a12941f3956bcab8458446ed52db/crates/launchpad-client/tests/settlement.rs): historical payout, rollback, retry and recovery cases; not current actor execution evidence.

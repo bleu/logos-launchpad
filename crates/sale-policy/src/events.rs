@@ -2,7 +2,7 @@
 use borsh::{BorshDeserialize, BorshSerialize};
 use serde::{Deserialize, Serialize};
 
-use crate::{controls::PausePolicy, terms::EndingPolicy};
+use crate::{GraduationPolicy, controls::PausePolicy, terms::EndingPolicy};
 
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize, Serialize, Deserialize)]
 pub struct SaleEventV1 {
@@ -77,7 +77,7 @@ pub enum SaleEventKindV1 {
         collateral_definition: [u8; 32],
         sale_inventory: u128,
         creator_allocation: u128,
-        curve_reserve: u128,
+        graduation_policy: GraduationPolicy,
         collateral_seed: u128,
         start_timestamp: Option<u64>,
         end_timestamp: Option<u64>,
@@ -177,8 +177,6 @@ pub enum ClosureReasonV1 {
 pub enum SettlementStepV1 {
     Prepared,
     ReservesWithdrawn,
-    UnsoldBurned,
-    SeedReturned,
     Payout,
     Completed,
 }
@@ -214,8 +212,9 @@ pub enum SettlementEffectV1 {
 pub enum PayoutPurposeV1 {
     Reserve,
     CreatorProceeds,
-    CreatorSeed,
-    CurveReserve,
+    CreatorLaunch,
+    AdapterLaunch,
+    AdapterCollateral,
 }
 
 #[derive(

@@ -3,8 +3,8 @@
 pub use curve_core::{AllowlistPolicy, BuyPolicy, MembershipPath};
 use sale_policy::{EndingError, TimeBounds};
 pub use sale_policy::{
-    EndingPolicy, PausePolicy, SettlementAmounts, SettlementProgress, SettlementRoute,
-    TradeControl, TradeMode,
+    EndingPolicy, GraduationPolicy, PausePolicy, SettlementAmounts, SettlementPayouts,
+    SettlementProgress, SettlementRoute, TradeControl, TradeMode,
 };
 
 mod events;
@@ -60,6 +60,7 @@ pub struct FixedPricePoolInputs {
     pub trade_mode: TradeMode,
     pub sell_fee_bps: u16,
     pub graduation_adapter: Option<Actor>,
+    pub graduation_policy: GraduationPolicy,
     pub namespace: AccountId,
     pub namespace_program_id: AccountId,
     pub factory_program_id: AccountId,
@@ -90,6 +91,7 @@ pub struct WeightedPoolInputs {
     pub trade_mode: TradeMode,
     pub sell_fee_bps: u16,
     pub graduation_adapter: Option<Actor>,
+    pub graduation_policy: GraduationPolicy,
     pub namespace: AccountId,
     pub namespace_program_id: AccountId,
     pub factory_program_id: AccountId,
@@ -223,6 +225,7 @@ pub struct PoolAccount {
     pub trade_mode: TradeMode,
     pub sell_fee_bps: u16,
     pub graduation_adapter: Option<Actor>,
+    pub graduation_policy: GraduationPolicy,
     pub mode: PoolMode,
     pub funded: bool,
     pub closure_observed: bool,
@@ -243,7 +246,6 @@ pub struct PoolAccount {
     pub recorded_collateral: u128,
     pub accrued_fees: u128,
     pub settlement_progress: SettlementProgress,
-    pub seed_returned: bool,
     pending: Option<Pending>,
 }
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -308,6 +310,9 @@ impl PoolAccount {
             .map_err(ending_error)
     }
     fn validate_policies(&self) -> Result<(), Error> {
+        self.graduation_policy
+            .validate(self.graduation_adapter.is_some())
+            .map_err(|_| Error::InvalidState)?;
         sale_policy::SellFeeRate::new(self.sell_fee_bps).map_err(|_| Error::InvalidState)?;
         if !supported_ending(
             matches!(self.mode, PoolMode::Weighted { .. }),
@@ -655,6 +660,10 @@ pub fn handle(input: &ReceiveInput) -> Result<Response, Error> {
             {
                 return Err(Error::InvalidTerms);
             }
+            inputs
+                .graduation_policy
+                .validate(inputs.graduation_adapter.is_some())
+                .map_err(|_| Error::InvalidTerms)?;
             sale_policy::SellFeeRate::new(inputs.sell_fee_bps).map_err(|_| Error::InvalidTerms)?;
             validate_policy_terms(
                 false,
@@ -691,6 +700,7 @@ pub fn handle(input: &ReceiveInput) -> Result<Response, Error> {
                 trade_mode: inputs.trade_mode,
                 sell_fee_bps: inputs.sell_fee_bps,
                 graduation_adapter: inputs.graduation_adapter,
+                graduation_policy: inputs.graduation_policy,
                 mode: PoolMode::FixedPrice,
                 funded: false,
                 closure_observed: false,
@@ -711,7 +721,6 @@ pub fn handle(input: &ReceiveInput) -> Result<Response, Error> {
                 recorded_collateral: 0,
                 accrued_fees: 0,
                 settlement_progress: crate::SettlementProgress::Unselected,
-                seed_returned: true,
                 pending: Some(Pending {
                     activate: false,
                     step: 0,
@@ -779,6 +788,10 @@ pub fn handle(input: &ReceiveInput) -> Result<Response, Error> {
             {
                 return Err(Error::InvalidTerms);
             }
+            inputs
+                .graduation_policy
+                .validate(inputs.graduation_adapter.is_some())
+                .map_err(|_| Error::InvalidTerms)?;
             sale_policy::SellFeeRate::new(inputs.sell_fee_bps).map_err(|_| Error::InvalidTerms)?;
             validate_policy_terms(
                 true,
@@ -815,6 +828,7 @@ pub fn handle(input: &ReceiveInput) -> Result<Response, Error> {
                 trade_mode: inputs.trade_mode,
                 sell_fee_bps: inputs.sell_fee_bps,
                 graduation_adapter: inputs.graduation_adapter,
+                graduation_policy: inputs.graduation_policy,
                 mode: PoolMode::Weighted {
                     token_weight_start: inputs.token_weight_start,
                     token_weight_end: inputs.token_weight_end,
@@ -846,7 +860,6 @@ pub fn handle(input: &ReceiveInput) -> Result<Response, Error> {
                 recorded_collateral: 0,
                 accrued_fees: 0,
                 settlement_progress: crate::SettlementProgress::Unselected,
-                seed_returned: false,
                 pending: Some(Pending {
                     activate: false,
                     step: 0,

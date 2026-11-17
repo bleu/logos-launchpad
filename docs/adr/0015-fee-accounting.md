@@ -6,7 +6,7 @@ Date: 2026-09-29; fee-limit review: 2026-10-01
 
 ## Decision
 
-Namespace protocol fees use collateral and are tracked separately from reserves and creator proceeds. Collection transfers all accrued fees to the current namespace treasury, including fees accrued before a treasury change. It is permissionless, idempotent and available at any time. The caller cannot redirect payment. Terminal settlement collects any remainder atomically with the relevant reserve or proceeds transfer.
+Namespace protocol fees use collateral and are tracked separately from reserves and creator proceeds. Collection transfers all accrued fees to the current namespace treasury, including fees accrued before a treasury change. It is permissionless, idempotent and available at any time. The caller cannot redirect payment. Terminal settlement collects any remainder atomically with the relevant payout. Fees are excluded from the common two-asset split in [ADR 0020](0020-settlement-and-graduation.md); retained sell collateral remains part of eligible recorded collateral.
 
 If the curve pool is the treasury, collection records and clears fees without a self-transfer. Reserve withdrawal leaves those collected fees in the vault. This prevents collection from treating fees as liquidity.
 

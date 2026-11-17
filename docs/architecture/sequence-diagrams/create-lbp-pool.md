@@ -37,8 +37,8 @@ sequenceDiagram
 
 The creator signer initializes the creator role in the same claim. Namespace administration stays separate from that role. Immediate start saves the supplied timestamp as a clock lower bound; it does not read and save current time. Scheduled starts and activation use separate trusted-clock checks. See [ADR 0032](../../adr/0032-fixed-price-lbp-setup.md) for the time rules.
 
-Each stage is atomic. The workflow spans four transactions. Final setup can fund the fixed-price sale vault before a scheduled start. `AfterSetup` pays the creator allocation only after successful final funding. `AfterEnd` retains the already placed allocation in escrow; later settlement or payout is future work. The fixed-price sale setup does not use curve `R` allocation or curve factory custody.
+Each stage is atomic. The workflow spans four transactions. Final setup can fund the fixed-price sale vault before a scheduled start. `AfterSetup` pays the creator allocation only after successful final funding. `AfterEnd` retains the already placed allocation in escrow until its separate claim is eligible. Setup saves the common payout terms under [ADR 0020](../../adr/0020-settlement-and-graduation.md), without adopting curve factory custody.
 
 ## Out of scope
 
-This flow does not add buys, sells, weighted accounting, fees, close, end payout, end hooks, delayed settlement, cancellation or expired-recovery handlers, private fixed-price sale flows, allowlists, full SDK or CLI flows. Event indexing, wallet integration and the final account schema need separate implementation and review.
+This diagram covers setup only. Trading, fees, ending, common manual or adapter payouts and separate allocation claims are defined in the linked ADRs. Delayed settlement, cancellation or expired-recovery handlers, private fixed-price sale flows and full SDK or CLI flows remain outside this flow. Event indexing, wallet integration and the final account schema need separate implementation and review.

@@ -22,7 +22,7 @@ A fixed-price sale may omit its end time. When it has an end time, it must be af
 
 When pause is enabled, only the current creator authority holder can pause/resume before the selected ending, including before start. Authorized repeated calls succeed without another state change or event. Authority must still be checked. Pause does not stop weighted-sale weight changes or move either sale's end, and resume cannot reopen an ended sale. This settles the previously open fixed-price and weighted-sale pause authority; it does not grant sale control to namespace administrators or select platform freeze gates.
 
-Allowlist admission applies only to buys. A permitted sell can replenish empty inventory under `Scheduled`; selected depletion under `Depletion` or `Either` is final and rejects later sells. Settlement burns cannot create depletion evidence.
+Allowlist admission applies only to buys. A permitted sell can replenish empty inventory under `Scheduled`; selected depletion under `Depletion` or `Either` is final and rejects later sells. Payout cannot create depletion evidence.
 
 Defer the optional limit on tokens allocated in one block. This differs from the RFP-016 requirement and is `To be reviewed by Logos team`. It is not implemented or removed from scope.
 

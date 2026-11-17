@@ -471,7 +471,7 @@ fn transferred_curve_creator_funds_and_settles_without_pool_custody() {
                 name: "Sale".into(),
                 uri: "ipfs://sale".into(),
                 sale_reserve: 400,
-                dex_seed_reserve: 100,
+                graduation_policy: launchpad_client::GraduationPolicy::default(),
                 creator_allocation: 50,
                 virtual_token_reserve: 1_000,
                 virtual_collateral_reserve: 1_000,
@@ -561,7 +561,7 @@ fn transferred_curve_creator_funds_and_settles_without_pool_custody() {
     );
     assert_eq!(
         balance(&fixture.state, fixture.factory, fixture.definition),
-        100
+        0
     );
     rejected_without_changes(
         &mut fixture.state,
@@ -666,12 +666,6 @@ fn transferred_curve_creator_funds_and_settles_without_pool_custody() {
             unsold: 300,
             collateral_due: 112,
         },
-        factory_core::SettlementStage::Burned {
-            collateral_due: 112,
-        },
-        factory_core::SettlementStage::TokenPaid {
-            collateral_due: 112,
-        },
         factory_core::SettlementStage::Complete,
     ] {
         let before = fixture.state.clone();
@@ -708,7 +702,7 @@ fn transferred_curve_creator_funds_and_settles_without_pool_custody() {
     }
     assert_eq!(
         balance(&fixture.state, id(&successor), fixture.definition),
-        250
+        450
     );
     assert_eq!(balance(&fixture.state, id(&successor), COLLATERAL), 1_000);
     assert_eq!(balance(&fixture.state, id(&creator), fixture.definition), 0);
@@ -728,7 +722,7 @@ fn transferred_curve_creator_funds_and_settles_without_pool_custody() {
     .unwrap();
     assert!(matches!(
         definition,
-        TokenState::Definition { supply: 250, .. }
+        TokenState::Definition { supply: 450, .. }
     ));
 }
 

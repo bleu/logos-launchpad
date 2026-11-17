@@ -22,6 +22,7 @@ fn weighted_inputs() -> WeightedPoolInputs {
         trade_mode: lbp_core::TradeMode::BuyOnly,
         sell_fee_bps: 0,
         graduation_adapter: None,
+        graduation_policy: sale_policy::GraduationPolicy::default(),
         namespace: id(40),
         namespace_program_id: id(6),
         factory_program_id: id(7),
@@ -1364,11 +1365,11 @@ fn fixed_price_pool_rejects_weighted_pause() {
 }
 
 // ---------------------------------------------------------------------------
-// Settlement — proceeds, fees, burn
+// Settlement payouts and fees
 // ---------------------------------------------------------------------------
 
 #[test]
-fn weighted_settlement_pays_seed_and_proceeds_burns_unsold_and_collects_fees() {
+fn weighted_settlement_pays_inventory_and_recorded_collateral_and_collects_fees() {
     let (input, mut state) = funded();
     // Simulate a buy: 50 in, fee 1, net 49 recorded
     state.recorded_collateral = 149; // seed(100) + net(49)
@@ -1397,11 +1398,11 @@ fn weighted_settlement_pays_seed_and_proceeds_burns_unsold_and_collects_fees() {
     assert_eq!(next.accrued_fees, 0);
 
     // Check the response has transfers and burns
-    // Fee payout to treasury, burn of unsold, proceeds payout to creator
+    // Fees go to the treasury; both sale assets go to the creator.
     let messages = &response.sync_messages;
     assert!(
         messages.len() >= 2,
-        "expected fee + burn + proceeds transfers"
+        "expected fee, inventory and collateral transfers"
     );
 }
 
@@ -1499,7 +1500,7 @@ fn weighted_settlement_with_zero_fees_and_no_unsold() {
     .unwrap();
     let next = state_of(&response);
     assert!(next.settlement_progress.is_complete());
-    // No burn needed when remaining_inventory is 0
+    // Empty inventory needs no launch-token transfer.
     // No fee payout when accrued_fees is 0
 }
 
@@ -2323,7 +2324,7 @@ fn common_weighted_resume_keeps_namespace_freeze_for_both_buys() {
 }
 
 #[test]
-fn weighted_shared_closing_keeps_the_schedule_after_depletion_and_burn() {
+fn weighted_shared_closing_keeps_the_schedule_after_depletion_and_payout() {
     let (mut input, original) = funded();
     for remaining in [0, original.remaining_inventory] {
         let mut state = original.clone();
@@ -2565,7 +2566,7 @@ fn weighted_collection_and_settlement_reject_unbacked_pricing_or_reduced_seed() 
 }
 
 #[test]
-fn weighted_atomic_settlement_excludes_seed_fees_and_burn_from_route_selection() {
+fn weighted_atomic_settlement_pays_seed_in_recorded_collateral_once() {
     use lbp_core::SettlementProgress;
     use lez_compat_core::token::Message as TokenMessage;
     let (input, original) = funded();
@@ -2598,7 +2599,6 @@ fn weighted_atomic_settlement_excludes_seed_fees_and_burn_from_route_selection()
         expected.recorded_collateral = 0;
         expected.accrued_fees = 0;
         expected.closure_observed = true;
-        expected.seed_returned = true;
         expected.settlement_progress = SettlementProgress::ManualComplete;
         assert_eq!(state_of(&response), expected);
         assert_eq!(
@@ -2616,8 +2616,9 @@ fn weighted_atomic_settlement_excludes_seed_fees_and_burn_from_route_selection()
             });
         }
         if inventory != 0 {
-            calls.push(TokenMessage::Burn {
+            calls.push(TokenMessage::Transfer {
                 definition: id(41),
+                recipient: id(50),
                 amount: inventory,
             });
         }
@@ -2780,11 +2781,10 @@ fn receipt_settlement_keeps_selected_ending_and_net_collateral_for_both_routes()
                 {
                     *pricing_collateral = 149;
                 }
-                let adapter = if route == lbp_core::SettlementRoute::Graduation {
-                    state.graduation_adapter
-                } else {
-                    None
-                };
+                if route == lbp_core::SettlementRoute::Manual {
+                    state.graduation_adapter = None;
+                }
+                let adapter = state.graduation_adapter;
                 let message = Message::Settle {
                     route,
                     creator: id(50),
@@ -2809,8 +2809,11 @@ fn receipt_settlement_keeps_selected_ending_and_net_collateral_for_both_routes()
                 else {
                     panic!("expected applied receipt")
                 };
-                assert_eq!(receipt.amounts.collateral, 49);
-                assert_eq!(receipt.seed_payment, 100);
+                assert_eq!(receipt.eligible.collateral, 149);
+                assert_eq!(
+                    receipt.payouts.creator.collateral + receipt.payouts.adapter.collateral,
+                    149
+                );
                 let mut finalize = input.clone();
                 finalize.from = Some(receipt.factory);
                 finalize.pre_state = response.post_state.unwrap();
@@ -2822,7 +2825,6 @@ fn receipt_settlement_keeps_selected_ending_and_net_collateral_for_both_routes()
                 let next = state_of(&completed);
                 assert_eq!(next.remaining_inventory, remaining);
                 assert_eq!(next.settlement_progress, receipt.progress);
-                assert!(next.seed_returned);
                 assert_eq!(completed.validity.timestamps.start(), expected);
                 if let lbp_core::PoolMode::Weighted {
                     pricing_collateral, ..
@@ -2922,7 +2924,7 @@ fn weighted_trade_events_use_net_pricing_input_and_trusted_time_for_both_forms()
 }
 
 #[test]
-fn weighted_settlement_events_separate_seed_proceeds_and_scheduled_closure() {
+fn weighted_settlement_events_report_both_assets_and_scheduled_closure() {
     use curve_core::events::*;
     let (input, original) = funded();
     for proceeds in [100, 149] {
@@ -2961,38 +2963,28 @@ fn weighted_settlement_events_separate_seed_proceeds_and_scheduled_closure() {
                 tokens_transferred: 2,
             },
             SaleEventKindV1::Settlement {
-                step: SettlementStepV1::UnsoldBurned,
-                route: None,
-                effects: vec![SettlementEffectV1::Burn {
+                step: SettlementStepV1::Payout,
+                route: Some(SettlementRouteV1::Manual),
+                effects: vec![SettlementEffectV1::Payout {
                     definition: *id(41).value(),
-                    amount: state.remaining_inventory,
+                    recipient: *id(50).value(),
+                    purpose: PayoutPurposeV1::CreatorLaunch,
+                    liability_discharged: state.remaining_inventory,
+                    tokens_transferred: state.remaining_inventory,
                 }],
             },
             SaleEventKindV1::Settlement {
-                step: SettlementStepV1::SeedReturned,
-                route: None,
-                effects: vec![SettlementEffectV1::Payout {
-                    definition: *id(42).value(),
-                    recipient: *id(50).value(),
-                    purpose: PayoutPurposeV1::CreatorSeed,
-                    liability_discharged: 100,
-                    tokens_transferred: 100,
-                }],
-            },
-        ];
-        if proceeds != 100 {
-            expected.push(SaleEventKindV1::Settlement {
                 step: SettlementStepV1::Payout,
                 route: Some(SettlementRouteV1::Manual),
                 effects: vec![SettlementEffectV1::Payout {
                     definition: *id(42).value(),
                     recipient: *id(50).value(),
                     purpose: PayoutPurposeV1::CreatorProceeds,
-                    liability_discharged: 49,
-                    tokens_transferred: 49,
+                    liability_discharged: proceeds,
+                    tokens_transferred: proceeds,
                 }],
-            });
-        }
+            },
+        ];
         expected.push(SaleEventKindV1::Settlement {
             step: SettlementStepV1::Completed,
             route: Some(SettlementRouteV1::Manual),
@@ -3006,7 +2998,6 @@ fn weighted_settlement_events_separate_seed_proceeds_and_scheduled_closure() {
             expected
         );
         assert_eq!(next.remaining_inventory, state.remaining_inventory);
-        assert!(next.seed_returned);
     }
 }
 
@@ -3015,7 +3006,7 @@ fn weighted_depletion_waits_for_schedule_and_zero_manual_completion_blocks_hooks
     use curve_core::events::*;
     let (input, mut state) = funded();
     state.remaining_inventory = 0;
-    state.graduation_adapter = Some(Actor::new(id(70), id(71)));
+    state.graduation_adapter = None;
     let response = settle(
         &input,
         &state,
@@ -3058,7 +3049,7 @@ fn weighted_depletion_waits_for_schedule_and_zero_manual_completion_blocks_hooks
             [900, 0],
         )
         .err(),
-        Some(lbp_core::Error::InvalidState)
+        Some(lbp_core::Error::InvalidTerms)
     );
     let manual_retry = handle(&ReceiveInput {
         receiver: input.receiver,
@@ -3070,6 +3061,7 @@ fn weighted_depletion_waits_for_schedule_and_zero_manual_completion_blocks_hooks
     .unwrap();
     assert!(sale_events(&manual_retry).is_empty());
     assert_eq!(state_of(&manual_retry), next);
+    state.graduation_adapter = Some(Actor::new(id(70), id(71)));
     let hook = settle(
         &input,
         &state,
@@ -3082,10 +3074,7 @@ fn weighted_depletion_waits_for_schedule_and_zero_manual_completion_blocks_hooks
         [100, 0],
     )
     .unwrap();
-    assert_eq!(
-        sale_events(&hook),
-        sale_events(&response)[..sale_events(&response).len() - 1]
-    );
+    assert_eq!(sale_events(&hook).len(), sale_events(&response).len() - 1);
     assert_eq!(hook.validity.timestamps.start(), Some(3_000_000));
     let lbp_core::SettlementReply::Applied { receipt } =
         borsh::from_slice(&hook.sync_messages.last().unwrap().message).unwrap()
@@ -3122,9 +3111,8 @@ fn weighted_depletion_waits_for_schedule_and_zero_manual_completion_blocks_hooks
         is_authorized: false,
         pre_state: borsh::to_vec(&completed).unwrap().into(),
         message: borsh::to_vec(&Message::SettleWeighted { creator: id(51) }).unwrap(),
-    })
-    .unwrap();
-    assert!(sale_events(&repeated).is_empty());
+    });
+    assert_eq!(repeated.err(), Some(lbp_core::Error::InvalidTerms));
 }
 
 #[test]
@@ -3546,7 +3534,7 @@ fn weighted_retention_preserves_custody_and_remains_creator_proceeds() {
         1007 - quote.amount_out
     );
     assert_eq!(
-        next.buyer_proceeds().unwrap(),
+        next.recorded_collateral - 100,
         900 - quote.gross_collateral + quote.retained_fee
     );
     assert_eq!(pricing_collateral(&next), next.recorded_collateral);
@@ -3578,7 +3566,6 @@ fn weighted_retention_preserves_custody_and_remains_creator_proceeds() {
         recipient: id(60),
         amount: next.recorded_collateral
     }));
-    assert!(state_of(&settled).seed_returned);
 }
 
 #[test]

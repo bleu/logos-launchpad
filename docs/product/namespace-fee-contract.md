@@ -12,8 +12,8 @@ Anyone can create a namespace. Creation sets its administrator, fee, and treasur
 | Change treasury | Current administrator | Treasury only |
 | Change administrator | Current administrator and accepting successor | Administrator only |
 | Give up administration | Current administrator | Remove administration permanently; keep fee and treasury |
-| Create a sale or perform manual settlement | Current creator authority holder | Sale actions allowed at the current stage |
-| Execute a configured curve adapter hook | Anyone | Post-close settlement under [ADR 0020](../adr/0020-settlement-and-graduation.md) |
+| Create a sale or perform manual settlement | Current creator authority holder | Sale actions allowed at the current stage; manual payout requires no configured adapter |
+| Execute a configured adapter hook | Anyone | Post-close settlement under [ADR 0020](../adr/0020-settlement-and-graduation.md) |
 | Collect fees | Anyone | Collect all outstanding fees for the current treasury; no self-transfer if already in its vault |
 
 Each namespace has one administration record. The [administration module](../adr/0006-namespaces-and-authority.md) defines its setup and transfer rules. Namespace administration does not grant creator rights.
@@ -39,9 +39,9 @@ Execution checks trade amounts, rounding, price limits, and available funds. A f
 
 Namespace fees can be collected at any time. Collection pays all outstanding namespace fees, clears that record, and increases total collected fees by the amount paid. If the curve pool is the current treasury, its fees are already in the destination collateral vault: clear outstanding fees and record collection without a transfer to itself. Reserve withdrawal leaves those collected fees in that vault. Collecting a zero balance succeeds and leaves the records unchanged. Repeated collection gives the same result until a trade adds new fees.
 
-Settlement collects remaining fees in the same transaction as the related reserve or proceeds payment. The payment uses the balance after collection. If that stage fails, its state and balances stay unchanged. Earlier stages stay complete. The full process can use several transactions. Completed payments and token burns are recorded so a retry is safe.
+Settlement collects remaining fees in the same transaction as the related reserve or proceeds payment. The payment uses the balance after collection. If that stage fails, its state and balances stay unchanged. Earlier stages stay complete. The full process can use several transactions. Completed payments are recorded so a retry cannot pay twice. The common split excludes fees and surplus; a configured adapter requires graduation under [ADR 0020](../adr/0020-settlement-and-graduation.md).
 
-Creator withdrawal and `AfterEnd` allocations follow the selected ending policy. `Scheduled` waits for the end even with empty inventory; selected depletion permits early payout and is final. Weighted `Either` keeps its schedule end as a fallback. Settlement burns do not create depletion evidence. A pause keeps the schedule active; weighted-sale weights continue to change. Fixed-price freeze blocks buys, not settlement. See [ADR 0025](../adr/0025-sale-closing.md), [ADR 0015](../adr/0015-fee-accounting.md), [ADR 0016](../adr/0016-lbp-live-fees.md), and [ADR 0020](../adr/0020-settlement-and-graduation.md).
+Creator withdrawal and `AfterEnd` allocations follow the selected ending policy. `Scheduled` waits for the end even with empty inventory; selected depletion permits early payout and is final. Weighted `Either` keeps its schedule end as a fallback. Payout does not create depletion evidence. A pause keeps the schedule active; weighted-sale weights continue to change. Fixed-price freeze blocks buys, not settlement. See [ADR 0025](../adr/0025-sale-closing.md), [ADR 0015](../adr/0015-fee-accounting.md), [ADR 0016](../adr/0016-lbp-live-fees.md), and [ADR 0020](../adr/0020-settlement-and-graduation.md).
 
 ## Events and errors
 
@@ -54,7 +54,7 @@ Events identify the namespace and chain location and record completed changes. H
 | Administrator change or removal | Action, affected administrator identities |
 | Trade | Sale, sale type, tokens, input/output, fee base, rate, fee, amount used for pricing or paid after fees, fee records |
 | Collection | Sale, collateral definition, amount, treasury, resulting fee records |
-| Settlement stage | Sale, sale type, completed stage, fees collected, tokens paid or burned, resulting state |
+| Settlement stage | Sale, sale type, completed stage, fees collected, actual launch-token and collateral payouts, resulting state |
 
 Program and client errors use these cause categories:
 

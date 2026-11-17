@@ -1,5 +1,6 @@
 use std::str::FromStr;
 
+use super::GraduationPolicy;
 use factory_core::{CreationStage, FactoryState, SettlementStage};
 use lee::AccountId;
 use lee_core::account::Actor;
@@ -36,10 +37,10 @@ fn creation() -> CreateSaleRequest {
         trade_mode: factory_core::TradeMode::BuyAndSell,
         sell_fee_bps: 0,
         graduation_hook: None,
+        graduation_policy: GraduationPolicy::default(),
         name: "E2E token".into(),
         uri: "https://example.invalid/e2e-token.json".into(),
         sale_reserve: 800,
-        dex_seed_reserve: 100,
         creator_allocation: 50,
         virtual_token_reserve: 2_000,
         virtual_collateral_reserve: 100,
@@ -110,9 +111,9 @@ fn valid_factory_state(sale: FactorySale) -> FactoryState {
     field!(addresses.token_definition);
     field!(sale.collateral_definition);
     field!(800u128);
-    field!(100u128);
+    field!(GraduationPolicy::default());
     field!(50u128);
-    field!(950u128);
+    field!(850u128);
     field!(2_000u128);
     field!(100u128);
     field!(sale.curve_program_id);
@@ -280,6 +281,7 @@ fn fixed_creation() -> factory_core::FixedPriceInputs {
         trade_mode: super::TradeMode::BuyOnly,
         sell_fee_bps: 0,
         graduation_hook: None,
+        graduation_policy: GraduationPolicy::default(),
         namespace: sale.namespace,
         launch_salt: sale.launch_salt,
         name: "Sale".into(),
@@ -446,6 +448,7 @@ fn weighted_creation() -> factory_core::WeightedInputs {
         trade_mode: super::TradeMode::BuyOnly,
         sell_fee_bps: 0,
         graduation_hook: None,
+        graduation_policy: GraduationPolicy::default(),
         namespace: fixed.namespace,
         launch_salt: fixed.launch_salt,
         name: fixed.name,
@@ -783,6 +786,7 @@ fn graduation_admits_adapter_custody_and_its_payout_holdings_without_authorizati
         super::GraduationTarget::Curve {
             sale: sale(),
             state: &state,
+            creator_hint: AccountId::new([9; 32]),
         },
         AccountId::new([10; 32]),
     )
@@ -1000,9 +1004,13 @@ fn saved_settlement_stages_identify_completed_manual_work() {
             },
             false,
         ),
-        (SettlementStage::Burned { collateral_due: 0 }, false),
-        (SettlementStage::TokenPaid { collateral_due: 0 }, false),
-        (SettlementStage::HookReady { collateral_due: 0 }, false),
+        (
+            SettlementStage::HookReady {
+                unsold: 0,
+                collateral_due: 0,
+            },
+            false,
+        ),
     ] {
         let mut state = valid_factory_state(sale());
         state.settlement_stage = stage;
@@ -1344,6 +1352,7 @@ fn graduation_builder_uses_typed_callback_and_adapter_custody() {
         super::GraduationTarget::Curve {
             sale: sale(),
             state: &state,
+            creator_hint: AccountId::new([9; 32]),
         },
         AccountId::new([4; 32]),
     )
@@ -1358,7 +1367,9 @@ fn graduation_builder_uses_typed_callback_and_adapter_custody() {
     )));
     assert_eq!(
         call.instruction,
-        factory_core::Message::ExecuteGraduationHook { creator_hint: None }
+        factory_core::Message::ExecuteGraduationHook {
+            creator_hint: Some(AccountId::new([9; 32]))
+        }
     );
 }
 
@@ -1930,6 +1941,7 @@ fn valid_lbp_factory_state(weighted: bool) -> factory_core::LbpLaunchState {
         program_id: AccountId::new([19; 32]),
         configuration: vec![7, 11]
     }));
+    field!(GraduationPolicy::default());
     field!(if weighted { *b"LZWGLAUN" } else { *b"LZFXLAUN" });
     field!(4u16);
     field!(factory_core::compute_creator_role_pda(
@@ -2209,6 +2221,7 @@ fn lbp_pool_snapshot(weighted: bool) -> (lbp_core::PoolAccount, curve_core::Conf
         super::TradeMode::BuyAndSell,
         0u16,
         None::<Actor>,
+        GraduationPolicy::default(),
         mode,
         (true, false),
         (
@@ -2230,12 +2243,7 @@ fn lbp_pool_snapshot(weighted: bool) -> (lbp_core::PoolAccount, curve_core::Conf
             Some(100u64),
             lbp_core::CreatorAllocationRelease::AfterEnd,
         ),
-        (
-            1_000u128,
-            0u128,
-            lbp_core::SettlementProgress::Unselected,
-            !weighted,
-        ),
+        (1_000u128, 0u128, lbp_core::SettlementProgress::Unselected),
     ))
     .unwrap();
     bytes.push(0);
@@ -2602,5 +2610,153 @@ fn lbp_quotes_expose_independent_retained_fees_and_net_slippage() {
             panic!("expected core slippage error")
         };
         assert_eq!(error, core_error);
+    }
+}
+
+#[test]
+fn curve_creation_preserves_and_validates_graduation_percentages() {
+    for policy in [
+        GraduationPolicy {
+            launch_bps: 0,
+            collateral_bps: 0,
+        },
+        GraduationPolicy {
+            launch_bps: 2500,
+            collateral_bps: 7500,
+        },
+        GraduationPolicy {
+            launch_bps: 10000,
+            collateral_bps: 10000,
+        },
+    ] {
+        let mut request = creation();
+        request.graduation_hook = Some(factory_core::GraduationHook {
+            program_id: AccountId::new([19; 32]),
+            configuration: vec![],
+        });
+        request.graduation_policy = policy;
+        let call =
+            build_create_sale_invocation(sale(), AccountId::new([9; 32]), request.clone()).unwrap();
+        assert!(
+            matches!(call.instruction, factory_core::Message::CreateFactoryPool { graduation_policy, .. } if graduation_policy == policy)
+        );
+        request.graduation_hook = None;
+        assert_eq!(
+            build_create_sale_invocation(sale(), AccountId::new([9; 32]), request).is_ok(),
+            policy == GraduationPolicy::default()
+        );
+    }
+    for policy in [
+        GraduationPolicy {
+            launch_bps: 10001,
+            collateral_bps: 0,
+        },
+        GraduationPolicy {
+            launch_bps: 0,
+            collateral_bps: 10001,
+        },
+    ] {
+        let mut request = creation();
+        request.graduation_hook = Some(factory_core::GraduationHook {
+            program_id: AccountId::new([19; 32]),
+            configuration: vec![],
+        });
+        request.graduation_policy = policy;
+        assert!(build_create_sale_invocation(sale(), AccountId::new([9; 32]), request).is_err());
+    }
+}
+
+#[test]
+fn resumed_curve_creation_cannot_change_the_saved_split() {
+    for stage in [
+        CreationStage::Minted,
+        CreationStage::Allocated,
+        CreationStage::PoolPrepared,
+        CreationStage::Active,
+    ] {
+        let mut state = valid_factory_state(sale());
+        state.creation_stage = stage;
+        state.graduation_hook = Some(factory_core::GraduationHook {
+            program_id: AccountId::new([19; 32]),
+            configuration: vec![],
+        });
+        state.graduation_policy = GraduationPolicy {
+            launch_bps: 2500,
+            collateral_bps: 7500,
+        };
+        let mut request = creation();
+        request.graduation_hook = state.graduation_hook.clone();
+        request.graduation_policy = state.graduation_policy;
+        assert!(
+            super::next_creation_invocation(
+                sale(),
+                AccountId::new([9; 32]),
+                request.clone(),
+                Some(&state)
+            )
+            .is_ok()
+        );
+        for policy in [
+            GraduationPolicy {
+                launch_bps: 2501,
+                collateral_bps: 7500,
+            },
+            GraduationPolicy {
+                launch_bps: 2500,
+                collateral_bps: 7501,
+            },
+        ] {
+            request.graduation_policy = policy;
+            assert!(matches!(
+                super::next_creation_invocation(
+                    sale(),
+                    AccountId::new([9; 32]),
+                    request.clone(),
+                    Some(&state)
+                ),
+                Err(ClientError::LaunchParametersMismatch)
+            ));
+        }
+    }
+}
+
+#[test]
+fn curve_graduation_admits_both_current_creator_holdings_without_signing() {
+    let mut state = valid_factory_state(sale());
+    state.graduation_hook = Some(factory_core::GraduationHook {
+        program_id: AccountId::new([19; 32]),
+        configuration: vec![],
+    });
+    for creator_hint in [AccountId::new([21; 32]), AccountId::new([22; 32])] {
+        let call = super::build_graduation_invocation(
+            super::GraduationTarget::Curve {
+                sale: sale(),
+                state: &state,
+                creator_hint,
+            },
+            AccountId::new([23; 32]),
+        )
+        .unwrap();
+        assert!(call.signer_accounts.is_empty());
+        assert_eq!(
+            call.instruction,
+            factory_core::Message::ExecuteGraduationHook {
+                creator_hint: Some(creator_hint)
+            }
+        );
+        assert!(call.actors.contains(&Actor::new(
+            creator_hint,
+            curve_core::AUTHORITY_PROGRAM_ACCOUNT_ID
+        )));
+        for definition in [state.token_definition_id, sale().collateral_definition] {
+            let holding = super::associated_token_account(creator_hint, definition);
+            assert!(
+                call.account_mentions()
+                    .iter()
+                    .any(|mention| mention.actor() == super::token_actor(holding)
+                        && !mention.authorizes
+                        && matches!(mention.identity, wallet::AccountIdentity::PublicPda { .. }))
+            );
+        }
     }
 }

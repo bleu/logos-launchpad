@@ -50,6 +50,12 @@ Root handlers accept `ReceiveInput` and return `Result<Response, Error>`. Guests
 
 Application, SDK and CLI timestamps use Unix seconds. Programs convert stored bounds to LEZ milliseconds with checked arithmetic. Response validity windows enforce start-inclusive, end-exclusive inclusion-block time. Saved clock data cannot enforce the current block's deadline. See [sale closing](../adr/0025-sale-closing.md).
 
+## CLI payout terms
+
+Curve `create-sale` uses `--graduation-launch-bps` and `--graduation-collateral-bps` instead of the removed DEX-seed reserve input. Both must be explicit with `--graduation-hook-program-id`, including zero values. Each is in `0..=10_000`; without a hook, only zero shares are valid. `status` and `sale-info` show the saved terms. See [ADR 0020](../adr/0020-settlement-and-graduation.md) for eligible balances and required routing. This does not add fixed-price or weighted CLI creation flows.
+
+`graduate` is permissionless and requires `--creator-hint`. The factory verifies that hint through role-authority `Resolve` and pays the current creator. A failed callback permits retry, with no manual bypass of the configured adapter. Adapter initialization requires an existing factory and a matching sale kind and adapter program; it has no later activation step.
+
 ## CI
 
 [Root CI](../../.github/workflows/ci.yml) runs formatting, static pins, mock shell regressions and the light host tests on pushes and pull requests. Full builds, client/CLI and IDL checks, guest parity and node-free execution run only through `workflow_dispatch` with `full` enabled. The full job is manual for now. Package installation, app smoke actions, live service integration, fuzz campaigns and real proofs remain separate checks.

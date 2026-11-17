@@ -383,7 +383,7 @@ fn sale_with_pause(
                 name: "Controls sale".into(),
                 uri: "ipfs://controls".into(),
                 sale_reserve: 400,
-                dex_seed_reserve: 100,
+                graduation_policy: launchpad_client::GraduationPolicy::default(),
                 creator_allocation: 50,
                 virtual_token_reserve: 1_000,
                 virtual_collateral_reserve: 1_000,
@@ -844,7 +844,7 @@ fn buying_all_factory_d_closes_both_sale_modes_and_rejects_later_trades() {
         assert_eq!(balance(&fixture.state, fixture.pool, COLLATERAL), 667);
         assert_eq!(
             balance(&fixture.state, fixture.factory, fixture.definition),
-            100
+            0
         );
         rejected_without_changes(
             &mut fixture.state,
@@ -1242,7 +1242,7 @@ fn factory_expiry_rejects_current_and_stale_trades_and_can_close_while_frozen() 
     assert_eq!(balance(&fixture.state, fixture.pool, COLLATERAL), 0);
     assert_eq!(
         balance(&fixture.state, fixture.factory, fixture.definition),
-        410
+        310
     );
     assert_eq!(balance(&fixture.state, fixture.factory, COLLATERAL), 100);
     assert_eq!(
@@ -1447,7 +1447,7 @@ fn curve_pause_uses_current_creator_blocks_all_swaps_and_preserves_frozen_settle
         "{result:?}"
     );
     assert!(fixture.state == before);
-    for _ in 0..5 {
+    for _ in 0..3 {
         fixture
             .call(
                 &successor,

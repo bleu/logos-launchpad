@@ -16,6 +16,7 @@ pub struct FixedPriceInputs {
     pub trade_mode: TradeMode,
     pub sell_fee_bps: u16,
     pub graduation_hook: Option<GraduationHook>,
+    pub graduation_policy: GraduationPolicy,
     pub namespace: AccountId,
     pub launch_salt: [u8; 32],
     pub name: String,
@@ -40,6 +41,7 @@ pub struct WeightedInputs {
     pub trade_mode: TradeMode,
     pub sell_fee_bps: u16,
     pub graduation_hook: Option<GraduationHook>,
+    pub graduation_policy: GraduationPolicy,
     pub namespace: AccountId,
     pub launch_salt: [u8; 32],
     pub name: String,
@@ -104,6 +106,7 @@ pub struct LbpLaunchState {
     pub trade_mode: TradeMode,
     pub sell_fee_bps: u16,
     pub graduation_hook: Option<GraduationHook>,
+    pub graduation_policy: GraduationPolicy,
     format: [u8; 8],
     version: u16,
     pub creator_role_id: AccountId,
@@ -163,6 +166,7 @@ struct SetupInputs {
     trade_mode: TradeMode,
     sell_fee_bps: u16,
     graduation_hook: Option<GraduationHook>,
+    graduation_policy: GraduationPolicy,
     namespace: AccountId,
     launch_salt: [u8; 32],
     name: String,
@@ -195,6 +199,7 @@ pub(super) fn create_fixed(
             trade_mode: inputs.trade_mode,
             sell_fee_bps: inputs.sell_fee_bps,
             graduation_hook: inputs.graduation_hook,
+            graduation_policy: inputs.graduation_policy,
             namespace: inputs.namespace,
             launch_salt: inputs.launch_salt,
             name: inputs.name,
@@ -235,6 +240,7 @@ pub(super) fn create_weighted(
             trade_mode: inputs.trade_mode,
             sell_fee_bps: inputs.sell_fee_bps,
             graduation_hook: inputs.graduation_hook,
+            graduation_policy: inputs.graduation_policy,
             namespace: inputs.namespace,
             launch_salt: inputs.launch_salt,
             name: inputs.name,
@@ -315,6 +321,10 @@ fn create(input: &ReceiveInput, inputs: SetupInputs, command: Message) -> Result
     {
         return Err(Error::InvalidTerms);
     }
+    inputs
+        .graduation_policy
+        .validate(inputs.graduation_hook.is_some())
+        .map_err(|_| Error::InvalidTerms)?;
     SellFeeRate::new(inputs.sell_fee_bps).map_err(|_| Error::InvalidTerms)?;
     validate_lbp_policies(
         inputs.mode,
@@ -340,6 +350,7 @@ fn create(input: &ReceiveInput, inputs: SetupInputs, command: Message) -> Result
         trade_mode: inputs.trade_mode,
         sell_fee_bps: inputs.sell_fee_bps,
         graduation_hook: inputs.graduation_hook,
+        graduation_policy: inputs.graduation_policy,
         format: match inputs.mode {
             LbpSetupMode::FixedPrice => *b"LZFXLAUN",
             LbpSetupMode::Weighted { .. } => *b"LZWGLAUN",
@@ -404,7 +415,7 @@ fn create(input: &ReceiveInput, inputs: SetupInputs, command: Message) -> Result
             collateral_definition: *state.collateral_definition_id.value(),
             sale_inventory: state.sale_inventory,
             creator_allocation: state.creator_allocation,
-            curve_reserve: 0,
+            graduation_policy: state.graduation_policy,
             collateral_seed: match state.mode {
                 LbpSetupMode::FixedPrice => 0,
                 LbpSetupMode::Weighted {
@@ -532,6 +543,15 @@ pub(super) fn begin_payout(input: &ReceiveInput, command: Message) -> Result<Res
         | Message::ClaimWeightedAllocation { creator } => creator,
         _ => return Err(Error::InvalidMessage),
     };
+    if matches!(
+        command,
+        Message::WithdrawFactoryProceeds { .. } | Message::WithdrawWeightedProceeds { .. }
+    ) {
+        state
+            .graduation_policy
+            .validate_route(SettlementRoute::Manual, state.graduation_hook.is_some())
+            .map_err(|_| Error::InvalidTerms)?;
+    }
     let mut reads = vec![];
     if matches!(
         command,
@@ -702,7 +722,8 @@ pub(super) fn resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
         {
             let pool = lbp_core::PoolAccount::decode(&pending.values[0])
                 .map_err(|_| Error::InvalidState)?;
-            if pool.graduation_adapter != state.adapter(input.receiver)
+            if pool.graduation_policy != state.graduation_policy
+                || pool.graduation_adapter != state.adapter(input.receiver)
                 || pool.ending_policy != state.ending_policy
                 || pool.trade_mode != state.trade_mode
                 || pool.sell_fee_bps != state.sell_fee_bps
@@ -811,7 +832,8 @@ pub(super) fn resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
                 }
                 let pool = lbp_core::PoolAccount::decode(&pending.values[4])
                     .map_err(|_| Error::InvalidState)?;
-                if pool.graduation_adapter != state.adapter(input.receiver)
+                if pool.graduation_policy != state.graduation_policy
+                    || pool.graduation_adapter != state.adapter(input.receiver)
                     || pool.ending_policy != state.ending_policy
                     || pool.trade_mode != state.trade_mode
                     || pool.sell_fee_bps != state.sell_fee_bps
@@ -822,7 +844,6 @@ pub(super) fn resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
                     || pool.trade_control.policy() != state.pause_policy
                     || pool.funded
                     || pool.settlement_progress != SettlementProgress::Unselected
-                    || pool.seed_returned != matches!(state.mode, LbpSetupMode::FixedPrice)
                     || pool.mode != state.mode.pool_mode()
                     || pool.remaining_inventory != state.sale_inventory
                     || pool.accrued_fees != 0
@@ -942,6 +963,7 @@ pub(super) fn resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
                             trade_mode: state.trade_mode,
                             sell_fee_bps: state.sell_fee_bps,
                             graduation_adapter: state.adapter(input.receiver),
+                            graduation_policy: state.graduation_policy,
                             namespace: state.namespace,
                             namespace_program_id: state.namespace_program_id,
                             factory_program_id: input.receiver.program_account_id,
@@ -969,6 +991,7 @@ pub(super) fn resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
                             trade_mode: state.trade_mode,
                             sell_fee_bps: state.sell_fee_bps,
                             graduation_adapter: state.adapter(input.receiver),
+                            graduation_policy: state.graduation_policy,
                             namespace: state.namespace,
                             namespace_program_id: state.namespace_program_id,
                             factory_program_id: input.receiver.program_account_id,
@@ -1160,6 +1183,9 @@ impl LbpLaunchState {
         ))
     }
     fn validate_terms(&self) -> Result<(), Error> {
+        self.graduation_policy
+            .validate(self.graduation_hook.is_some())
+            .map_err(|_| Error::InvalidState)?;
         SellFeeRate::new(self.sell_fee_bps).map_err(|_| Error::InvalidState)?;
         validate_lbp_policies(
             self.mode,
@@ -1298,7 +1324,8 @@ impl LbpLaunchState {
         pool: &lbp_core::PoolAccount,
     ) -> Result<(), Error> {
         self.validate_factory(factory)?;
-        if pool.graduation_adapter != self.adapter(factory)
+        if pool.graduation_policy != self.graduation_policy
+            || pool.graduation_adapter != self.adapter(factory)
             || pool.ending_policy != self.ending_policy
             || pool.trade_mode != self.trade_mode
             || pool.sell_fee_bps != self.sell_fee_bps
@@ -1343,15 +1370,18 @@ impl LbpLaunchState {
         if creator == AccountId::default() {
             return Err(Error::Unauthorized);
         }
-        let seed_payment = pool.outstanding_seed().map_err(|_| Error::InvalidState)?;
-        let amounts = SettlementAmounts {
-            launch_tokens: 0,
-            collateral: pool.buyer_proceeds().map_err(|_| Error::InvalidState)?,
+        let eligible = SettlementAmounts {
+            launch_tokens: pool.remaining_inventory,
+            collateral: pool.recorded_collateral,
         };
+        let payouts = self
+            .graduation_policy
+            .payouts(eligible, route, self.graduation_hook.is_some())
+            .map_err(|_| Error::InvalidTerms)?;
         let mut progress = self.settlement_progress;
         match route {
             SettlementRoute::Manual => {
-                progress.record_manual_payout(amounts)?;
+                progress.record_manual_payout(eligible)?;
                 progress.finish_manual()?;
             }
             SettlementRoute::Graduation => progress.finish_graduation()?,
@@ -1366,8 +1396,8 @@ impl LbpLaunchState {
             } else {
                 None
             },
-            amounts,
-            seed_payment,
+            eligible,
+            payouts,
             progress,
         })
     }
@@ -1385,6 +1415,10 @@ impl LbpLaunchState {
         });
         let response = self
             .response()
+            .send_sync(
+                Actor::new(self.token_definition_id, TOKEN_PROGRAM_ACCOUNT_ID),
+                &token::Message::Initialize { owner: creator },
+            )
             .send_sync(
                 Actor::new(self.collateral_definition_id, TOKEN_PROGRAM_ACCOUNT_ID),
                 &token::Message::Initialize { owner: creator },
@@ -1413,8 +1447,7 @@ impl LbpLaunchState {
         factory: Actor,
         receipt: &SettlementReceipt,
     ) -> Result<GraduationRequest, Error> {
-        if receipt.amounts.launch_tokens != 0
-            || receipt.route != SettlementRoute::Graduation
+        if receipt.route != SettlementRoute::Graduation
             || receipt.factory != factory
             || receipt.pool != Actor::new(self.pool_id, self.lbp_program_id)
             || receipt.adapter != self.adapter(factory)
@@ -1426,11 +1459,13 @@ impl LbpLaunchState {
             .as_ref()
             .ok_or(Error::HookNotConfigured)?;
         let intent = match self.mode {
-            LbpSetupMode::FixedPrice => GraduationIntent::FixedPriceProceeds {
-                collateral: receipt.amounts.collateral,
+            LbpSetupMode::FixedPrice => GraduationIntent::FixedPrice {
+                launch_tokens: receipt.payouts.adapter.launch_tokens,
+                collateral: receipt.payouts.adapter.collateral,
             },
-            LbpSetupMode::Weighted { .. } => GraduationIntent::WeightedBuyerProceeds {
-                collateral: receipt.amounts.collateral,
+            LbpSetupMode::Weighted { .. } => GraduationIntent::Weighted {
+                launch_tokens: receipt.payouts.adapter.launch_tokens,
+                collateral: receipt.payouts.adapter.collateral,
             },
         };
         Ok(GraduationRequest {
@@ -1521,6 +1556,10 @@ fn settlement_ready(
     match pending.command {
         Message::WithdrawFactoryProceeds { creator, .. }
         | Message::WithdrawWeightedProceeds { creator } => {
+            state
+                .graduation_policy
+                .validate_route(SettlementRoute::Manual, state.graduation_hook.is_some())
+                .map_err(|_| Error::InvalidTerms)?;
             if state.settlement_progress.is_complete() {
                 return curve_core::with_time_bounds(state.response(), expiry, None)
                     .map_err(|_| Error::InvalidTerms);
@@ -1542,11 +1581,11 @@ fn settlement_ready(
                 return Err(Error::InvalidCustody);
             }
             let kind = match state.mode {
-                LbpSetupMode::FixedPrice => GraduationIntentKind::FixedPriceProceeds,
-                LbpSetupMode::Weighted { .. } => GraduationIntentKind::WeightedBuyerProceeds,
+                LbpSetupMode::FixedPrice => GraduationIntentKind::FixedPrice,
+                LbpSetupMode::Weighted { .. } => GraduationIntentKind::Weighted,
             };
-            if adapter.accepted_intent != Some(kind) {
-                return Err(Error::AdapterNotReady);
+            if adapter.accepted_intent != kind {
+                return Err(Error::AdapterIntentMismatch);
             }
             state.settlement_pending = Some(LbpSettlementPhase::AdapterHoldings {
                 pool,
@@ -1692,7 +1731,7 @@ fn resume_settlement(input: &ReceiveInput, mut state: LbpLaunchState) -> Result<
             state.settlement_pending = Some(LbpSettlementPhase::PoolCompleted {
                 receipt_hash,
                 progress: receipt.progress,
-                graduation_amounts: Some(receipt.amounts),
+                graduation_amounts: Some(receipt.payouts.adapter),
             });
             Ok(state.response().send_sync(
                 receipt.pool,

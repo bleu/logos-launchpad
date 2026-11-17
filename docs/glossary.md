@@ -16,7 +16,7 @@ This page explains technical shorthand used in this repository. [CONTEXT.md](../
 | Collateral | The token used to buy the sale token and pay protocol fees. |
 | Real reserve / virtual reserve | Real reserves are tokens that can fund swap output. Virtual reserves are pricing-only values. |
 | Invariant / `k` | A formula value that pricing must preserve under its stated rules. The curve's creation-time product is immutable `initial_k`. Quotes use current `k`, which grows with retained sell collateral under [ADR 0009](adr/0009-curve-arithmetic.md). |
-| `D` / `R` | `D` is the purchasable curve allocation. `R` is the curve allocation reserved for possible DEX seeding after close. |
+| `D` | The purchasable curve allocation. Curve supply also includes the separate creator allocation. |
 | Allocation / supply | Tokens assigned to a purpose in a sale, or the total tokens available for that purpose. |
 | Fixed-price sale | A sale with a strictly positive exact price in collateral and launch-token smallest units; token decimals are for display. Locked local verification of its four-stage setup passed using development receipts; trading, real proofs and deployment readiness remain pending. See [ADR 0032](adr/0032-fixed-price-lbp-setup.md). |
 | Weighted sale | A sale whose pricing uses token balances and weights that change on a set schedule. Setup, buys, controls, settlement and observer checkpoints are implemented with a temporary pricing clock. |
@@ -30,7 +30,7 @@ This page explains technical shorthand used in this repository. [CONTEXT.md](../
 | Live fee rate / current treasury | A namespace setting read at execution or collection time, rather than a value frozen when the sale was created. |
 | Treasury | The current namespace destination for collected protocol fees. |
 | Lifecycle / close / settlement | A sale's allowed state changes; ending trading; and the separate post-close transfer of allowed fees, allocations or proceeds. |
-| Graduation / DEX | Moving liquidity to a decentralized exchange. |
+| Graduation / DEX | Graduation completes the saved adapter callback and payouts. A DEX is a decentralized exchange; graduation alone does not establish DEX liquidity. |
 | Graduation hook | A call to another program after a sale closes. Its rules are in [ADR 0020](adr/0020-settlement-and-graduation.md). |
 | Ending policy | The fixed rule that ends trading and permits settlement: `Manual`, `Scheduled`, `Depletion` or `Either`. `Manual` is direct-only; weighted sales require a schedule end. See [ADR 0025](adr/0025-sale-closing.md). |
 | Expiry / end timestamp | The configured end used by `Scheduled` or as the fallback for `Either`. |

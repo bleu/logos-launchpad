@@ -230,14 +230,15 @@ fn application_settlement_schema_links_pool_receipts_and_shared_rules() {
         assert!(idl["modules"]["lbp_settlement"].get(name).is_some());
         assert!(idl["modules"]["settlement"].get(name).is_none());
     }
-    assert!(
-        idl["modules"]["settlement"]
-            .get("SettlementAmounts")
-            .is_some()
-    );
+    for name in ["GraduationPolicy", "SettlementAmounts", "SettlementPayouts"] {
+        assert!(idl["modules"]["settlement"].get(name).is_some());
+    }
     assert!(idl["modules"]["lbp"].get("PoolAccount").is_some());
     for (name, field, field_type) in [
-        ("SettlementReceipt", "amounts", "SettlementAmounts"),
+        ("SettlementReceipt", "factory", "Actor"),
+        ("SettlementReceipt", "pool", "Actor"),
+        ("SettlementReceipt", "eligible", "SettlementAmounts"),
+        ("SettlementReceipt", "payouts", "SettlementPayouts"),
         ("SettlementReceipt", "route", "SettlementRoute"),
         ("SettlementReceipt", "progress", "SettlementProgress"),
         ("AwaitFactoryFinalize", "state", "PoolAccount"),

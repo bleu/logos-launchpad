@@ -11,6 +11,7 @@ pub use curve_core::{
 };
 pub use error::{ClientError, Result};
 pub use factory_core::{CreationStage, GraduationHook, SettlementStage, TradeMode};
+pub use factory_core::{GraduationPolicy, SettlementPayouts};
 pub use lbp_core::{QuoteRequest as LbpQuoteRequest, TradeQuote as LbpTradeQuote};
 pub use lifecycle::{FactorySession, LifecycleReceipt, next_creation_invocation};
 pub use types::{
@@ -74,7 +75,7 @@ pub struct CreateSaleRequest {
     pub name: String,
     pub uri: String,
     pub sale_reserve: u128,
-    pub dex_seed_reserve: u128,
+    pub graduation_policy: GraduationPolicy,
     pub creator_allocation: u128,
     pub virtual_token_reserve: u128,
     pub virtual_collateral_reserve: u128,
@@ -476,6 +477,10 @@ pub fn build_create_sale_invocation(
     factory_core::validate_curve_policies(request.ending_policy, request.end_timestamp)?;
     curve_core::SellFeeRate::new(request.sell_fee_bps)
         .map_err(|_| ClientError::FactoryPolicy(factory_core::Error::InvalidTerms))?;
+    request
+        .graduation_policy
+        .validate(request.graduation_hook.is_some())
+        .map_err(|_| ClientError::FactoryPolicy(factory_core::Error::InvalidTerms))?;
     let a = factory_pool_addresses(sale);
     Ok(admit_factory_accounts(
         invocation(
@@ -497,7 +502,7 @@ pub fn build_create_sale_invocation(
                 name: request.name,
                 uri: request.uri,
                 sale_reserve: request.sale_reserve,
-                dex_seed_reserve: request.dex_seed_reserve,
+                graduation_policy: request.graduation_policy,
                 creator_allocation: request.creator_allocation,
                 virtual_token_reserve: request.virtual_token_reserve,
                 virtual_collateral_reserve: request.virtual_collateral_reserve,
@@ -607,6 +612,7 @@ pub enum GraduationTarget<'a> {
     Curve {
         sale: FactorySale,
         state: &'a FactoryState,
+        creator_hint: AccountId,
     },
     Lbp {
         sale: LbpSale,
@@ -621,23 +627,30 @@ pub fn build_graduation_invocation(
     treasury: AccountId,
 ) -> Result<PublicInvocation<FactoryInstruction>> {
     let (mut call, factory, hook, definition, collateral) = match target {
-        GraduationTarget::Curve { sale, state } => {
+        GraduationTarget::Curve {
+            sale,
+            state,
+            creator_hint,
+        } => {
             validate_factory_state(sale, state)?;
             let hook = state
                 .graduation_hook
                 .as_ref()
                 .ok_or(ClientError::GraduationNotConfigured)?;
             let a = factory_pool_addresses(sale);
-            let custody = factory_core::compute_graduation_pda(hook.program_id, a.factory);
             let call = admit_factory_accounts(
                 invocation(
                     Actor::new(a.factory, sale.factory_program_id),
-                    factory_actors(sale, custody, Some(treasury)),
+                    factory_actors(sale, creator_hint, Some(treasury)),
                     vec![],
-                    FactoryInstruction::ExecuteGraduationHook { creator_hint: None },
+                    FactoryInstruction::ExecuteGraduationHook {
+                        creator_hint: Some(creator_hint),
+                    },
                 ),
                 sale,
-            );
+            )
+            .with_holding(creator_hint, a.token_definition)
+            .with_holding(creator_hint, sale.collateral_definition);
             (
                 call,
                 a.factory,

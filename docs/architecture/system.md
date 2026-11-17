@@ -38,7 +38,7 @@ The admin app manages namespaces. Creators and participants use the sales app. B
 
 The indexer provides listings and history. Its data can lag behind the chain. Programs check current state before they accept an action. Dashed lines show dependencies or an open integration.
 
-The curve branch of the shared launch factory can call a saved adapter through the SDK or CLI. See [ADR 0020](../adr/0020-settlement-and-graduation.md) for hook policy and the [curve overview](../product/curve-contract.md#acceptance-evidence) for implementation limits.
+All three sale types can use a saved adapter. Its common two-asset split is required when configured; manual settlement is available only without one. The curve hook is available through the SDK or CLI. See [ADR 0020](../adr/0020-settlement-and-graduation.md) for hook policy and the [curve overview](../product/curve-contract.md#acceptance-evidence) for implementation limits.
 
 ## Flows
 

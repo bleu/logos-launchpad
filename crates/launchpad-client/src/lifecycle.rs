@@ -135,7 +135,7 @@ impl<'a> FactorySession<'a> {
         Ok(receipt)
     }
 
-    /// Resume the exact withdrawal, burn and payout sequence without paying a stage twice.
+    /// Resume the exact withdrawal and payout sequence without paying a stage twice.
     pub async fn withdraw(&mut self, sale: FactorySale, now: u64) -> Result<LifecycleReceipt> {
         self.validate_sale(sale)?;
         if self.authority.is_private() {
@@ -147,6 +147,11 @@ impl<'a> FactorySession<'a> {
                 .state(sale)
                 .await?
                 .ok_or(ClientError::FactoryLaunchMissing)?;
+            if state.graduation_hook.is_some() {
+                return Err(ClientError::FactoryPolicy(
+                    factory_core::Error::InvalidTerms,
+                ));
+            }
             if state.settlement_stage.is_manual_settlement_complete() {
                 return Ok(receipt);
             }
@@ -194,7 +199,7 @@ pub fn next_creation_invocation(
             && state.sell_fee_bps == request.sell_fee_bps
             && state.graduation_hook == request.graduation_hook
             && state.sale_reserve == request.sale_reserve
-            && state.dex_seed_reserve == request.dex_seed_reserve
+            && state.graduation_policy == request.graduation_policy
             && state.creator_allocation == request.creator_allocation
             && state.virtual_token_reserve == request.virtual_token_reserve
             && state.virtual_collateral_reserve == request.virtual_collateral_reserve

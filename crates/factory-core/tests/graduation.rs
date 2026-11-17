@@ -7,9 +7,15 @@ use lez_compat_core::token::{TokenKind, TokenState};
 fn id(n: u8) -> AccountId {
     AccountId::new([n; 32])
 }
-fn initialized(ready: bool) -> (ReceiveInput, Response) {
+const KINDS: [GraduationIntentKind; 3] = [
+    GraduationIntentKind::Curve,
+    GraduationIntentKind::FixedPrice,
+    GraduationIntentKind::Weighted,
+];
+
+fn initialization(kind: GraduationIntentKind) -> ReceiveInput {
     let factory = compute_factory_pda(id(40), id(7), [3; 32]);
-    let input = ReceiveInput {
+    ReceiveInput {
         receiver: Actor::new(compute_graduation_pda(id(9), factory), id(9)),
         from: None,
         is_authorized: false,
@@ -18,12 +24,159 @@ fn initialized(ready: bool) -> (ReceiveInput, Response) {
             factory_program_id: id(7),
             namespace: id(40),
             launch_salt: [3; 32],
-            accepted_intent: ready.then_some(GraduationIntentKind::CurveReserves),
+            accepted_intent: kind,
         })
         .unwrap(),
+    }
+}
+
+fn factory_state(kind: GraduationIntentKind) -> Vec<u8> {
+    let hook = Some(GraduationHook {
+        program_id: id(9),
+        configuration: vec![],
+    });
+    let message = match kind {
+        GraduationIntentKind::Curve => Message::CreateFactoryPool {
+            buy_policy: curve_core::BuyPolicy::Open,
+            pause_policy: PausePolicy::Disabled,
+            ending_policy: EndingPolicy::Scheduled,
+            trade_mode: 0,
+            sell_fee_bps: 0,
+            graduation_hook_program_id: Some(id(9)),
+            graduation_hook_configuration: vec![],
+            namespace: id(40),
+            launch_salt: [3; 32],
+            name: "Launch".into(),
+            uri: "uri".into(),
+            sale_reserve: 800,
+            graduation_policy: GraduationPolicy::default(),
+            creator_allocation: 100,
+            virtual_token_reserve: 1_000,
+            virtual_collateral_reserve: 100,
+            end_timestamp: Some(200),
+            curve_program_id: id(6),
+            collateral_definition_id: id(41),
+            creator: id(42),
+            now: 100,
+        },
+        GraduationIntentKind::FixedPrice => Message::CreateFixedPriceLbp {
+            inputs: FixedPriceInputs {
+                buy_policy: curve_core::BuyPolicy::Open,
+                pause_policy: PausePolicy::Disabled,
+                ending_policy: EndingPolicy::Scheduled,
+                trade_mode: TradeMode::BuyOnly,
+                sell_fee_bps: 0,
+                graduation_hook: hook,
+                graduation_policy: GraduationPolicy::default(),
+                namespace: id(40),
+                launch_salt: [3; 32],
+                name: "Launch".into(),
+                uri: "uri".into(),
+                sale_inventory: 800,
+                creator_allocation: 100,
+                price: FixedPrice {
+                    collateral_units: 3,
+                    token_units: 2,
+                },
+                start: SaleStart::Now { timestamp: 100 },
+                end_timestamp: Some(200),
+                allocation_release: CreatorAllocationRelease::AfterEnd,
+                namespace_program_id: id(6),
+                lbp_program_id: id(8),
+                collateral_definition_id: id(41),
+                creator: id(42),
+                now: 100,
+            },
+        },
+        GraduationIntentKind::Weighted => Message::CreateWeightedLbp {
+            inputs: WeightedInputs {
+                buy_policy: curve_core::BuyPolicy::Open,
+                pause_policy: PausePolicy::Disabled,
+                ending_policy: EndingPolicy::Scheduled,
+                trade_mode: TradeMode::BuyOnly,
+                sell_fee_bps: 0,
+                graduation_hook: hook,
+                graduation_policy: GraduationPolicy::default(),
+                namespace: id(40),
+                launch_salt: [3; 32],
+                name: "Launch".into(),
+                uri: "uri".into(),
+                sale_inventory: 800,
+                creator_allocation: 100,
+                collateral_seed: 100,
+                token_weight_start: lbp_core::WEIGHT_TOTAL / 2,
+                token_weight_end: lbp_core::WEIGHT_TOTAL / 2,
+                start_timestamp: 150,
+                end_timestamp: 300,
+                allocation_release: CreatorAllocationRelease::AfterEnd,
+                namespace_program_id: id(6),
+                lbp_program_id: id(8),
+                collateral_definition_id: id(41),
+                creator: id(42),
+            },
+        },
     };
-    let response = handle_adapter(&input).unwrap();
-    (input, response)
+    let mut input = ReceiveInput {
+        receiver: Actor::new(compute_factory_pda(id(40), id(7), [3; 32]), id(7)),
+        from: None,
+        is_authorized: false,
+        pre_state: vec![].into(),
+        message: borsh::to_vec(&message).unwrap(),
+    };
+    let mut response = handle(&input).unwrap();
+    let config = curve_core::handle(&ReceiveInput {
+        receiver: Actor::new(curve_core::compute_config_pda(id(40), id(6)), id(6)),
+        from: Some(Actor::new(id(40), id(6))),
+        is_authorized: false,
+        pre_state: vec![].into(),
+        message: borsh::to_vec(&curve_core::Message::InitializeNamespace {
+            namespace: id(40),
+            protocol_fee_bps: 100,
+            treasury: id(44),
+        })
+        .unwrap(),
+    })
+    .unwrap()
+    .post_state
+    .unwrap()
+    .to_vec();
+    for value in [config, borsh::to_vec(&definition()).unwrap()] {
+        input = factory_reply(&input, &response, value);
+        response = handle(&input).unwrap();
+    }
+    let state = response.post_state.unwrap();
+    let read = handle(&ReceiveInput {
+        receiver: input.receiver,
+        from: Some(initialization(kind).receiver),
+        is_authorized: false,
+        pre_state: state.clone(),
+        message: borsh::to_vec(&Message::ReadState).unwrap(),
+    })
+    .unwrap();
+    assert_eq!(
+        borsh::from_slice::<StateReply>(&read.sync_messages[0].message)
+            .unwrap()
+            .state,
+        state
+    );
+    state.to_vec()
+}
+
+fn factory_reply(input: &ReceiveInput, response: &Response, state: Vec<u8>) -> ReceiveInput {
+    ReceiveInput {
+        receiver: input.receiver,
+        from: Some(response.sync_messages[0].to),
+        is_authorized: false,
+        pre_state: response.post_state.clone().unwrap(),
+        message: borsh::to_vec(&StateReply {
+            state: state.into(),
+        })
+        .unwrap(),
+    }
+}
+
+fn initialized() -> (ReceiveInput, Response) {
+    initialized_kind(GraduationIntentKind::Curve)
 }
 fn request() -> GraduationRequest {
     GraduationRequest {
@@ -32,7 +185,7 @@ fn request() -> GraduationRequest {
         launch_salt: [3; 32],
         token_definition_id: compute_definition_pda(id(40), id(7), [3; 32]),
         collateral_definition_id: id(41),
-        intent: GraduationIntent::CurveReserves {
+        intent: GraduationIntent::Curve {
             launch_tokens: 100,
             collateral: 50,
         },
@@ -40,8 +193,8 @@ fn request() -> GraduationRequest {
     }
 }
 #[test]
-fn callback_accepts_only_the_saved_factory_and_ready_canonical_custody() {
-    let (mut input, initialized) = initialized(true);
+fn callback_accepts_only_the_saved_factory_and_canonical_custody() {
+    let (mut input, initialized) = initialized();
     let factory = AdapterState::decode(initialized.post_state.as_ref().unwrap())
         .unwrap()
         .factory;
@@ -64,7 +217,7 @@ fn callback_accepts_only_the_saved_factory_and_ready_canonical_custody() {
 }
 #[test]
 fn adapter_authenticates_token_reads_and_acknowledges_only_credited_canonical_custody() {
-    let (mut input, initialized) = initialized(true);
+    let (mut input, initialized) = initialized();
     let factory = AdapterState::decode(initialized.post_state.as_ref().unwrap())
         .unwrap()
         .factory;
@@ -123,37 +276,35 @@ fn adapter_authenticates_token_reads_and_acknowledges_only_credited_canonical_cu
 }
 #[test]
 fn adapter_initialization_binds_canonical_custody_to_the_factory_actor() {
-    let (input, response) = initialized(true);
+    let (input, response) = initialized();
     let state = AdapterState::decode(response.post_state.as_ref().unwrap()).unwrap();
     assert_eq!(
         state.factory,
         Actor::new(compute_factory_pda(id(40), id(7), [3; 32]), id(7))
     );
-    assert_eq!(
-        state.accepted_intent,
-        Some(GraduationIntentKind::CurveReserves)
-    );
+    assert_eq!(state.accepted_intent, GraduationIntentKind::Curve);
     assert!(state.receipt.is_none());
     let mut wrong = input.clone();
     wrong.receiver.account_id = id(99);
     assert!(matches!(handle_adapter(&wrong), Err(Error::WrongAccount)));
 }
 
-fn initialized_kind(kind: Option<GraduationIntentKind>) -> (ReceiveInput, Response) {
-    let (mut input, _) = initialized(true);
-    input.message = borsh::to_vec(&AdapterMessage::Initialize {
-        factory_program_id: id(7),
-        namespace: id(40),
-        launch_salt: [3; 32],
-        accepted_intent: kind,
-    })
-    .unwrap();
-    let response = handle_adapter(&input).unwrap();
+fn initialized_kind(kind: GraduationIntentKind) -> (ReceiveInput, Response) {
+    let input = initialization(kind);
+    let pending = handle_adapter(&input).unwrap();
+    assert!(AdapterState::decode(pending.post_state.as_ref().unwrap()).is_err());
+    assert_eq!(pending.sync_messages.len(), 1);
+    assert_eq!(
+        borsh::from_slice::<Message>(&pending.sync_messages[0].message).unwrap(),
+        Message::ReadState
+    );
+    let response = handle_adapter(&factory_reply(&input, &pending, factory_state(kind))).unwrap();
+    assert!(response.sync_messages.is_empty());
     (input, response)
 }
 
 fn begin_intent(intent: GraduationIntent) -> (ReceiveInput, Response, GraduationRequest) {
-    let (mut input, initialized) = initialized_kind(Some(intent.kind()));
+    let (mut input, initialized) = initialized_kind(intent.kind());
     let mut request = request();
     request.intent = intent;
     input.pre_state = initialized.post_state.unwrap();
@@ -215,16 +366,22 @@ fn request_hash_binds_each_field_and_each_typed_asset_intent() {
         changed.push(value);
     }
     for intent in [
-        GraduationIntent::CurveReserves {
+        GraduationIntent::Curve {
             launch_tokens: 101,
             collateral: 50,
         },
-        GraduationIntent::CurveReserves {
+        GraduationIntent::Curve {
             launch_tokens: 100,
             collateral: 51,
         },
-        GraduationIntent::FixedPriceProceeds { collateral: 50 },
-        GraduationIntent::WeightedBuyerProceeds { collateral: 50 },
+        GraduationIntent::FixedPrice {
+            launch_tokens: 100,
+            collateral: 50,
+        },
+        GraduationIntent::Weighted {
+            launch_tokens: 100,
+            collateral: 50,
+        },
     ] {
         changed.push(GraduationRequest {
             intent,
@@ -239,54 +396,55 @@ fn request_hash_binds_each_field_and_each_typed_asset_intent() {
             assert_ne!(value.hash(), other.hash());
         }
     }
-    for intent in [
-        GraduationIntent::FixedPriceProceeds { collateral: 50 },
-        GraduationIntent::WeightedBuyerProceeds { collateral: 50 },
+    for kind in [
+        GraduationIntentKind::Curve,
+        GraduationIntentKind::FixedPrice,
+        GraduationIntentKind::Weighted,
     ] {
+        let intent = |launch_tokens, collateral| match kind {
+            GraduationIntentKind::Curve => GraduationIntent::Curve {
+                launch_tokens,
+                collateral,
+            },
+            GraduationIntentKind::FixedPrice => GraduationIntent::FixedPrice {
+                launch_tokens,
+                collateral,
+            },
+            GraduationIntentKind::Weighted => GraduationIntent::Weighted {
+                launch_tokens,
+                collateral,
+            },
+        };
         let original = GraduationRequest {
-            intent,
+            intent: intent(100, 50),
             ..base.clone()
         };
-        let mut changed = original.clone();
-        changed.intent = match intent {
-            GraduationIntent::FixedPriceProceeds { .. } => {
-                GraduationIntent::FixedPriceProceeds { collateral: 51 }
-            }
-            _ => GraduationIntent::WeightedBuyerProceeds { collateral: 51 },
-        };
-        assert_ne!(original.hash(), changed.hash());
+        for changed in [intent(101, 50), intent(100, 51)] {
+            assert_ne!(
+                original.hash(),
+                GraduationRequest {
+                    intent: changed,
+                    ..base.clone()
+                }
+                .hash()
+            );
+        }
     }
 }
 
 #[test]
-fn readiness_can_activate_once_for_each_intent_kind() {
+fn initialization_sets_each_intent_once_and_rejects_every_repeat() {
     let kinds = [
-        None,
-        Some(GraduationIntentKind::CurveReserves),
-        Some(GraduationIntentKind::FixedPriceProceeds),
-        Some(GraduationIntentKind::WeightedBuyerProceeds),
+        GraduationIntentKind::Curve,
+        GraduationIntentKind::FixedPrice,
+        GraduationIntentKind::Weighted,
     ];
-    for kind in kinds.into_iter().flatten() {
-        let (mut input, response) = initialized_kind(None);
+    for kind in kinds {
+        let (mut input, response) = initialized_kind(kind);
         input.pre_state = response.post_state.unwrap();
-        let mut expected = AdapterState::decode(&input.pre_state).unwrap();
-        input.message = borsh::to_vec(&AdapterMessage::Initialize {
-            factory_program_id: id(7),
-            namespace: id(40),
-            launch_salt: [3; 32],
-            accepted_intent: Some(kind),
-        })
-        .unwrap();
-        assert!(input.from.is_none());
-        assert!(!input.is_authorized);
-        let response = handle_adapter(&input).unwrap();
-        expected.accepted_intent = Some(kind);
-        assert_eq!(
-            AdapterState::decode(response.post_state.as_ref().unwrap()).unwrap(),
-            expected
-        );
-        assert!(response.sync_messages.is_empty());
-        input.pre_state = response.post_state.unwrap();
+        let expected = AdapterState::decode(&input.pre_state).unwrap();
+        assert_eq!(expected.accepted_intent, kind);
+        assert!(expected.receipt.is_none());
         for accepted_intent in kinds {
             input.message = borsh::to_vec(&AdapterMessage::Initialize {
                 factory_program_id: id(7),
@@ -299,52 +457,31 @@ fn readiness_can_activate_once_for_each_intent_kind() {
                 handle_adapter(&input),
                 Err(Error::AlreadyInitialized)
             ));
+            assert_eq!(AdapterState::decode(&input.pre_state).unwrap(), expected);
         }
     }
 }
 
 #[test]
-fn readiness_activation_requires_the_saved_factory_and_canonical_custody() {
-    let (mut input, response) = initialized_kind(None);
-    input.pre_state = response.post_state.unwrap();
-    input.message = borsh::to_vec(&AdapterMessage::Initialize {
-        factory_program_id: id(7),
-        namespace: id(40),
-        launch_salt: [3; 32],
-        accepted_intent: Some(GraduationIntentKind::CurveReserves),
-    })
-    .unwrap();
-    let mut wrong = input.clone();
-    wrong.receiver.account_id = id(99);
-    assert!(matches!(handle_adapter(&wrong), Err(Error::WrongAccount)));
-    let saved_factory = AdapterState::decode(&input.pre_state).unwrap().factory;
-    for factory in [
-        Actor::new(id(99), saved_factory.program_account_id),
-        Actor::new(saved_factory.account_id, id(99)),
-    ] {
-        let mut state = AdapterState::decode(&input.pre_state).unwrap();
-        state.factory = factory;
-        wrong = input.clone();
-        wrong.pre_state = borsh::to_vec(&state).unwrap().into();
-        assert!(matches!(handle_adapter(&wrong), Err(Error::WrongAccount)));
-    }
-}
-
-#[test]
-fn readiness_accepts_only_the_explicit_intent_kind() {
+fn adapter_accepts_only_the_initialized_intent_kind() {
     let intents = [
-        GraduationIntent::CurveReserves {
+        GraduationIntent::Curve {
             launch_tokens: 100,
             collateral: 50,
         },
-        GraduationIntent::FixedPriceProceeds { collateral: 50 },
-        GraduationIntent::WeightedBuyerProceeds { collateral: 50 },
+        GraduationIntent::FixedPrice {
+            launch_tokens: 100,
+            collateral: 50,
+        },
+        GraduationIntent::Weighted {
+            launch_tokens: 100,
+            collateral: 50,
+        },
     ];
     for kind in [
-        None,
-        Some(GraduationIntentKind::CurveReserves),
-        Some(GraduationIntentKind::FixedPriceProceeds),
-        Some(GraduationIntentKind::WeightedBuyerProceeds),
+        GraduationIntentKind::Curve,
+        GraduationIntentKind::FixedPrice,
+        GraduationIntentKind::Weighted,
     ] {
         let (mut input, response) = initialized_kind(kind);
         input.pre_state = response.post_state.unwrap();
@@ -362,12 +499,12 @@ fn readiness_accepts_only_the_explicit_intent_kind() {
             })
             .unwrap();
             let result = handle_adapter(&input);
-            if kind == Some(intent.kind()) {
+            if kind == intent.kind() {
                 let response = result.unwrap();
                 assert_eq!(response.sync_messages.len(), 1);
                 assert!(response.sync_messages[0].pda_seeds.is_empty());
             } else {
-                assert!(matches!(result, Err(Error::AdapterNotReady)));
+                assert!(matches!(result, Err(Error::AdapterIntentMismatch)));
             }
         }
     }
@@ -376,26 +513,39 @@ fn readiness_accepts_only_the_explicit_intent_kind() {
 #[test]
 fn every_intent_checks_both_canonical_holdings_and_returns_its_exact_request_hash() {
     for intent in [
-        GraduationIntent::CurveReserves {
+        GraduationIntent::Curve {
             launch_tokens: 100,
             collateral: 50,
         },
-        GraduationIntent::CurveReserves {
+        GraduationIntent::Curve {
             launch_tokens: 0,
             collateral: 0,
         },
-        GraduationIntent::FixedPriceProceeds { collateral: 50 },
-        GraduationIntent::FixedPriceProceeds { collateral: 0 },
-        GraduationIntent::WeightedBuyerProceeds { collateral: 50 },
-        GraduationIntent::WeightedBuyerProceeds { collateral: 0 },
+        GraduationIntent::FixedPrice {
+            launch_tokens: 100,
+            collateral: 50,
+        },
+        GraduationIntent::FixedPrice {
+            launch_tokens: 0,
+            collateral: 0,
+        },
+        GraduationIntent::Weighted {
+            launch_tokens: 100,
+            collateral: 50,
+        },
+        GraduationIntent::Weighted {
+            launch_tokens: 0,
+            collateral: 0,
+        },
     ] {
         let (mut input, mut response, request) = begin_intent(intent);
         let factory = input.from.unwrap();
         assert_eq!(
             intent.amounts().0,
             match intent {
-                GraduationIntent::CurveReserves { launch_tokens, .. } => launch_tokens,
-                _ => 0,
+                GraduationIntent::Curve { launch_tokens, .. }
+                | GraduationIntent::FixedPrice { launch_tokens, .. }
+                | GraduationIntent::Weighted { launch_tokens, .. } => launch_tokens,
             }
         );
         response = token_reply(&mut input, response, definition()).unwrap();
@@ -430,7 +580,7 @@ fn every_intent_checks_both_canonical_holdings_and_returns_its_exact_request_has
         }
         let state = AdapterState::decode(response.post_state.as_ref().unwrap()).unwrap();
         assert_eq!(state.receipt, Some(request.clone()));
-        assert_eq!(state.accepted_intent, Some(intent.kind()));
+        assert_eq!(state.accepted_intent, intent.kind());
         let reply = &response.sync_messages[0];
         assert_eq!(reply.to, factory);
         assert!(reply.pda_seeds.is_empty());
@@ -443,7 +593,11 @@ fn every_intent_checks_both_canonical_holdings_and_returns_its_exact_request_has
         );
         input.pre_state = response.post_state.unwrap();
         input.from = None;
-        for accepted_intent in [None, Some(intent.kind())] {
+        for accepted_intent in [
+            GraduationIntentKind::Curve,
+            GraduationIntentKind::FixedPrice,
+            GraduationIntentKind::Weighted,
+        ] {
             input.message = borsh::to_vec(&AdapterMessage::Initialize {
                 factory_program_id: id(7),
                 namespace: id(40),
@@ -469,12 +623,18 @@ fn every_intent_checks_both_canonical_holdings_and_returns_its_exact_request_has
 #[test]
 fn malformed_or_underfunded_holdings_fail_for_each_intent_without_a_receipt() {
     for intent in [
-        GraduationIntent::CurveReserves {
+        GraduationIntent::Curve {
             launch_tokens: 100,
             collateral: 50,
         },
-        GraduationIntent::FixedPriceProceeds { collateral: 50 },
-        GraduationIntent::WeightedBuyerProceeds { collateral: 50 },
+        GraduationIntent::FixedPrice {
+            launch_tokens: 100,
+            collateral: 50,
+        },
+        GraduationIntent::Weighted {
+            launch_tokens: 100,
+            collateral: 50,
+        },
     ] {
         for side in 0..2 {
             let (mut input, mut response, request) = begin_intent(intent);
@@ -546,8 +706,10 @@ fn malformed_or_underfunded_holdings_fail_for_each_intent_without_a_receipt() {
 
 #[test]
 fn pending_callback_cannot_be_replaced_by_another_adapter_message() {
-    let (mut input, response, request) =
-        begin_intent(GraduationIntent::FixedPriceProceeds { collateral: 0 });
+    let (mut input, response, request) = begin_intent(GraduationIntent::FixedPrice {
+        launch_tokens: 100,
+        collateral: 0,
+    });
     input.pre_state = response.post_state.unwrap();
     for message in [
         AdapterMessage::Graduate { request },
@@ -555,16 +717,139 @@ fn pending_callback_cannot_be_replaced_by_another_adapter_message() {
             factory_program_id: id(7),
             namespace: id(40),
             launch_salt: [3; 32],
-            accepted_intent: None,
+            accepted_intent: GraduationIntentKind::Curve,
         },
         AdapterMessage::Initialize {
             factory_program_id: id(7),
             namespace: id(40),
             launch_salt: [3; 32],
-            accepted_intent: Some(GraduationIntentKind::FixedPriceProceeds),
+            accepted_intent: GraduationIntentKind::FixedPrice,
         },
     ] {
         input.message = borsh::to_vec(&message).unwrap();
         assert!(matches!(handle_adapter(&input), Err(Error::Unauthorized)));
+    }
+}
+
+#[test]
+fn malicious_kind_choice_fails_before_commit_and_correct_initialization_can_retry() {
+    for actual in KINDS {
+        for selected in KINDS {
+            let input = initialization(selected);
+            let pending = handle_adapter(&input).unwrap();
+            let result = handle_adapter(&factory_reply(&input, &pending, factory_state(actual)));
+            if selected == actual {
+                assert_eq!(
+                    AdapterState::decode(result.unwrap().post_state.as_ref().unwrap())
+                        .unwrap()
+                        .accepted_intent,
+                    actual
+                );
+            } else {
+                assert!(matches!(result, Err(Error::AdapterIntentMismatch)));
+                assert!(input.pre_state.is_empty());
+                let (_, response) = initialized_kind(actual);
+                assert_eq!(
+                    AdapterState::decode(response.post_state.as_ref().unwrap())
+                        .unwrap()
+                        .accepted_intent,
+                    actual
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn initialization_authenticates_the_exact_factory_actor_and_rejects_reentry() {
+    for kind in KINDS {
+        let input = initialization(kind);
+        let pending = handle_adapter(&input).unwrap();
+        let expected = pending.sync_messages[0].to;
+        let correct = factory_reply(&input, &pending, factory_state(kind));
+        for from in [
+            None,
+            Some(Actor::new(id(99), expected.program_account_id)),
+            Some(Actor::new(expected.account_id, id(99))),
+        ] {
+            let mut forged = correct.clone();
+            forged.from = from;
+            assert!(matches!(handle_adapter(&forged), Err(Error::Unauthorized)));
+        }
+        for message in [
+            AdapterMessage::ReadState,
+            AdapterMessage::Initialize {
+                factory_program_id: id(7),
+                namespace: id(40),
+                launch_salt: [3; 32],
+                accepted_intent: kind,
+            },
+            AdapterMessage::Graduate { request: request() },
+        ] {
+            let mut reentry = correct.clone();
+            reentry.message = borsh::to_vec(&message).unwrap();
+            assert!(handle_adapter(&reentry).is_err());
+        }
+        let mut wrong_custody = correct.clone();
+        wrong_custody.receiver.account_id = id(99);
+        assert!(matches!(
+            handle_adapter(&wrong_custody),
+            Err(Error::WrongAccount)
+        ));
+        let completed = handle_adapter(&correct).unwrap();
+        assert_eq!(
+            AdapterState::decode(completed.post_state.as_ref().unwrap())
+                .unwrap()
+                .accepted_intent,
+            kind
+        );
+    }
+}
+
+#[test]
+fn initialization_rejects_uncreated_factory_and_wrong_saved_hook_or_sale_identity() {
+    for kind in KINDS {
+        let input = initialization(kind);
+        let pending = handle_adapter(&input).unwrap();
+        assert!(matches!(
+            handle_adapter(&factory_reply(&input, &pending, vec![])),
+            Err(Error::InvalidState)
+        ));
+        for fault in 0..5 {
+            let saved = factory_state(kind);
+            let wrong = if kind == GraduationIntentKind::Curve {
+                let mut state = FactoryState::decode(&saved).unwrap();
+                match fault {
+                    0 => state.graduation_hook = None,
+                    1 => state.graduation_hook.as_mut().unwrap().program_id = id(99),
+                    2 => state.namespace = id(99),
+                    3 => state.launch_salt = [99; 32],
+                    _ => state.token_definition_id = id(99),
+                }
+                borsh::to_vec(&state).unwrap()
+            } else {
+                let mut state = LbpLaunchState::decode(&saved).unwrap();
+                match fault {
+                    0 => state.graduation_hook = None,
+                    1 => state.graduation_hook.as_mut().unwrap().program_id = id(99),
+                    2 => state.namespace = id(99),
+                    3 => state.launch_salt = [99; 32],
+                    _ => state.token_definition_id = id(99),
+                }
+                borsh::to_vec(&state).unwrap()
+            };
+            assert!(matches!(
+                handle_adapter(&factory_reply(&input, &pending, wrong)),
+                Err(Error::WrongAccount)
+            ));
+        }
+        let completed =
+            handle_adapter(&factory_reply(&input, &pending, factory_state(kind))).unwrap();
+        assert_eq!(
+            AdapterState::decode(completed.post_state.as_ref().unwrap())
+                .unwrap()
+                .accepted_intent,
+            kind
+        );
     }
 }

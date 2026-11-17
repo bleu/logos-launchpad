@@ -2,21 +2,23 @@ use super::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum GraduationIntentKind {
-    CurveReserves,
-    FixedPriceProceeds,
-    WeightedBuyerProceeds,
+    Curve,
+    FixedPrice,
+    Weighted,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum GraduationIntent {
-    CurveReserves {
+    Curve {
         launch_tokens: u128,
         collateral: u128,
     },
-    FixedPriceProceeds {
+    FixedPrice {
+        launch_tokens: u128,
         collateral: u128,
     },
-    WeightedBuyerProceeds {
+    Weighted {
+        launch_tokens: u128,
         collateral: u128,
     },
 }
@@ -24,20 +26,26 @@ pub enum GraduationIntent {
 impl GraduationIntent {
     pub fn kind(self) -> GraduationIntentKind {
         match self {
-            Self::CurveReserves { .. } => GraduationIntentKind::CurveReserves,
-            Self::FixedPriceProceeds { .. } => GraduationIntentKind::FixedPriceProceeds,
-            Self::WeightedBuyerProceeds { .. } => GraduationIntentKind::WeightedBuyerProceeds,
+            Self::Curve { .. } => GraduationIntentKind::Curve,
+            Self::FixedPrice { .. } => GraduationIntentKind::FixedPrice,
+            Self::Weighted { .. } => GraduationIntentKind::Weighted,
         }
     }
 
     pub fn amounts(self) -> (u128, u128) {
         match self {
-            Self::CurveReserves {
+            Self::Curve {
+                launch_tokens,
+                collateral,
+            }
+            | Self::FixedPrice {
+                launch_tokens,
+                collateral,
+            }
+            | Self::Weighted {
                 launch_tokens,
                 collateral,
             } => (launch_tokens, collateral),
-            Self::FixedPriceProceeds { collateral }
-            | Self::WeightedBuyerProceeds { collateral } => (0, collateral),
         }
     }
 }
@@ -68,7 +76,7 @@ pub enum AdapterMessage {
         factory_program_id: AccountId,
         namespace: AccountId,
         launch_salt: [u8; 32],
-        accepted_intent: Option<GraduationIntentKind>,
+        accepted_intent: GraduationIntentKind,
     },
     ReadState,
     Graduate {
@@ -78,7 +86,7 @@ pub enum AdapterMessage {
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct AdapterState {
     pub factory: Actor,
-    pub accepted_intent: Option<GraduationIntentKind>,
+    pub accepted_intent: GraduationIntentKind,
     pub receipt: Option<GraduationRequest>,
     pending: Option<(GraduationRequest, u8)>,
 }
@@ -92,7 +100,86 @@ impl AdapterState {
         borsh::from_slice(bytes).map_err(|_| Error::InvalidState)
     }
 }
+// The tag occupies the accepted-intent byte in AdapterState, which only permits 0..=2.
+#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+struct AdapterInitialization {
+    factory: Actor,
+    tag: u8,
+    namespace: AccountId,
+    launch_salt: [u8; 32],
+    accepted_intent: GraduationIntentKind,
+}
+
+impl AdapterInitialization {
+    fn finish(self, input: &ReceiveInput) -> Result<Response, Error> {
+        if input.from != Some(self.factory) {
+            return Err(Error::Unauthorized);
+        }
+        if input.receiver.account_id
+            != compute_graduation_pda(input.receiver.program_account_id, self.factory.account_id)
+            || self.factory.account_id
+                != compute_factory_pda(
+                    self.namespace,
+                    self.factory.program_account_id,
+                    self.launch_salt,
+                )
+        {
+            return Err(Error::WrongAccount);
+        }
+        let reply: StateReply =
+            borsh::from_slice(&input.message).map_err(|_| Error::InvalidMessage)?;
+        let (namespace, launch_salt, definition, hook, kind) =
+            if let Ok(state) = LbpLaunchState::decode(&reply.state) {
+                (
+                    state.namespace,
+                    state.launch_salt,
+                    state.token_definition_id,
+                    state.graduation_hook,
+                    match state.mode {
+                        LbpSetupMode::FixedPrice => GraduationIntentKind::FixedPrice,
+                        LbpSetupMode::Weighted { .. } => GraduationIntentKind::Weighted,
+                    },
+                )
+            } else {
+                let state = FactoryState::decode(&reply.state)?;
+                state.validate(self.factory)?;
+                (
+                    state.namespace,
+                    state.launch_salt,
+                    state.token_definition_id,
+                    state.graduation_hook,
+                    GraduationIntentKind::Curve,
+                )
+            };
+        if namespace != self.namespace
+            || launch_salt != self.launch_salt
+            || definition
+                != compute_definition_pda(namespace, self.factory.program_account_id, launch_salt)
+            || hook.as_ref().map(|hook| hook.program_id) != Some(input.receiver.program_account_id)
+        {
+            return Err(Error::WrongAccount);
+        }
+        if self.accepted_intent != kind {
+            return Err(Error::AdapterIntentMismatch);
+        }
+        Ok(Response::set_state(
+            borsh::to_vec(&AdapterState {
+                factory: self.factory,
+                accepted_intent: self.accepted_intent,
+                receipt: None,
+                pending: None,
+            })
+            .unwrap(),
+        ))
+    }
+}
+
 pub fn handle_adapter(input: &ReceiveInput) -> Result<Response, Error> {
+    if let Ok(initialization) = borsh::from_slice::<AdapterInitialization>(&input.pre_state)
+        && initialization.tag == u8::MAX
+    {
+        return initialization.finish(input);
+    }
     if let Ok(mut state) = AdapterState::decode(&input.pre_state)
         && let Some((request, step)) = state.pending.take()
     {
@@ -187,25 +274,19 @@ pub fn handle_adapter(input: &ReceiveInput) -> Result<Response, Error> {
                 return Err(Error::WrongAccount);
             }
             if !input.pre_state.is_empty() {
-                let mut state = AdapterState::decode(&input.pre_state)?;
-                if state.factory != factory {
-                    return Err(Error::WrongAccount);
-                }
-                if state.accepted_intent.is_some() || accepted_intent.is_none() {
-                    return Err(Error::AlreadyInitialized);
-                }
-                state.accepted_intent = accepted_intent;
-                return Ok(Response::set_state(borsh::to_vec(&state).unwrap()));
+                return Err(Error::AlreadyInitialized);
             }
             Ok(Response::set_state(
-                borsh::to_vec(&AdapterState {
+                borsh::to_vec(&AdapterInitialization {
                     factory,
+                    tag: u8::MAX,
+                    namespace,
+                    launch_salt,
                     accepted_intent,
-                    receipt: None,
-                    pending: None,
                 })
                 .unwrap(),
-            ))
+            )
+            .send_sync(factory, &Message::ReadState))
         }
         AdapterMessage::Graduate { request } => {
             let mut state = AdapterState::decode(&input.pre_state)?;
@@ -260,8 +341,8 @@ fn validate_request(
     {
         return Err(Error::WrongAccount);
     }
-    if state.accepted_intent != Some(request.intent.kind()) {
-        return Err(Error::AdapterNotReady);
+    if state.accepted_intent != request.intent.kind() {
+        return Err(Error::AdapterIntentMismatch);
     }
     Ok(())
 }

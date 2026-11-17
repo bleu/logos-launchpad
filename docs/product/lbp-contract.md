@@ -8,7 +8,7 @@ The shared launch factory can create a new launch token, set positive sale inven
 
 ## Settlement
 
-A fixed-price sale ends under its selected policy without a final trade or separate close call. Selected depletion is final; burns during settlement do not create depletion evidence. Only the current creator-role holder can authorize manual payouts, and that creator is the recipient. Manual proceeds settlement pays all recorded net proceeds, collects remaining fees to the current namespace treasury and burns unsold sale inventory. Donations remain surplus. The separate `AfterEnd` allocation claim can run before or after proceeds settlement. Successful retries do not pay or burn twice. See [ADR 0025](../adr/0025-sale-closing.md).
+Both sale types use the common two-asset payout policy in [ADR 0020](../adr/0020-settlement-and-graduation.md): unsold launch tokens and recorded collateral go to the saved adapter and current creator, without an unsold burn. Weighted collateral includes the seed, with no separate refund. Without an adapter, creator-authorized manual settlement pays all eligible balances to the current creator. A configured adapter requires its saved split and cannot be bypassed manually. Fees go to the current treasury; donations remain surplus. Separate creator-allocation release and ending policies are unchanged under [ADR 0025](../adr/0025-sale-closing.md).
 
 ## Weighted setup and trading
 

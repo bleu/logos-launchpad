@@ -704,13 +704,18 @@
           },
           {
             "fields": [],
-            "name": "CreatorSeed",
+            "name": "CreatorLaunch",
             "tag": 2
           },
           {
             "fields": [],
-            "name": "CurveReserve",
+            "name": "AdapterLaunch",
             "tag": 3
+          },
+          {
+            "fields": [],
+            "name": "AdapterCollateral",
+            "tag": 4
           }
         ]
       },
@@ -762,8 +767,8 @@
                 "type": "u128"
               },
               {
-                "name": "curve_reserve",
-                "type": "u128"
+                "name": "graduation_policy",
+                "type": "GraduationPolicy"
               },
               {
                 "name": "collateral_seed",
@@ -1101,23 +1106,13 @@
           },
           {
             "fields": [],
-            "name": "UnsoldBurned",
+            "name": "Payout",
             "tag": 2
           },
           {
             "fields": [],
-            "name": "SeedReturned",
-            "tag": 3
-          },
-          {
-            "fields": [],
-            "name": "Payout",
-            "tag": 4
-          },
-          {
-            "fields": [],
             "name": "Completed",
-            "tag": 5
+            "tag": 3
           }
         ]
       },
@@ -1240,8 +1235,8 @@
             "type": "u128"
           },
           {
-            "name": "dex_seed_reserve",
-            "type": "u128"
+            "name": "graduation_policy",
+            "type": "GraduationPolicy"
           },
           {
             "name": "creator_allocation",
@@ -1358,8 +1353,8 @@
                 "type": "u128"
               },
               {
-                "name": "dex_seed_reserve",
-                "type": "u128"
+                "name": "graduation_policy",
+                "type": "GraduationPolicy"
               },
               {
                 "name": "creator_allocation",
@@ -1617,47 +1612,55 @@
           {
             "fields": [
               {
-                "name": "collateral_due",
+                "name": "unsold",
                 "type": "u128"
-              }
-            ],
-            "name": "Burned",
-            "tag": 3
-          },
-          {
-            "fields": [
-              {
-                "name": "collateral_due",
-                "type": "u128"
-              }
-            ],
-            "name": "TokenPaid",
-            "tag": 4
-          },
-          {
-            "fields": [],
-            "name": "Complete",
-            "tag": 5
-          },
-          {
-            "fields": [
+              },
               {
                 "name": "collateral_due",
                 "type": "u128"
               }
             ],
             "name": "HookReady",
-            "tag": 6
+            "tag": 3
+          },
+          {
+            "fields": [],
+            "name": "Complete",
+            "tag": 4
           },
           {
             "fields": [],
             "name": "Graduated",
-            "tag": 7
+            "tag": 5
           }
         ]
       }
     },
     "hook": {
+      "AdapterInitialization": {
+        "fields": [
+          {
+            "name": "factory",
+            "type": "Actor"
+          },
+          {
+            "name": "tag",
+            "type": "u8"
+          },
+          {
+            "name": "namespace",
+            "type": "AccountId"
+          },
+          {
+            "name": "launch_salt",
+            "type": "[u8;32]"
+          },
+          {
+            "name": "accepted_intent",
+            "type": "GraduationIntentKind"
+          }
+        ]
+      },
       "AdapterMessage": {
         "variants": [
           {
@@ -1676,7 +1679,7 @@
               },
               {
                 "name": "accepted_intent",
-                "type": "Option<GraduationIntentKind>"
+                "type": "GraduationIntentKind"
               }
             ],
             "name": "Initialize",
@@ -1707,7 +1710,7 @@
           },
           {
             "name": "accepted_intent",
-            "type": "Option<GraduationIntentKind>"
+            "type": "GraduationIntentKind"
           },
           {
             "name": "receipt",
@@ -1732,27 +1735,35 @@
                 "type": "u128"
               }
             ],
-            "name": "CurveReserves",
+            "name": "Curve",
             "tag": 0
           },
           {
             "fields": [
               {
-                "name": "collateral",
+                "name": "launch_tokens",
                 "type": "u128"
-              }
-            ],
-            "name": "FixedPriceProceeds",
-            "tag": 1
-          },
-          {
-            "fields": [
+              },
               {
                 "name": "collateral",
                 "type": "u128"
               }
             ],
-            "name": "WeightedBuyerProceeds",
+            "name": "FixedPrice",
+            "tag": 1
+          },
+          {
+            "fields": [
+              {
+                "name": "launch_tokens",
+                "type": "u128"
+              },
+              {
+                "name": "collateral",
+                "type": "u128"
+              }
+            ],
+            "name": "Weighted",
             "tag": 2
           }
         ]
@@ -1761,17 +1772,17 @@
         "variants": [
           {
             "fields": [],
-            "name": "CurveReserves",
+            "name": "Curve",
             "tag": 0
           },
           {
             "fields": [],
-            "name": "FixedPriceProceeds",
+            "name": "FixedPrice",
             "tag": 1
           },
           {
             "fields": [],
-            "name": "WeightedBuyerProceeds",
+            "name": "Weighted",
             "tag": 2
           }
         ]
@@ -1873,6 +1884,10 @@
           {
             "name": "graduation_adapter",
             "type": "Option<Actor>"
+          },
+          {
+            "name": "graduation_policy",
+            "type": "GraduationPolicy"
           },
           {
             "name": "namespace",
@@ -2210,6 +2225,10 @@
             "type": "Option<Actor>"
           },
           {
+            "name": "graduation_policy",
+            "type": "GraduationPolicy"
+          },
+          {
             "name": "mode",
             "type": "PoolMode"
           },
@@ -2290,10 +2309,6 @@
             "type": "SettlementProgress"
           },
           {
-            "name": "seed_returned",
-            "type": "bool"
-          },
-          {
             "name": "pending",
             "type": "Option<Pending>"
           }
@@ -2363,6 +2378,10 @@
           {
             "name": "graduation_adapter",
             "type": "Option<Actor>"
+          },
+          {
+            "name": "graduation_policy",
+            "type": "GraduationPolicy"
           },
           {
             "name": "namespace",
@@ -2471,12 +2490,12 @@
             "type": "Option<Actor>"
           },
           {
-            "name": "amounts",
+            "name": "eligible",
             "type": "SettlementAmounts"
           },
           {
-            "name": "seed_payment",
-            "type": "u128"
+            "name": "payouts",
+            "type": "SettlementPayouts"
           },
           {
             "name": "progress",
@@ -2539,6 +2558,10 @@
           {
             "name": "graduation_hook",
             "type": "Option<GraduationHook>"
+          },
+          {
+            "name": "graduation_policy",
+            "type": "GraduationPolicy"
           },
           {
             "name": "namespace",
@@ -2651,6 +2674,10 @@
           {
             "name": "graduation_hook",
             "type": "Option<GraduationHook>"
+          },
+          {
+            "name": "graduation_policy",
+            "type": "GraduationPolicy"
           },
           {
             "name": "format",
@@ -2914,6 +2941,10 @@
             "type": "Option<GraduationHook>"
           },
           {
+            "name": "graduation_policy",
+            "type": "GraduationPolicy"
+          },
+          {
             "name": "namespace",
             "type": "AccountId"
           },
@@ -3073,6 +3104,18 @@
     },
     "sale_policy": {},
     "settlement": {
+      "GraduationPolicy": {
+        "fields": [
+          {
+            "name": "launch_bps",
+            "type": "u16"
+          },
+          {
+            "name": "collateral_bps",
+            "type": "u16"
+          }
+        ]
+      },
       "SettlementAmounts": {
         "fields": [
           {
@@ -3082,6 +3125,18 @@
           {
             "name": "collateral",
             "type": "u128"
+          }
+        ]
+      },
+      "SettlementPayouts": {
+        "fields": [
+          {
+            "name": "creator",
+            "type": "SettlementAmounts"
+          },
+          {
+            "name": "adapter",
+            "type": "SettlementAmounts"
           }
         ]
       },

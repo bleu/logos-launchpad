@@ -466,6 +466,7 @@ pub(super) fn begin(input: &ReceiveInput, message: Message) -> Result<Response, 
         {
             return Err(Error::Unauthorized);
         }
+        crate::lbp_settlement::validate_saved_route(&state, crate::SettlementRoute::Manual)?;
         if state.settlement_progress.is_complete() {
             return Ok(state.response());
         }
@@ -475,6 +476,7 @@ pub(super) fn begin(input: &ReceiveInput, message: Message) -> Result<Response, 
         if creator == AccountId::default() {
             return Err(Error::Unauthorized);
         }
+        crate::lbp_settlement::validate_saved_route(&state, crate::SettlementRoute::Manual)?;
         if state.settlement_progress.is_complete() {
             return curve_core::with_time_bounds(state.response(), state.close_time_bound()?, None)
                 .map_err(|_| Error::InvalidTerms);
@@ -649,12 +651,11 @@ fn settlement_payout(
     expiry: Option<u64>,
 ) -> Result<Response, Error> {
     let plan = crate::lbp_settlement::plan(&state, crate::SettlementRoute::Manual)?;
-    if balances[1] < plan.burn {
+    if balances[1] < plan.eligible.launch_tokens {
         return Err(Error::Underfunded);
     }
     let closure_event = state.observe_closure(receiver)?;
     state.settlement_progress = plan.progress;
-    state.seed_returned = true;
     state.accrued_fees = 0;
     state.recorded_collateral = 0;
     let response = curve_core::with_time_bounds(state.response(), expiry, None)
@@ -695,33 +696,30 @@ pub(super) fn custody_effects(
         treasury,
         plan.fees,
     );
-    let response = if plan.burn == 0 {
-        response
-    } else {
-        response.send(
-            SyncMessage::new(
-                Actor::new(receiver.account_id, TOKEN_PROGRAM_ACCOUNT_ID),
-                &token::Message::Burn {
-                    definition: state.token_definition_id,
-                    amount: plan.burn,
-                },
-            )
-            .with_pda_seeds([compute_pool_pda_seed(
-                state.namespace,
-                state.token_definition_id,
-                state.collateral_definition_id,
-                state.factory_owner,
-            )]),
-        )
-    };
+    let response = payout(
+        response,
+        state,
+        receiver,
+        state.token_definition_id,
+        creator,
+        plan.payouts.creator.launch_tokens,
+    );
+    let response = payout(
+        response,
+        state,
+        receiver,
+        state.collateral_definition_id,
+        creator,
+        plan.payouts.creator.collateral,
+    );
     let response = if let Some(adapter) = adapter {
         let response = payout(
             response,
             state,
             receiver,
-            state.collateral_definition_id,
-            creator,
-            plan.seed,
+            state.token_definition_id,
+            adapter.account_id,
+            plan.payouts.adapter.launch_tokens,
         );
         payout(
             response,
@@ -729,17 +727,10 @@ pub(super) fn custody_effects(
             receiver,
             state.collateral_definition_id,
             adapter.account_id,
-            plan.amounts.collateral,
+            plan.payouts.adapter.collateral,
         )
     } else {
-        payout(
-            response,
-            state,
-            receiver,
-            state.collateral_definition_id,
-            creator,
-            plan.seed + plan.amounts.collateral,
-        )
+        response
     };
     crate::events::custody_events(response, state, receiver, creator, adapter, treasury, plan)
 }
@@ -783,6 +774,7 @@ mod tests {
             trade_mode: crate::TradeMode::BuyOnly,
             sell_fee_bps: 0,
             graduation_adapter: None,
+            graduation_policy: sale_policy::GraduationPolicy::default(),
             mode: PoolMode::FixedPrice,
             funded: true,
             closure_observed: false,
@@ -806,7 +798,6 @@ mod tests {
             recorded_collateral: 0,
             accrued_fees: 0,
             settlement_progress: crate::SettlementProgress::Unselected,
-            seed_returned: true,
             pending: None,
         };
         (state, config)

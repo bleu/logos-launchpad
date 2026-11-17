@@ -4,7 +4,7 @@ This is the planned logical curve-sale creation flow. It shows the reviewed stag
 
 ## Preconditions
 
-- The creator has the required creator authority and allocations `D` and `R`.
+- The creator has the required creator authority and supplies `D` plus any separate creator allocation.
 - The target namespace exists with its per-namespace administration and configuration state.
 - Curve creation inputs are typed and immutable after acceptance. Exact input bounds still need mechanism specifications.
 - LP-0021 provider integration awaits SDK development; its final API is unavailable.
@@ -38,7 +38,7 @@ sequenceDiagram
     SDK->>Wallet: Request funding transaction approval
     Wallet->>Factory: Submit funding stage if supported
     Factory->>Pool: Fund D and activate when valid
-    Note over Factory: R remains in factory custody until post-close settlement
+    Note over Factory: Save immutable payout terms; keep creator allocation separate
     Pool-->>Factory: Active pool state
     Factory-->>Indexer: Emit creation events
     SDK-->>App: Show creation result

@@ -71,10 +71,7 @@ pub fn quote_trade(
         ..
     } = state.mode
     {
-        if state.seed_returned
-            || pricing_collateral != state.recorded_collateral
-            || pricing_collateral < collateral_seed
-        {
+        if pricing_collateral != state.recorded_collateral || pricing_collateral < collateral_seed {
             return Err(Error::InvalidState);
         }
         Some(crate::weighted_lifecycle::weights_at(state, pricing_time)?)
