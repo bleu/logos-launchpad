@@ -1,32 +1,26 @@
 # ADR 0032: Define fixed-price sale creation and funding
 
-Status: Four-stage implementation migrated; local actor host and guest-build checks passed. Setup execution, real proofs and deployment readiness remain pending.
-
-Date: 2026-10-13
-
-## Context
-
-Fixed-price sale creation needs a defined token, allocation, price, schedule, authority and funding path. The curve factory already has staged creation rules, but curve state and custody do not define fixed-price sale behavior.
-
-This record partially supersedes [ADR 0006](0006-namespaces-and-authority.md) by defining the fixed-price sale creation and funding gap. ADR 0006 remains correct that curve stages, pending guards and factory custody do not define fixed-price sale creation. This record defines only fixed-price sale creation and funding and leaves its mechanism and platform review limits visible.
+Status: Accepted; four-stage setup implemented with local signed execution evidence.
 
 ## Decision
 
-Reuse the curve-owned `NamespaceConfig` as the canonical namespace configuration for fixed-price sale validation. Namespace role administration remains separate from a sale creator role. Each fixed-price sale has a separate creator role, initialized with the creator signer in the same creation claim. This leaves no public claim window. Readonly namespace account data exposes its format version, not a duplicate administrator or hidden role-authority bytes. This work does not migrate existing curve creator Authority NFTs.
+Use curve-owned `NamespaceConfig` as canonical namespace configuration for fixed-price validation. Namespace administration is separate from the sale creator role. Initialize that role with the creator signer in the same creation claim, with no public claim window. Readonly namespace data exposes its format version, not duplicate administrator or hidden authority bytes.
 
-A fixed-price sale creates a new launch token with a strictly positive sale inventory and an optional separate creator allocation. It has no curve `R` allocation and starts with zero recorded collateral under [ADR 0033](0033-fixed-price-lbp-recorded-collateral.md). Its price is a strictly positive exact rational ratio of collateral smallest units to launch-token smallest units. Token decimals affect display only.
+Create a new launch token with positive sale inventory and optional separate creator allocation. There is no curve `R`. Recorded collateral starts at zero under [ADR 0033](0033-fixed-price-lbp-recorded-collateral.md). Save a positive exact rational price in collateral and launch-token smallest units; decimals affect display only.
 
-Public timestamps remain Unix seconds. `SaleStart::Now { timestamp }` saves that value verbatim as the start, including zero, and requires creation inclusion at or after it. There is no freshness check. A scheduled start must not precede the creation block timestamp; its inclusive millisecond limit becomes an exclusive validity upper bound of `start_ms + 1`. The selected ending policy determines whether an end is required: `Scheduled` and `Either` require one after the saved start; `Depletion` has none. Every incomplete setup stage and activation must enter strictly before that end. Without an end they have no end deadline. Late final setup keeps the configured schedule. Convert bounds with checked arithmetic and intersect response windows so an added bound cannot erase an earlier one. See [sale closing](0025-sale-closing.md) for inclusion-time rules.
+Public timestamps use Unix seconds. `SaleStart::Now { timestamp }` saves the supplied value verbatim, including zero, and requires creation inclusion at or after it; there is no freshness check. Scheduled start cannot precede the creation block timestamp. Convert its inclusive millisecond limit to exclusive upper bound `start_ms + 1`.
 
-Creation saves an immutable creator-allocation release choice: `AfterSetup` or `AfterEnd`. The implementation uses four atomic transactions: claim the exact mint and per-sale creator role; split supply into sale inventory and allocation escrow; prepare the pool, vaults and immediate recipient ATA; then fund inventory into the fixed-price sale vault, pay an `AfterSetup` allocation only on successful funding and mark the sale `Complete`. The workflow can span those transactions. `AfterEnd` retains the allocation in escrow until the selected ending policy permits a separate creator-authorized claim under [ADR 0025](0025-sale-closing.md). Any unpaid allocation or future proceeds belong to the current creator-role holder. This scope does not add creator-role transfer or renunciation.
+`Scheduled` and `Either` require an end after saved start; `Depletion` has none. Every incomplete stage and activation must enter before a configured end. Without an end there is no end deadline. Late final setup keeps the original schedule. Convert bounds with checked arithmetic and intersect response windows so added bounds cannot erase earlier bounds. See [ending](0025-sale-closing.md).
 
-[ADR 0033](0033-fixed-price-lbp-recorded-collateral.md) supersedes the original physical collateral-empty activation rule. Unsolicited collateral after `PoolPrepared` remains surplus and does not block activation. The owner claim still blocks an outsider from precreating the ATA with `Create`.
+Save immutable creator-allocation release `AfterSetup` or `AfterEnd`. Setup has four atomic transactions: claim exact mint and creator role; split inventory and allocation escrow; prepare pool, vaults and immediate recipient ATA; then fund inventory, pay `AfterSetup` allocation and mark `Complete`. The whole workflow spans transactions. Keep `AfterEnd` allocation in escrow for a separate creator-authorized claim when ending permits it. Unpaid allocations and proceeds belong to the current creator-role holder. This setup contract does not add role transfer or renunciation.
 
-## Consequences
+Retain fresh-custody and launch-token inventory checks. The owner claim blocks outsider ATA precreation through `Create`. Unsolicited collateral after `PoolPrepared` remains surplus and does not block activation; recorded collateral must remain zero.
 
-Fixed-price buys and permissionless fee collection are specified in [ADR 0033](0033-fixed-price-lbp-recorded-collateral.md) and [ADR 0016](0016-lbp-live-fees.md). Creator proceeds settlement and the separate `AfterEnd` allocation claim follow [ADR 0025](0025-sale-closing.md); signed guest tests cover settlement token operations and rollback. Weighted-sale work remains separate. This design does not add end hooks, delayed settlement, cancellation or expired-recovery handlers, private fixed-price sale routes, allowlists, or full SDK and CLI flows.
+## Reason and limits
 
-The actor migration replaces the old instruction encoding with typed messages. Rebuild clients, guest binaries and image IDs together. See the [workspace guide](../architecture/workspace-guide.md) for interface generation and checks.
+Staged setup supports resumable preparation without trading unbacked inventory. Curve custody rules do not define this engine's behavior. Weighted seed funding is separate under [ADR 0031](0031-shared-launch-factory.md#shared-setup).
+
+Public setup has local signed execution coverage; see [current evidence](../architecture/workspace-guide.md#execution-and-evidence-limits). Fees, ending and settlement follow [0015](0015-fee-accounting.md), [0025](0025-sale-closing.md) and [0020](0020-settlement-and-graduation.md). Private routes, cancellation, expired recovery, full SDK/CLI journeys, real proofs and deployment readiness remain outside this setup contract. Rebuild typed interfaces, clients, guests and image IDs together after interface changes.
 
 ## Sources
 

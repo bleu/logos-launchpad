@@ -2633,8 +2633,7 @@ fn weighted_clock_failure_and_freeze_preserve_state() {
 // Factory-level weighted controls and settlement guest tests
 // ---------------------------------------------------------------------------
 
-/// Build a complete weighted factory environment, run setup to completion, execute
-/// a buy, then return the state ready for controls and settlement testing.
+/// Complete weighted setup and one buy for controls and settlement tests.
 fn weighted_factory_env() -> (
     V03State,
     AccountId, // factory
@@ -2854,7 +2853,6 @@ fn weighted_factory_env_with_sell_fee(
         )
     };
     let execute = |state: &mut V03State, instruction| execute_at(state, instruction, 100_000);
-    // Create the weighted LBP
     execute(
         &mut state,
         factory_core::Message::CreateWeightedLbp {
@@ -2885,7 +2883,6 @@ fn weighted_factory_env_with_sell_fee(
         },
     )
     .unwrap();
-    // Run through all creation stages
     for stage in [LbpCreationStage::Minted, LbpCreationStage::Allocated] {
         execute(
             &mut state,
@@ -2896,7 +2893,6 @@ fn weighted_factory_env_with_sell_fee(
         )
         .unwrap();
     }
-    // Fund the creator with enough collateral for the seed
     state = state.with_public_accounts([account(
         holding(creator, COLLATERAL),
         borsh::to_vec(&TokenState::Holding {
@@ -2907,7 +2903,6 @@ fn weighted_factory_env_with_sell_fee(
         })
         .unwrap(),
     )]);
-    // Complete pool setup (transfers seed, activates)
     execute(
         &mut state,
         factory_core::Message::ContinueWeightedCreation {
@@ -3042,8 +3037,6 @@ fn weighted_factory_controls_and_settlement_full_flow() {
     assert!(sale.funded);
     assert!(sale.accrued_fees > 0 || sale.recorded_collateral > 100);
 
-    // --- Pause ---
-    // Pause before end must succeed
     factory_execute_at(
         &mut state,
         factory,
@@ -3060,7 +3053,6 @@ fn weighted_factory_controls_and_settlement_full_flow() {
     )
     .unwrap();
 
-    // Buys must fail while paused
     let buy_result = fixed_execute_at(
         &mut state,
         pool,
@@ -3074,7 +3066,6 @@ fn weighted_factory_controls_and_settlement_full_flow() {
     );
     assert!(buy_result.is_err());
 
-    // Repeated pause is a no-op (succeeds)
     factory_execute_at(
         &mut state,
         factory,
@@ -3091,7 +3082,6 @@ fn weighted_factory_controls_and_settlement_full_flow() {
     )
     .unwrap();
 
-    // --- Resume ---
     factory_execute_at(
         &mut state,
         factory,
@@ -3108,7 +3098,6 @@ fn weighted_factory_controls_and_settlement_full_flow() {
     )
     .unwrap();
 
-    // Buys work after resume
     fixed_execute_at(
         &mut state,
         pool,
@@ -3122,7 +3111,6 @@ fn weighted_factory_controls_and_settlement_full_flow() {
     )
     .unwrap();
 
-    // --- Collect fees (permissionless) ---
     fixed_execute_at(
         &mut state,
         pool,
@@ -3134,11 +3122,9 @@ fn weighted_factory_controls_and_settlement_full_flow() {
     let fee_collected = balance(&state, TREASURY, COLLATERAL);
     assert!(fee_collected > 0, "fees should have been collected");
 
-    // --- Settlement (after end) ---
     // Move clock past end (300 seconds → 300_000 ms)
     state = clock_state(state, 300_000);
 
-    // Record balances before settlement
     let creator_collateral_before = balance(&state, creator, COLLATERAL);
     let pool_token_before = balance(&state, pool, launch);
     let sale_before = fixed_pool(&state, pool);
@@ -3146,7 +3132,6 @@ fn weighted_factory_controls_and_settlement_full_flow() {
     let fees = sale_before.accrued_fees;
     let unsold = sale_before.remaining_inventory;
 
-    // Settle weighted proceeds
     factory_execute_at(
         &mut state,
         factory,
@@ -3168,22 +3153,18 @@ fn weighted_factory_controls_and_settlement_full_flow() {
     assert_eq!(sale_after.recorded_collateral, 0);
     assert_eq!(sale_after.accrued_fees, 0);
 
-    // Creator received proceeds
     let creator_collateral_after = balance(&state, creator, COLLATERAL);
     assert_eq!(
         creator_collateral_after,
         creator_collateral_before + recorded
     );
 
-    // Treasury received remaining fees
     let treasury_after = balance(&state, TREASURY, COLLATERAL);
     assert_eq!(treasury_after, fee_collected + fees);
 
-    // Unsold inventory was burned (pool token balance decreased by unsold)
     let pool_token_after = balance(&state, pool, launch);
     assert_eq!(pool_token_after, pool_token_before - unsold);
 
-    // --- Repeated settlement is idempotent ---
     let before_retry = state.clone();
     factory_execute_at(
         &mut state,
@@ -3197,13 +3178,11 @@ fn weighted_factory_controls_and_settlement_full_flow() {
         300_000,
     )
     .unwrap();
-    // Balances unchanged after retry
     assert_eq!(
         balance(&state, creator, COLLATERAL),
         creator_collateral_after
     );
 
-    // --- Allocation claim (AfterEnd) ---
     let escrow_tokens = balance(&state, escrow, launch);
     assert_eq!(escrow_tokens, 200);
     factory_execute_at(
@@ -3224,7 +3203,6 @@ fn weighted_factory_controls_and_settlement_full_flow() {
     );
     assert_eq!(balance(&state, escrow, launch), 0);
 
-    // Repeated allocation claim is idempotent
     factory_execute_at(
         &mut state,
         factory,
@@ -3298,13 +3276,10 @@ fn weighted_controls_after_end_rejected_by_inclusion_window() {
 fn weighted_unauthorized_factory_controls_rejected() {
     let (mut state, factory, pool, launch, _escrow, _key, actors, salt) = weighted_factory_env();
 
-    // Use a different key that doesn't have creator authority
     let wrong_key = PrivateKey::try_new([99; 32]).unwrap();
     let wrong_caller = AccountId::from(&PublicKey::new_from_private_key(&wrong_key));
 
-    // The factory message references a creator that signed, but the authority
-    // check should fail because wrong_caller doesn't hold the creator role.
-    // We try the correct creator ID but with the wrong signer.
+    // The caller signs but does not hold this sale's creator role.
     let mut actors_with_wrong = actors.clone();
     actors_with_wrong.push(Actor::new(
         wrong_caller,
@@ -3336,10 +3311,8 @@ fn weighted_frozen_buys_blocked_but_settlement_allowed() {
     let (mut state, factory, pool, launch, _escrow, key, actors, salt) = weighted_factory_env();
     let creator = AccountId::from(&PublicKey::new_from_private_key(&key));
 
-    // Freeze the namespace
     state = fixed_config(state, 100, TREASURY, true);
 
-    // Buys must fail when frozen
     let buy_result = fixed_execute_at(
         &mut state,
         pool,
@@ -3353,7 +3326,6 @@ fn weighted_frozen_buys_blocked_but_settlement_allowed() {
     );
     assert!(buy_result.is_err());
 
-    // Fee collection must still work when frozen
     fixed_execute_at(
         &mut state,
         pool,
@@ -3363,7 +3335,6 @@ fn weighted_frozen_buys_blocked_but_settlement_allowed() {
     )
     .unwrap();
 
-    // Settlement must work when frozen (after end)
     state = clock_state(fixed_config(state, 100, TREASURY, true), 300_000);
     factory_execute_at(
         &mut state,
@@ -3382,7 +3353,6 @@ fn weighted_frozen_buys_blocked_but_settlement_allowed() {
         lbp_core::SettlementProgress::ManualComplete
     );
 
-    // Allocation claim must work when frozen
     factory_execute_at(
         &mut state,
         factory,
@@ -3402,10 +3372,8 @@ fn weighted_allocation_before_settlement_then_settlement() {
     let (mut state, factory, pool, launch, escrow, key, actors, salt) = weighted_factory_env();
     let creator = AccountId::from(&PublicKey::new_from_private_key(&key));
 
-    // Move past end
     state = clock_state(state, 300_000);
 
-    // Claim allocation FIRST (before settlement)
     let creator_tokens_before = balance(&state, creator, launch);
     factory_execute_at(
         &mut state,
@@ -3425,7 +3393,6 @@ fn weighted_allocation_before_settlement_then_settlement() {
     );
     assert_eq!(balance(&state, escrow, launch), 0);
 
-    // Then settle proceeds
     let creator_collateral_before = balance(&state, creator, COLLATERAL);
     let sale = fixed_pool(&state, pool);
     let recorded = sale.recorded_collateral;
@@ -3767,7 +3734,6 @@ fn guest_poke_records_checkpoint_permissionlessly() {
     let key = PrivateKey::try_new([23; 32]).unwrap();
     let buyer = AccountId::from(&PublicKey::new_from_private_key(&key));
     let (mut state, pool) = weighted_state(buyer);
-    // Checkpoint starts at zero
     assert_eq!(checkpoint_of(&state, pool), (0, 0));
     // Clock is at 100_000ms = 100s (set in fixed_state). Inclusion time within sale window.
     poke_execute_at(&mut state, pool, 100_000).unwrap();
@@ -3781,7 +3747,6 @@ fn guest_buy_updates_checkpoint_and_poke_is_idempotent() {
     let key = PrivateKey::try_new([23; 32]).unwrap();
     let buyer = AccountId::from(&PublicKey::new_from_private_key(&key));
     let (mut state, pool) = weighted_state(buyer);
-    // Buy updates checkpoint
     let transaction = fixed_transaction(
         &state,
         pool,
@@ -3827,7 +3792,6 @@ fn guest_buy_updates_checkpoint_and_poke_is_idempotent() {
             .iter()
             .all(|event| event.account_id != LBP || event.event.selector != checkpoint_selector)
     );
-    // Poke at same time is idempotent — checkpoint unchanged
     let transaction = poke_transaction(&state, pool);
     let events = state
         .transition_from_public_transaction(&transaction, 1, 150_000)
@@ -3840,11 +3804,9 @@ fn guest_buy_updates_checkpoint_and_poke_is_idempotent() {
 fn guest_poke_in_settlement_flow() {
     let (mut state, factory, pool, launch, _escrow, key, actors, salt) = weighted_factory_env();
     let creator = AccountId::from(&PublicKey::new_from_private_key(&key));
-    // Poke before settlement
     poke_execute_at(&mut state, pool, 150_000).unwrap();
     let (time, _) = checkpoint_of(&state, pool);
     assert_eq!(time, 150);
-    // Move past end and settle
     state = clock_state(state, 300_000);
     factory_execute_at(
         &mut state,
@@ -3858,7 +3820,6 @@ fn guest_poke_in_settlement_flow() {
         300_000,
     )
     .unwrap();
-    // Settlement should succeed with a checkpoint already recorded
     let sale = fixed_pool(&state, pool);
     assert_eq!(
         sale.settlement_progress,

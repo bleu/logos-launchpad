@@ -1,23 +1,33 @@
 # Agent instructions
 
-Read [CONTEXT.md](CONTEXT.md) and the relevant [ADRs](docs/adr/README.md) before work. Use their domain terms. Keep pending decisions distinct from accepted ones, and accepted designs distinct from implemented behavior.
+Read [CONTEXT.md](CONTEXT.md) and the relevant [ADRs](docs/adr/README.md) before work. Use their domain terms. An accepted design is not proof of implementation or external approval. Check code and tests for current behavior. Use the [workspace guide](docs/architecture/workspace-guide.md) for checks and evidence limits.
 
-This repository contains an imported PoC baseline and design documentation. The three sale types are fixed-price sale, bonding-curve sale and weighted sale. Public setup, buys, fee collection and settlement use the actor interface. Fixed-price and weighted setup have four stages. See [ADR 0031](docs/adr/0031-shared-launch-factory.md) for shared policies, [0021](docs/adr/0021-modes-and-open-limits.md) for modes and allowlists, [0025](docs/adr/0025-sale-closing.md) for ending rules, [0030](docs/adr/0030-lbp-pricing-collateral.md) for weighted accounting and [0017](docs/adr/0017-quotes-and-slippage.md) for quotes. See [ADR 0015](docs/adr/0015-fee-accounting.md) for sell fees and [0009](docs/adr/0009-curve-arithmetic.md) for curve invariants. Shared settlement route rules, duplicate-payout protection, cross-engine graduation and common program events are implemented. See the [workspace guide](docs/architecture/workspace-guide.md#execution-and-evidence-limits) for current checks and limits. The shared core and QML apps remain status placeholders. Do not scaffold replacements for working PoC code. Preserve required third-party licenses and copyright notices. Do not copy private tracker metadata from a PoC. Public documentation must not cite private tickets.
+## Code boundaries
 
-Keep mechanism-specific pricing, state and lifecycle code separate. Share helpers only when behavior matches. Weighted math is an independent, unaudited package. GUI and CLI code must not duplicate protocol logic.
+Keep pricing-engine state, custody and lifecycle code separate. Share helpers only where behavior matches. Weighted math is an independent, unaudited package. GUI and CLI code must not copy protocol logic. Do not replace working code with scaffolding.
 
-Use ASD-STE100 Simplified Technical English for all documentation. Use short sentences and simple words; use `CONTEXT.md` terms where technical words are needed. Keep overview pages brief. Put decisions and their reasons in ADRs, definitions in the glossary, and flows in sequence diagrams. Link to those pages instead of repeating them. Answer one-off questions in the conversation; do not turn every explanation or requested change into permanent prose.
+Preserve third-party licenses and copyright notices. Do not copy private tracker metadata into public docs or source comments.
 
-## Agent skills
+## Documentation and comments
 
-### Issue tracker
+Use ASD-STE100 writing rules: short sentences, simple verbs and consistent terms. Use project terms from `CONTEXT.md` when needed. Do not claim formal compliance without a check against the standard.
 
-Use the [issue-tracker guide](docs/agents/issue-tracker.md) for Linear setup. Do not repeat tracker details in public documentation.
+Give each topic one main home. Link to it instead of copying its detail:
 
-### Triage labels
+| Topic | Home |
+| --- | --- |
+| Short product view and entry points | `README.md` and `docs/product/` |
+| Domain language and technical definitions | `CONTEXT.md` and `docs/glossary.md` |
+| Current decisions and their reasons | `docs/adr/` |
+| Structure and flows | `docs/architecture/`, with Mermaid where useful |
+| Commands, coverage and readiness limits | `docs/architecture/workspace-guide.md` |
 
-Use the five default triage labels. See [docs/agents/triage-labels.md](docs/agents/triage-labels.md).
+Keep current behavior, planned work and pending approvals distinct. Update ADRs to state the current decision; Git keeps old decisions. Remove completed plans only after preserving useful reasons, evidence and unresolved requirements. Do not add progress logs or permanent docs for one-off questions.
 
-### Domain docs
+Keep each Markdown paragraph on one line. In code, use few, short comments. Explain a reason or constraint that the code cannot show. Preserve safety assumptions, math bounds, tool directives and required notices. Do not edit generated or third-party text for style.
 
-Read root `CONTEXT.md` and relevant ADRs. See [docs/agents/domain.md](docs/agents/domain.md).
+## Agent guides
+
+- [Issue tracker](docs/agents/issue-tracker.md)
+- [Triage labels](docs/agents/triage-labels.md)
+- [Domain docs](docs/agents/domain.md)

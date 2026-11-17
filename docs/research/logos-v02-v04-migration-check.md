@@ -1,10 +1,10 @@
 # LEZ 0.2 to development 0.4 migration check
 
-Checked: 2026-10-20. Public source and GitHub API review only. No builds, proofs or transactions were run. This note records current evidence; it does not replace the earlier [delivery-target note](logos-testnet-0.4.md).
+Historical source check: 2026-10-20. No builds, proofs or transactions were run. Release and proposal status below is from that date, not a current platform survey. See the [workspace guide](../architecture/workspace-guide.md) for the selected revision, migration evidence and remaining checks. The earlier [delivery-target note](logos-testnet-0.4.md) records planning guidance.
 
 ## Release boundary
 
-The current release list has LEZ `v0.3.1`, published on 11 October, and `v0.2.4-lez-legacy`, published on 13 October. It has no 0.4 release. The legacy release rebuilds LEZ 0.2.4 against Logos Blockchain and zone-sdk 0.3.1. Thus, a base-layer 0.3.1 version does not establish support for newer LEZ program interfaces. [Release list](https://github.com/logos-blockchain/logos-execution-zone/releases), [legacy release](https://github.com/logos-blockchain/logos-execution-zone/releases/tag/v0.2.4-lez-legacy).
+At review, the release list had LEZ `v0.3.1`, published on 11 October, and `v0.2.4-lez-legacy`, published on 13 October. It had no 0.4 release. The legacy release rebuilds LEZ 0.2.4 against Logos Blockchain and zone-sdk 0.3.1. Thus, a base-layer 0.3.1 version does not establish support for newer LEZ program interfaces. [Release list](https://github.com/logos-blockchain/logos-execution-zone/releases), [legacy release](https://github.com/logos-blockchain/logos-execution-zone/releases/tag/v0.2.4-lez-legacy).
 
 ## Confirmed changes
 
@@ -18,10 +18,10 @@ The same source distinguishes a deployed program's account address from its byte
 
 PR #930 closed without merging. Its replacement, PR #993, merged on 16 October and combines the wallet and sequencer headers into `core_ffi.h`. PR #948 also closed without merging. Open PR #996 proposes wallet startup through a `SequencerServiceFFI` pointer and still lists LEZ core and explorer module updates as future work. Module integration remains a moving dependency. [PR #993](https://github.com/logos-blockchain/logos-execution-zone/pull/993), [PR #996](https://github.com/logos-blockchain/logos-execution-zone/pull/996).
 
-## Migration work and open checks
+## Follow-up checks
 
-Select one compatible set of LEZ, SPEL, scaffold, token, ATA, authority, clock and wallet/module revisions. Port program handlers and cross-program calls, then rebuild proofs, program binaries, IDs and client artifacts. Recheck fee funding, events, indexed reads and deployment addresses. Retest sale setup, custody, permissions, rollback and the complete private route. Keep pricing math separate from platform adaptation. These are project migration recommendations inferred from the confirmed interface changes above.
+The [platform replacement checklist](../architecture/workspace-guide.md#platform-replacement-checklist) tracks the active work. [ADR 0034](../adr/0034-lez-v04-migration.md) records the migration decision. This source survey does not establish a final 0.4 API or a compatible deployment set.
 
-Private transaction fees and dry runs remain proposed in open PR #949. Open issue #974 says asynchronous messages do not propagate PDA program authority. Open issues #956 and #957 concern private reply handling. These require checks against the selected migration revision. [PR #949](https://github.com/logos-blockchain/logos-execution-zone/pull/949), [issue #974](https://github.com/logos-blockchain/logos-execution-zone/issues/974), [issue #956](https://github.com/logos-blockchain/logos-execution-zone/issues/956), [issue #957](https://github.com/logos-blockchain/logos-execution-zone/issues/957).
+At review, private transaction fees and dry runs were proposed in PR #949. Issue #974 reported that asynchronous messages did not propagate PDA program authority; issues #956 and #957 concerned private replies. These are version-specific source leads, not findings about the selected project pin. [PR #949](https://github.com/logos-blockchain/logos-execution-zone/pull/949), [issue #974](https://github.com/logos-blockchain/logos-execution-zone/issues/974), [issue #956](https://github.com/logos-blockchain/logos-execution-zone/issues/956), [issue #957](https://github.com/logos-blockchain/logos-execution-zone/issues/957).
 
-Open issue #863 reports missing timestamp bounds on named September revisions. It does not establish current development behavior. Fixed-price expiry and future weighted-sale time rules need a fresh clock check. No reviewed source establishes the final 0.4 API, release date, state-transfer route or a complete compatible deployment set. [Clock issue](https://github.com/logos-blockchain/logos-execution-zone/issues/863).
+Issue #863 reports missing timestamp bounds on named September revisions. It does not establish later behavior. The separate [clock review](lez-clock-and-transaction-time.md) checks time APIs at named revisions. [Clock issue](https://github.com/logos-blockchain/logos-execution-zone/issues/863).

@@ -2,23 +2,17 @@
 
 Status: Accepted (reviewed PoC baseline; unaudited)
 
-Date: 2026-09-29
-
-## Context
-
-The reviewed PoC harness defines `BOUND = quant_floor(SCALE) + BUDGET`. Directional wrapper checks require error in `[0, BOUND]`: upward results stay at or above truth, and downward results stay at or below truth. A wrong-side result is a fund-safety failure regardless of its size; a right-side result outside the bound is a magnitude failure.
-
-The power fixtures store high-precision decimal values and `floor(value * 2^128)` values. Rust rescales the latter at test time, so the fixtures can be reused across scale sweeps. The historical harness record reports that captured Balancer outputs passed the mpmath comparator before the PoC kernel existed. Checking those outputs against Balancer's own tolerance tests the grader with an independent implementation. Balancer is not the kernel's accuracy reference or a bit-identical target.
-
 ## Decision
 
-Keep mpmath fixtures as the accuracy reference, directional gates, property tests, the bounded fuzz target, and host/guest parity as separate checks. Retain the committed fixtures and their oracle, Balancer-capture, and guest-parity tools with the copied kernel.
+Keep high-precision mpmath fixtures as the accuracy reference. Directional checks require error in `[0, BOUND]`, with `BOUND = quant_floor(SCALE) + BUDGET`. A wrong-side result is a fund-safety failure regardless of size. A right-side result outside the bound is a magnitude failure.
 
-Keep the invariant referee independent from kernel arithmetic by using harness-only big-integer calculations. Reusing the kernel could repeat its errors, while `f64` can miss one-unit losses at these magnitudes. The referee uses integer weights in `1..=99` to make exact powers practical. That test restriction is narrower than the kernel's accepted weight range.
+Keep fixture checks, property tests, bounded fuzzing and host/guest parity separate. Fixtures retain decimal truth and `floor(value * 2^128)` so Rust can rescale them. Balancer captures check the comparator; they are not the accuracy reference or a bit-identical target.
 
-## Consequences
+Use harness-only big integers for the invariant referee, independent of kernel arithmetic. Check `(b_in + in)^w_in * (b_out - out)^w_out >= b_in^w_in * b_out^w_out`; equality is valid for zero-fee math. Integer referee weights in `1..=99` make exact powers practical but cover less than the kernel's weight range. `f64` cannot detect all one-unit losses.
 
-The exact referee checks `(b_in + in)^w_in * (b_out - out)^w_out >= b_in^w_in * b_out^w_out`; equality is valid for zero-fee math. Host/guest parity checks deterministic execution, not numerical truth, weighted-sale integration, production proving readiness, or an audit. The imported comparator and parity results are historical evidence. [Current qualification](../../packages/weighted-math/docs/qualification.md) records scale-52 rational trade guards, explicit rejection counts, expanded mixed-decimal/large-weight fixtures and one real standalone proof. That proof does not establish full weighted-sale or LEZ compatibility. Report new checks, ignored tests and fuzz runs separately.
+## Reason and limits
+
+Independent calculations reduce the chance of repeating kernel errors. Parity proves deterministic execution, not numerical truth or sale integration. [Qualification](../../packages/weighted-math/docs/qualification.md) records scale-52 rational guards, rejection counts, expanded fixtures and one real standalone proof. That proof does not establish full weighted-sale or LEZ compatibility. Report new checks, ignored tests and fuzz runs separately. The kernel is unaudited.
 
 ## Sources
 

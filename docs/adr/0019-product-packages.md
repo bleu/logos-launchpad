@@ -2,8 +2,6 @@
 
 Status: Accepted
 
-Date: 2026-09-29
-
 ## Context
 
 Administrators, creators and participants need different product flows. Operational history and monitoring remain in scope, while the derived analytics view is excluded. Basecamp QML reads network-backed data through backend modules. This product placement refines the public proposal.

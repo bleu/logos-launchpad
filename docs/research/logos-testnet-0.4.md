@@ -1,6 +1,6 @@
 # LEZ testnet 0.4 delivery target
 
-Researched: 2026-10-13. Source review only; no builds or live transactions. Open proposals describe intended changes, not released APIs.
+Historical source review: 2026-10-13. No builds or live transactions were run. Release and proposal status below is from that date. It does not describe the selected project revision or establish a delivery commitment. See the [workspace guide](../architecture/workspace-guide.md) for current project checks.
 
 ## Public facts
 
@@ -16,13 +16,11 @@ For LEZ Core, open PR #930 proposes shared wallet/sequencer FFI primitives and r
 
 The supplied builder announcement calls 0.3 experimental, says 0.2 is being rebooted for existing programs, and makes 0.4 the target with its date "to be announced". It says 0.3 programs and the LEZ Core Module API will break, open lambda-Prizes target 0.4, SPEL focuses on 0.4 with best-effort 0.3 support, scaffold is under review, and the DEX will run on rebooted 0.2 before redeployment on 0.4. The direct RFP message asks this team not to target 0.3, confirms the intended milestone replacement, and promises dependency dates before a revised plan. These are user-provided team messages with no supplied public URL, sender identity or send date. Treat them as updated planning guidance, separate from the older article and from merged specifications; the public sources reviewed do not establish those release commitments.
 
-## Impact on logos-launchpad
+## Dependency limits
 
-Confirm this dependency set with Logos: SPEL and scaffold; RFP-001 role authority for both launchpads; RFP-002 freeze authority for LBP; token and ATA programs; the on-chain clock for LBP; and atomic cross-program execution. RFP-015 makes DEX auto-graduation a soft requirement, dependent on RFP-004 and LP-0015. A graduation hook alone does not establish that those DEX dependencies are ready. [RFP-001][admin-rfp], [RFP-002][freeze-rfp], [RFP-015][curve-rfp], [RFP-016][lbp-rfp], [settlement decision](../adr/0020-settlement-and-graduation.md).
+The reviewed authority guides label their pins unreleased and show LEZ 0.2.4 dependencies. SPEL's manifest pins LEZ 0.2.5-rc2; `lez-programs` pins 0.2.4 and lists token and AMM deployments on that version. Scaffold's package version 0.4.0 is a tool version, not evidence of testnet 0.4 support. [Authority guides][admin-docs], [freeze guide][freeze-docs], [SPEL manifest][spel], [program manifest][programs], [deployments][deployments], [scaffold manifest][scaffold].
 
-Existing tooling is not evidence of 0.4 compatibility. Official authority guides label their pins unreleased and show LEZ 0.2.4 dependencies. SPEL's reviewed framework manifest pins LEZ 0.2.5-rc2; `lez-programs` pins 0.2.4 and lists token and AMM deployments on that version. Its LP-0013 and LP-0014 prize pages are CLOSED, although the launchpad RFPs still call LP-0013 open. Scaffold's own package version 0.4.0 is a tool version, not proof of testnet 0.4 support. [Authority guides][admin-docs], [freeze guide][freeze-docs], [SPEL manifest][spel], [program manifest][programs], [deployments][deployments], [LP-0013][token-prize], [LP-0014][ata-prize], [scaffold manifest][scaffold].
-
-Before fixing delivery dates, require a versioned compatible dependency set and tests for atomic buys, token custody, role authorization and the complete single-transaction private route. Atomic Calls in the actor proposal do not make deferred Casts one atomic transaction; open issue #974 says Casts do not currently propagate program authority. LBP also needs trusted, monotonic chain time: open issue #863 reports missing timestamp bounds on its cited September revisions. Neither issue establishes the final 0.4 behavior. Final APIs, migration steps, transaction limits, clock guarantees, dependency deployment dates and the 0.4 release date remain unconfirmed by the reviewed sources. [Actor proposal][actors], [PDA authorization issue][pda], [clock issue][clock], [LBP requirements][lbp-rfp], [private participation contract](../architecture/private-participation.md).
+RFP-015 makes DEX auto-graduation a soft requirement dependent on RFP-004 and LP-0015. A launchpad hook does not establish that those dependencies are ready. The reviewed sources did not establish a final 0.4 API, release date or compatible deployment set. Later interface findings are in the [20 October source check](logos-v02-v04-migration-check.md); active requirements are in the [platform replacement checklist](../architecture/workspace-guide.md#platform-replacement-checklist). [RFP-015][curve-rfp], [settlement decision](../adr/0020-settlement-and-graduation.md).
 
 [article]: https://logos.co/media/article/logos-testnet-v03-live
 [releases]: https://github.com/logos-blockchain/logos-execution-zone/releases
@@ -33,15 +31,9 @@ Before fixing delivery dates, require a versioned compatible dependency set and 
 [actors]: https://github.com/logos-blockchain/logos-execution-zone/pull/935
 [core-ffi]: https://github.com/logos-blockchain/logos-execution-zone/pull/930
 [core-wallet]: https://github.com/logos-blockchain/logos-execution-zone/pull/948
-[admin-rfp]: https://github.com/logos-co/rfp/blob/4b02880f023911439cdc6b2494c182500b5e40c3/RFPs/RFP-001-admin-authority-lib.md
-[freeze-rfp]: https://github.com/logos-co/rfp/blob/4b02880f023911439cdc6b2494c182500b5e40c3/RFPs/RFP-002-freeze-authority-lib.md
 [admin-docs]: https://github.com/logos-co/logos-docs/blob/976a28bd2036578f13b628634eb04c035e86d1ed/docs/lez/extensions/admin-authority.md
 [freeze-docs]: https://github.com/logos-co/logos-docs/blob/976a28bd2036578f13b628634eb04c035e86d1ed/docs/lez/extensions/freeze-authority.md
 [spel]: https://github.com/logos-co/spel/blob/c6f73ce21e4805f8430f03afdbdedf0b7e479a5e/spel-framework/Cargo.toml
 [programs]: https://github.com/logos-blockchain/lez-programs/blob/64c01210adecd6b557dbd021a3cc94553f243fd8/Cargo.toml
 [deployments]: https://github.com/logos-blockchain/lez-programs/blob/64c01210adecd6b557dbd021a3cc94553f243fd8/DEPLOYMENTS.md
-[token-prize]: https://github.com/logos-co/lambda-prize/blob/ea8cf61e77fa13ac52ce83b9a6751bed7e1d44e0/prizes/LP-0013.md
-[ata-prize]: https://github.com/logos-co/lambda-prize/blob/ea8cf61e77fa13ac52ce83b9a6751bed7e1d44e0/prizes/LP-0014.md
 [scaffold]: https://github.com/logos-co/scaffold/blob/d4b15ff7ad4e97fd987b9d1216f6e80cb750106e/Cargo.toml
-[pda]: https://github.com/logos-blockchain/logos-execution-zone/issues/974
-[clock]: https://github.com/logos-blockchain/logos-execution-zone/issues/863

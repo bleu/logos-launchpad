@@ -1,20 +1,20 @@
 # ADR 0030: Fee-neutral weighted-sale pricing collateral
 
-Status: Accepted internally; host and seeded buy/fee-collection guest checks passed. Weighted setup and rollback guest checks passed. Weighted settlement and payout rollback have local guest checks; real proofs remain pending.
-
-Date: 2026-10-02
-
-## Context
-
-Collecting namespace fees from the vault must not change the next weighted buy's price. [ADR 0031](0031-shared-launch-factory.md) supersedes the original creator-borne incidence and full-input pricing rule.
+Status: Accepted internally; local execution evidence only; real proofs pending.
 
 ## Decision
 
-Keep pricing collateral separate from actual vault collateral. Weighted buys deduct namespace fees before pricing; exact output grosses up the required net collateral. During trading, pricing collateral equals recorded collateral: the initial seed plus net buyer inputs minus gross sell outputs plus retained sell collateral. Require `vault >= recorded collateral + accrued fees`. Collection reduces vault collateral and accrued fees together, leaving pricing and recorded collateral unchanged. Surplus does not enter either record. Settlement pays recorded collateral, including the seed, once; pricing collateral grants no separate payout right. See [ADR 0033](0033-fixed-price-lbp-recorded-collateral.md). Under `BuyAndSell`, checked reverse quotes limit gross sell output to recorded buyer proceeds above the saved seed. The gross sell budget excludes the original seed, accrued namespace fees and surplus, even when retained fees reduce the debit. Debit recorded and pricing collateral by `gross_output - retained_fee`. Fees follow [ADR 0015](0015-fee-accounting.md); trade limits follow [ADR 0017](0017-quotes-and-slippage.md).
+Keep weighted pricing collateral separate from actual vault collateral. During trading, pricing collateral equals recorded collateral: initial seed plus net buyer inputs minus gross sell outputs plus retained sell collateral. Buys price net input; exact output grosses up required net collateral under [ADR 0015](0015-fee-accounting.md).
 
-## Consequences
+Require `vault >= recorded collateral + accrued fees`. Collection reduces vault and accrued fees together, leaving pricing and recorded collateral unchanged. Surplus enters neither record.
 
-Code and tests must check vault coverage, prevent duplicate payouts and keep pricing unchanged by collection. Fee policy and pending Logos review remain under [ADR 0016](0016-lbp-live-fees.md).
+Under `BuyAndSell`, checked reverse quotes cap gross sell output at recorded buyer proceeds above the saved seed. This gross budget excludes seed, namespace fees and surplus even if retained fees reduce the debit. Debit pricing and recorded collateral by `gross_output - retained_fee`. Apply [trade limits](0017-quotes-and-slippage.md).
+
+Settlement pays recorded collateral, including seed, once under the selected [route](0020-settlement-and-graduation.md). Pricing collateral grants no separate payout right. [ADR 0033](0033-fixed-price-lbp-recorded-collateral.md) defines the distinct fixed-price accounting boundary.
+
+## Reason and limits
+
+Fee collection and unsolicited transfers must not change the next weighted price. Tests must check vault coverage, price neutrality and duplicate-payout protection. [Local execution evidence](../architecture/workspace-guide.md#execution-and-evidence-limits) does not establish real proofs or production readiness. Fee departures still need Logos review under [ADR 0015](0015-fee-accounting.md).
 
 ## Sources
 
