@@ -9,6 +9,7 @@ use lee_core::{
 };
 use lez_compat_core::token;
 use pool::{Pool, PoolCreateParams, TokenSide};
+use sale_policy::events::{ClosureReasonV1, SaleEventKindV1};
 
 pub(crate) fn side(side: Option<u8>) -> Result<Option<TokenSide>, Error> {
     match side {
@@ -21,6 +22,9 @@ pub(crate) fn side(side: Option<u8>) -> Result<Option<TokenSide>, Error> {
 pub fn begin(input: &ReceiveInput, message: Message) -> Result<Response, Error> {
     let Message::CreatePool {
         buy_policy,
+        pause_policy,
+        ending_policy,
+        sell_fee_bps,
         namespace,
         token0_definition_id,
         token1_definition_id,
@@ -66,6 +70,18 @@ pub fn begin(input: &ReceiveInput, message: Message) -> Result<Response, Error> 
     if !defer_funding && close_timestamp.is_some_and(|end| now >= end) {
         return Err(Error::Closed);
     }
+    close_timestamp.map(crate::timestamp_millis).transpose()?;
+    let pool = Pool::create(PoolCreateParams {
+        token0_amount,
+        token1_amount,
+        virtual_reserve0,
+        virtual_reserve1,
+        ending_policy,
+        sell_fee_bps,
+        close_timestamp,
+        close_on_depletion: side(close_on_depletion)?,
+    })
+    .map_err(|_| Error::InvalidPool)?;
     let owner_program = match (owner_program_id, owner_program_seed) {
         (None, None) => None,
         (Some(p), Some(s)) if p != AccountId::default() => Some((p, s)),
@@ -108,22 +124,16 @@ pub fn begin(input: &ReceiveInput, message: Message) -> Result<Response, Error> 
     }
     let state = PoolAccount {
         buy_policy,
+        trade_control: crate::TradeControl::new(pause_policy),
         allowed_input_token: side(allowed_input_token)?,
         funded: !defer_funding,
+        closure_observed: false,
         namespace,
         token0_definition_id,
         token1_definition_id,
         owner,
         owner_program,
-        pool: Pool::create(PoolCreateParams {
-            token0_amount,
-            token1_amount,
-            virtual_reserve0,
-            virtual_reserve1,
-            close_timestamp,
-            close_on_depletion: side(close_on_depletion)?,
-        })
-        .map_err(|_| Error::InvalidPool)?,
+        pool,
     };
     state.validate_address(input.receiver)?;
     let mut queries = vec![Query::Namespace, Query::Definition0, Query::Definition1];
@@ -162,6 +172,13 @@ pub fn activate(input: &ReceiveInput, message: Message) -> Result<Response, Erro
     Pending::new(state, message, authority, queries).advance(input.receiver)
 }
 pub(crate) fn finish(mut pending: Pending, receiver: Actor) -> Result<Response, Error> {
+    pending.state.validate_address(receiver)?;
+    pending
+        .state
+        .pool
+        .close_timestamp
+        .map(crate::timestamp_millis)
+        .transpose()?;
     if let Message::ActivatePool { now } = pending.message {
         if pending.state.owner_program.is_some()
             && (pending.balances[0] < pending.state.pool.real_reserve0
@@ -174,15 +191,37 @@ pub(crate) fn finish(mut pending: Pending, receiver: Actor) -> Result<Response, 
         if expired.is_some() {
             pending.state.pool.lifecycle = pool::PoolLifecycle::Closed;
         }
-        let mut response = crate::with_time_bounds(
-            Response::set_state(borsh::to_vec(&pending.state).unwrap()),
-            expired,
-            pending
+        let bounds = crate::TimeBounds {
+            at_least: expired,
+            before: pending
                 .state
                 .pool
                 .close_timestamp
                 .filter(|_| expired.is_none()),
+        };
+        let closure = expired.and_then(|timestamp| {
+            pending.state.observe_closure(
+                receiver,
+                ClosureReasonV1::ScheduledEnd { timestamp },
+                bounds,
+            )
+        });
+        let mut response = crate::with_time_bounds(
+            Response::set_state(borsh::to_vec(&pending.state).unwrap()),
+            bounds.at_least,
+            bounds.before,
         )?;
+        response = response.event(pending.state.event(
+            receiver,
+            SaleEventKindV1::Activated {
+                reserve0: pending.state.pool.real_reserve0,
+                reserve1: pending.state.pool.real_reserve1,
+                collateral_seed: 0,
+            },
+        ));
+        if let Some(event) = closure {
+            response = response.event(event);
+        }
         if pending.state.owner_program.is_none() {
             response = transfer(
                 response,
@@ -201,9 +240,26 @@ pub(crate) fn finish(mut pending: Pending, receiver: Actor) -> Result<Response, 
         }
         return Ok(response);
     }
-    let Message::CreatePool { defer_funding, .. } = pending.message else {
+    let Message::CreatePool {
+        defer_funding,
+        pause_policy,
+        ending_policy,
+        sell_fee_bps,
+        close_timestamp,
+        close_on_depletion,
+        ..
+    } = pending.message
+    else {
         return Err(Error::InvalidMessage);
     };
+    if pending.state.trade_control.policy() != pause_policy
+        || pending.state.pool.ending_policy != ending_policy
+        || pending.state.pool.sell_fee_bps != sell_fee_bps
+        || pending.state.pool.close_timestamp != close_timestamp
+        || pending.state.pool.close_on_depletion != side(close_on_depletion)?
+    {
+        return Err(Error::InvalidPool);
+    }
     if pending.state.owner_program.is_some()
         && !defer_funding
         && (pending.balances[0] < pending.state.pool.real_reserve0
@@ -221,6 +277,27 @@ pub(crate) fn finish(mut pending: Pending, receiver: Actor) -> Result<Response, 
         None,
         before,
     )?;
+    response = response.event(pending.state.event(
+        receiver,
+        SaleEventKindV1::Prepared {
+            owner: *pending.state.owner.value(),
+            token0_definition: *pending.state.token0_definition_id.value(),
+            token1_definition: *pending.state.token1_definition_id.value(),
+            reserve0: pending.state.pool.real_reserve0,
+            reserve1: pending.state.pool.real_reserve1,
+            policies: pending.state.event_policies(),
+        },
+    ));
+    if !defer_funding {
+        response = response.event(pending.state.event(
+            receiver,
+            SaleEventKindV1::Activated {
+                reserve0: pending.state.pool.real_reserve0,
+                reserve1: pending.state.pool.real_reserve1,
+                collateral_seed: 0,
+            },
+        ));
+    }
     for (definition, amount) in [
         (
             pending.state.token0_definition_id,

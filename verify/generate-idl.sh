@@ -15,12 +15,18 @@ temporary="$(mktemp -d)"
 trap 'rm -rf "$temporary"' EXIT
 cargo +"$ACTOR_RUST_VERSION" run --quiet --manifest-path packages/lez-compat/Cargo.toml -p lez-compat-tools --locked -- idl-source \
   eligibility_policy=crates/eligibility-policy/src/lib.rs \
+  sale_policy=crates/sale-policy/src/lib.rs \
+  controls=crates/sale-policy/src/controls.rs \
+  events=crates/sale-policy/src/events.rs \
+  settlement=crates/sale-policy/src/settlement.rs \
+  terms=crates/sale-policy/src/terms.rs \
   curve=crates/curve-core/src/lib.rs \
   pool=crates/pool/src/lib.rs \
   factory=crates/factory-core/src/lib.rs \
   lbp_setup=crates/factory-core/src/lbp_setup.rs \
   hook=crates/factory-core/src/hook.rs \
-  lbp=crates/lbp-core/src/lib.rs > "$temporary/launchpad.json"
+  lbp=crates/lbp-core/src/lib.rs \
+  lbp_settlement=crates/lbp-core/src/settlement.rs > "$temporary/launchpad.json"
 cargo +"$ACTOR_RUST_VERSION" run --quiet --manifest-path packages/lez-compat/Cargo.toml -p lez-compat-tools --locked -- idl > "$temporary/compat.json"
 if [ -n "$output" ]; then
   mkdir -p "$output"

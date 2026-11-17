@@ -72,6 +72,8 @@ pub enum ClientError {
     NamespaceFrozen,
     #[error("pool funding is pending")]
     PoolFundingPending,
+    #[error("pool swaps are paused")]
+    PoolPaused,
     #[error("cannot quote purchase: {0}")]
     #[strum(serialize = "quote_buy")]
     QuoteBuy(#[source] pool::SwapError),
@@ -81,9 +83,13 @@ pub enum ClientError {
     #[error("cannot quote collateral purchase: {0}")]
     #[strum(serialize = "quote_buy_with_collateral")]
     QuoteBuyWithCollateral(#[source] pool::SwapError),
+    #[error("cannot quote LBP trade: {0}")]
+    QuoteLbpTrade(#[source] lbp_core::Error),
     #[error("invalid factory curve parameters: {0}")]
     #[strum(serialize = "factory_parameters")]
     FactoryParameters(#[from] factory_core::CreateError),
+    #[error("invalid factory sale policy: {0}")]
+    FactoryPolicy(#[from] factory_core::Error),
     #[error("reading the live curve configuration")]
     #[strum(serialize = "read_curve_config")]
     ReadCurveConfig(#[source] Box<dyn Error + Send + Sync>),
@@ -254,6 +260,10 @@ mod tests {
             ),
             (ClientError::QuoteBuy(pool::SwapError::Closed), "quote_buy"),
             (
+                ClientError::QuoteLbpTrade(lbp_core::Error::Closed),
+                "quote_lbp_trade",
+            ),
+            (
                 ClientError::QuoteBuy(pool::SwapError::SlippageExceeded),
                 "quote_buy",
             ),
@@ -269,6 +279,7 @@ mod tests {
                 factory_core::CreateError::SaleReserveZero.into(),
                 "factory_parameters",
             ),
+            (factory_core::Error::InvalidTerms.into(), "factory_policy"),
             (
                 ClientError::ReadFactoryPool(Box::new(std::io::Error::other("slippage"))),
                 "read_factory_pool",
@@ -295,6 +306,19 @@ mod tests {
                 .unwrap()
                 .downcast_ref::<factory_core::CreateError>(),
             Some(factory_core::CreateError::VirtualTokenReserveNotAboveSaleReserve)
+        ));
+        let error: ClientError = factory_core::Error::InvalidTerms.into();
+        assert!(matches!(
+            error
+                .source()
+                .unwrap()
+                .downcast_ref::<factory_core::Error>(),
+            Some(factory_core::Error::InvalidTerms)
+        ));
+        let error = ClientError::QuoteLbpTrade(lbp_core::Error::Closed);
+        assert!(matches!(
+            error.source().unwrap().downcast_ref::<lbp_core::Error>(),
+            Some(lbp_core::Error::Closed)
         ));
         let error = ClientError::QuoteSell(pool::SwapError::InsufficientRealOutputReserve);
         assert!(matches!(

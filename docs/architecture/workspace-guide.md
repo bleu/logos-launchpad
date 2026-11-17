@@ -1,6 +1,6 @@
 # Workspace guide
 
-The application is [migrated to the selected LEZ actor revision](../../plans/lez-v04-migration.md). Local checks below passed with the stated evidence gaps. There is no second supported legacy platform. See [repository layout](repository-layout.md) for package roles and [ADR 0034](../adr/0034-lez-v04-migration.md) for the decision.
+The application uses the [selected LEZ actor revision](../../plans/lez-v04-migration.md). There is no second supported legacy platform. See [repository layout](repository-layout.md) for package roles and [ADR 0034](../adr/0034-lez-v04-migration.md) for the decision.
 
 ## Light development checks
 
@@ -38,11 +38,11 @@ Run from the repository root after setting `CURVE_EMERGENCY_AUTHORITY` as above:
 
 ```sh
 bash verify/check-pins.sh
-bash verify/check-builds.sh --execution
+LAUNCHPAD_MOCK_CLOCK=1 bash verify/check-builds.sh --execution
 bash verify/check-idl.sh
 ```
 
-The build script selects locked host/client/CLI tests, application and compatibility guest builds, weighted-math checks, math guest parity and release-overflow checks. It checks that lockfiles stay unchanged. The local results and their limits are recorded below. The old `--actor` flag is an alias for the same platform, not a separate foundation-only lane.
+The build script selects locked host/client/CLI tests, application and compatibility guest builds, weighted-math checks, math guest parity and release-overflow checks. It checks that lockfiles stay unchanged. The old `--actor` flag is an alias for the same platform, not a separate foundation-only lane.
 
 `check-pins.sh` checks application and compatibility dependencies against the selected actor revision. `generate-idl.sh` generates the actor schemas from Rust declarations. `check-idl.sh` checks drift and Borsh wire fixtures. The application schema is [`idl/launchpad.json`](../../idl/launchpad.json); the compatibility schema is separate. The application schema includes serialized private types. Schema `imports` lists parent modules to search when a type is not defined in the current module. The old SPEL instruction schemas are not supported. Regenerate after changing message types; do not edit generated output by hand.
 
@@ -58,33 +58,9 @@ Application, SDK and CLI timestamps use Unix seconds. Programs convert stored bo
 
 Add `--execution` to `check-builds.sh` to select the optional node-free token, seeded sale and role-authority fixtures. The script builds the application and compatibility guests and locates the pinned upstream clock guest; `LAUNCHPAD_CLOCK_ELF` can override that path. Execution needs local processes and IPC. A sandbox rejection is not a passing result. Token-only rollback checks do not prove sale rollback.
 
-The two [seeded curve tests](../../methods/tests/actor_sale.rs) passed through real curve and compatibility-token guests on `V03State`. Public buys passed, and stale-cap rejection preserved full state and buyer nonce. With saved clock time held before expiry, the same signed trade passed at the last millisecond before expiry and failed at expiry and later. Validity rejection preserved full state and nonce.
+The [sale tests](../../methods/tests/actor_sale.rs) and [role-authority tests](../../crates/launchpad-client/tests/role_authority_guest.rs) exercise signed setup, trades, controls and settlement through the guests. Fault tests check rollback and retries. Use disposable state; replacing a test fault adapter does not establish live adapter replacement.
 
-The five seeded fixed-price tests passed through real fixed-price, namespace and compatibility-token guests. They cover fee-first exact-input and exact-output buys, live fees, current-treasury collection, surplus, no-end sellout, inclusion bounds, slippage, fee-consumed dust and freeze. The same signed buy passed at start and just before end, but failed before start, at end and later, with saved clock time unchanged. Rejection preserved full state and buyer nonce. A failed output transfer also rolled back the earlier input transfer. Fee collection passed after expiry while frozen and without a signer; a zero-fee retry left state unchanged.
-
-The five seeded weighted-sale tests passed through real sale, namespace, clock and compatibility-token guests on 4 November 2026. They cover both buy forms, delayed execution within the validity window, inclusion-window rejection with stale saved clock data, successive recorded reserves, fee-neutral pricing after collection, accuracy rejection and vault overflow. A failed final token credit preserved the full state and buyer nonce, including the earlier collateral transfer. A separate weighted factory test passed all four creation stages through real factory, authority, token, namespace, sale and clock guests. It covers both allocation choices, normalized fractional weights, full creator seed funding, surplus, and a buy after setup. Creation at the scheduled start passed. Creation after that start and every incomplete setup stage at or after the end were rejected with stale saved clock data. Setup immediately before the end passed. An insufficient seed and a failed final allocation credit preserved full state and creator nonce. The latter check includes rollback of earlier inventory transfer, seed transfer and pool activation. Public-account admission uses canonical PDA evidence. These local checks do not produce real proofs or check live clock updates.
-
-On 6 November 2026, the sale guest suite passed 26 tests with the temporary pricing clock. Weighted controls and settlement checks cover creator authorization, pause and resume, scheduled-end inclusion bounds, both allocation and settlement orders, frozen buys and permitted frozen payouts. Forced fee-credit, burn, final proceeds-credit and allocation-credit failures preserve full runtime state and creator nonce. Repaired retries pay and burn once. Host checks cover the checkpoint event selector and payload. The IDL gate and 32 client wire tests passed, including the new weighted commands and weighted state layout. These checks do not establish real clock support, private execution or production readiness.
-
-The [role-authority guest tests](../../crates/launchpad-client/tests/role_authority_guest.rs) use signed `V03State` transactions through real guests. They cover fresh namespace, direct-pool and factory setup, role transfer and rejection, and a program-controlled namespace admin that accepts its role and changes a fee. The [controls tests](../../crates/launchpad-client/tests/role_authority_guest/controls.rs) cover both trade modes, live fees, current-treasury collection, namespace isolation, expiry and `D` depletion. Freeze blocks swaps while administration, role transfer, collection and close remain available.
-
-The [settlement tests](../../crates/launchpad-client/tests/role_authority_guest/settlement.rs) cover manual and graduation routes, allocation, unsold-token burn, payout failures, callback rejection and invalid final acknowledgment. Failed transactions preserve full state and signer nonces; repaired retries do not repeat completed payments or burns. Tests also cover competing-route rejection, manual recovery, frozen settlement and the permitted zero-payout hook. A real adapter receives payouts and records a successful callback. This proves local graduation execution, not DEX liquidity.
-
-The seeded fixed-price trade checks do not exercise fresh setup or settlement. Weighted setup has the separate factory test above. To run those trade fixtures directly:
-
-```sh
-RISC0_BUILD_LOCKED=1 cargo +1.98.1 test --manifest-path methods/Cargo.toml --locked --features actor-execution-tests --test actor_sale
-```
-
-The local `bash verify/check-builds.sh --execution` gate passed with unchanged lockfiles. It checks release host tests, application and compatibility guests, weighted-math parity, release-overflow checks, token execution, seeded sale tests and the signed curve contract guest tests. IDL and wire checks, formatting, pins and shell regressions are separate checks. Linux CI has not run for the expanded curve evidence.
-
-A separate direct run passed all eleven sale tests, including the weighted factory test.
-
-Fixed-price setup and payout runtime checks remain deferred, as do sequencer `Tick`, wallet/service integration and real proofs. Old namespace and private-helper guest evidence predates this actor migration and cannot establish compatibility on the selected revision. Private purchase and authority helpers return explicit unsupported errors because the compatibility token implementation has no private holdings.
-
-The three launchpad package archives passed the Nix build. Installation, loading and `Test backend` are blocked by missing Basecamp and `lgpm`; no `Backend OK` result is recorded. See the [package README](../../packages/launchpad/README.md) for the command and local requirements.
-
-Host tests do not prove guest execution or cross-program rollback. Guest development receipts and standalone math parity do not establish production readiness. Real proofs, service integration, wallet workflows and live E2E verification remain separate evidence gaps. Use disposable state for execution checks. Nothing is deployed to testnet or production, and no state migration is provided.
+Host tests do not prove guest execution. Local guest execution does not establish real proofs, live sequencer timing, wallet/service integration, package loading or DEX liquidity. Private routes are unsupported because compatibility token holdings are public only. See the [package README](../../packages/launchpad/README.md) for package requirements.
 
 For stable release image IDs, the build script requires `/tmp/logos-launchpad-release/source` with `--release`. Build paths can change guest binaries and IDs; cross-OS identity remains unverified. See [verification boundaries](../adr/0022-verification-boundaries.md).
 
@@ -102,7 +78,7 @@ Run `bash verify/check-weighted-clock.sh` for focused host and sale guest checks
 
 The clock is updated at the end of a block. A node-free `Tick` test checks the real guest's state update and a later weighted price. It also holds saved time before expiry while inclusion reaches expiry. The transaction is rejected without state or nonce changes. This does not prove sequencer ordering, timestamp trust, network operation or proof generation time.
 
-The earlier fake-clock evidence above is historical. The 9 November results below used feature-branch pin `f94ca8a7550fa0012222b9fb5990dfe44c54a3dc`. They do not establish behavior on the current `dev` pin.
+Earlier fake-clock evidence is historical. The 9 November results below used feature-branch pin `f94ca8a7550fa0012222b9fb5990dfe44c54a3dc`. They do not establish behavior on the current `dev` pin.
 
 A separate local native-token probe at the earlier feature-branch pin checked private funding, a public clock read and atomic private returns. This probe has not been repeated on the current `dev` pin. A changed clock reply passed when the return stayed fixed. A changed return failed with `CrossMessageMismatch` despite an acceptable minimum output. A fresh proof passed. Failed attempts preserved all state. The five-test probe used development receipts and a small payout guest. It did not run launchpad token programs or complete a launchpad private route.
 

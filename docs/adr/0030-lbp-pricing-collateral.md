@@ -6,11 +6,11 @@ Date: 2026-10-02
 
 ## Context
 
-Collecting creator-borne fees from the vault must not change the next weighted buy's price.
+Collecting namespace fees from the vault must not change the next weighted buy's price. [ADR 0031](0031-shared-launch-factory.md) supersedes the original creator-borne incidence and full-input pricing rule.
 
 ## Decision
 
-Keep pricing collateral separate from actual vault collateral. Pricing collateral includes the seed and full successful buyer inputs; fee collection does not reduce it. Surplus does not enter pricing. Creator payouts use recorded proceeds backed by available vault collateral, not the pricing record or unsolicited surplus; see [ADR 0033](0033-fixed-price-lbp-recorded-collateral.md). This applies to buy-only weighted sales; bonding-curve accounting is unchanged.
+Keep pricing collateral separate from actual vault collateral. Weighted buys deduct namespace fees before pricing; exact output grosses up the required net collateral. During trading, pricing collateral equals recorded collateral: the initial seed plus net buyer inputs minus gross sell outputs plus retained sell collateral. Require `vault >= recorded collateral + accrued fees`. Collection reduces vault collateral and accrued fees together, leaving pricing and recorded collateral unchanged. Surplus does not enter either record. Settlement pays recorded collateral, including the seed, once; pricing collateral grants no separate payout right. See [ADR 0033](0033-fixed-price-lbp-recorded-collateral.md). Under `BuyAndSell`, checked reverse quotes limit gross sell output to recorded buyer proceeds above the saved seed. The gross sell budget excludes the original seed, accrued namespace fees and surplus, even when retained fees reduce the debit. Debit recorded and pricing collateral by `gross_output - retained_fee`. Fees follow [ADR 0015](0015-fee-accounting.md); trade limits follow [ADR 0017](0017-quotes-and-slippage.md).
 
 ## Consequences
 

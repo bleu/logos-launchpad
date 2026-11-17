@@ -1,4 +1,47 @@
 use super::*;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub enum GraduationIntentKind {
+    CurveReserves,
+    FixedPriceProceeds,
+    WeightedBuyerProceeds,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub enum GraduationIntent {
+    CurveReserves {
+        launch_tokens: u128,
+        collateral: u128,
+    },
+    FixedPriceProceeds {
+        collateral: u128,
+    },
+    WeightedBuyerProceeds {
+        collateral: u128,
+    },
+}
+
+impl GraduationIntent {
+    pub fn kind(self) -> GraduationIntentKind {
+        match self {
+            Self::CurveReserves { .. } => GraduationIntentKind::CurveReserves,
+            Self::FixedPriceProceeds { .. } => GraduationIntentKind::FixedPriceProceeds,
+            Self::WeightedBuyerProceeds { .. } => GraduationIntentKind::WeightedBuyerProceeds,
+        }
+    }
+
+    pub fn amounts(self) -> (u128, u128) {
+        match self {
+            Self::CurveReserves {
+                launch_tokens,
+                collateral,
+            } => (launch_tokens, collateral),
+            Self::FixedPriceProceeds { collateral }
+            | Self::WeightedBuyerProceeds { collateral } => (0, collateral),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct GraduationRequest {
     pub factory_program_id: AccountId,
@@ -6,17 +49,26 @@ pub struct GraduationRequest {
     pub launch_salt: [u8; 32],
     pub token_definition_id: AccountId,
     pub collateral_definition_id: AccountId,
-    pub dex_seed_reserve: u128,
-    pub collateral_amount: u128,
+    pub intent: GraduationIntent,
     pub configuration: Vec<u8>,
 }
+impl GraduationRequest {
+    pub fn hash(&self) -> [u8; 32] {
+        use risc0_zkvm::sha::{Impl, Sha256 as _};
+        Impl::hash_bytes(&borsh::to_vec(self).expect("graduation request serializes"))
+            .as_bytes()
+            .try_into()
+            .unwrap()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum AdapterMessage {
     Initialize {
         factory_program_id: AccountId,
         namespace: AccountId,
         launch_salt: [u8; 32],
-        ready: bool,
+        accepted_intent: Option<GraduationIntentKind>,
     },
     ReadState,
     Graduate {
@@ -26,13 +78,14 @@ pub enum AdapterMessage {
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct AdapterState {
     pub factory: Actor,
-    pub ready: bool,
+    pub accepted_intent: Option<GraduationIntentKind>,
     pub receipt: Option<GraduationRequest>,
     pending: Option<(GraduationRequest, u8)>,
 }
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct GraduationResult {
     pub factory: AccountId,
+    pub request_hash: [u8; 32],
 }
 impl AdapterState {
     pub fn decode(bytes: &[u8]) -> Result<Self, Error> {
@@ -43,6 +96,10 @@ pub fn handle_adapter(input: &ReceiveInput) -> Result<Response, Error> {
     if let Ok(mut state) = AdapterState::decode(&input.pre_state)
         && let Some((request, step)) = state.pending.take()
     {
+        validate_request(&state, &request, input.receiver)?;
+        if step > 3 {
+            return Err(Error::InvalidState);
+        }
         let owner = input.receiver.account_id;
         let definition = if step == 0 || step == 2 {
             request.token_definition_id
@@ -73,19 +130,21 @@ pub fn handle_adapter(input: &ReceiveInput) -> Result<Response, Error> {
                 && stored_definition == definition
                 && balance
                     >= if step == 2 {
-                        request.dex_seed_reserve
+                        request.intent.amounts().0
                     } else {
-                        request.collateral_amount
+                        request.intent.amounts().1
                     } => {}
             _ => return Err(Error::InvalidCustody),
         }
         if step == 3 {
+            let request_hash = request.hash();
             state.receipt = Some(request);
             return Ok(
                 Response::set_state(borsh::to_vec(&state).unwrap()).send_sync(
                     state.factory,
                     &GraduationResult {
                         factory: state.factory.account_id,
+                        request_hash,
                     },
                 ),
             );
@@ -116,7 +175,7 @@ pub fn handle_adapter(input: &ReceiveInput) -> Result<Response, Error> {
             factory_program_id,
             namespace,
             launch_salt,
-            ready,
+            accepted_intent,
         } => {
             let factory = Actor::new(
                 compute_factory_pda(namespace, factory_program_id, launch_salt),
@@ -128,18 +187,20 @@ pub fn handle_adapter(input: &ReceiveInput) -> Result<Response, Error> {
                 return Err(Error::WrongAccount);
             }
             if !input.pre_state.is_empty() {
-                let previous = AdapterState::decode(&input.pre_state)?;
-                if previous.factory != factory
-                    || previous.receipt.is_some()
-                    || previous.pending.is_some()
-                {
+                let mut state = AdapterState::decode(&input.pre_state)?;
+                if state.factory != factory {
+                    return Err(Error::WrongAccount);
+                }
+                if state.accepted_intent.is_some() || accepted_intent.is_none() {
                     return Err(Error::AlreadyInitialized);
                 }
+                state.accepted_intent = accepted_intent;
+                return Ok(Response::set_state(borsh::to_vec(&state).unwrap()));
             }
             Ok(Response::set_state(
                 borsh::to_vec(&AdapterState {
                     factory,
-                    ready,
+                    accepted_intent,
                     receipt: None,
                     pending: None,
                 })
@@ -151,33 +212,7 @@ pub fn handle_adapter(input: &ReceiveInput) -> Result<Response, Error> {
             if input.from != Some(state.factory) {
                 return Err(Error::Unauthorized);
             }
-            if input.receiver.account_id
-                != compute_graduation_pda(
-                    input.receiver.program_account_id,
-                    state.factory.account_id,
-                )
-                || state.factory
-                    != Actor::new(
-                        compute_factory_pda(
-                            request.namespace,
-                            request.factory_program_id,
-                            request.launch_salt,
-                        ),
-                        request.factory_program_id,
-                    )
-                || request.token_definition_id
-                    != compute_definition_pda(
-                        request.namespace,
-                        request.factory_program_id,
-                        request.launch_salt,
-                    )
-                || request.token_definition_id == request.collateral_definition_id
-            {
-                return Err(Error::WrongAccount);
-            }
-            if !state.ready {
-                return Err(Error::AdapterNotReady);
-            }
+            validate_request(&state, &request, input.receiver)?;
             if state.receipt.is_some() {
                 return Err(Error::AlreadySettled);
             }
@@ -197,4 +232,36 @@ pub fn handle_adapter(input: &ReceiveInput) -> Result<Response, Error> {
             ))
         }
     }
+}
+
+fn validate_request(
+    state: &AdapterState,
+    request: &GraduationRequest,
+    receiver: Actor,
+) -> Result<(), Error> {
+    if receiver.account_id
+        != compute_graduation_pda(receiver.program_account_id, state.factory.account_id)
+        || state.factory
+            != Actor::new(
+                compute_factory_pda(
+                    request.namespace,
+                    request.factory_program_id,
+                    request.launch_salt,
+                ),
+                request.factory_program_id,
+            )
+        || request.token_definition_id
+            != compute_definition_pda(
+                request.namespace,
+                request.factory_program_id,
+                request.launch_salt,
+            )
+        || request.token_definition_id == request.collateral_definition_id
+    {
+        return Err(Error::WrongAccount);
+    }
+    if state.accepted_intent != Some(request.intent.kind()) {
+        return Err(Error::AdapterNotReady);
+    }
+    Ok(())
 }

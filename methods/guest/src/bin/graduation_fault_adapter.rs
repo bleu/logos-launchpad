@@ -18,7 +18,10 @@ fn handle(input: &ReceiveInput) -> Response {
     if let Some(state) = response.post_state.as_ref()
         && let Ok(state) = AdapterState::decode(state)
         && let Some(receipt) = state.receipt
-        && receipt.configuration == b"corrupt-final-ack"
+        && matches!(
+            receipt.configuration.as_slice(),
+            b"corrupt-final-ack" | b"corrupt-request-hash"
+        )
     {
         let acknowledgment = response
             .sync_messages
@@ -27,10 +30,32 @@ fn handle(input: &ReceiveInput) -> Response {
         acknowledgment.message = SyncMessage::new(
             acknowledgment.to,
             &GraduationResult {
-                factory: AccountId::new([0; 32]),
+                factory: if receipt.configuration == b"corrupt-final-ack" {
+                    AccountId::new([0; 32])
+                } else {
+                    state.factory.account_id
+                },
+                request_hash: if receipt.configuration == b"corrupt-request-hash" {
+                    [0; 32]
+                } else {
+                    receipt.hash()
+                },
             },
         )
         .message;
+    }
+    if let Some(state) = response.post_state.as_ref()
+        && let Ok(state) = AdapterState::decode(state)
+        && let Some(receipt) = state.receipt
+        && let Some(payload) = receipt.configuration.strip_prefix(b"nested-call:")
+    {
+        let target = lee_core::account::Actor::new(
+            AccountId::new(payload[..32].try_into().expect("nested account")),
+            AccountId::new(payload[32..64].try_into().expect("nested program")),
+        );
+        let mut nested = SyncMessage::new(target, &());
+        nested.message = payload[64..].to_vec();
+        response.sync_messages.insert(0, nested);
     }
     response
 }

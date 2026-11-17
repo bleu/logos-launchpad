@@ -18,6 +18,7 @@ all = { level = "deny", priority = -1 }
 workspace = true
 
 [dependencies]
+borsh = "1.8"
 lee_core = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", rev = "cb075d5777cb812ba44216429d4f2837ea8518bd", default-features = false }
 risc0-zkvm = { version = "3.1.0", default-features = false, features = ["std"] }
 

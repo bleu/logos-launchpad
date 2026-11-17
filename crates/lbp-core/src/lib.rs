@@ -1,9 +1,21 @@
-//! Fixed-price and weighted sale setup, buys and fees and mechanism-specific settlement.
+//! Fixed-price and weighted sale setup, trades, fees and mechanism-specific settlement.
 
 pub use curve_core::{AllowlistPolicy, BuyPolicy, MembershipPath};
+use sale_policy::{EndingError, TimeBounds};
+pub use sale_policy::{
+    EndingPolicy, PausePolicy, SettlementAmounts, SettlementProgress, SettlementRoute,
+    TradeControl, TradeMode,
+};
 
+mod events;
+#[path = "settlement.rs"]
+mod lbp_settlement;
+mod pricing;
+mod quote;
+pub use quote::{QuoteRequest, TradeQuote, quote_trade};
 pub mod pricing_clock;
 mod trading;
+pub use lbp_settlement::{SettlementReceipt, SettlementReply};
 mod weighted_lifecycle;
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
@@ -43,6 +55,11 @@ pub enum CreatorAllocationRelease {
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize, Serialize, Deserialize)]
 pub struct FixedPricePoolInputs {
     pub buy_policy: BuyPolicy,
+    pub pause_policy: PausePolicy,
+    pub ending_policy: EndingPolicy,
+    pub trade_mode: TradeMode,
+    pub sell_fee_bps: u16,
+    pub graduation_adapter: Option<Actor>,
     pub namespace: AccountId,
     pub namespace_program_id: AccountId,
     pub factory_program_id: AccountId,
@@ -68,6 +85,11 @@ pub struct FixedPricePoolInputs {
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize, Serialize, Deserialize)]
 pub struct WeightedPoolInputs {
     pub buy_policy: BuyPolicy,
+    pub pause_policy: PausePolicy,
+    pub ending_policy: EndingPolicy,
+    pub trade_mode: TradeMode,
+    pub sell_fee_bps: u16,
+    pub graduation_adapter: Option<Actor>,
     pub namespace: AccountId,
     pub namespace_program_id: AccountId,
     pub factory_program_id: AccountId,
@@ -151,6 +173,27 @@ pub enum Message {
     /// Permissionless observer checkpoint. Reads the pricing clock and records
     /// the current token weight without changing the price schedule.
     PokeWeighted,
+    /// Factory-authorized controls for either sale mode.
+    SetPaused {
+        paused: bool,
+    },
+    Settle {
+        route: SettlementRoute,
+        creator: AccountId,
+        adapter: Option<Actor>,
+    },
+    FinalizeSettlement {
+        receipt_hash: [u8; 32],
+    },
+    SellExactInput {
+        amount_in: u128,
+        min_amount_out: u128,
+        now: u64,
+    },
+    SellWeightedExactInput {
+        amount_in: u128,
+        min_amount_out: u128,
+    },
 }
 pub type Instruction = Message;
 
@@ -159,12 +202,11 @@ pub enum PoolMode {
     FixedPrice,
     /// Collateral weight is the exact complement within `WEIGHT_TOTAL`.
     Weighted {
-        paused: bool,
         token_weight_start: u128,
         token_weight_end: u128,
         /// Immutable creator seed. Surplus does not change this value.
         collateral_seed: u128,
-        /// Seed plus full successful buyer inputs. Fees and custody are separate.
+        /// Seed plus net buys minus gross sells plus retained fees. Custody is separate.
         pricing_collateral: u128,
         /// Last observed pricing second. Zero means no checkpoint recorded.
         checkpoint_time: u64,
@@ -176,8 +218,14 @@ pub enum PoolMode {
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PoolAccount {
     pub buy_policy: BuyPolicy,
+    pub trade_control: TradeControl,
+    pub ending_policy: EndingPolicy,
+    pub trade_mode: TradeMode,
+    pub sell_fee_bps: u16,
+    pub graduation_adapter: Option<Actor>,
     pub mode: PoolMode,
     pub funded: bool,
+    pub closure_observed: bool,
     pub namespace: AccountId,
     pub namespace_program_id: AccountId,
     pub factory_owner: AccountId,
@@ -194,7 +242,8 @@ pub struct PoolAccount {
     pub creator_allocation_release: CreatorAllocationRelease,
     pub recorded_collateral: u128,
     pub accrued_fees: u128,
-    pub proceeds_settled: bool,
+    pub settlement_progress: SettlementProgress,
+    pub seed_returned: bool,
     pending: Option<Pending>,
 }
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -226,6 +275,8 @@ pub enum Error {
     MathAccuracy,
     PowerUnderflow,
     Underfunded,
+    PauseDisabled,
+    TradeDirectionUnsupported,
 }
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -238,11 +289,37 @@ impl PoolAccount {
         borsh::from_slice(bytes).map_err(|_| Error::InvalidState)
     }
     pub fn close_time_bound(&self) -> Result<Option<u64>, Error> {
-        if self.remaining_inventory == 0 {
-            Ok(None)
-        } else {
-            self.end_timestamp.map(Some).ok_or(Error::NotClosed)
+        self.validate_policies()?;
+        Ok(self
+            .ending_policy
+            .settlement(self.end_timestamp, self.remaining_inventory)
+            .map_err(ending_error)?
+            .inclusion_bounds()
+            .at_least)
+    }
+    fn trade_bounds(&self) -> Result<TimeBounds, Error> {
+        self.ending_policy
+            .trade_bounds(
+                Some(self.start_timestamp),
+                self.end_timestamp,
+                self.remaining_inventory,
+            )
+            .map_err(ending_error)
+    }
+    fn validate_policies(&self) -> Result<(), Error> {
+        sale_policy::SellFeeRate::new(self.sell_fee_bps).map_err(|_| Error::InvalidState)?;
+        if !supported_ending(
+            matches!(self.mode, PoolMode::Weighted { .. }),
+            self.ending_policy,
+        ) {
+            return Err(Error::InvalidState);
         }
+        validate_policy_terms(
+            matches!(self.mode, PoolMode::Weighted { .. }),
+            self.ending_policy,
+            self.start_timestamp,
+            self.end_timestamp,
+        )
     }
     fn validate_address(&self, receiver: Actor) -> Result<(), Error> {
         self.buy_policy
@@ -259,12 +336,40 @@ impl PoolAccount {
         {
             return Err(Error::WrongAccount);
         }
-        Ok(())
+        self.validate_policies()
     }
     fn response(&self) -> Response {
         Response::set_state(borsh::to_vec(self).unwrap())
     }
 }
+fn ending_error(error: EndingError) -> Error {
+    match error {
+        EndingError::InvalidWindow => Error::InvalidTerms,
+        EndingError::Ended => Error::Closed,
+        EndingError::NotEnded => Error::NotClosed,
+    }
+}
+
+fn supported_ending(weighted: bool, ending: EndingPolicy) -> bool {
+    matches!(ending, EndingPolicy::Scheduled | EndingPolicy::Either)
+        || (!weighted && ending == EndingPolicy::Depletion)
+}
+
+fn validate_policy_terms(
+    weighted: bool,
+    ending: EndingPolicy,
+    start: u64,
+    end: Option<u64>,
+) -> Result<(), Error> {
+    if !supported_ending(weighted, ending) {
+        return Err(Error::InvalidTerms);
+    }
+    ending.validate(Some(start), end).map_err(ending_error)?;
+    let _ = curve_core::with_time_bounds(Response::keep_state(), Some(start), end)
+        .map_err(|_| Error::InvalidTerms)?;
+    Ok(())
+}
+
 pub fn compute_pool_pda(
     namespace: AccountId,
     program: AccountId,
@@ -404,10 +509,37 @@ fn advance_setup_steps(
                     *pricing_collateral = *collateral_seed;
                 }
             }
+            let kind = if pending.activate {
+                curve_core::events::SaleEventKindV1::Activated {
+                    reserve0: state.remaining_inventory,
+                    reserve1: state.recorded_collateral,
+                    collateral_seed: match state.mode {
+                        PoolMode::FixedPrice => 0,
+                        PoolMode::Weighted {
+                            collateral_seed, ..
+                        } => collateral_seed,
+                    },
+                }
+            } else {
+                curve_core::events::SaleEventKindV1::Prepared {
+                    owner: *state.factory_owner.value(),
+                    token0_definition: *state.token_definition_id.value(),
+                    token1_definition: *state.collateral_definition_id.value(),
+                    reserve0: state.sale_inventory,
+                    reserve1: match state.mode {
+                        PoolMode::FixedPrice => 0,
+                        PoolMode::Weighted {
+                            collateral_seed, ..
+                        } => collateral_seed,
+                    },
+                    policies: state.event_policies(),
+                }
+            };
             state.pending = None;
             let response =
                 curve_core::with_time_bounds(state.response(), None, state.end_timestamp)
-                    .map_err(|_| Error::InvalidTerms)?;
+                    .map_err(|_| Error::InvalidTerms)?
+                    .event(state.event(input.receiver, kind));
             let response = if matches!(state.mode, PoolMode::Weighted { .. }) {
                 let at_most = state
                     .end_timestamp
@@ -500,6 +632,9 @@ pub fn handle(input: &ReceiveInput) -> Result<Response, Error> {
         });
     }
 
+    if let Some(result) = lbp_settlement::resume(input) {
+        return result;
+    }
     if let Some(result) = weighted_lifecycle::resume_poke(input) {
         return result;
     }
@@ -532,6 +667,13 @@ pub fn handle(input: &ReceiveInput) -> Result<Response, Error> {
             {
                 return Err(Error::InvalidTerms);
             }
+            sale_policy::SellFeeRate::new(inputs.sell_fee_bps).map_err(|_| Error::InvalidTerms)?;
+            validate_policy_terms(
+                false,
+                inputs.ending_policy,
+                inputs.start_timestamp,
+                inputs.end_timestamp,
+            )?;
             let factory = AccountId::for_public_pda(
                 &inputs.factory_program_id,
                 &PdaSeed::new(inputs.factory_seed),
@@ -556,8 +698,14 @@ pub fn handle(input: &ReceiveInput) -> Result<Response, Error> {
                 .map_err(|_| Error::InvalidTerms)?;
             let state = PoolAccount {
                 buy_policy: inputs.buy_policy,
+                trade_control: TradeControl::new(inputs.pause_policy),
+                ending_policy: inputs.ending_policy,
+                trade_mode: inputs.trade_mode,
+                sell_fee_bps: inputs.sell_fee_bps,
+                graduation_adapter: inputs.graduation_adapter,
                 mode: PoolMode::FixedPrice,
                 funded: false,
+                closure_observed: false,
                 namespace: inputs.namespace,
                 namespace_program_id: inputs.namespace_program_id,
                 factory_owner: factory,
@@ -574,7 +722,8 @@ pub fn handle(input: &ReceiveInput) -> Result<Response, Error> {
                 creator_allocation_release: inputs.creator_allocation_release,
                 recorded_collateral: 0,
                 accrued_fees: 0,
-                proceeds_settled: false,
+                settlement_progress: crate::SettlementProgress::Unselected,
+                seed_returned: true,
                 pending: Some(Pending {
                     activate: false,
                     step: 0,
@@ -642,6 +791,13 @@ pub fn handle(input: &ReceiveInput) -> Result<Response, Error> {
             {
                 return Err(Error::InvalidTerms);
             }
+            sale_policy::SellFeeRate::new(inputs.sell_fee_bps).map_err(|_| Error::InvalidTerms)?;
+            validate_policy_terms(
+                true,
+                inputs.ending_policy,
+                inputs.start_timestamp,
+                Some(inputs.end_timestamp),
+            )?;
             let factory = AccountId::for_public_pda(
                 &inputs.factory_program_id,
                 &PdaSeed::new(inputs.factory_seed),
@@ -666,8 +822,12 @@ pub fn handle(input: &ReceiveInput) -> Result<Response, Error> {
                 .map_err(|_| Error::InvalidTerms)?;
             let state = PoolAccount {
                 buy_policy: inputs.buy_policy,
+                trade_control: TradeControl::new(inputs.pause_policy),
+                ending_policy: inputs.ending_policy,
+                trade_mode: inputs.trade_mode,
+                sell_fee_bps: inputs.sell_fee_bps,
+                graduation_adapter: inputs.graduation_adapter,
                 mode: PoolMode::Weighted {
-                    paused: false,
                     token_weight_start: inputs.token_weight_start,
                     token_weight_end: inputs.token_weight_end,
                     collateral_seed: inputs.collateral_seed,
@@ -676,6 +836,7 @@ pub fn handle(input: &ReceiveInput) -> Result<Response, Error> {
                     checkpoint_token_weight: 0,
                 },
                 funded: false,
+                closure_observed: false,
                 namespace: inputs.namespace,
                 namespace_program_id: inputs.namespace_program_id,
                 factory_owner: factory,
@@ -696,7 +857,8 @@ pub fn handle(input: &ReceiveInput) -> Result<Response, Error> {
                 creator_allocation_release: inputs.creator_allocation_release,
                 recorded_collateral: 0,
                 accrued_fees: 0,
-                proceeds_settled: false,
+                settlement_progress: crate::SettlementProgress::Unselected,
+                seed_returned: false,
                 pending: Some(Pending {
                     activate: false,
                     step: 0,
@@ -756,6 +918,8 @@ pub fn handle(input: &ReceiveInput) -> Result<Response, Error> {
                         | Message::BuyExactOutput { .. }
                         | Message::BuyWeightedExactInput { .. }
                         | Message::BuyWeightedExactOutput { .. }
+                        | Message::SellExactInput { .. }
+                        | Message::SellWeightedExactInput { .. }
                 )
             {
                 return Err(Error::Unauthorized);
@@ -769,10 +933,17 @@ pub fn handle(input: &ReceiveInput) -> Result<Response, Error> {
         | Message::BuyExactOutput { .. }
         | Message::BuyWeightedExactInput { .. }
         | Message::BuyWeightedExactOutput { .. }
+        | Message::SellExactInput { .. }
+        | Message::SellWeightedExactInput { .. }
         | Message::SettleFixedPrice { .. }
         | Message::CollectFees => trading::begin(input, message),
-        Message::SetWeightedPaused { paused } => weighted_lifecycle::set_paused(input, paused),
-        Message::SettleWeighted { .. } => trading::begin(input, message),
+        Message::SetWeightedPaused { paused } => {
+            weighted_lifecycle::end(&PoolAccount::decode(&input.pre_state)?)?;
+            weighted_lifecycle::set_paused(input, paused)
+        }
+        Message::SetPaused { paused } => weighted_lifecycle::set_paused(input, paused),
+        Message::SettleWeighted { .. } | Message::Settle { .. } => trading::begin(input, message),
+        Message::FinalizeSettlement { .. } => Err(Error::InvalidState),
         Message::PokeWeighted => weighted_lifecycle::poke(input),
         Message::ReadState => {
             PoolAccount::decode(&input.pre_state)?.validate_address(input.receiver)?;

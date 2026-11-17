@@ -14,7 +14,7 @@ The [historical clock experiment](https://github.com/bleu/logos-launchpad/blob/f
 
 This amendment supersedes the buyer-selected pricing windows below. Weighted buys now supply amounts and price limits only. Each buy requests one timestamp through a separate read-and-reply interface. The reply is accepted only from the configured clock actor during the pending clock-read phase. The buyer cannot select that actor or supply its time.
 
-The temporary local provider returns Unix milliseconds from fixture state. Divide by 1000 to select the pricing second. Model previous-block time, not exact execution time. Require the pricing second to be at or after the scheduled start and before the scheduled end. Interpolate the collateral weight at that second and use its exact token-weight complement. Use current recorded reserves and retain the math limits, creator-borne fees and buyer price limits.
+The temporary local provider returns Unix milliseconds from fixture state. Divide by 1000 to select the pricing second. Model previous-block time, not exact execution time. Require the pricing second to be at or after the scheduled start and before the scheduled end. Interpolate the collateral weight at that second and use its exact token-weight complement. Use current recorded reserves and retain the math limits and buyer price limits. Namespace fees use net-input pricing and exact-output gross-up under [ADR 0031](0031-shared-launch-factory.md).
 
 Attach the immutable sale start and end as inclusion-time bounds. These bounds remain necessary when saved clock time is stale. Setup keeps its existing canonical clock assertions. Fixed-price and bonding-curve behavior is unchanged. No checkpoint is needed for pricing.
 
@@ -48,7 +48,7 @@ Use an explicit scheduled start for weighted creation. Check that the canonical 
 
 Use these endpoints for interpolation. Floor the collateral weight's interpolation and calculate the token weight as its exact complement. Evaluate the pair at `valid_from` and `valid_until - 1`, the last included Unix second. Select the smaller collateral weight and its token complement. This pair gives the least token output for exact input and the greatest collateral input for exact output. Linear schedules are monotone, so no interior timestamp gives a worse pair. Apply the same rule to rising, falling and constant schedules.
 
-Price each buy with this pair and the current recorded pricing reserves. Check minimum output or maximum input against that result. Keep creator-borne fees and pricing collateral under [ADR 0016](0016-lbp-live-fees.md) and [ADR 0030](0030-lbp-pricing-collateral.md). The buyer selects the window and price limits. Do not replace them during execution.
+Price each buy with this pair and the current recorded pricing reserves. Check minimum output or maximum input against that result. Fee incidence is superseded by [ADR 0031](0031-shared-launch-factory.md); pricing collateral follows [ADR 0030](0030-lbp-pricing-collateral.md). The buyer selects the window and price limits. Do not replace them during execution.
 
 A buy does not require a poke or checkpoint. A stored pair must not select a later price. Poke and observer checkpoints are implemented in the clock-read amendment above.
 

@@ -31,7 +31,10 @@ fn sale() -> FactorySale {
 fn creation() -> CreateSaleRequest {
     CreateSaleRequest {
         buy_policy: curve_core::BuyPolicy::Open,
+        pause_policy: curve_core::PausePolicy::Disabled,
+        ending_policy: curve_core::EndingPolicy::Depletion,
         trade_mode: factory_core::TradeMode::BuyAndSell,
+        sell_fee_bps: 0,
         graduation_hook: None,
         name: "E2E token".into(),
         uri: "https://example.invalid/e2e-token.json".into(),
@@ -48,8 +51,10 @@ fn creation() -> CreateSaleRequest {
 fn pool_snapshot() -> (curve_core::PoolAccount, curve_core::Config) {
     let pool = curve_core::PoolAccount {
         buy_policy: curve_core::BuyPolicy::Open,
+        trade_control: curve_core::TradeControl::Unrestricted,
         allowed_input_token: None,
         funded: true,
+        closure_observed: false,
         namespace: AccountId::new([0xAD; 32]),
         token0_definition_id: AccountId::new([2; 32]),
         token1_definition_id: AccountId::new([5; 32]),
@@ -60,6 +65,8 @@ fn pool_snapshot() -> (curve_core::PoolAccount, curve_core::Config) {
             token1_amount: 100,
             virtual_reserve0: 1_000,
             virtual_reserve1: 100,
+            ending_policy: curve_core::EndingPolicy::Manual,
+            sell_fee_bps: 0,
             close_timestamp: None,
             close_on_depletion: None,
         })
@@ -90,7 +97,10 @@ fn valid_factory_state(sale: FactorySale) -> FactoryState {
         };
     }
     field!(curve_core::BuyPolicy::Open);
+    field!(curve_core::PausePolicy::Disabled);
+    field!(curve_core::EndingPolicy::Depletion);
     field!(factory_core::TradeMode::BuyAndSell);
+    field!(0u16);
     field!(None::<factory_core::GraduationHook>);
     field!(CreationStage::Active);
     field!(SettlementStage::Ready);
@@ -265,6 +275,11 @@ fn fixed_creation() -> factory_core::FixedPriceInputs {
             sale_policy_id: *pool.value(),
             root: [42; 32],
         }),
+        pause_policy: curve_core::PausePolicy::Disabled,
+        ending_policy: curve_core::EndingPolicy::Either,
+        trade_mode: super::TradeMode::BuyOnly,
+        sell_fee_bps: 0,
+        graduation_hook: None,
         namespace: sale.namespace,
         launch_salt: sale.launch_salt,
         name: "Sale".into(),
@@ -426,6 +441,11 @@ fn weighted_creation() -> factory_core::WeightedInputs {
     let fixed = fixed_creation();
     factory_core::WeightedInputs {
         buy_policy: fixed.buy_policy,
+        pause_policy: curve_core::PausePolicy::AuthorityControlled,
+        ending_policy: curve_core::EndingPolicy::Scheduled,
+        trade_mode: super::TradeMode::BuyOnly,
+        sell_fee_bps: 0,
+        graduation_hook: None,
         namespace: fixed.namespace,
         launch_salt: fixed.launch_salt,
         name: fixed.name,
@@ -759,8 +779,14 @@ fn graduation_admits_adapter_custody_and_its_payout_holdings_without_authorizati
         program_id: adapter,
         configuration: vec![],
     });
-    let call =
-        super::build_graduation_invocation(sale(), &state, AccountId::new([10; 32]), 0).unwrap();
+    let call = super::build_graduation_invocation(
+        super::GraduationTarget::Curve {
+            sale: sale(),
+            state: &state,
+        },
+        AccountId::new([10; 32]),
+    )
+    .unwrap();
     let a = super::factory_pool_addresses(sale());
     let custody = factory_core::compute_graduation_pda(adapter, a.factory);
     for account in [
@@ -964,7 +990,6 @@ fn creator_claim_uses_factory_escrow_and_derived_recipient_ata() {
 fn saved_settlement_stages_identify_completed_manual_work() {
     for (stage, complete) in [
         (SettlementStage::Complete, true),
-        (SettlementStage::NoPayout, true),
         (SettlementStage::Graduated, true),
         (SettlementStage::Unstarted, false),
         (SettlementStage::Ready, false),
@@ -1315,8 +1340,14 @@ fn graduation_builder_uses_typed_callback_and_adapter_custody() {
         program_id: adapter,
         configuration: vec![7, 11],
     });
-    let call =
-        super::build_graduation_invocation(sale(), &state, AccountId::new([4; 32]), 0).unwrap();
+    let call = super::build_graduation_invocation(
+        super::GraduationTarget::Curve {
+            sale: sale(),
+            state: &state,
+        },
+        AccountId::new([4; 32]),
+    )
+    .unwrap();
     assert!(call.signer_accounts.is_empty());
     assert!(call.actors.contains(&Actor::new(
         factory_core::compute_graduation_pda(
@@ -1327,7 +1358,7 @@ fn graduation_builder_uses_typed_callback_and_adapter_custody() {
     )));
     assert_eq!(
         call.instruction,
-        factory_core::Message::ExecuteGraduationHook { now: 0 }
+        factory_core::Message::ExecuteGraduationHook { creator_hint: None }
     );
 }
 
@@ -1481,5 +1512,1095 @@ fn creation_and_continuations_admit_the_factory_curve_relay_without_authorizatio
                     && seed == factory_core::compute_factory_seed(selected.namespace, selected.launch_salt)
         ));
         assert_eq!(call.message_bytes().unwrap()[0], u8::from(stage.is_some()));
+    }
+}
+
+#[test]
+fn pause_builders_keep_current_role_signers_and_factory_relay_admission() {
+    let creator = AccountId::new([9; 32]);
+    let curve = super::build_set_factory_paused_invocation(sale(), creator, true);
+    let lbp = super::build_set_lbp_paused_invocation(lbp_sale(), creator, true);
+    for (call, namespace, salt, factory_program, engine, role) in [
+        (
+            &curve,
+            sale().namespace,
+            sale().launch_salt,
+            sale().factory_program_id,
+            sale().curve_program_id,
+            factory_core::compute_curve_creator_role_pda(
+                sale().namespace,
+                sale().factory_program_id,
+                sale().launch_salt,
+            ),
+        ),
+        (
+            &lbp,
+            lbp_sale().namespace,
+            lbp_sale().launch_salt,
+            lbp_sale().factory_program_id,
+            lbp_sale().lbp_program_id,
+            factory_core::compute_creator_role_pda(
+                lbp_sale().namespace,
+                lbp_sale().factory_program_id,
+                lbp_sale().launch_salt,
+            ),
+        ),
+    ] {
+        let factory = factory_core::compute_factory_pda(namespace, factory_program, salt);
+        assert_eq!(call.destination, Actor::new(factory, factory_program));
+        assert_eq!(call.signer_accounts, [creator]);
+        assert_eq!(
+            call.instruction,
+            factory_core::Message::SetPaused {
+                creator,
+                paused: true
+            }
+        );
+        assert!(call.actors.contains(&Actor::new(
+            creator,
+            curve_core::AUTHORITY_PROGRAM_ACCOUNT_ID
+        )));
+        for actor in [
+            Actor::new(factory, engine),
+            Actor::new(role, curve_core::AUTHORITY_PROGRAM_ACCOUNT_ID),
+        ] {
+            assert!(
+                call.account_mentions()
+                    .iter()
+                    .any(|mention| mention.actor() == actor
+                        && !mention.authorizes
+                        && matches!(mention.identity, wallet::AccountIdentity::PublicPda { .. }))
+            );
+        }
+    }
+}
+
+#[test]
+fn direct_pause_builder_uses_owner_role_and_signed_curve_envelope() {
+    let owner = AccountId::new([9; 32]);
+    let pool = AccountId::new([10; 32]);
+    let call = super::build_set_curve_paused_invocation(
+        sale().namespace,
+        CURVE_PROGRAM_ID,
+        pool,
+        owner,
+        false,
+    );
+    assert_eq!(call.destination, Actor::new(owner, CURVE_PROGRAM_ID));
+    assert_eq!(call.signer_accounts, [owner]);
+    assert_eq!(
+        call.instruction,
+        curve_core::Message::Execute {
+            pool,
+            instruction: Box::new(curve_core::Message::SetPaused { paused: false })
+        }
+    );
+    let role = curve_core::compute_pool_owner_role(sale().namespace, pool, CURVE_PROGRAM_ID);
+    assert!(call.account_mentions().iter().any(|mention| mention.actor()
+        == Actor::new(role, curve_core::AUTHORITY_PROGRAM_ACCOUNT_ID)
+        && !mention.authorizes
+        && matches!(mention.identity, wallet::AccountIdentity::PublicPda { .. })));
+    assert!(call.actors.contains(&super::clock_actor()));
+}
+
+#[test]
+fn creation_preserves_pause_policy_and_resumption_rejects_changes_at_every_stage() {
+    for policy in [
+        curve_core::PausePolicy::Disabled,
+        curve_core::PausePolicy::AuthorityControlled,
+    ] {
+        let mut request = creation();
+        request.pause_policy = policy;
+        let call =
+            build_create_sale_invocation(sale(), AccountId::new([9; 32]), request.clone()).unwrap();
+        assert!(
+            matches!(call.instruction, factory_core::Message::CreateFactoryPool { pause_policy, .. } if pause_policy == policy)
+        );
+        for stage in [
+            CreationStage::Minted,
+            CreationStage::Allocated,
+            CreationStage::PoolPrepared,
+            CreationStage::Active,
+        ] {
+            let mut state = valid_factory_state(sale());
+            state.creation_stage = stage;
+            state.pause_policy = policy;
+            assert!(
+                super::next_creation_invocation(
+                    sale(),
+                    AccountId::new([9; 32]),
+                    request.clone(),
+                    Some(&state)
+                )
+                .is_ok()
+            );
+            state.pause_policy = match policy {
+                curve_core::PausePolicy::Disabled => curve_core::PausePolicy::AuthorityControlled,
+                curve_core::PausePolicy::AuthorityControlled => curve_core::PausePolicy::Disabled,
+            };
+            assert!(matches!(
+                super::next_creation_invocation(
+                    sale(),
+                    AccountId::new([9; 32]),
+                    request.clone(),
+                    Some(&state)
+                ),
+                Err(ClientError::LaunchParametersMismatch)
+            ));
+        }
+    }
+}
+
+#[test]
+fn paused_curve_quotes_reject_both_buy_forms_and_sells() {
+    let (mut pool, config) = pool_snapshot();
+    pool.trade_control = curve_core::TradeControl::Paused;
+    for result in [
+        quote_buy(&pool, &config, 1, 1),
+        quote_buy_with_collateral(&pool, &config, 1, 1),
+        quote_sell(&pool, &config, 1, 1),
+    ] {
+        assert!(matches!(result, Err(ClientError::PoolPaused)));
+    }
+}
+
+#[test]
+fn creation_accepts_only_factory_ending_windows() {
+    use curve_core::EndingPolicy::{Depletion, Either, Manual, Scheduled};
+    for ending in [Manual, Scheduled, Depletion, Either] {
+        for end in [None, Some(100)] {
+            let mut request = creation();
+            request.ending_policy = ending;
+            request.end_timestamp = end;
+            let result = build_create_sale_invocation(sale(), AccountId::new([9; 32]), request);
+            let supported = matches!(
+                (ending, end),
+                (Depletion, None) | (Scheduled | Either, Some(_))
+            );
+            if supported {
+                assert!(matches!(
+                    result.unwrap().instruction,
+                    factory_core::Message::CreateFactoryPool { ending_policy, end_timestamp, .. }
+                        if ending_policy == ending && end_timestamp == end
+                ));
+            } else {
+                assert!(matches!(
+                    result,
+                    Err(ClientError::FactoryPolicy(
+                        factory_core::Error::InvalidTerms
+                    ))
+                ));
+            }
+        }
+    }
+}
+
+#[test]
+fn creation_resume_rejects_ending_and_deadline_replacements_at_every_stage() {
+    use curve_core::EndingPolicy::{Depletion, Either, Scheduled};
+    for stage in [
+        CreationStage::Minted,
+        CreationStage::Allocated,
+        CreationStage::PoolPrepared,
+        CreationStage::Active,
+    ] {
+        for (ending, end) in [
+            (Depletion, None),
+            (Scheduled, Some(100)),
+            (Either, Some(100)),
+        ] {
+            let mut state = valid_factory_state(sale());
+            state.creation_stage = stage;
+            state.ending_policy = ending;
+            state.end_timestamp = end;
+            let mut request = creation();
+            request.ending_policy = ending;
+            request.end_timestamp = end;
+            assert!(
+                super::next_creation_invocation(
+                    sale(),
+                    AccountId::new([9; 32]),
+                    request.clone(),
+                    Some(&state)
+                )
+                .is_ok()
+            );
+            for (replacement, deadline) in [
+                (Depletion, None),
+                (Scheduled, Some(100)),
+                (Either, Some(100)),
+                (ending, Some(101)),
+            ] {
+                if (replacement, deadline) == (ending, end) {
+                    continue;
+                }
+                let mut changed = request.clone();
+                changed.ending_policy = replacement;
+                changed.end_timestamp = deadline;
+                assert!(matches!(
+                    super::next_creation_invocation(
+                        sale(),
+                        AccountId::new([9; 32]),
+                        changed,
+                        Some(&state)
+                    ),
+                    Err(ClientError::LaunchParametersMismatch)
+                ));
+            }
+        }
+    }
+}
+
+#[test]
+fn factory_state_rejects_invalid_ending_windows() {
+    use curve_core::EndingPolicy::{Depletion, Either, Manual, Scheduled};
+    for (ending, end) in [
+        (Manual, None),
+        (Manual, Some(100)),
+        (Scheduled, None),
+        (Either, None),
+        (Depletion, Some(100)),
+    ] {
+        let mut state = valid_factory_state(sale());
+        state.ending_policy = ending;
+        state.end_timestamp = end;
+        assert!(matches!(
+            super::validate_factory_state(sale(), &state),
+            Err(ClientError::FactorySaleMismatch)
+        ));
+    }
+}
+
+fn matching_factory_pool(state: &FactoryState) -> curve_core::PoolAccount {
+    let (mut pool, _) = pool_snapshot();
+    pool.namespace = state.namespace;
+    pool.token0_definition_id = state.token_definition_id;
+    pool.token1_definition_id = state.collateral_definition_id;
+    pool.owner = super::factory_pool_addresses(sale()).factory;
+    pool.owner_program = Some((
+        sale().factory_program_id,
+        *factory_core::compute_factory_seed(state.namespace, state.launch_salt).as_bytes(),
+    ));
+    pool.pool.virtual_reserve0 = state.virtual_token_reserve;
+    pool.pool.virtual_reserve1 = state.virtual_collateral_reserve;
+    pool.pool.initial_k = state.virtual_token_reserve * state.virtual_collateral_reserve;
+    pool.pool.k = pool.pool.initial_k;
+    pool.pool.sell_fee_bps = state.sell_fee_bps;
+    pool.pool.ending_policy = state.ending_policy;
+    pool.pool.close_timestamp = state.end_timestamp;
+    pool.pool.close_on_depletion = match state.ending_policy {
+        curve_core::EndingPolicy::Scheduled => None,
+        _ => Some(pool::TokenSide::Token0),
+    };
+    pool
+}
+
+#[test]
+fn loaded_factory_pool_checks_all_immutable_policy_and_pricing_terms() {
+    let state = valid_factory_state(sale());
+    let pool = matching_factory_pool(&state);
+    super::validate_factory_pool(sale(), &state, &pool).unwrap();
+    for change in 1..10 {
+        let mut changed = pool.clone();
+        match change {
+            1 => changed.pool.ending_policy = curve_core::EndingPolicy::Manual,
+            2 => changed.pool.close_timestamp = Some(100),
+            3 => changed.pool.close_on_depletion = Some(pool::TokenSide::Token1),
+            4 => changed.allowed_input_token = Some(pool::TokenSide::Token1),
+            5 => changed.trade_control = curve_core::TradeControl::Running,
+            6 => changed.pool.initial_k += 1,
+            7 => changed.owner_program = None,
+            8 => changed.token0_definition_id = AccountId::new([99; 32]),
+            9 => changed.buy_policy = fixed_creation().buy_policy,
+            _ => unreachable!(),
+        }
+        assert!(
+            matches!(
+                super::validate_factory_pool(sale(), &state, &changed),
+                Err(ClientError::FactorySaleMismatch)
+            ),
+            "change {change}"
+        );
+    }
+    let mut paused_state = state.clone();
+    paused_state.pause_policy = curve_core::PausePolicy::AuthorityControlled;
+    let mut paused_pool = pool.clone();
+    paused_pool.trade_control = curve_core::TradeControl::Paused;
+    super::validate_factory_pool(sale(), &paused_state, &paused_pool).unwrap();
+    let mut traded_pool = pool;
+    traded_pool.pool.virtual_reserve0 -= 1;
+    traded_pool.pool.virtual_reserve1 += 1;
+    traded_pool.pool.real_reserve0 -= 1;
+    traded_pool.pool.real_reserve1 += 1;
+    super::validate_factory_pool(sale(), &state, &traded_pool).unwrap();
+}
+
+#[test]
+fn malformed_policy_quotes_keep_the_quote_error_label_and_source() {
+    use std::error::Error;
+    let (original, config) = pool_snapshot();
+    for change in 0..4 {
+        let mut pool = original.clone();
+        match change {
+            0 => pool.pool.ending_policy = curve_core::EndingPolicy::Either,
+            1 => pool.pool.ending_policy = curve_core::EndingPolicy::Scheduled,
+            2 => pool.pool.ending_policy = curve_core::EndingPolicy::Depletion,
+            3 => pool.pool.close_timestamp = Some(100),
+            _ => unreachable!(),
+        }
+        let before = pool.clone();
+        for (error, label) in [
+            (
+                super::quote_buy(&pool, &config, 1, 0).unwrap_err(),
+                "quote_buy",
+            ),
+            (
+                super::quote_sell(&pool, &config, 1, 0).unwrap_err(),
+                "quote_sell",
+            ),
+            (
+                super::quote_buy_with_collateral(&pool, &config, 1, 0).unwrap_err(),
+                "quote_buy_with_collateral",
+            ),
+        ] {
+            let actual: &'static str = (&error).into();
+            assert_eq!(actual, label);
+            assert!(matches!(
+                error.source().unwrap().downcast_ref::<pool::SwapError>(),
+                Some(pool::SwapError::InvalidPolicy)
+            ));
+        }
+        assert_eq!(pool, before);
+    }
+}
+
+#[test]
+fn loaded_factory_pool_matches_each_selected_ending() {
+    use curve_core::EndingPolicy::{Depletion, Either, Scheduled};
+    for (ending, end) in [
+        (Depletion, None),
+        (Scheduled, Some(100)),
+        (Either, Some(100)),
+    ] {
+        let mut state = valid_factory_state(sale());
+        state.ending_policy = ending;
+        state.end_timestamp = end;
+        let pool = matching_factory_pool(&state);
+        super::validate_factory_pool(sale(), &state, &pool).unwrap();
+        for side in [
+            None,
+            Some(pool::TokenSide::Token0),
+            Some(pool::TokenSide::Token1),
+        ] {
+            let mut changed = pool.clone();
+            changed.pool.close_on_depletion = side;
+            assert_eq!(
+                super::validate_factory_pool(sale(), &state, &changed).is_ok(),
+                side == pool.pool.close_on_depletion
+            );
+        }
+        let mut changed = pool;
+        changed.pool.ending_policy = if ending == Either { Scheduled } else { Either };
+        assert!(matches!(
+            super::validate_factory_pool(sale(), &state, &changed),
+            Err(ClientError::FactorySaleMismatch)
+        ));
+    }
+}
+
+fn valid_lbp_factory_state(weighted: bool) -> factory_core::LbpLaunchState {
+    let sale = lbp_sale();
+    let a = super::lbp_addresses(sale);
+    let mut bytes = Vec::new();
+    macro_rules! field {
+        ($value:expr) => {
+            bytes.extend(borsh::to_vec(&$value).unwrap());
+        };
+    }
+    field!(curve_core::BuyPolicy::Open);
+    field!(curve_core::PausePolicy::Disabled);
+    field!(if weighted {
+        curve_core::EndingPolicy::Scheduled
+    } else {
+        curve_core::EndingPolicy::Either
+    });
+    field!(super::TradeMode::BuyOnly);
+    field!(0u16);
+    field!(Some(factory_core::GraduationHook {
+        program_id: AccountId::new([19; 32]),
+        configuration: vec![7, 11]
+    }));
+    field!(if weighted { *b"LZWGLAUN" } else { *b"LZFXLAUN" });
+    field!(4u16);
+    field!(factory_core::compute_creator_role_pda(
+        sale.namespace,
+        sale.factory_program_id,
+        sale.launch_salt
+    ));
+    field!(if weighted {
+        factory_core::LbpSetupMode::Weighted {
+            collateral_seed: 100,
+            token_weight_start: lbp_core::WEIGHT_TOTAL / 2 + 1,
+            token_weight_end: lbp_core::WEIGHT_TOTAL / 2 - 1,
+        }
+    } else {
+        factory_core::LbpSetupMode::FixedPrice
+    });
+    field!(factory_core::LbpCreationStage::Complete);
+    field!(lbp_core::SettlementProgress::Unselected);
+    field!(sale.namespace);
+    field!(sale.launch_salt);
+    field!(a.token_definition);
+    field!(sale.collateral_definition);
+    field!(a.creator_escrow);
+    field!(a.pool);
+    field!(sale.namespace_program_id);
+    field!(sale.lbp_program_id);
+    field!(800u128);
+    field!(200u128);
+    field!(1_000u128);
+    field!(if weighted {
+        lbp_core::FixedPrice {
+            collateral_units: 0,
+            token_units: 0,
+        }
+    } else {
+        lbp_core::FixedPrice {
+            collateral_units: 25,
+            token_units: 10,
+        }
+    });
+    field!(9u64);
+    field!(Some(100u64));
+    field!(factory_core::CreatorAllocationRelease::AfterEnd);
+    field!(false);
+    field!("Sale".to_owned());
+    field!("ipfs://sale".to_owned());
+    field!(None::<u8>);
+    field!(None::<u8>);
+    factory_core::LbpLaunchState::decode(&bytes).unwrap()
+}
+
+#[test]
+fn lbp_graduation_admits_setup_callback_and_custody_without_creator_authorization() {
+    let sale = lbp_sale();
+    let a = super::lbp_addresses(sale);
+    for weighted in [false, true] {
+        let state = valid_lbp_factory_state(weighted);
+        for creator_hint in [AccountId::new([21; 32]), AccountId::new([22; 32])] {
+            let treasury = AccountId::new([23; 32]);
+            let call = super::build_graduation_invocation(
+                super::GraduationTarget::Lbp {
+                    sale,
+                    state: &state,
+                    creator_hint,
+                },
+                treasury,
+            )
+            .unwrap();
+            assert_eq!(
+                call.destination,
+                Actor::new(a.factory, sale.factory_program_id)
+            );
+            assert!(call.signer_accounts.is_empty());
+            assert_eq!(
+                call.instruction,
+                factory_core::Message::ExecuteGraduationHook {
+                    creator_hint: Some(creator_hint)
+                }
+            );
+            assert!(
+                call.account_mentions()
+                    .iter()
+                    .all(|mention| !mention.authorizes)
+            );
+            let custody_program = state.graduation_hook.as_ref().unwrap().program_id;
+            let custody = factory_core::compute_graduation_pda(custody_program, a.factory);
+            for actor in [
+                Actor::new(
+                    state.creator_role_id,
+                    curve_core::AUTHORITY_PROGRAM_ACCOUNT_ID,
+                ),
+                Actor::new(creator_hint, curve_core::AUTHORITY_PROGRAM_ACCOUNT_ID),
+                Actor::new(a.factory, sale.lbp_program_id),
+                Actor::new(a.pool, sale.lbp_program_id),
+                Actor::new(custody, custody_program),
+                Actor::new(
+                    curve_core::compute_config_pda(sale.namespace, sale.namespace_program_id),
+                    sale.namespace_program_id,
+                ),
+                super::clock_actor(),
+                super::token_actor(a.token_definition),
+                super::token_actor(sale.collateral_definition),
+            ] {
+                assert!(call.actors.contains(&actor), "missing {actor:?}");
+            }
+            let mentions = call.account_mentions();
+            for owner in [
+                a.factory,
+                a.pool,
+                a.creator_escrow,
+                creator_hint,
+                custody,
+                treasury,
+            ] {
+                for definition in [a.token_definition, sale.collateral_definition] {
+                    let holding =
+                        super::token_actor(super::associated_token_account(owner, definition));
+                    assert!(mentions.iter().any(|m| m.actor() == holding
+                        && !m.authorizes
+                        && matches!(m.identity, wallet::AccountIdentity::PublicPda { .. })));
+                }
+            }
+            assert_eq!(
+                call.actors.len(),
+                call.actors
+                    .iter()
+                    .collect::<std::collections::HashSet<_>>()
+                    .len()
+            );
+        }
+    }
+}
+
+#[test]
+fn lbp_graduation_rejects_foreign_identity_and_requires_a_saved_hook() {
+    let sale = lbp_sale();
+    let hint = AccountId::new([21; 32]);
+    let treasury = AccountId::new([23; 32]);
+    for weighted in [false, true] {
+        let state = valid_lbp_factory_state(weighted);
+        for index in 0..9 {
+            let mut bad = state.clone();
+            let foreign = AccountId::new([99; 32]);
+            match index {
+                0 => bad.namespace = foreign,
+                1 => bad.launch_salt = [99; 32],
+                2 => bad.namespace_program_id = foreign,
+                3 => bad.lbp_program_id = foreign,
+                4 => bad.collateral_definition_id = foreign,
+                5 => bad.token_definition_id = foreign,
+                6 => bad.creator_escrow_id = foreign,
+                7 => bad.pool_id = foreign,
+                _ => bad.creator_role_id = foreign,
+            }
+            assert!(matches!(
+                super::build_graduation_invocation(
+                    super::GraduationTarget::Lbp {
+                        sale,
+                        state: &bad,
+                        creator_hint: hint,
+                    },
+                    treasury
+                ),
+                Err(ClientError::FactorySaleMismatch)
+            ));
+        }
+        let mut no_hook = state;
+        no_hook.graduation_hook = None;
+        assert!(matches!(
+            super::build_graduation_invocation(
+                super::GraduationTarget::Lbp {
+                    sale,
+                    state: &no_hook,
+                    creator_hint: hint,
+                },
+                treasury
+            ),
+            Err(ClientError::GraduationNotConfigured)
+        ));
+    }
+}
+
+#[test]
+fn typed_lbp_creation_keeps_the_complete_immutable_hook() {
+    let hook = factory_core::GraduationHook {
+        program_id: AccountId::new([19; 32]),
+        configuration: vec![3, 7, 11],
+    };
+    let mut fixed = fixed_creation();
+    fixed.graduation_hook = Some(hook.clone());
+    let fixed_call =
+        super::build_create_fixed_price_invocation(lbp_sale().factory_program_id, fixed.clone());
+    assert_eq!(
+        fixed_call.instruction,
+        factory_core::Message::CreateFixedPriceLbp { inputs: fixed }
+    );
+    let mut weighted = weighted_creation();
+    weighted.graduation_hook = Some(hook);
+    let weighted_call =
+        super::build_create_weighted_invocation(lbp_sale().factory_program_id, weighted.clone());
+    assert_eq!(
+        weighted_call.instruction,
+        factory_core::Message::CreateWeightedLbp { inputs: weighted }
+    );
+}
+
+#[test]
+fn curve_resume_rejects_hook_program_configuration_and_presence_changes_at_each_stage() {
+    let hook = factory_core::GraduationHook {
+        program_id: AccountId::new([19; 32]),
+        configuration: vec![3, 7],
+    };
+    for stage in [
+        CreationStage::Minted,
+        CreationStage::Allocated,
+        CreationStage::PoolPrepared,
+        CreationStage::Active,
+    ] {
+        let mut state = valid_factory_state(sale());
+        state.creation_stage = stage;
+        state.graduation_hook = Some(hook.clone());
+        let mut request = creation();
+        request.graduation_hook = Some(hook.clone());
+        assert!(
+            super::next_creation_invocation(
+                sale(),
+                AccountId::new([9; 32]),
+                request.clone(),
+                Some(&state)
+            )
+            .is_ok()
+        );
+        for changed in [
+            None,
+            Some(factory_core::GraduationHook {
+                program_id: AccountId::new([20; 32]),
+                ..hook.clone()
+            }),
+            Some(factory_core::GraduationHook {
+                configuration: vec![3, 8],
+                ..hook.clone()
+            }),
+        ] {
+            request.graduation_hook = changed;
+            assert!(matches!(
+                super::next_creation_invocation(
+                    sale(),
+                    AccountId::new([9; 32]),
+                    request.clone(),
+                    Some(&state)
+                ),
+                Err(ClientError::LaunchParametersMismatch)
+            ));
+        }
+    }
+}
+
+fn lbp_pool_snapshot(weighted: bool) -> (lbp_core::PoolAccount, curve_core::Config) {
+    let sale = lbp_sale();
+    let a = super::lbp_addresses(sale);
+    let mode = if weighted {
+        lbp_core::PoolMode::Weighted {
+            token_weight_start: lbp_core::WEIGHT_TOTAL / 2,
+            token_weight_end: lbp_core::WEIGHT_TOTAL / 2,
+            collateral_seed: 100,
+            pricing_collateral: 1_000,
+            checkpoint_time: 9,
+            checkpoint_token_weight: lbp_core::WEIGHT_TOTAL / 2,
+        }
+    } else {
+        lbp_core::PoolMode::FixedPrice
+    };
+    let mut bytes = borsh::to_vec(&(
+        curve_core::BuyPolicy::Open,
+        curve_core::TradeControl::Unrestricted,
+        curve_core::EndingPolicy::Scheduled,
+        super::TradeMode::BuyAndSell,
+        0u16,
+        None::<Actor>,
+        mode,
+        (true, false),
+        (
+            sale.namespace,
+            sale.namespace_program_id,
+            a.factory,
+            sale.factory_program_id,
+            *factory_core::compute_factory_seed(sale.namespace, sale.launch_salt).as_bytes(),
+            a.token_definition,
+            sale.collateral_definition,
+        ),
+        (800u128, 700u128, 200u128),
+        lbp_core::FixedPrice {
+            collateral_units: 2,
+            token_units: 1,
+        },
+        (
+            9u64,
+            Some(100u64),
+            lbp_core::CreatorAllocationRelease::AfterEnd,
+        ),
+        (
+            1_000u128,
+            0u128,
+            lbp_core::SettlementProgress::Unselected,
+            !weighted,
+        ),
+    ))
+    .unwrap();
+    bytes.push(0);
+    let pool = lbp_core::PoolAccount::decode(&bytes).unwrap();
+    let (_, mut config) = pool_snapshot();
+    config.protocol_fee_bps = 1_000;
+    (pool, config)
+}
+
+#[test]
+fn lbp_quotes_reuse_core_results_for_each_engine_and_trade_form() {
+    use super::LbpQuoteRequest::*;
+    for weighted in [false, true] {
+        let (pool, config) = lbp_pool_snapshot(weighted);
+        for request in [
+            BuyExactInput {
+                collateral_in: 20,
+                min_tokens_out: 1,
+            },
+            BuyExactOutput {
+                tokens_out: 5,
+                max_collateral_in: 100,
+            },
+            SellExactInput {
+                tokens_in: 10,
+                min_collateral_out: 1,
+            },
+        ] {
+            let expected =
+                lbp_core::quote_trade(&pool, request, config.protocol_fee_bps, 50).unwrap();
+            let before = pool.clone();
+            assert_eq!(
+                super::quote_lbp_trade(lbp_sale(), &pool, &config, request, 50).unwrap(),
+                expected
+            );
+            assert_eq!(pool, before);
+        }
+    }
+}
+
+#[test]
+fn lbp_quotes_reject_each_pool_identity_mismatch_and_wrong_namespace_config() {
+    let (pool, config) = lbp_pool_snapshot(false);
+    let request = super::LbpQuoteRequest::SellExactInput {
+        tokens_in: 10,
+        min_collateral_out: 0,
+    };
+    for field in 0..7 {
+        let mut wrong = pool.clone();
+        let other = AccountId::new([99; 32]);
+        match field {
+            0 => wrong.namespace = other,
+            1 => wrong.namespace_program_id = other,
+            2 => wrong.factory_owner = other,
+            3 => wrong.factory_program_id = other,
+            4 => wrong.factory_seed = [99; 32],
+            5 => wrong.token_definition_id = other,
+            6 => wrong.collateral_definition_id = other,
+            _ => unreachable!(),
+        }
+        assert!(matches!(
+            super::quote_lbp_trade(lbp_sale(), &wrong, &config, request, 50),
+            Err(ClientError::FactorySaleMismatch)
+        ));
+    }
+    let mut wrong = config;
+    wrong.namespace = AccountId::new([99; 32]);
+    assert!(matches!(
+        super::quote_lbp_trade(lbp_sale(), &pool, &wrong, request, 50),
+        Err(ClientError::PoolSelectionMismatch)
+    ));
+}
+
+#[test]
+fn lbp_quotes_check_live_freeze_and_preserve_core_errors() {
+    let request = super::LbpQuoteRequest::SellExactInput {
+        tokens_in: 10,
+        min_collateral_out: 0,
+    };
+    for weighted in [false, true] {
+        let (mut pool, mut config) = lbp_pool_snapshot(weighted);
+        config.emergency.is_frozen = true;
+        assert!(matches!(
+            super::quote_lbp_trade(lbp_sale(), &pool, &config, request, 50),
+            Err(ClientError::NamespaceFrozen)
+        ));
+        config.emergency.is_frozen = false;
+        pool.trade_mode = super::TradeMode::BuyOnly;
+        assert!(matches!(
+            super::quote_lbp_trade(lbp_sale(), &pool, &config, request, 50),
+            Err(ClientError::QuoteLbpTrade(
+                lbp_core::Error::TradeDirectionUnsupported
+            ))
+        ));
+        pool.trade_mode = super::TradeMode::BuyAndSell;
+        pool.remaining_inventory = 0;
+        pool.ending_policy = super::EndingPolicy::Either;
+        assert!(matches!(
+            super::quote_lbp_trade(lbp_sale(), &pool, &config, request, 50),
+            Err(ClientError::QuoteLbpTrade(lbp_core::Error::Closed))
+        ));
+    }
+}
+
+#[test]
+fn lbp_sell_quotes_apply_net_floor_and_protect_weighted_seed() {
+    let (pool, config) = lbp_pool_snapshot(false);
+    let request = super::LbpQuoteRequest::SellExactInput {
+        tokens_in: 10,
+        min_collateral_out: 18,
+    };
+    let quote = super::quote_lbp_trade(lbp_sale(), &pool, &config, request, 50).unwrap();
+    assert_eq!(
+        (
+            quote.gross_collateral,
+            quote.net_collateral,
+            quote.protocol_fee,
+            quote.amount_out
+        ),
+        (20, 18, 2, 18)
+    );
+    let too_high = super::LbpQuoteRequest::SellExactInput {
+        tokens_in: 10,
+        min_collateral_out: 19,
+    };
+    assert!(super::quote_lbp_trade(lbp_sale(), &pool, &config, too_high, 50).is_err());
+    let (mut pool, config) = lbp_pool_snapshot(true);
+    pool.recorded_collateral = 100;
+    if let lbp_core::PoolMode::Weighted {
+        pricing_collateral, ..
+    } = &mut pool.mode
+    {
+        *pricing_collateral = 100;
+    }
+    assert!(super::quote_lbp_trade(lbp_sale(), &pool, &config, request, 50).is_err());
+}
+
+#[test]
+fn lbp_sell_builders_keep_participant_authority_reverse_holdings_and_clock() {
+    let sale = lbp_sale();
+    let participant = AccountId::new([9; 32]);
+    let a = super::lbp_addresses(sale);
+    let terms = ExactInputTradeTerms {
+        amount_in: 10,
+        min_amount_out: 18,
+    };
+    for weighted in [false, true] {
+        let call = if weighted {
+            super::build_weighted_sell_invocation(sale, participant, terms)
+        } else {
+            super::build_fixed_price_sell_invocation(sale, participant, terms, 50)
+        };
+        assert_eq!(
+            call.destination,
+            Actor::new(participant, sale.lbp_program_id)
+        );
+        assert_eq!(call.signer_accounts, vec![participant]);
+        let lbp_core::Message::Execute { pool, instruction } = &call.instruction else {
+            panic!("expected Execute");
+        };
+        assert_eq!(*pool, a.pool);
+        assert_eq!(
+            **instruction,
+            if weighted {
+                lbp_core::Message::SellWeightedExactInput {
+                    amount_in: 10,
+                    min_amount_out: 18,
+                }
+            } else {
+                lbp_core::Message::SellExactInput {
+                    amount_in: 10,
+                    min_amount_out: 18,
+                    now: 50,
+                }
+            }
+        );
+        assert_eq!(
+            call.actors.contains(&lbp_core::pricing_clock::actor()),
+            weighted
+        );
+        for owner in [participant, a.pool] {
+            for definition in [a.token_definition, sale.collateral_definition] {
+                assert!(call.actors.contains(&super::token_actor(
+                    super::associated_token_account(owner, definition)
+                )));
+                assert!(call.pda_accounts.contains(&(
+                    curve_core::TOKEN_PROGRAM_ACCOUNT_ID,
+                    lez_compat_core::token::holding_seed(owner, definition)
+                )));
+            }
+        }
+        assert!(
+            !call
+                .actors
+                .iter()
+                .any(|a| a.program_account_id == curve_core::AUTHORITY_PROGRAM_ACCOUNT_ID)
+        );
+    }
+}
+
+#[test]
+fn retained_sell_fee_is_forwarded_and_immutable_at_each_creation_stage() {
+    let mut request = creation();
+    request.sell_fee_bps = 250;
+    let call =
+        build_create_sale_invocation(sale(), AccountId::new([9; 32]), request.clone()).unwrap();
+    assert!(matches!(
+        call.instruction,
+        factory_core::Message::CreateFactoryPool {
+            sell_fee_bps: 250,
+            ..
+        }
+    ));
+    for stage in [
+        CreationStage::Minted,
+        CreationStage::Allocated,
+        CreationStage::PoolPrepared,
+        CreationStage::Active,
+    ] {
+        let mut state = valid_factory_state(sale());
+        state.creation_stage = stage;
+        state.sell_fee_bps = 250;
+        assert!(
+            super::next_creation_invocation(
+                sale(),
+                AccountId::new([9; 32]),
+                request.clone(),
+                Some(&state)
+            )
+            .is_ok()
+        );
+        for replacement in [0, 251] {
+            let mut changed = request.clone();
+            changed.sell_fee_bps = replacement;
+            assert!(matches!(
+                super::next_creation_invocation(
+                    sale(),
+                    AccountId::new([9; 32]),
+                    changed,
+                    Some(&state)
+                ),
+                Err(ClientError::LaunchParametersMismatch)
+            ));
+        }
+    }
+    for rate in [10_000, u16::MAX] {
+        request.sell_fee_bps = rate;
+        assert!(matches!(
+            build_create_sale_invocation(sale(), AccountId::new([9; 32]), request.clone()),
+            Err(ClientError::FactoryPolicy(
+                factory_core::Error::InvalidTerms
+            ))
+        ));
+        let mut state = valid_factory_state(sale());
+        state.sell_fee_bps = rate;
+        assert!(matches!(
+            validate_factory_state(sale(), &state),
+            Err(ClientError::FactorySaleMismatch)
+        ));
+    }
+}
+
+#[test]
+fn factory_pool_binds_initial_k_and_accepts_current_k_after_retained_sell() {
+    let mut state = valid_factory_state(sale());
+    state.sell_fee_bps = 1_000;
+    let mut pool = matching_factory_pool(&state);
+    let initial = pool.pool.initial_k;
+    let quote = pool
+        .pool
+        .swap_exact_input(pool::ExactInputSwap {
+            token_in: pool::TokenSide::Token0,
+            amount_in: 500,
+            min_amount_out: 0,
+            pool_fee_bps: 0,
+            protocol_fee_bps: 500,
+            now: 1,
+        })
+        .unwrap();
+    assert!(quote.retained_fee > 0);
+    assert!(pool.pool.k > initial);
+    assert_eq!(pool.pool.initial_k, initial);
+    super::validate_factory_pool(sale(), &state, &pool).unwrap();
+    let mut changed = pool.clone();
+    changed.pool.initial_k += 1;
+    assert!(matches!(
+        super::validate_factory_pool(sale(), &state, &changed),
+        Err(ClientError::FactorySaleMismatch)
+    ));
+    changed = pool.clone();
+    changed.pool.sell_fee_bps = 999;
+    assert!(matches!(
+        super::validate_factory_pool(sale(), &state, &changed),
+        Err(ClientError::FactorySaleMismatch)
+    ));
+}
+
+#[test]
+fn curve_quotes_expose_retained_fee_without_changing_buy_quotes() {
+    let (mut pool, mut config) = pool_snapshot();
+    config.protocol_fee_bps = 1_000;
+    let zero_sell = quote_sell(&pool, &config, 250, 1).unwrap();
+    let zero_buy = quote_buy_with_collateral(&pool, &config, 25, 1).unwrap();
+    assert_eq!(zero_sell.retained_fee, 0);
+    pool.pool.sell_fee_bps = 500;
+    let sell = quote_sell(&pool, &config, 250, 1).unwrap();
+    assert_eq!(
+        (
+            sell.raw_amount_out,
+            sell.protocol_fee,
+            sell.retained_fee,
+            sell.amount_out
+        ),
+        (20, 2, 1, 17)
+    );
+    assert_eq!(
+        quote_buy_with_collateral(&pool, &config, 25, 1).unwrap(),
+        zero_buy
+    );
+    assert_eq!(pool.pool.k, pool.pool.initial_k);
+    config.protocol_fee_bps = 9_500;
+    assert!(quote_sell(&pool, &config, 250, 1).is_err());
+    assert!(quote_buy_with_collateral(&pool, &config, 100, 1).is_ok());
+}
+
+#[test]
+fn lbp_quotes_expose_independent_retained_fees_and_net_slippage() {
+    for weighted in [false, true] {
+        let (mut pool, config) = lbp_pool_snapshot(weighted);
+        let request = super::LbpQuoteRequest::SellExactInput {
+            tokens_in: 10,
+            min_collateral_out: 0,
+        };
+        let zero = super::quote_lbp_trade(lbp_sale(), &pool, &config, request, 50).unwrap();
+        assert_eq!(zero.retained_fee, 0);
+        let buy = super::LbpQuoteRequest::BuyExactInput {
+            collateral_in: 25,
+            min_tokens_out: 0,
+        };
+        let zero_buy = super::quote_lbp_trade(lbp_sale(), &pool, &config, buy, 50).unwrap();
+        pool.sell_fee_bps = 500;
+        let quote = super::quote_lbp_trade(lbp_sale(), &pool, &config, request, 50).unwrap();
+        assert_eq!(quote.gross_collateral, zero.gross_collateral);
+        assert_eq!(quote.protocol_fee, zero.protocol_fee);
+        assert!(quote.retained_fee > 0);
+        assert_eq!(
+            quote.amount_out + quote.protocol_fee + quote.retained_fee,
+            quote.gross_collateral
+        );
+        assert_eq!(quote.net_collateral, quote.amount_out);
+        assert_eq!(
+            super::quote_lbp_trade(lbp_sale(), &pool, &config, buy, 50).unwrap(),
+            zero_buy
+        );
+        let too_high = super::LbpQuoteRequest::SellExactInput {
+            tokens_in: 10,
+            min_collateral_out: quote.amount_out + 1,
+        };
+        let core_error =
+            lbp_core::quote_trade(&pool, too_high, config.protocol_fee_bps, 50).unwrap_err();
+        let Err(ClientError::QuoteLbpTrade(error)) =
+            super::quote_lbp_trade(lbp_sale(), &pool, &config, too_high, 50)
+        else {
+            panic!("expected core slippage error")
+        };
+        assert_eq!(error, core_error);
     }
 }

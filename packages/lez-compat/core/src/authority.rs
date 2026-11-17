@@ -58,6 +58,7 @@ pub enum Message {
     BootstrapTransferOnly {
         authority: AccountId,
     },
+    Resolve,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -114,6 +115,25 @@ pub fn verify(input: &ReceiveInput, role: Actor, authority: AccountId) -> Result
     Ok(())
 }
 
+/// Current holder data only; this reply does not approve an action.
+#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct CurrentAuthority {
+    pub role: AccountId,
+    pub authority: AccountId,
+}
+
+pub fn verify_resolved(input: &ReceiveInput, expected_role: Actor) -> Result<AccountId, Error> {
+    if input.from != Some(expected_role) {
+        return Err(Error::Unauthorized);
+    }
+    let reply: CurrentAuthority =
+        borsh::from_slice(&input.message).map_err(|_| Error::InvalidMessage)?;
+    if reply.role != expected_role.account_id || reply.authority == AccountId::default() {
+        return Err(Error::Unauthorized);
+    }
+    Ok(reply.authority)
+}
+
 #[derive(Clone, BorshSerialize, BorshDeserialize)]
 struct Role {
     holder: Option<AccountId>,
@@ -132,6 +152,22 @@ pub fn handle(input: &ReceiveInput) -> Result<Response, Error> {
     let message: Message = borsh::from_slice(&input.message).map_err(|_| Error::InvalidMessage)?;
     let program = input.receiver.program_account_id;
     match message {
+        Message::Resolve => {
+            let caller = input.from.ok_or(Error::Unauthorized)?;
+            let role: Role =
+                borsh::from_slice(&input.pre_state).map_err(|_| Error::InvalidState)?;
+            let authority = role.holder.ok_or(Error::Renounced)?;
+            if authority == AccountId::default() {
+                return Err(Error::Unauthorized);
+            }
+            Ok(Response::keep_state().send_sync(
+                caller,
+                &CurrentAuthority {
+                    role: input.receiver.account_id,
+                    authority,
+                },
+            ))
+        }
         Message::TransferPda {
             role,
             program: owner,

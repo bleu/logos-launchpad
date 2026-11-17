@@ -5,9 +5,13 @@
 mod error;
 mod lifecycle;
 mod types;
-pub use curve_core::{AllowlistPolicy, BuyPolicy, MembershipPath, TOKEN_PROGRAM_ACCOUNT_ID};
+pub use curve_core::{
+    AllowlistPolicy, BuyPolicy, EndingPolicy, MembershipPath, PausePolicy,
+    TOKEN_PROGRAM_ACCOUNT_ID, TradeControl,
+};
 pub use error::{ClientError, Result};
 pub use factory_core::{CreationStage, GraduationHook, SettlementStage, TradeMode};
+pub use lbp_core::{QuoteRequest as LbpQuoteRequest, TradeQuote as LbpTradeQuote};
 pub use lifecycle::{FactorySession, LifecycleReceipt, next_creation_invocation};
 pub use types::{
     AccountLocation, ExactInputTradeTerms, ExactOutputTradeTerms, FactorySale, LbpSale,
@@ -66,7 +70,10 @@ pub fn load_program(path: &Path) -> Result<Program> {
 #[derive(Debug, Clone)]
 pub struct CreateSaleRequest {
     pub buy_policy: BuyPolicy,
+    pub pause_policy: PausePolicy,
+    pub ending_policy: EndingPolicy,
     pub trade_mode: TradeMode,
+    pub sell_fee_bps: u16,
     pub graduation_hook: Option<GraduationHook>,
     pub name: String,
     pub uri: String,
@@ -467,6 +474,9 @@ pub fn build_create_sale_invocation(
         request.virtual_token_reserve,
         request.virtual_collateral_reserve,
     )?;
+    factory_core::validate_curve_policies(request.ending_policy, request.end_timestamp)?;
+    curve_core::SellFeeRate::new(request.sell_fee_bps)
+        .map_err(|_| ClientError::FactoryPolicy(factory_core::Error::InvalidTerms))?;
     let a = factory_pool_addresses(sale);
     Ok(admit_factory_accounts(
         invocation(
@@ -475,7 +485,10 @@ pub fn build_create_sale_invocation(
             vec![creator],
             FactoryInstruction::CreateFactoryPool {
                 buy_policy: request.buy_policy,
+                pause_policy: request.pause_policy,
+                ending_policy: request.ending_policy,
                 trade_mode: request.trade_mode as u8,
+                sell_fee_bps: request.sell_fee_bps,
                 graduation_hook_program_id: request.graduation_hook.as_ref().map(|h| h.program_id),
                 graduation_hook_configuration: request
                     .graduation_hook
@@ -500,6 +513,53 @@ pub fn build_create_sale_invocation(
     )
     .with_holding(creator, a.token_definition)
     .with_holding(creator, sale.collateral_definition))
+}
+
+pub fn build_set_factory_paused_invocation(
+    sale: FactorySale,
+    creator: AccountId,
+    paused: bool,
+) -> PublicInvocation<FactoryInstruction> {
+    let a = factory_pool_addresses(sale);
+    admit_factory_accounts(
+        invocation(
+            Actor::new(a.factory, sale.factory_program_id),
+            factory_actors(sale, creator, None),
+            vec![creator],
+            FactoryInstruction::SetPaused { creator, paused },
+        ),
+        sale,
+    )
+}
+
+pub fn build_set_curve_paused_invocation(
+    namespace: AccountId,
+    curve: AccountId,
+    pool: AccountId,
+    owner: AccountId,
+    paused: bool,
+) -> PublicInvocation<CurveInstruction> {
+    invocation(
+        Actor::new(owner, curve),
+        vec![
+            Actor::new(pool, curve),
+            Actor::new(
+                curve_core::compute_pool_owner_role(namespace, pool, curve),
+                curve_core::AUTHORITY_PROGRAM_ACCOUNT_ID,
+            ),
+            Actor::new(owner, curve_core::AUTHORITY_PROGRAM_ACCOUNT_ID),
+            clock_actor(),
+        ],
+        vec![owner],
+        CurveInstruction::Execute {
+            pool,
+            instruction: Box::new(CurveInstruction::SetPaused { paused }),
+        },
+    )
+    .with_pda(
+        curve,
+        curve_core::compute_pool_owner_role_seed(namespace, pool),
+    )
 }
 
 pub fn build_withdraw_factory_proceeds_invocation(
@@ -542,39 +602,117 @@ pub fn build_claim_creator_allocation_invocation(
     .with_holding(creator, sale.collateral_definition)
 }
 
+/// Persisted terms select the adapter. A creator hint only admits the resolved payout accounts.
+#[derive(Debug, Clone, Copy)]
+pub enum GraduationTarget<'a> {
+    Curve {
+        sale: FactorySale,
+        state: &'a FactoryState,
+    },
+    Lbp {
+        sale: LbpSale,
+        state: &'a factory_core::LbpLaunchState,
+        creator_hint: AccountId,
+    },
+}
+
 /// The callback has a fixed typed context and no arbitrary account extension.
 pub fn build_graduation_invocation(
-    sale: FactorySale,
-    state: &FactoryState,
+    target: GraduationTarget<'_>,
     treasury: AccountId,
-    now: u64,
 ) -> Result<PublicInvocation<FactoryInstruction>> {
-    validate_factory_state(sale, state)?;
-    let hook = state
-        .graduation_hook
-        .as_ref()
-        .ok_or(ClientError::GraduationNotConfigured)?;
-    let a = factory_pool_addresses(sale);
-    let custody = factory_core::compute_graduation_pda(hook.program_id, a.factory);
-    let mut actors = factory_actors(sale, custody, Some(treasury));
-    actors.push(Actor::new(custody, hook.program_id));
-    Ok(admit_factory_accounts(
-        invocation(
-            Actor::new(a.factory, sale.factory_program_id),
-            actors,
-            vec![],
-            FactoryInstruction::ExecuteGraduationHook { now },
-        ),
-        sale,
-    )
-    .with_pda(
+    let (mut call, factory, hook, definition, collateral) = match target {
+        GraduationTarget::Curve { sale, state } => {
+            validate_factory_state(sale, state)?;
+            let hook = state
+                .graduation_hook
+                .as_ref()
+                .ok_or(ClientError::GraduationNotConfigured)?;
+            let a = factory_pool_addresses(sale);
+            let custody = factory_core::compute_graduation_pda(hook.program_id, a.factory);
+            let call = admit_factory_accounts(
+                invocation(
+                    Actor::new(a.factory, sale.factory_program_id),
+                    factory_actors(sale, custody, Some(treasury)),
+                    vec![],
+                    FactoryInstruction::ExecuteGraduationHook { creator_hint: None },
+                ),
+                sale,
+            );
+            (
+                call,
+                a.factory,
+                hook,
+                a.token_definition,
+                sale.collateral_definition,
+            )
+        }
+        GraduationTarget::Lbp {
+            sale,
+            state,
+            creator_hint,
+        } => {
+            validate_lbp_factory_state(sale, state)?;
+            let hook = state
+                .graduation_hook
+                .as_ref()
+                .ok_or(ClientError::GraduationNotConfigured)?;
+            let a = lbp_addresses(sale);
+            let mut call = lbp_setup_invocation(
+                sale,
+                creator_hint,
+                FactoryInstruction::ExecuteGraduationHook {
+                    creator_hint: Some(creator_hint),
+                },
+            );
+            call.signer_accounts.clear();
+            (
+                call,
+                a.factory,
+                hook,
+                a.token_definition,
+                sale.collateral_definition,
+            )
+        }
+    };
+    let custody = factory_core::compute_graduation_pda(hook.program_id, factory);
+    call.actors.push(Actor::new(custody, hook.program_id));
+    call.actors.push(token_actor(custody));
+    for owner in [custody, treasury] {
+        for token in [definition, collateral] {
+            call.actors
+                .push(token_actor(associated_token_account(owner, token)));
+            call = call.with_holding(owner, token);
+        }
+    }
+    let mut seen = std::collections::HashSet::new();
+    call.actors.retain(|actor| seen.insert(*actor));
+    Ok(call.with_pda(
         hook.program_id,
-        factory_core::compute_graduation_seed(a.factory),
-    )
-    .with_holding(custody, a.token_definition)
-    .with_holding(custody, sale.collateral_definition)
-    .with_holding(treasury, a.token_definition)
-    .with_holding(treasury, sale.collateral_definition))
+        factory_core::compute_graduation_seed(factory),
+    ))
+}
+
+fn validate_lbp_factory_state(sale: LbpSale, state: &factory_core::LbpLaunchState) -> Result<()> {
+    let a = lbp_addresses(sale);
+    if state.namespace != sale.namespace
+        || state.launch_salt != sale.launch_salt
+        || state.namespace_program_id != sale.namespace_program_id
+        || state.lbp_program_id != sale.lbp_program_id
+        || state.collateral_definition_id != sale.collateral_definition
+        || state.token_definition_id != a.token_definition
+        || state.creator_escrow_id != a.creator_escrow
+        || state.pool_id != a.pool
+        || state.creator_role_id
+            != factory_core::compute_creator_role_pda(
+                sale.namespace,
+                sale.factory_program_id,
+                sale.launch_salt,
+            )
+    {
+        return Err(ClientError::FactorySaleMismatch);
+    }
+    Ok(())
 }
 
 fn trade_invocation(
@@ -821,6 +959,18 @@ fn lbp_setup_invocation(
     call
 }
 
+pub fn build_set_lbp_paused_invocation(
+    sale: LbpSale,
+    creator: AccountId,
+    paused: bool,
+) -> PublicInvocation<FactoryInstruction> {
+    lbp_setup_invocation(
+        sale,
+        creator,
+        FactoryInstruction::SetPaused { creator, paused },
+    )
+}
+
 pub fn build_create_fixed_price_invocation(
     factory_program_id: AccountId,
     inputs: factory_core::FixedPriceInputs,
@@ -916,6 +1066,7 @@ fn lbp_trade_invocation(
         &instruction,
         lbp_core::Message::BuyWeightedExactInput { .. }
             | lbp_core::Message::BuyWeightedExactOutput { .. }
+            | lbp_core::Message::SellWeightedExactInput { .. }
     ) {
         actors.push(lbp_core::pricing_clock::actor());
     }
@@ -1004,6 +1155,38 @@ pub fn build_fixed_price_buy_invocation(
             amount_out: terms.amount_out,
             max_amount_in: terms.max_amount_in,
             now,
+        },
+    )
+}
+
+pub fn build_fixed_price_sell_invocation(
+    sale: LbpSale,
+    participant: AccountId,
+    terms: ExactInputTradeTerms,
+    now: u64,
+) -> PublicInvocation<lbp_core::Message> {
+    lbp_trade_invocation(
+        sale,
+        participant,
+        lbp_core::Message::SellExactInput {
+            amount_in: terms.amount_in,
+            min_amount_out: terms.min_amount_out,
+            now,
+        },
+    )
+}
+
+pub fn build_weighted_sell_invocation(
+    sale: LbpSale,
+    participant: AccountId,
+    terms: ExactInputTradeTerms,
+) -> PublicInvocation<lbp_core::Message> {
+    lbp_trade_invocation(
+        sale,
+        participant,
+        lbp_core::Message::SellWeightedExactInput {
+            amount_in: terms.amount_in,
+            min_amount_out: terms.min_amount_out,
         },
     )
 }
@@ -1135,6 +1318,18 @@ pub async fn load_factory_pool(
         .await
         .map_err(ClientError::ReadFactoryPool)?;
     let state = curve_core::PoolAccount::decode(&data).map_err(ClientError::DecodeFactoryPool)?;
+    let factory = load_factory_state(wallet, sale).await?;
+    validate_factory_pool(sale, &factory, &state)?;
+    Ok(state)
+}
+
+pub(crate) fn validate_factory_pool(
+    sale: FactorySale,
+    factory: &FactoryState,
+    state: &curve_core::PoolAccount,
+) -> Result<()> {
+    validate_factory_state(sale, factory)?;
+    let a = factory_pool_addresses(sale);
     if state.namespace != sale.namespace
         || state.token0_definition_id != a.token_definition
         || state.token1_definition_id != sale.collateral_definition
@@ -1144,12 +1339,36 @@ pub async fn load_factory_pool(
                 sale.factory_program_id,
                 *factory_core::compute_factory_seed(sale.namespace, sale.launch_salt).as_bytes(),
             ))
+        || state.buy_policy != factory.buy_policy
+        || state.trade_control.policy() != factory.pause_policy
+        || state.pool.ending_policy != factory.ending_policy
+        || state.pool.sell_fee_bps != factory.sell_fee_bps
+        || state.pool.validate_policy().is_err()
+        || Some(state.pool.initial_k)
+            != factory
+                .virtual_token_reserve
+                .checked_mul(factory.virtual_collateral_reserve)
+        || state.pool.close_timestamp != factory.end_timestamp
+        || state.pool.close_on_depletion
+            != match factory.ending_policy {
+                EndingPolicy::Scheduled => None,
+                _ => Some(pool::TokenSide::Token0),
+            }
+        || state.allowed_input_token
+            != match factory.trade_mode {
+                TradeMode::BuyOnly => Some(pool::TokenSide::Token1),
+                TradeMode::BuyAndSell => None,
+            }
     {
         return Err(ClientError::FactorySaleMismatch);
     }
-    Ok(state)
+    Ok(())
 }
 pub(crate) fn validate_factory_state(sale: FactorySale, state: &FactoryState) -> Result<()> {
+    curve_core::SellFeeRate::new(state.sell_fee_bps)
+        .map_err(|_| ClientError::FactorySaleMismatch)?;
+    factory_core::validate_curve_policies(state.ending_policy, state.end_timestamp)
+        .map_err(|_| ClientError::FactorySaleMismatch)?;
     let a = factory_pool_addresses(sale);
     if state.namespace != sale.namespace
         || state.launch_salt != sale.launch_salt
@@ -1338,6 +1557,36 @@ pub async fn collect_pool_fees(
     Ok(hashes)
 }
 
+/// Quotes against pool and live namespace snapshots. Weighted pricing time is not inclusion proof.
+pub fn quote_lbp_trade(
+    sale: LbpSale,
+    pool_account: &lbp_core::PoolAccount,
+    config: &Config,
+    request: LbpQuoteRequest,
+    pricing_time: u64,
+) -> Result<LbpTradeQuote> {
+    let addresses = lbp_addresses(sale);
+    if config.namespace != sale.namespace {
+        return Err(ClientError::PoolSelectionMismatch);
+    }
+    if pool_account.namespace != sale.namespace
+        || pool_account.namespace_program_id != sale.namespace_program_id
+        || pool_account.factory_owner != addresses.factory
+        || pool_account.factory_program_id != sale.factory_program_id
+        || pool_account.factory_seed
+            != *factory_core::compute_factory_seed(sale.namespace, sale.launch_salt).as_bytes()
+        || pool_account.token_definition_id != addresses.token_definition
+        || pool_account.collateral_definition_id != sale.collateral_definition
+    {
+        return Err(ClientError::FactorySaleMismatch);
+    }
+    if config.emergency.is_frozen {
+        return Err(ClientError::NamespaceFrozen);
+    }
+    lbp_core::quote_trade(pool_account, request, config.protocol_fee_bps, pricing_time)
+        .map_err(ClientError::QuoteLbpTrade)
+}
+
 /// Quotes an exact-output purchase against a snapshot of the current pool and fee config.
 /// The participant supplies the cap in the purchase message.
 pub fn quote_buy(
@@ -1352,12 +1601,19 @@ pub fn quote_buy(
     if !pool_account.funded {
         return Err(ClientError::PoolFundingPending);
     }
+    if pool_account.trade_control.is_paused() {
+        return Err(ClientError::PoolPaused);
+    }
     if pool_account
         .allowed_input_token
         .is_some_and(|side| side != pool::TokenSide::Token1)
     {
         return Err(ClientError::InputTokenRestricted);
     }
+    pool_account
+        .pool
+        .validate_policy()
+        .map_err(|_| ClientError::QuoteBuy(pool::SwapError::InvalidPolicy))?;
     let mut pool = pool_account.pool.clone();
     pool.swap_exact_output(pool::ExactOutputSwap {
         token_in: pool::TokenSide::Token1,
@@ -1384,12 +1640,19 @@ pub fn quote_sell(
     if !pool_account.funded {
         return Err(ClientError::PoolFundingPending);
     }
+    if pool_account.trade_control.is_paused() {
+        return Err(ClientError::PoolPaused);
+    }
     if pool_account
         .allowed_input_token
         .is_some_and(|side| side != pool::TokenSide::Token0)
     {
         return Err(ClientError::InputTokenRestricted);
     }
+    pool_account
+        .pool
+        .validate_policy()
+        .map_err(|_| ClientError::QuoteSell(pool::SwapError::InvalidPolicy))?;
     let mut pool = pool_account.pool.clone();
     pool.swap_exact_input(pool::ExactInputSwap {
         token_in: pool::TokenSide::Token0,
@@ -1415,12 +1678,19 @@ pub fn quote_buy_with_collateral(
     if !pool_account.funded {
         return Err(ClientError::PoolFundingPending);
     }
+    if pool_account.trade_control.is_paused() {
+        return Err(ClientError::PoolPaused);
+    }
     if pool_account
         .allowed_input_token
         .is_some_and(|side| side != pool::TokenSide::Token1)
     {
         return Err(ClientError::InputTokenRestricted);
     }
+    pool_account
+        .pool
+        .validate_policy()
+        .map_err(|_| ClientError::QuoteBuyWithCollateral(pool::SwapError::InvalidPolicy))?;
     let mut pool = pool_account.pool.clone();
     pool.swap_exact_input(pool::ExactInputSwap {
         token_in: pool::TokenSide::Token1,

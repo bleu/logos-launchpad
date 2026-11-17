@@ -348,6 +348,14 @@ fn emergency_transfer_preserves_freeze_and_all_noop_calls_require_current_author
 }
 
 fn fresh_sale(trade_mode: u8, end_timestamp: Option<u64>) -> FactoryFixture {
+    sale_with_pause(trade_mode, end_timestamp, curve_core::PausePolicy::Disabled)
+}
+
+fn sale_with_pause(
+    trade_mode: u8,
+    end_timestamp: Option<u64>,
+    pause_policy: curve_core::PausePolicy,
+) -> FactoryFixture {
     let mut fixture = factory_fixture();
     let creator = key(48);
     fixture.actors.extend([
@@ -360,7 +368,14 @@ fn fresh_sale(trade_mode: u8, end_timestamp: Option<u64>) -> FactoryFixture {
             &creator,
             factory_core::Message::CreateFactoryPool {
                 buy_policy: curve_core::BuyPolicy::Open,
+                pause_policy,
+                ending_policy: if end_timestamp.is_some() {
+                    curve_core::EndingPolicy::Either
+                } else {
+                    curve_core::EndingPolicy::Depletion
+                },
                 trade_mode,
+                sell_fee_bps: 0,
                 graduation_hook_program_id: None,
                 graduation_hook_configuration: vec![],
                 namespace: fixture.namespace,
@@ -915,6 +930,9 @@ fn namespace_freeze_and_emergency_transfer_do_not_control_another_namespace_pool
         &owner,
         curve_core::Message::CreatePool {
             buy_policy: curve_core::BuyPolicy::Open,
+            pause_policy: curve_core::PausePolicy::Disabled,
+            ending_policy: curve_core::EndingPolicy::Manual,
+            sell_fee_bps: 0,
             namespace: other_id,
             token0_definition_id: LAUNCH,
             token1_definition_id: COLLATERAL,
@@ -1099,6 +1117,9 @@ fn frozen_direct_pool_keeps_owner_close_and_reserve_recovery_checks() {
         &owner,
         curve_core::Message::CreatePool {
             buy_policy: curve_core::BuyPolicy::Open,
+            pause_policy: curve_core::PausePolicy::Disabled,
+            ending_policy: curve_core::EndingPolicy::Manual,
+            sell_fee_bps: 0,
             namespace: ns,
             token0_definition_id: LAUNCH,
             token1_definition_id: COLLATERAL,
@@ -1260,4 +1281,383 @@ fn factory_expiry_rejects_current_and_stale_trades_and_can_close_while_frozen() 
             "InvalidPool",
         );
     }
+}
+
+fn set_sale_paused(
+    fixture: &mut FactoryFixture,
+    signer: &PrivateKey,
+    paused: bool,
+) -> Result<(), lee::error::LeeError> {
+    fixture.call(
+        signer,
+        factory_core::Message::SetPaused {
+            creator: id(signer),
+            paused,
+        },
+    )
+}
+
+#[test]
+#[ignore = "requires fresh application and compatibility ELFs and the pinned clock ELF"]
+fn curve_pause_uses_current_creator_blocks_all_swaps_and_preserves_frozen_settlement() {
+    let mut fixture = sale_with_pause(1, Some(2), curve_core::PausePolicy::AuthorityControlled);
+    let creator = key(48);
+    let successor = key(49);
+    fixture.actors.extend([
+        Actor::new(id(&emergency_key()), AUTHORITY),
+        Actor::new(id(&emergency_key()), FACTORY),
+    ]);
+    admin_call(
+        &mut fixture.state,
+        &fixture.actors,
+        &key(47),
+        curve_core::Message::UpdateFee {
+            namespace: fixture.namespace,
+            protocol_fee_bps: 1_000,
+        },
+    )
+    .unwrap();
+    trade(
+        &mut fixture,
+        curve_core::Message::SwapExactInput {
+            membership: None,
+            amount_in: 100,
+            min_amount_out: 82,
+            token_in: COLLATERAL,
+            now: 1,
+        },
+    )
+    .unwrap();
+    execute(
+        &mut fixture.state,
+        Actor::new(id(&creator), AUTHORITY),
+        fixture.actors.clone(),
+        authority::Message::Transfer {
+            role: factory_core::compute_curve_creator_role_pda(fixture.namespace, FACTORY, SALT),
+            successor: id(&successor),
+        },
+        &[&creator, &successor],
+    )
+    .unwrap();
+    for paused in [false, true, true] {
+        for signer in [&creator, &key(47), &emergency_key()] {
+            let before = fixture.state.clone();
+            let result = set_sale_paused(&mut fixture, signer, paused);
+            assert!(
+                matches!(&result, Err(lee::error::LeeError::ProgramExecutionFailed(reason)) if reason.contains("Unauthorized")),
+                "{result:?}"
+            );
+            assert!(fixture.state == before);
+        }
+        rejected_without_changes(
+            &mut fixture.state,
+            |state| {
+                curve_call(
+                    state,
+                    &fixture.actors,
+                    fixture.pool,
+                    &successor,
+                    curve_core::Message::SetPaused { paused },
+                )
+            },
+            "Unauthorized",
+        );
+        set_sale_paused(&mut fixture, &successor, paused).unwrap();
+    }
+    assert_eq!(
+        saved_pool(&fixture).trade_control,
+        curve_core::TradeControl::Paused
+    );
+    for token_in in [COLLATERAL, fixture.definition] {
+        for instruction in [
+            curve_core::Message::SwapExactInput {
+                membership: None,
+                amount_in: 1,
+                min_amount_out: 0,
+                token_in,
+                now: 1,
+            },
+            curve_core::Message::SwapExactOutput {
+                membership: None,
+                amount_out: 1,
+                max_amount_in: 100,
+                token_in,
+                now: 1,
+            },
+        ] {
+            rejected_without_changes(
+                &mut fixture.state,
+                |state| {
+                    curve_call(
+                        state,
+                        &fixture.actors,
+                        fixture.pool,
+                        &successor,
+                        instruction,
+                    )
+                },
+                "Paused",
+            );
+        }
+    }
+    collect(&mut fixture).unwrap();
+    assert_eq!(balance(&fixture.state, TREASURY, COLLATERAL), 10);
+    assert_eq!(saved_pool(&fixture).pool.fees_accrued, 0);
+    admin_call(
+        &mut fixture.state,
+        &fixture.actors,
+        &emergency_key(),
+        curve_core::Message::SetFrozen {
+            namespace: fixture.namespace,
+            frozen: true,
+        },
+    )
+    .unwrap();
+    set_sale_paused(&mut fixture, &successor, false).unwrap();
+    assert!(
+        namespace_config(&fixture.state, fixture.namespace)
+            .emergency
+            .is_frozen
+    );
+    rejected_without_changes(
+        &mut fixture.state,
+        |state| {
+            curve_call(
+                state,
+                &fixture.actors,
+                fixture.pool,
+                &successor,
+                curve_core::Message::SwapExactInput {
+                    membership: None,
+                    amount_in: 1,
+                    min_amount_out: 0,
+                    token_in: COLLATERAL,
+                    now: 1,
+                },
+            )
+        },
+        "Frozen",
+    );
+    set_sale_paused(&mut fixture, &successor, true).unwrap();
+    fixture.inclusion_timestamp_ms = 2_000;
+    let before = fixture.state.clone();
+    let result = set_sale_paused(&mut fixture, &successor, false);
+    assert!(
+        matches!(result, Err(lee::error::LeeError::OutOfValidityWindow)),
+        "{result:?}"
+    );
+    assert!(fixture.state == before);
+    for _ in 0..5 {
+        fixture
+            .call(
+                &successor,
+                factory_core::Message::WithdrawFactoryProceeds {
+                    creator: id(&successor),
+                    now: 2,
+                },
+            )
+            .unwrap();
+    }
+    assert_eq!(
+        saved_pool(&fixture).trade_control,
+        curve_core::TradeControl::Paused
+    );
+    assert_eq!(
+        saved_pool(&fixture).pool.lifecycle,
+        pool::PoolLifecycle::Withdrawn
+    );
+    assert_eq!(balance(&fixture.state, fixture.pool, COLLATERAL), 0);
+    assert_eq!(balance(&fixture.state, fixture.factory, COLLATERAL), 0);
+    assert_eq!(balance(&fixture.state, id(&successor), COLLATERAL), 990);
+    rejected_without_changes(
+        &mut fixture.state,
+        |state| {
+            execute_at(
+                state,
+                Actor::new(fixture.factory, FACTORY),
+                fixture.actors.clone(),
+                factory_core::Message::SetPaused {
+                    creator: id(&successor),
+                    paused: false,
+                },
+                &[&successor],
+                2_000,
+            )
+        },
+        "Closed",
+    );
+}
+
+#[test]
+#[ignore = "requires fresh application and compatibility ELFs and the pinned clock ELF"]
+fn disabled_curve_pause_and_depleted_sale_controls_reject_without_changes() {
+    let mut disabled = fresh_sale(1, None);
+    let before = disabled.state.clone();
+    let result = set_sale_paused(&mut disabled, &key(48), true);
+    assert!(
+        matches!(&result, Err(lee::error::LeeError::ProgramExecutionFailed(reason)) if reason.contains("PauseDisabled")),
+        "{result:?}"
+    );
+    assert!(disabled.state == before);
+    let mut depleted = sale_with_pause(1, None, curve_core::PausePolicy::AuthorityControlled);
+    trade(
+        &mut depleted,
+        curve_core::Message::SwapExactOutput {
+            membership: None,
+            amount_out: 400,
+            max_amount_in: 667,
+            token_in: COLLATERAL,
+            now: 1,
+        },
+    )
+    .unwrap();
+    for paused in [false, true] {
+        let before = depleted.state.clone();
+        let result = set_sale_paused(&mut depleted, &key(48), paused);
+        assert!(
+            matches!(&result, Err(lee::error::LeeError::ProgramExecutionFailed(reason)) if reason.contains("Closed")),
+            "{result:?}"
+        );
+        assert!(depleted.state == before);
+    }
+}
+
+#[test]
+#[ignore = "requires fresh application and compatibility ELFs and the pinned clock ELF"]
+fn direct_curve_pause_follows_transferred_owner_and_keeps_reserve_recovery() {
+    let namespace = key(60);
+    let owner = key(61);
+    let successor = key(62);
+    let emergency = emergency_key();
+    let ns = id(&namespace);
+    let (mut state, mut actors) =
+        base_state(&namespace, &[id(&owner), id(&successor), id(&emergency)]);
+    let pool = curve_core::compute_pool_pda(ns, CURVE, LAUNCH, COLLATERAL, id(&owner));
+    let role = curve_core::compute_pool_owner_role(ns, pool, CURVE);
+    actors.extend([
+        Actor::new(pool, CURVE),
+        Actor::new(pool, TOKEN),
+        Actor::new(role, AUTHORITY),
+        holding(pool, LAUNCH),
+        holding(pool, COLLATERAL),
+    ]);
+    curve_call(
+        &mut state,
+        &actors,
+        pool,
+        &owner,
+        curve_core::Message::CreatePool {
+            buy_policy: curve_core::BuyPolicy::Open,
+            pause_policy: curve_core::PausePolicy::AuthorityControlled,
+            ending_policy: curve_core::EndingPolicy::Manual,
+            sell_fee_bps: 0,
+            namespace: ns,
+            token0_definition_id: LAUNCH,
+            token1_definition_id: COLLATERAL,
+            allowed_input_token: None,
+            defer_funding: false,
+            token0_amount: 400,
+            token1_amount: 100,
+            virtual_reserve0: 1_000,
+            virtual_reserve1: 1_000,
+            close_timestamp: None,
+            close_on_depletion: None,
+            owner: id(&owner),
+            owner_program_id: None,
+            owner_program_seed: None,
+            curve_program_id: CURVE,
+            now: 1,
+        },
+    )
+    .unwrap();
+    execute(
+        &mut state,
+        Actor::new(id(&owner), AUTHORITY),
+        actors.clone(),
+        authority::Message::Transfer {
+            role,
+            successor: id(&successor),
+        },
+        &[&owner, &successor],
+    )
+    .unwrap();
+    for paused in [false, true, true] {
+        for signer in [&owner, &namespace, &emergency] {
+            rejected_without_changes(
+                &mut state,
+                |state| {
+                    curve_call(
+                        state,
+                        &actors,
+                        pool,
+                        signer,
+                        curve_core::Message::SetPaused { paused },
+                    )
+                },
+                "Unauthorized",
+            );
+        }
+        let call = launchpad_client::build_set_curve_paused_invocation(
+            ns,
+            CURVE,
+            pool,
+            id(&successor),
+            paused,
+        );
+        execute(
+            &mut state,
+            call.destination,
+            call.actors,
+            call.instruction,
+            &[&successor],
+        )
+        .unwrap();
+    }
+    for token_in in [LAUNCH, COLLATERAL] {
+        for instruction in [
+            curve_core::Message::SwapExactInput {
+                membership: None,
+                amount_in: 1,
+                min_amount_out: 0,
+                token_in,
+                now: 1,
+            },
+            curve_core::Message::SwapExactOutput {
+                membership: None,
+                amount_out: 1,
+                max_amount_in: 100,
+                token_in,
+                now: 1,
+            },
+        ] {
+            rejected_without_changes(
+                &mut state,
+                |state| curve_call(state, &actors, pool, &successor, instruction),
+                "Paused",
+            );
+        }
+    }
+    for instruction in [
+        curve_core::Message::ClosePool { now: 1 },
+        curve_core::Message::WithdrawReserves { now: 1 },
+    ] {
+        curve_call(&mut state, &actors, pool, &successor, instruction).unwrap();
+    }
+    assert_eq!(balance(&state, id(&successor), LAUNCH), 1_400);
+    assert_eq!(balance(&state, id(&successor), COLLATERAL), 1_100);
+    assert_eq!(balance(&state, pool, LAUNCH), 0);
+    assert_eq!(balance(&state, pool, COLLATERAL), 0);
+    rejected_without_changes(
+        &mut state,
+        |state| {
+            curve_call(
+                state,
+                &actors,
+                pool,
+                &successor,
+                curve_core::Message::SetPaused { paused: false },
+            )
+        },
+        "Closed",
+    );
 }

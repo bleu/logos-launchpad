@@ -14,6 +14,18 @@
           }
         ]
       },
+      "CurrentAuthority": {
+        "fields": [
+          {
+            "name": "role",
+            "type": "AccountId"
+          },
+          {
+            "name": "authority",
+            "type": "AccountId"
+          }
+        ]
+      },
       "Message": {
         "variants": [
           {
@@ -193,6 +205,11 @@
             ],
             "name": "BootstrapTransferOnly",
             "tag": 12
+          },
+          {
+            "fields": [],
+            "name": "Resolve",
+            "tag": 13
           }
         ]
       },

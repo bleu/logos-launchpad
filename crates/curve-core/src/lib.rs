@@ -6,6 +6,12 @@ use lee_core::{
     account::{AccountId, Actor},
     program::{PdaSeed, ReceiveInput, Response, SyncMessage},
 };
+pub use sale_policy::events;
+pub use sale_policy::{
+    EndingDecision, EndingError, EndingPolicy, EndingReason, PausePolicy, SellFeeRate,
+    SettlementAmounts, SettlementError, SettlementProgress, SettlementRoute, TimeBounds,
+    TradeControl, TradeMode,
+};
 
 include!(concat!(env!("OUT_DIR"), "/emergency_authority.rs"));
 
@@ -36,6 +42,8 @@ pub enum Error {
     Arithmetic,
     Restricted,
     Closed,
+    PauseDisabled,
+    Paused,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -71,6 +79,9 @@ pub enum Message {
     },
     CreatePool {
         buy_policy: BuyPolicy,
+        pause_policy: PausePolicy,
+        ending_policy: EndingPolicy,
+        sell_fee_bps: u16,
         namespace: AccountId,
         token0_definition_id: AccountId,
         token1_definition_id: AccountId,
@@ -119,6 +130,9 @@ pub enum Message {
         namespace: AccountId,
         protocol_fee_bps: u32,
         treasury: AccountId,
+    },
+    SetPaused {
+        paused: bool,
     },
 }
 pub type Instruction = Message;
@@ -243,6 +257,8 @@ pub fn compute_pool_owner_role(
 mod authority;
 mod dispatch;
 mod emergency;
+mod program_events;
+pub use program_events::sale_event;
 mod pool_create;
 mod pool_lifecycle;
 mod pool_swap;
@@ -274,6 +290,7 @@ pub fn handle(input: &ReceiveInput) -> Result<Response, Error> {
                         | Message::ActivatePool { .. }
                         | Message::WithdrawReserves { .. }
                         | Message::ClosePool { .. }
+                        | Message::SetPaused { .. }
                         | Message::SwapExactInput { .. }
                         | Message::SwapExactOutput { .. }
                 )
@@ -298,9 +315,10 @@ pub fn handle(input: &ReceiveInput) -> Result<Response, Error> {
             }
             Ok(Response::keep_state().send(call))
         }
-        Message::WithdrawReserves { .. } | Message::ClosePool { .. } | Message::CollectFees => {
-            pool_lifecycle::begin(input, message)
-        }
+        Message::WithdrawReserves { .. }
+        | Message::ClosePool { .. }
+        | Message::CollectFees
+        | Message::SetPaused { .. } => pool_lifecycle::begin(input, message),
         Message::SwapExactInput { .. } | Message::SwapExactOutput { .. } => {
             pool_swap::begin(input, message)
         }
@@ -426,8 +444,10 @@ mod tests;
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PoolAccount {
     pub buy_policy: BuyPolicy,
+    pub trade_control: TradeControl,
     pub allowed_input_token: Option<pool::TokenSide>,
     pub funded: bool,
+    pub closure_observed: bool,
     pub namespace: AccountId,
     pub token0_definition_id: AccountId,
     pub token1_definition_id: AccountId,
@@ -451,6 +471,9 @@ impl PoolAccount {
         {
             return Err(Error::WrongAccount);
         }
+        self.pool
+            .validate_policy()
+            .map_err(|_| Error::InvalidPool)?;
         self.buy_policy
             .validate_binding(self.namespace.value(), actor.account_id.value())
             .map_err(|_| Error::InvalidPool)?;

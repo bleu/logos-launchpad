@@ -24,18 +24,19 @@ pub(crate) const fn mul_wide(a: u128, b: u128) -> (u128, u128) {
 /// does not fit `u128`; each call site's fit argument is in
 /// `docs/overflow-proof.md`.
 pub(crate) fn mul_shr(a: u128, b: u128, shift: u32) -> u128 {
+    shifted_product(a, b, shift).0
+}
+
+fn shifted_product(a: u128, b: u128, shift: u32) -> (u128, u128) {
     debug_assert!(shift > 0 && shift < 128);
     let (hi, lo) = mul_wide(a, b);
     assert!(hi >> shift == 0, "widened product exceeds u128 after shift");
-    (hi << (128 - shift)) | (lo >> shift)
+    ((hi << (128 - shift)) | (lo >> shift), lo)
 }
 
 /// Ceiling variant of [`mul_shr`], same fit requirement.
 pub(crate) fn mul_shr_up(a: u128, b: u128, shift: u32) -> u128 {
-    debug_assert!(shift > 0 && shift < 128);
-    let (hi, lo) = mul_wide(a, b);
-    assert!(hi >> shift == 0, "widened product exceeds u128 after shift");
-    let floor = (hi << (128 - shift)) | (lo >> shift);
+    let (floor, lo) = shifted_product(a, b, shift);
     floor
         .checked_add(u128::from(lo & ((1u128 << shift) - 1) != 0))
         .expect("widened product exceeds u128 after rounding")
@@ -58,6 +59,52 @@ mod tests {
     fn full_width_corner() {
         // (2^128 - 1)^2 = 2^256 - 2^129 + 1
         assert_eq!(mul_wide(u128::MAX, u128::MAX), (u128::MAX - 1, 1));
+    }
+
+    #[test]
+    fn shift_boundaries_preserve_floor_and_ceiling() {
+        for shift in [1, 62, 127] {
+            let unit = 1u128 << shift;
+            for (a, b, floor, ceil) in [
+                (0, u128::MAX, 0, 0),
+                (3, unit, 3, 3),
+                (1, unit + 1, 1, 2),
+                (u128::MAX, unit, u128::MAX, u128::MAX),
+                // MAX * (2^shift - 1) / 2^shift = MAX - 2^(128-shift) + 2^-shift.
+                (
+                    u128::MAX,
+                    unit - 1,
+                    u128::MAX - (1u128 << (128 - shift)),
+                    u128::MAX - (1u128 << (128 - shift)) + 1,
+                ),
+            ] {
+                assert_eq!(mul_shr(a, b, shift), floor);
+                assert_eq!(mul_shr_up(a, b, shift), ceil);
+            }
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "widened product exceeds u128 after shift")]
+    fn floor_rejects_shift_fit_failure() {
+        mul_shr(u128::MAX, u128::MAX, 127);
+    }
+
+    #[test]
+    #[should_panic(expected = "widened product exceeds u128 after shift")]
+    fn ceiling_rejects_shift_fit_failure() {
+        mul_shr_up(u128::MAX, u128::MAX, 127);
+    }
+
+    #[test]
+    fn floor_fits_when_only_ceiling_overflows() {
+        assert_eq!(mul_shr((1 << 127) + 1, u128::MAX - 1, 127), u128::MAX);
+    }
+
+    #[test]
+    #[should_panic(expected = "widened product exceeds u128 after rounding")]
+    fn ceiling_rejects_rounding_overflow() {
+        mul_shr_up((1 << 127) + 1, u128::MAX - 1, 127);
     }
 
     #[test]

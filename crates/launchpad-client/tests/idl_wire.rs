@@ -437,13 +437,13 @@ fn factory_creator_calls_keep_distinct_tags_creator_and_clock_on_wire() {
 #[test]
 fn graduation_execution_cannot_override_the_saved_adapter_on_wire() {
     assert_wire(
-        factory_core::Message::ExecuteGraduationHook { now: 9 },
-        "040900000000000000",
+        factory_core::Message::ExecuteGraduationHook { creator_hint: None },
+        "0400",
     );
     assert_eq!(
         variant("factory", "Message", "ExecuteGraduationHook"),
         json!({
-            "tag":4,"name":"ExecuteGraduationHook","fields":[{"name":"now","type":"u64"}]
+            "tag":4,"name":"ExecuteGraduationHook","fields":[{"name":"creator_hint","type":"Option<AccountId>"}]
         })
     );
 }
@@ -476,6 +476,9 @@ fn direct_pool_creation_keeps_namespace_owner_and_funding_terms_on_wire() {
     assert_wire(
         curve_core::Message::CreatePool {
             buy_policy: curve_core::BuyPolicy::Open,
+            pause_policy: curve_core::PausePolicy::Disabled,
+            ending_policy: curve_core::EndingPolicy::Either,
+            sell_fee_bps: 0x0102,
             namespace: AccountId::new([1; 32]),
             token0_definition_id: AccountId::new([2; 32]),
             token1_definition_id: AccountId::new([3; 32]),
@@ -494,7 +497,7 @@ fn direct_pool_creation_keeps_namespace_owner_and_funding_terms_on_wire() {
             now: 13,
         },
         concat!(
-            "0800",
+            "080000030201",
             "0101010101010101010101010101010101010101010101010101010101010101",
             "0202020202020202020202020202020202020202020202020202020202020202",
             "0303030303030303030303030303030303030303030303030303030303030303",
@@ -519,6 +522,9 @@ fn direct_pool_creation_keeps_namespace_owner_and_funding_terms_on_wire() {
         json!({
             "tag":8,"name":"CreatePool","fields":[
                 {"name":"buy_policy","type":"BuyPolicy"},
+                {"name":"pause_policy","type":"PausePolicy"},
+                {"name":"ending_policy","type":"EndingPolicy"},
+                {"name":"sell_fee_bps","type":"u16"},
                 {"name":"namespace","type":"AccountId"},
                 {"name":"token0_definition_id","type":"AccountId"},
                 {"name":"token1_definition_id","type":"AccountId"},
@@ -540,7 +546,10 @@ fn factory_creation_keeps_creator_namespace_and_saved_hook_terms_on_wire() {
     assert_wire(
         factory_core::Message::CreateFactoryPool {
             buy_policy: curve_core::BuyPolicy::Open,
+            pause_policy: curve_core::PausePolicy::Disabled,
+            ending_policy: curve_core::EndingPolicy::Either,
             trade_mode: 1,
+            sell_fee_bps: 0x0102,
             graduation_hook_program_id: Some(AccountId::new([1; 32])),
             graduation_hook_configuration: vec![2, 3],
             namespace: AccountId::new([4; 32]),
@@ -559,7 +568,7 @@ fn factory_creation_keeps_creator_namespace_and_saved_hook_terms_on_wire() {
             now: 15,
         },
         concat!(
-            "00000101",
+            "0000000301020101",
             "0101010101010101010101010101010101010101010101010101010101010101",
             "020000000203",
             "0404040404040404040404040404040404040404040404040404040404040404",
@@ -583,7 +592,10 @@ fn factory_creation_keeps_creator_namespace_and_saved_hook_terms_on_wire() {
         json!({
             "tag":0,"name":"CreateFactoryPool","fields":[
                 {"name":"buy_policy","type":"BuyPolicy"},
+                {"name":"pause_policy","type":"PausePolicy"},
+                {"name":"ending_policy","type":"EndingPolicy"},
                 {"name":"trade_mode","type":"u8"},
+                {"name":"sell_fee_bps","type":"u16"},
                 {"name":"graduation_hook_program_id","type":"Option<AccountId>"},
                 {"name":"graduation_hook_configuration","type":"Vec<u8>"},
                 {"name":"namespace","type":"AccountId"},{"name":"launch_salt","type":"[u8;32]"},
@@ -605,14 +617,14 @@ fn graduation_custody_initialization_keeps_saved_sale_identity_on_wire() {
             factory_program_id: AccountId::new([1; 32]),
             namespace: AccountId::new([2; 32]),
             launch_salt: [3; 32],
-            ready: true,
+            accepted_intent: Some(factory_core::GraduationIntentKind::CurveReserves),
         },
         concat!(
             "00",
             "0101010101010101010101010101010101010101010101010101010101010101",
             "0202020202020202020202020202020202020202020202020202020202020202",
             "0303030303030303030303030303030303030303030303030303030303030303",
-            "01"
+            "0100"
         ),
     );
     assert_eq!(
@@ -620,7 +632,7 @@ fn graduation_custody_initialization_keeps_saved_sale_identity_on_wire() {
         json!({
             "tag":0,"name":"Initialize","fields":[
                 {"name":"factory_program_id","type":"AccountId"},{"name":"namespace","type":"AccountId"},
-                {"name":"launch_salt","type":"[u8;32]"},{"name":"ready","type":"bool"}
+                {"name":"launch_salt","type":"[u8;32]"},{"name":"accepted_intent","type":"Option<GraduationIntentKind>"}
             ]
         })
     );
@@ -652,6 +664,9 @@ where
     let expected = hex::decode(encoded).unwrap();
     assert_eq!(borsh::to_vec(&message).unwrap(), expected);
     assert_eq!(borsh::from_slice::<T>(&expected).unwrap(), message);
+    let mut trailing = expected;
+    trailing.push(0);
+    assert!(borsh::from_slice::<T>(&trailing).is_err());
 }
 
 #[test]
@@ -780,8 +795,10 @@ fn graduation_callback_has_a_typed_request_without_an_account_extension() {
             launch_salt: [3; 32],
             token_definition_id: AccountId::new([4; 32]),
             collateral_definition_id: AccountId::new([5; 32]),
-            dex_seed_reserve: 6,
-            collateral_amount: 7,
+            intent: factory_core::GraduationIntent::CurveReserves {
+                launch_tokens: 6,
+                collateral: 7,
+            },
             configuration: vec![8, 9],
         },
     };
@@ -792,6 +809,7 @@ fn graduation_callback_has_a_typed_request_without_an_account_extension() {
         "0303030303030303030303030303030303030303030303030303030303030303",
         "0404040404040404040404040404040404040404040404040404040404040404",
         "0505050505050505050505050505050505050505050505050505050505050505",
+        "00",
         "06000000000000000000000000000000",
         "07000000000000000000000000000000",
         "020000000809"
@@ -811,8 +829,8 @@ fn graduation_callback_has_a_typed_request_without_an_account_extension() {
         json!([
             {"name":"factory_program_id","type":"AccountId"},{"name":"namespace","type":"AccountId"},
             {"name":"launch_salt","type":"[u8;32]"},{"name":"token_definition_id","type":"AccountId"},
-            {"name":"collateral_definition_id","type":"AccountId"},{"name":"dex_seed_reserve","type":"u128"},
-            {"name":"collateral_amount","type":"u128"},{"name":"configuration","type":"Vec<u8>"}
+            {"name":"collateral_definition_id","type":"AccountId"},{"name":"intent","type":"GraduationIntent"},
+            {"name":"configuration","type":"Vec<u8>"}
         ])
     );
 }
@@ -1125,9 +1143,8 @@ fn weighted_controls_settlement_and_poke_have_independent_wire_contracts() {
 }
 
 #[test]
-fn weighted_pool_mode_keeps_pause_and_observer_fields_on_wire() {
+fn weighted_pool_mode_keeps_pricing_and_observer_fields_on_wire() {
     let mode = lbp_core::PoolMode::Weighted {
-        paused: true,
         token_weight_start: 95,
         token_weight_end: 50,
         collateral_seed: 100,
@@ -1135,7 +1152,7 @@ fn weighted_pool_mode_keeps_pause_and_observer_fields_on_wire() {
         checkpoint_time: 1500,
         checkpoint_token_weight: 75,
     };
-    let mut expected = vec![1, 1]; // Weighted, paused
+    let mut expected = vec![1]; // Weighted
     for value in [95u128, 50, 100, 150] {
         expected.extend(value.to_le_bytes());
     }
@@ -1150,7 +1167,6 @@ fn weighted_pool_mode_keeps_pause_and_observer_fields_on_wire() {
         variant("lbp", "PoolMode", "Weighted"),
         json!({
             "tag":1,"name":"Weighted","fields":[
-                {"name":"paused","type":"bool"},
                 {"name":"token_weight_start","type":"u128"},
                 {"name":"token_weight_end","type":"u128"},
                 {"name":"collateral_seed","type":"u128"},
@@ -1218,6 +1234,11 @@ fn weighted_factory_messages_keep_distinct_tags_and_normalized_weights() {
     );
     let inputs = factory_core::WeightedInputs {
         buy_policy: curve_core::BuyPolicy::Open,
+        pause_policy: curve_core::PausePolicy::AuthorityControlled,
+        ending_policy: curve_core::EndingPolicy::Scheduled,
+        trade_mode: factory_core::TradeMode::BuyOnly,
+        sell_fee_bps: 0x0102,
+        graduation_hook: None,
         namespace: creator,
         launch_salt: [6; 32],
         name: "W".into(),
@@ -1238,7 +1259,7 @@ fn weighted_factory_messages_keep_distinct_tags_and_normalized_weights() {
     let message = factory_core::Message::CreateWeightedLbp {
         inputs: inputs.clone(),
     };
-    let mut expected = vec![8, 0];
+    let mut expected = vec![8, 0, 1, 1, 0, 2, 1, 0];
     expected.extend_from_slice(creator.value());
     expected.extend_from_slice(&[6; 32]);
     expected.extend_from_slice(&[1, 0, 0, 0, b'W', 1, 0, 0, 0, b'u']);
@@ -1262,4 +1283,1130 @@ fn weighted_factory_messages_keep_distinct_tags_and_normalized_weights() {
         borsh::from_slice::<factory_core::Message>(&expected).unwrap(),
         message
     );
+}
+
+#[test]
+fn shared_pause_controls_have_appended_tags_and_keep_weighted_aliases() {
+    for (paused, suffix) in [(false, "00"), (true, "01")] {
+        assert_wire(
+            curve_core::Message::SetPaused { paused },
+            &format!("11{suffix}"),
+        );
+        assert_wire(
+            lbp_core::Message::SetPaused { paused },
+            &format!("0f{suffix}"),
+        );
+        assert_wire(
+            factory_core::Message::SetPaused {
+                creator: AccountId::new([5; 32]),
+                paused,
+            },
+            &format!("0d{}{suffix}", "05".repeat(32)),
+        );
+    }
+    for (module, tag) in [("curve", 17), ("lbp", 15)] {
+        assert_eq!(
+            variant(module, "Message", "SetPaused"),
+            json!({
+                "tag":tag,"name":"SetPaused","fields":[{"name":"paused","type":"bool"}]
+            })
+        );
+    }
+    assert_eq!(
+        variant("factory", "Message", "SetPaused"),
+        json!({
+            "tag":13,"name":"SetPaused","fields":[
+                {"name":"creator","type":"AccountId"},{"name":"paused","type":"bool"}
+            ]
+        })
+    );
+}
+
+#[test]
+fn pause_policy_and_trade_control_have_independent_wire_tags() {
+    for (policy, tag, name) in [
+        (curve_core::PausePolicy::Disabled, 0, "Disabled"),
+        (
+            curve_core::PausePolicy::AuthorityControlled,
+            1,
+            "AuthorityControlled",
+        ),
+    ] {
+        assert_wire(policy, &format!("{tag:02x}"));
+        assert_eq!(
+            variant("controls", "PausePolicy", name),
+            json!({"tag":tag,"name":name,"fields":[]})
+        );
+    }
+    for (control, tag, name) in [
+        (curve_core::TradeControl::Unrestricted, 0, "Unrestricted"),
+        (curve_core::TradeControl::Running, 1, "Running"),
+        (curve_core::TradeControl::Paused, 2, "Paused"),
+    ] {
+        assert_wire(control, &format!("{tag:02x}"));
+        assert_eq!(
+            variant("controls", "TradeControl", name),
+            json!({"tag":tag,"name":name,"fields":[]})
+        );
+    }
+    for (module, name, next) in [
+        ("factory", "FactoryState", "pause_policy"),
+        ("lbp_setup", "FixedPriceInputs", "pause_policy"),
+        ("lbp_setup", "WeightedInputs", "pause_policy"),
+        ("lbp_setup", "LbpLaunchState", "pause_policy"),
+        ("lbp", "FixedPricePoolInputs", "pause_policy"),
+        ("lbp", "WeightedPoolInputs", "pause_policy"),
+        ("curve", "PoolAccount", "trade_control"),
+        ("lbp", "PoolAccount", "trade_control"),
+    ] {
+        let schema = schema();
+        let fields = schema["modules"][module][name]["fields"]
+            .as_array()
+            .unwrap();
+        let index = fields
+            .iter()
+            .position(|field| field["name"] == "buy_policy")
+            .unwrap();
+        assert_eq!(
+            fields[index + 1],
+            json!({
+                "name":next,"type":if next == "pause_policy" { "PausePolicy" } else { "TradeControl" }
+            }),
+            "{module}::{name}"
+        );
+    }
+}
+
+#[test]
+fn ending_policies_have_independent_wire_tags() {
+    let schema = schema();
+    let imports = schema["imports"]["sale_policy"].as_array().unwrap();
+    assert!(imports.contains(&json!("controls")));
+    assert!(imports.contains(&json!("terms")));
+    for (policy, tag, name) in [
+        (curve_core::EndingPolicy::Manual, 0, "Manual"),
+        (curve_core::EndingPolicy::Scheduled, 1, "Scheduled"),
+        (curve_core::EndingPolicy::Depletion, 2, "Depletion"),
+        (curve_core::EndingPolicy::Either, 3, "Either"),
+    ] {
+        assert_wire(policy, &format!("{tag:02x}"));
+        assert_eq!(
+            variant("terms", "EndingPolicy", name),
+            json!({"tag":tag,"name":name,"fields":[]})
+        );
+    }
+}
+
+#[test]
+fn immutable_policy_fields_follow_controls_except_inside_the_curve_pool() {
+    let schema = schema();
+    for (module, name, previous) in [
+        ("factory", "FactoryState", "pause_policy"),
+        ("lbp_setup", "FixedPriceInputs", "pause_policy"),
+        ("lbp_setup", "WeightedInputs", "pause_policy"),
+        ("lbp_setup", "LbpLaunchState", "pause_policy"),
+        ("lbp", "FixedPricePoolInputs", "pause_policy"),
+        ("lbp", "WeightedPoolInputs", "pause_policy"),
+        ("lbp", "PoolAccount", "trade_control"),
+        ("pool", "Pool", "fees_collected"),
+    ] {
+        let fields = schema["modules"][module][name]["fields"]
+            .as_array()
+            .unwrap();
+        let index = fields
+            .iter()
+            .position(|field| field["name"] == previous)
+            .unwrap();
+        assert_eq!(
+            fields[index + 1],
+            json!({"name":"ending_policy","type":"EndingPolicy"}),
+            "{module}::{name}"
+        );
+        if module == "pool" {
+            assert_eq!(
+                fields[index + 2],
+                json!({"name":"sell_fee_bps","type":"u16"})
+            );
+            assert_eq!(fields[index + 3]["name"], "close_timestamp");
+        }
+    }
+    let outer = schema["modules"]["curve"]["PoolAccount"]["fields"]
+        .as_array()
+        .unwrap();
+    assert!(
+        outer
+            .iter()
+            .all(|field| field["name"] != "fee_policy" && field["name"] != "ending_policy")
+    );
+}
+
+#[test]
+fn fixed_pool_state_tuple_places_policies_after_trade_control() {
+    let account = AccountId::new([5; 32]);
+    let mut bytes = borsh::to_vec(&(
+        curve_core::BuyPolicy::Open,
+        curve_core::TradeControl::Unrestricted,
+        lbp_core::EndingPolicy::Either,
+        factory_core::TradeMode::BuyOnly,
+        0u16,
+        None::<lee_core::account::Actor>,
+        lbp_core::PoolMode::FixedPrice,
+        (true, false),
+        (
+            account, account, account, account, [6u8; 32], account, account,
+        ),
+        (800u128, 800u128, 200u128),
+        lbp_core::FixedPrice {
+            collateral_units: 25,
+            token_units: 10,
+        },
+        (
+            9u64,
+            Some(100u64),
+            lbp_core::CreatorAllocationRelease::AfterEnd,
+        ),
+        (0u128, 0u128, lbp_core::SettlementProgress::Unselected, true),
+    ))
+    .unwrap();
+    bytes.push(0); // No pending operation.
+    let pool = lbp_core::PoolAccount::decode(&bytes).unwrap();
+    assert!(!pool.closure_observed);
+    assert_eq!(pool.ending_policy, lbp_core::EndingPolicy::Either);
+    assert_eq!(pool.remaining_inventory, 800);
+    assert_eq!(pool.graduation_adapter, None);
+    assert!(pool.seed_returned);
+    assert_eq!(
+        pool.settlement_progress,
+        lbp_core::SettlementProgress::Unselected
+    );
+    assert_eq!(&bytes[..3], &[0, 0, 3]);
+    assert_eq!(borsh::to_vec(&pool).unwrap(), bytes);
+}
+
+#[test]
+fn settlement_progress_has_explicit_wire_tags_and_a_shared_schema() {
+    let schema = schema();
+    assert!(
+        schema["imports"]["sale_policy"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("settlement"))
+    );
+    for (progress, tag, name) in [
+        (lbp_core::SettlementProgress::Unselected, 0, "Unselected"),
+        (
+            lbp_core::SettlementProgress::ManualStarted,
+            1,
+            "ManualStarted",
+        ),
+        (
+            lbp_core::SettlementProgress::ManualComplete,
+            2,
+            "ManualComplete",
+        ),
+        (lbp_core::SettlementProgress::Graduated, 3, "Graduated"),
+    ] {
+        assert_wire(progress, &format!("{tag:02x}"));
+        assert_eq!(
+            variant("settlement", "SettlementProgress", name),
+            json!({"tag":tag,"name":name,"fields":[]})
+        );
+    }
+    assert_eq!(
+        schema["modules"]["settlement"]["SettlementProgress"]["variants"]
+            .as_array()
+            .unwrap()
+            .len(),
+        4
+    );
+    assert!(borsh::from_slice::<lbp_core::SettlementProgress>(&[4]).is_err());
+    let fields = schema["modules"]["lbp"]["PoolAccount"]["fields"]
+        .as_array()
+        .unwrap();
+    assert!(
+        fields
+            .iter()
+            .all(|field| field["name"] != "proceeds_settled")
+    );
+    let index = fields
+        .iter()
+        .position(|field| field["name"] == "accrued_fees")
+        .unwrap();
+    assert_eq!(
+        fields[index + 1],
+        json!({"name":"settlement_progress","type":"SettlementProgress"})
+    );
+    assert_eq!(
+        fields[index + 2],
+        json!({"name":"seed_returned","type":"bool"})
+    );
+    assert_eq!(fields[index + 3]["name"], "pending");
+}
+
+#[test]
+fn fixed_pool_terminal_states_use_progress_tags_instead_of_boolean_completion() {
+    let account = AccountId::new([5; 32]);
+    for (progress, tag) in [
+        (lbp_core::SettlementProgress::ManualComplete, 2),
+        (lbp_core::SettlementProgress::Graduated, 3),
+    ] {
+        let mut bytes = borsh::to_vec(&(
+            curve_core::BuyPolicy::Open,
+            curve_core::TradeControl::Unrestricted,
+            lbp_core::EndingPolicy::Either,
+            factory_core::TradeMode::BuyOnly,
+            0u16,
+            None::<lee_core::account::Actor>,
+            lbp_core::PoolMode::FixedPrice,
+            (true, true),
+            (
+                account, account, account, account, [6u8; 32], account, account,
+            ),
+            (800u128, 0u128, 200u128),
+            lbp_core::FixedPrice {
+                collateral_units: 25,
+                token_units: 10,
+            },
+            (
+                9u64,
+                Some(100u64),
+                lbp_core::CreatorAllocationRelease::AfterEnd,
+            ),
+            (0u128, 0u128, progress, true),
+        ))
+        .unwrap();
+        bytes.push(0);
+        let pool = lbp_core::PoolAccount::decode(&bytes).unwrap();
+        assert!(pool.closure_observed);
+        assert_eq!(pool.settlement_progress, progress);
+        assert_eq!(pool.remaining_inventory, 0);
+        assert_eq!(bytes[bytes.len() - 3], tag);
+        assert!(pool.seed_returned);
+        assert_eq!(borsh::to_vec(&pool).unwrap(), bytes);
+    }
+}
+
+#[test]
+fn curve_settlement_stage_keeps_its_existing_wire_bytes() {
+    use factory_core::SettlementStage;
+    for (stage, tag, name, payload_len) in [
+        (SettlementStage::Unstarted, 0, "Unstarted", 0),
+        (SettlementStage::Ready, 1, "Ready", 0),
+        (
+            SettlementStage::Withdrawn {
+                unsold: 0,
+                collateral_due: 0,
+            },
+            2,
+            "Withdrawn",
+            32,
+        ),
+        (
+            SettlementStage::Burned { collateral_due: 0 },
+            3,
+            "Burned",
+            16,
+        ),
+        (
+            SettlementStage::TokenPaid { collateral_due: 0 },
+            4,
+            "TokenPaid",
+            16,
+        ),
+        (SettlementStage::Complete, 5, "Complete", 0),
+        (
+            SettlementStage::HookReady { collateral_due: 0 },
+            6,
+            "HookReady",
+            16,
+        ),
+        (SettlementStage::Graduated, 7, "Graduated", 0),
+    ] {
+        assert_wire(stage, &format!("{tag:02x}{}", "00".repeat(payload_len)));
+        assert_eq!(variant("factory", "SettlementStage", name)["tag"], tag);
+    }
+    assert_eq!(
+        schema()["modules"]["factory"]["SettlementStage"]["variants"]
+            .as_array()
+            .unwrap()
+            .len(),
+        8
+    );
+    assert!(borsh::from_slice::<SettlementStage>(&[8]).is_err());
+}
+
+#[test]
+fn graduation_intent_kinds_and_amounts_have_independent_wire_tags() {
+    use factory_core::{GraduationIntent, GraduationIntentKind};
+    for (kind, intent, tag, name, fields, payload) in [
+        (
+            GraduationIntentKind::CurveReserves,
+            GraduationIntent::CurveReserves {
+                launch_tokens: 6,
+                collateral: 7,
+            },
+            0,
+            "CurveReserves",
+            json!([{"name":"launch_tokens","type":"u128"},{"name":"collateral","type":"u128"}]),
+            "0600000000000000000000000000000007000000000000000000000000000000",
+        ),
+        (
+            GraduationIntentKind::FixedPriceProceeds,
+            GraduationIntent::FixedPriceProceeds { collateral: 7 },
+            1,
+            "FixedPriceProceeds",
+            json!([{"name":"collateral","type":"u128"}]),
+            "07000000000000000000000000000000",
+        ),
+        (
+            GraduationIntentKind::WeightedBuyerProceeds,
+            GraduationIntent::WeightedBuyerProceeds { collateral: 7 },
+            2,
+            "WeightedBuyerProceeds",
+            json!([{"name":"collateral","type":"u128"}]),
+            "07000000000000000000000000000000",
+        ),
+    ] {
+        assert_eq!(intent.kind(), kind);
+        assert_eq!(intent.amounts(), (if tag == 0 { 6 } else { 0 }, 7));
+        assert_wire(kind, &format!("{tag:02x}"));
+        assert_wire(intent, &format!("{tag:02x}{payload}"));
+        assert_eq!(
+            variant("hook", "GraduationIntentKind", name),
+            json!({"tag":tag,"name":name,"fields":[]})
+        );
+        assert_eq!(
+            variant("hook", "GraduationIntent", name),
+            json!({"tag":tag,"name":name,"fields":fields})
+        );
+        let message = factory_core::AdapterMessage::Initialize {
+            factory_program_id: AccountId::new([1; 32]),
+            namespace: AccountId::new([2; 32]),
+            launch_salt: [3; 32],
+            accepted_intent: Some(kind),
+        };
+        assert_wire(
+            message,
+            &format!(
+                "00{}{}{}01{tag:02x}",
+                "01".repeat(32),
+                "02".repeat(32),
+                "03".repeat(32)
+            ),
+        );
+    }
+    assert_wire(
+        factory_core::AdapterMessage::Initialize {
+            factory_program_id: AccountId::new([1; 32]),
+            namespace: AccountId::new([2; 32]),
+            launch_salt: [3; 32],
+            accepted_intent: None,
+        },
+        &format!(
+            "00{}{}{}00",
+            "01".repeat(32),
+            "02".repeat(32),
+            "03".repeat(32)
+        ),
+    );
+}
+
+#[test]
+fn graduation_result_binds_the_factory_to_the_exact_typed_request_hash() {
+    let request = factory_core::GraduationRequest {
+        factory_program_id: AccountId::new([1; 32]),
+        namespace: AccountId::new([2; 32]),
+        launch_salt: [3; 32],
+        token_definition_id: AccountId::new([4; 32]),
+        collateral_definition_id: AccountId::new([5; 32]),
+        intent: factory_core::GraduationIntent::FixedPriceProceeds { collateral: 7 },
+        configuration: vec![8, 9],
+    };
+    let expected_hash =
+        hex::decode("e2b1a3f68e7418bbd5881c5c9d31a7a32859fb5fd6db157adae35cb518df2cca").unwrap();
+    assert_eq!(request.hash().as_slice(), expected_hash);
+    let result = factory_core::GraduationResult {
+        factory: AccountId::new([6; 32]),
+        request_hash: request.hash(),
+    };
+    assert_wire(
+        result,
+        &format!("{}{}", "06".repeat(32), hex::encode(&expected_hash)),
+    );
+    assert_eq!(
+        schema()["modules"]["hook"]["GraduationResult"]["fields"],
+        json!([
+            {"name":"factory","type":"AccountId"},{"name":"request_hash","type":"[u8;32]"}
+        ])
+    );
+}
+
+#[test]
+fn lbp_graduation_hint_is_optional_data_at_the_existing_factory_tag() {
+    assert_wire(
+        factory_core::Message::ExecuteGraduationHook {
+            creator_hint: Some(AccountId::new([5; 32])),
+        },
+        &format!("0401{}", "05".repeat(32)),
+    );
+}
+
+#[test]
+fn immutable_graduation_terms_follow_the_ending_policy_on_wire() {
+    let schema = schema();
+    for (module, name, next, ty) in [
+        (
+            "lbp_setup",
+            "FixedPriceInputs",
+            "graduation_hook",
+            "Option<GraduationHook>",
+        ),
+        (
+            "lbp_setup",
+            "WeightedInputs",
+            "graduation_hook",
+            "Option<GraduationHook>",
+        ),
+        (
+            "lbp_setup",
+            "LbpLaunchState",
+            "graduation_hook",
+            "Option<GraduationHook>",
+        ),
+        (
+            "lbp",
+            "FixedPricePoolInputs",
+            "graduation_adapter",
+            "Option<Actor>",
+        ),
+        (
+            "lbp",
+            "WeightedPoolInputs",
+            "graduation_adapter",
+            "Option<Actor>",
+        ),
+        ("lbp", "PoolAccount", "graduation_adapter", "Option<Actor>"),
+    ] {
+        let fields = schema["modules"][module][name]["fields"]
+            .as_array()
+            .unwrap();
+        let index = fields
+            .iter()
+            .position(|field| field["name"] == "ending_policy")
+            .unwrap();
+        assert_eq!(
+            fields[index + 1],
+            json!({"name":"trade_mode","type":"TradeMode"}),
+            "{module}::{name}"
+        );
+        assert_eq!(
+            fields[index + 2],
+            json!({"name":"sell_fee_bps","type":"u16"}),
+            "{module}::{name}"
+        );
+        assert_eq!(
+            fields[index + 3],
+            json!({"name":next,"type":ty}),
+            "{module}::{name}"
+        );
+    }
+    let fields = schema["modules"]["lbp_setup"]["LbpLaunchState"]["fields"]
+        .as_array()
+        .unwrap();
+    let index = fields
+        .iter()
+        .position(|field| field["name"] == "creation_stage")
+        .unwrap();
+    assert_eq!(
+        fields[index + 1],
+        json!({"name":"settlement_progress","type":"SettlementProgress"})
+    );
+}
+
+#[test]
+fn lbp_settlement_and_finalize_append_message_tags_without_clock_or_signer_fields() {
+    let adapter = lee_core::account::Actor::new(AccountId::new([6; 32]), AccountId::new([7; 32]));
+    assert_wire(
+        lbp_core::Message::Settle {
+            route: lbp_core::SettlementRoute::Graduation,
+            creator: AccountId::new([5; 32]),
+            adapter: Some(adapter),
+        },
+        &format!(
+            "1001{}01{}{}",
+            "05".repeat(32),
+            "06".repeat(32),
+            "07".repeat(32)
+        ),
+    );
+    assert_wire(
+        lbp_core::Message::FinalizeSettlement {
+            receipt_hash: [8; 32],
+        },
+        &format!("11{}", "08".repeat(32)),
+    );
+    assert_eq!(
+        variant("lbp", "Message", "Settle"),
+        json!({"tag":16,"name":"Settle","fields":[
+            {"name":"route","type":"SettlementRoute"},{"name":"creator","type":"AccountId"},{"name":"adapter","type":"Option<Actor>"}
+        ]})
+    );
+    assert_eq!(
+        variant("lbp", "Message", "FinalizeSettlement"),
+        json!({"tag":17,"name":"FinalizeSettlement","fields":[
+            {"name":"receipt_hash","type":"[u8;32]"}
+        ]})
+    );
+}
+
+#[test]
+fn weighted_pool_keeps_the_adapter_and_outstanding_seed_separate_from_progress() {
+    let account = AccountId::new([5; 32]);
+    let adapter = lee_core::account::Actor::new(AccountId::new([6; 32]), AccountId::new([7; 32]));
+    let mut bytes = borsh::to_vec(&(
+        curve_core::BuyPolicy::Open,
+        curve_core::TradeControl::Unrestricted,
+        lbp_core::EndingPolicy::Scheduled,
+        factory_core::TradeMode::BuyOnly,
+        0u16,
+        Some(adapter),
+        lbp_core::PoolMode::Weighted {
+            token_weight_start: lbp_core::WEIGHT_TOTAL / 2 + 1,
+            token_weight_end: lbp_core::WEIGHT_TOTAL / 2 - 1,
+            collateral_seed: 100,
+            pricing_collateral: 140,
+            checkpoint_time: 9,
+            checkpoint_token_weight: lbp_core::WEIGHT_TOTAL / 2 + 1,
+        },
+        (true, false),
+        (
+            account, account, account, account, [6u8; 32], account, account,
+        ),
+        (800u128, 700u128, 200u128),
+        lbp_core::FixedPrice {
+            collateral_units: 0,
+            token_units: 0,
+        },
+        (
+            9u64,
+            Some(100u64),
+            lbp_core::CreatorAllocationRelease::AfterEnd,
+        ),
+        (
+            140u128,
+            0u128,
+            lbp_core::SettlementProgress::Unselected,
+            false,
+        ),
+    ))
+    .unwrap();
+    bytes.push(0);
+    let pool = lbp_core::PoolAccount::decode(&bytes).unwrap();
+    assert!(!pool.closure_observed);
+    assert_eq!(&bytes[..7], &[0, 0, 1, 0, 0, 0, 1]);
+    assert_eq!(pool.graduation_adapter, Some(adapter));
+    assert!(!pool.seed_returned);
+    assert_eq!(pool.outstanding_seed().unwrap(), 100);
+    assert_eq!(pool.buyer_proceeds().unwrap(), 40);
+    assert_eq!(borsh::to_vec(&pool).unwrap(), bytes);
+}
+
+#[test]
+fn closure_observation_follows_funding_in_both_pool_state_schemas() {
+    let schema = schema();
+    for module in ["curve", "lbp"] {
+        let fields = schema["modules"][module]["PoolAccount"]["fields"]
+            .as_array()
+            .unwrap();
+        let index = fields
+            .iter()
+            .position(|field| field["name"] == "funded")
+            .unwrap();
+        assert_eq!(
+            fields[index + 1],
+            json!({"name":"closure_observed","type":"bool"})
+        );
+        assert_eq!(fields[index + 2]["name"], "namespace");
+    }
+}
+
+#[test]
+fn sale_event_envelope_has_a_versioned_selector_and_independent_wire_bytes() {
+    use curve_core::events::{EventSubjectV1, PricingEngineV1, SaleEventKindV1, SaleEventV1};
+    let event = SaleEventV1::new(
+        [2; 32],
+        PricingEngineV1::Weighted,
+        EventSubjectV1::Launch {
+            factory: [3; 32],
+            pool: [4; 32],
+        },
+        SaleEventKindV1::PauseChanged { paused: true },
+    );
+    let encoded = format!(
+        "01{}0200{}{}0401",
+        "02".repeat(32),
+        "03".repeat(32),
+        "04".repeat(32)
+    );
+    assert_wire(event.clone(), &encoded);
+    assert_eq!(SaleEventV1::VERSION, 1);
+    assert_eq!(SaleEventV1::SELECTOR_NAME, "launchpad::SaleEventV1");
+    let runtime = curve_core::sale_event(event);
+    assert_eq!(
+        runtime.selector,
+        [0xe1, 0x96, 0x1d, 0x35, 0xac, 0x82, 0x20, 0x6c]
+    );
+    assert_eq!(runtime.data, hex::decode(encoded).unwrap());
+    assert_eq!(
+        schema()["modules"]["events"]["SaleEventV1"]["fields"],
+        json!([
+            {"name":"version","type":"u8"}, {"name":"namespace","type":"[u8;32]"},
+            {"name":"engine","type":"PricingEngineV1"}, {"name":"subject","type":"EventSubjectV1"},
+            {"name":"kind","type":"SaleEventKindV1"}
+        ])
+    );
+    assert!(
+        schema()["imports"]["sale_policy"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("events"))
+    );
+}
+
+#[test]
+fn event_engines_subjects_and_policy_fields_have_fixed_wire_order() {
+    use curve_core::events::{EventPoliciesV1, EventSubjectV1, PricingEngineV1};
+    for (engine, tag, name) in [
+        (PricingEngineV1::Curve, 0, "Curve"),
+        (PricingEngineV1::FixedPrice, 1, "FixedPrice"),
+        (PricingEngineV1::Weighted, 2, "Weighted"),
+    ] {
+        assert_wire(engine, &format!("{tag:02x}"));
+        assert_eq!(
+            variant("events", "PricingEngineV1", name),
+            json!({"tag":tag,"name":name,"fields":[]})
+        );
+    }
+    assert_wire(
+        EventSubjectV1::Launch {
+            factory: [3; 32],
+            pool: [4; 32],
+        },
+        &format!("00{}{}", "03".repeat(32), "04".repeat(32)),
+    );
+    assert_wire(
+        EventSubjectV1::Pool { pool: [4; 32] },
+        &format!("01{}", "04".repeat(32)),
+    );
+    assert_eq!(
+        variant("events", "EventSubjectV1", "Launch"),
+        json!({"tag":0,"name":"Launch","fields":[
+            {"name":"factory","type":"[u8;32]"},{"name":"pool","type":"[u8;32]"}
+        ]})
+    );
+    assert_eq!(
+        variant("events", "EventSubjectV1", "Pool"),
+        json!({"tag":1,"name":"Pool","fields":[{"name":"pool","type":"[u8;32]"}]})
+    );
+    assert_wire(
+        EventPoliciesV1 {
+            ending: curve_core::EndingPolicy::Scheduled,
+            pause: curve_core::PausePolicy::AuthorityControlled,
+            sell_fee_bps: 0x0304,
+        },
+        "01010403",
+    );
+    assert_eq!(
+        schema()["modules"]["events"]["EventPoliciesV1"]["fields"],
+        json!([
+            {"name":"ending","type":"EndingPolicy"},{"name":"pause","type":"PausePolicy"},
+            {"name":"sell_fee_bps","type":"u16"}
+        ])
+    );
+}
+
+#[test]
+fn event_kinds_keep_creation_trade_and_settlement_amounts_distinct_on_wire() {
+    use curve_core::events::*;
+    let policies = EventPoliciesV1 {
+        ending: curve_core::EndingPolicy::Scheduled,
+        pause: curve_core::PausePolicy::AuthorityControlled,
+        sell_fee_bps: 0x0304,
+    };
+    let a = "01".repeat(32);
+    let b = "02".repeat(32);
+    let c = "03".repeat(32);
+    let d = "04".repeat(32);
+    let n = |value: u128| hex::encode(value.to_le_bytes());
+    for (kind, tag, name, payload) in [
+        (
+            SaleEventKindV1::Created {
+                creator: [1; 32],
+                creator_role: [2; 32],
+                token_definition: [3; 32],
+                collateral_definition: [4; 32],
+                sale_inventory: 5,
+                creator_allocation: 6,
+                curve_reserve: 7,
+                collateral_seed: 8,
+                start_timestamp: None,
+                end_timestamp: Some(9),
+                policies,
+            },
+            0,
+            "Created",
+            format!(
+                "{a}{b}{c}{d}{}{}{}{}0001090000000000000001010403",
+                n(5),
+                n(6),
+                n(7),
+                n(8)
+            ),
+        ),
+        (
+            SaleEventKindV1::Prepared {
+                owner: [1; 32],
+                token0_definition: [2; 32],
+                token1_definition: [3; 32],
+                reserve0: 5,
+                reserve1: 6,
+                policies,
+            },
+            1,
+            "Prepared",
+            format!("{a}{b}{c}{}{}01010403", n(5), n(6)),
+        ),
+        (
+            SaleEventKindV1::Activated {
+                reserve0: 5,
+                reserve1: 6,
+                collateral_seed: 7,
+            },
+            2,
+            "Activated",
+            format!("{}{}{}", n(5), n(6), n(7)),
+        ),
+        (
+            SaleEventKindV1::Trade {
+                trader: [1; 32],
+                form: TradeFormV1::ExactOutput,
+                token_in: [2; 32],
+                token_out: [3; 32],
+                amount_in: 5,
+                pricing_input: 6,
+                gross_output: 7,
+                amount_out: 8,
+                fee_definition: [4; 32],
+                fee_amount: 9,
+                fee_bps: 0x0102,
+                retained_fee: 11,
+                sell_fee_bps: 0x0304,
+                pricing_time: Some(10),
+            },
+            3,
+            "Trade",
+            format!(
+                "{a}01{b}{c}{}{}{}{}{d}{}0201{}0403010a00000000000000",
+                n(5),
+                n(6),
+                n(7),
+                n(8),
+                n(9),
+                n(11)
+            ),
+        ),
+        (
+            SaleEventKindV1::PauseChanged { paused: true },
+            4,
+            "PauseChanged",
+            "01".into(),
+        ),
+        (
+            SaleEventKindV1::FeesCollected {
+                definition: [1; 32],
+                treasury: [2; 32],
+                liability_discharged: 5,
+                tokens_transferred: 0,
+            },
+            5,
+            "FeesCollected",
+            format!("{a}{b}{}{}", n(5), n(0)),
+        ),
+        (
+            SaleEventKindV1::AllocationReleased {
+                definition: [1; 32],
+                recipient: [2; 32],
+                amount: 5,
+                release: AllocationReleaseV1::AfterEnd,
+            },
+            6,
+            "AllocationReleased",
+            format!("{a}{b}{}01", n(5)),
+        ),
+        (
+            SaleEventKindV1::Closed {
+                reason: ClosureReasonV1::ScheduledEnd { timestamp: 9 },
+                inclusion_bounds: EventTimeBoundsV1 {
+                    at_least: Some(9),
+                    before: None,
+                },
+            },
+            7,
+            "Closed",
+            "02090000000000000001090000000000000000".into(),
+        ),
+        (
+            SaleEventKindV1::Settlement {
+                step: SettlementStepV1::Completed,
+                route: Some(SettlementRouteV1::Manual),
+                effects: vec![],
+            },
+            8,
+            "Settlement",
+            "05010000000000".into(),
+        ),
+        (
+            SaleEventKindV1::Graduated {
+                adapter_program: [1; 32],
+                adapter_custody: [2; 32],
+                launch_tokens: 5,
+                collateral: 6,
+            },
+            9,
+            "Graduated",
+            format!("{a}{b}{}{}", n(5), n(6)),
+        ),
+    ] {
+        assert_wire(kind, &format!("{tag:02x}{payload}"));
+        assert_eq!(variant("events", "SaleEventKindV1", name)["tag"], tag);
+    }
+}
+
+#[test]
+fn event_closure_routes_steps_and_effects_keep_independent_tags() {
+    use curve_core::events::*;
+    for (reason, encoded) in [
+        (ClosureReasonV1::Manual, "00".into()),
+        (
+            ClosureReasonV1::Depleted {
+                definition: [3; 32],
+            },
+            format!("01{}", "03".repeat(32)),
+        ),
+        (
+            ClosureReasonV1::ScheduledEnd { timestamp: 9 },
+            "020900000000000000".into(),
+        ),
+    ] {
+        assert_wire(reason, &encoded);
+    }
+    for (step, tag, name) in [
+        (SettlementStepV1::Prepared, 0, "Prepared"),
+        (SettlementStepV1::ReservesWithdrawn, 1, "ReservesWithdrawn"),
+        (SettlementStepV1::UnsoldBurned, 2, "UnsoldBurned"),
+        (SettlementStepV1::SeedReturned, 3, "SeedReturned"),
+        (SettlementStepV1::Payout, 4, "Payout"),
+        (SettlementStepV1::Completed, 5, "Completed"),
+    ] {
+        assert_wire(step, &format!("{tag:02x}"));
+        assert_eq!(
+            variant("events", "SettlementStepV1", name),
+            json!({"tag":tag,"name":name,"fields":[]})
+        );
+    }
+    for (route, tag, name) in [
+        (SettlementRouteV1::Manual, 0, "Manual"),
+        (SettlementRouteV1::Graduation, 1, "Graduation"),
+    ] {
+        assert_wire(route, &format!("{tag:02x}"));
+        assert_eq!(
+            variant("events", "SettlementRouteV1", name),
+            json!({"tag":tag,"name":name,"fields":[]})
+        );
+    }
+    for (purpose, tag, name) in [
+        (PayoutPurposeV1::Reserve, 0, "Reserve"),
+        (PayoutPurposeV1::CreatorProceeds, 1, "CreatorProceeds"),
+        (PayoutPurposeV1::CreatorSeed, 2, "CreatorSeed"),
+        (PayoutPurposeV1::CurveReserve, 3, "CurveReserve"),
+    ] {
+        assert_wire(purpose, &format!("{tag:02x}"));
+        assert_eq!(
+            variant("events", "PayoutPurposeV1", name),
+            json!({"tag":tag,"name":name,"fields":[]})
+        );
+    }
+    assert_wire(
+        SettlementEffectV1::Burn {
+            definition: [3; 32],
+            amount: 5,
+        },
+        &format!("00{}05000000000000000000000000000000", "03".repeat(32)),
+    );
+    let effect = SettlementEffectV1::Payout {
+        definition: [3; 32],
+        recipient: [4; 32],
+        purpose: PayoutPurposeV1::CreatorSeed,
+        liability_discharged: 5,
+        tokens_transferred: 0,
+    };
+    let encoded = format!(
+        "01{}{}020500000000000000000000000000000000000000000000000000000000000000",
+        "03".repeat(32),
+        "04".repeat(32)
+    );
+    assert_wire(effect, &encoded);
+    assert_wire(
+        SaleEventKindV1::Settlement {
+            step: SettlementStepV1::SeedReturned,
+            route: Some(SettlementRouteV1::Graduation),
+            effects: vec![effect],
+        },
+        &format!("0803010101000000{encoded}"),
+    );
+    assert_wire(TradeFormV1::ExactInput, "00");
+    assert_wire(TradeFormV1::ExactOutput, "01");
+    assert_wire(AllocationReleaseV1::AfterSetup, "00");
+    assert_wire(AllocationReleaseV1::AfterEnd, "01");
+}
+
+#[test]
+fn legacy_weighted_event_payloads_remain_in_the_events_schema() {
+    use curve_core::events::{WeightedCheckpoint, WeightedPauseChanged};
+    assert_eq!(WeightedCheckpoint::SELECTOR_NAME, "lbp::WeightedCheckpoint");
+    assert_eq!(
+        WeightedPauseChanged::SELECTOR_NAME,
+        "lbp::WeightedPauseChanged"
+    );
+    assert_wire(
+        WeightedCheckpoint {
+            time: 9,
+            token_weight: 5,
+        },
+        "090000000000000005000000000000000000000000000000",
+    );
+    assert_wire(WeightedPauseChanged { paused: true }, "01");
+    assert_eq!(
+        schema()["modules"]["events"]["WeightedCheckpoint"]["fields"],
+        json!([
+            {"name":"time","type":"u64"},{"name":"token_weight","type":"u128"}
+        ])
+    );
+    assert_eq!(
+        schema()["modules"]["events"]["WeightedPauseChanged"]["fields"],
+        json!([{"name":"paused","type":"bool"}])
+    );
+}
+
+#[test]
+fn generated_event_metadata_binds_selectors_to_concrete_payload_types() {
+    assert_eq!(
+        schema()["events"],
+        json!({
+            "events::SaleEventV1": {"name":"launchpad::SaleEventV1","selector":"e1961d35ac82206c","payload":"events::SaleEventV1"},
+            "events::WeightedCheckpoint": {"name":"lbp::WeightedCheckpoint","selector":"ae2f6d457fb379cf","payload":"events::WeightedCheckpoint"},
+            "events::WeightedPauseChanged": {"name":"lbp::WeightedPauseChanged","selector":"6d8c1803e82b3a9d","payload":"events::WeightedPauseChanged"}
+        })
+    );
+}
+
+#[test]
+fn shared_trade_modes_have_independent_wire_tags() {
+    for (mode, tag, name) in [
+        (factory_core::TradeMode::BuyOnly, 0, "BuyOnly"),
+        (factory_core::TradeMode::BuyAndSell, 1, "BuyAndSell"),
+    ] {
+        assert_wire(mode, &format!("{tag:02x}"));
+        assert_eq!(
+            variant("terms", "TradeMode", name),
+            json!({"tag":tag,"name":name,"fields":[]})
+        );
+    }
+}
+
+#[test]
+fn lbp_sells_append_tags_without_membership_or_weighted_caller_time() {
+    for (message, name, tag, timed) in [
+        (
+            lbp_core::Message::SellExactInput {
+                amount_in: 25,
+                min_amount_out: 10,
+                now: 9,
+            },
+            "SellExactInput",
+            18u8,
+            true,
+        ),
+        (
+            lbp_core::Message::SellWeightedExactInput {
+                amount_in: 25,
+                min_amount_out: 10,
+            },
+            "SellWeightedExactInput",
+            19u8,
+            false,
+        ),
+    ] {
+        let payload = format!(
+            "190000000000000000000000000000000a000000000000000000000000000000{}",
+            if timed { "0900000000000000" } else { "" }
+        );
+        let mut fields = vec![
+            json!({"name":"amount_in","type":"u128"}),
+            json!({"name":"min_amount_out","type":"u128"}),
+        ];
+        if timed {
+            fields.push(json!({"name":"now","type":"u64"}));
+        }
+        assert_eq!(
+            variant("lbp", "Message", name),
+            json!({"tag":tag,"name":name,"fields":fields})
+        );
+        assert_wire(
+            lbp_core::Message::Execute {
+                pool: AccountId::new([3; 32]),
+                instruction: Box::new(message),
+            },
+            &format!("06{}{tag:02x}{payload}", "03".repeat(32)),
+        );
+    }
+}
+
+#[test]
+fn retained_sell_fee_and_initial_invariant_have_explicit_schema_slots() {
+    let schema = schema();
+    let fields = schema["modules"]["factory"]["FactoryState"]["fields"]
+        .as_array()
+        .unwrap();
+    let index = fields
+        .iter()
+        .position(|field| field["name"] == "trade_mode")
+        .unwrap();
+    assert_eq!(
+        fields[index + 1],
+        json!({"name":"sell_fee_bps","type":"u16"})
+    );
+    let fields = schema["modules"]["pool"]["Pool"]["fields"]
+        .as_array()
+        .unwrap();
+    let index = fields
+        .iter()
+        .position(|field| field["name"] == "k")
+        .unwrap();
+    assert_eq!(fields[index - 1], json!({"name":"initial_k","type":"u128"}));
+    let trade = variant("events", "SaleEventKindV1", "Trade");
+    let fields = trade["fields"].as_array().unwrap();
+    let index = fields
+        .iter()
+        .position(|field| field["name"] == "fee_bps")
+        .unwrap();
+    assert_eq!(
+        fields[index + 1],
+        json!({"name":"retained_fee","type":"u128"})
+    );
+    assert_eq!(
+        fields[index + 2],
+        json!({"name":"sell_fee_bps","type":"u16"})
+    );
+    assert_eq!(fields[index + 3]["name"], "pricing_time");
 }

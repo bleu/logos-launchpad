@@ -66,6 +66,13 @@ impl<'a> FactorySession<'a> {
         let state = FactoryState::decode(bytes.as_ref())
             .map_err(ClientError::DecodeResumableFactoryState)?;
         validate_factory_state(sale, &state)?;
+        if matches!(
+            state.creation_stage,
+            CreationStage::PoolPrepared | CreationStage::Active
+        ) {
+            let pool = load_factory_pool(self.wallet, sale).await?;
+            validate_factory_pool(sale, &state, &pool)?;
+        }
         Ok(Some(state))
     }
 
@@ -181,7 +188,10 @@ pub fn next_creation_invocation(
     if let Some(state) = state {
         validate_factory_state(sale, state)?;
         if !(state.buy_policy == request.buy_policy
+            && state.pause_policy == request.pause_policy
+            && state.ending_policy == request.ending_policy
             && state.trade_mode == request.trade_mode
+            && state.sell_fee_bps == request.sell_fee_bps
             && state.graduation_hook == request.graduation_hook
             && state.sale_reserve == request.sale_reserve
             && state.dex_seed_reserve == request.dex_seed_reserve

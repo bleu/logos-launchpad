@@ -11,11 +11,11 @@ This page explains technical shorthand used in this repository. [CONTEXT.md](../
 | Bonding-curve sale | A sale whose price follows a mathematical curve as tokens are bought or sold. |
 | AMM | Automated market maker: a program that prices trades from a formula and token balances. |
 | Pool | Mechanism state and token custody. A curve pool is state and custody for one ordered token pair. A direct curve pool is an internal primitive, not a separate sale product. |
-| Factory | Shared launch adapter that can create new tokens, set allocations, bind a sale to its namespace and validate setup where rules match. Fixed-price, bonding-curve and weighted sale pools keep separate pricing, custody, lifecycle and fee rules. |
+| Factory | Shared launch adapter that can create new tokens, set allocations, bind a sale to its namespace and validate setup where rules match. Fixed-price, bonding-curve and weighted sale pools keep separate pricing and custody, with shared eligibility, namespace fee and ending decisions. |
 | Token0 / token1 | The ordered token roles in a curve pool. A curve factory sale uses the launch token as token0 and collateral as token1. |
 | Collateral | The token used to buy the sale token and pay protocol fees. |
 | Real reserve / virtual reserve | Real reserves are tokens that can fund swap output. Virtual reserves are pricing-only values. |
-| Invariant / `k` | A formula value that pricing must preserve under its stated rules. The curve's creation-time virtual-reserve product is `k`. |
+| Invariant / `k` | A formula value that pricing must preserve under its stated rules. The curve's creation-time product is immutable `initial_k`. Quotes use current `k`, which grows with retained sell collateral under [ADR 0009](adr/0009-curve-arithmetic.md). |
 | `D` / `R` | `D` is the purchasable curve allocation. `R` is the curve allocation reserved for possible DEX seeding after close. |
 | Allocation / supply | Tokens assigned to a purpose in a sale, or the total tokens available for that purpose. |
 | Fixed-price sale | A sale with a strictly positive exact price in collateral and launch-token smallest units; token decimals are for display. Locked local verification of its four-stage setup passed using development receipts; trading, real proofs and deployment readiness remain pending. See [ADR 0032](adr/0032-fixed-price-lbp-setup.md). |
@@ -25,14 +25,15 @@ This page explains technical shorthand used in this repository. [CONTEXT.md](../
 | Exact-input / exact-output | A trade where the input is fixed and output is calculated, or where the desired output is fixed and required input is calculated. |
 | Slippage limit | A participant-selected execution bound, such as minimum output or maximum input, that rejects an unfavourable trade. |
 | Protocol fee / accrued fee | The protocol charge on a trade, and the amount recorded but not yet transferred to the treasury. |
-| Fee-first buy | A buy that deducts the collateral fee before pricing tokens. Fixed-price exact-output buys gross up the required net collateral; creator proceeds are net. See [ADR 0035](adr/0035-fixed-price-swap-fees.md). |
-| Creator-borne fee | A future weighted-sale fee claim against creator proceeds. It does not reduce the buyer input used for pricing. |
+| Fee-first buy | A buy that deducts the collateral fee before pricing tokens. Exact-output buys gross up the required net collateral; fixed-price and weighted recorded proceeds are net. See [ADR 0035](adr/0035-fixed-price-swap-fees.md). |
+| Namespace fee | A collateral fee on buy input or sell output. Buys price net input and gross up exact output; fees stay separate from recorded collateral. |
 | Live fee rate / current treasury | A namespace setting read at execution or collection time, rather than a value frozen when the sale was created. |
 | Treasury | The current namespace destination for collected protocol fees. |
 | Lifecycle / close / settlement | A sale's allowed state changes; ending trading; and the separate post-close transfer of allowed fees, allocations or proceeds. |
 | Graduation / DEX | Moving liquidity to a decentralized exchange. |
 | Graduation hook | A call to another program after a sale closes. Its rules are in [ADR 0020](adr/0020-settlement-and-graduation.md). |
-| Expiry / end timestamp | A configured time that can end a bonding-curve sale or the scheduled end of a fixed-price or weighted sale. |
+| Ending policy | The fixed rule that ends trading and permits settlement: `Manual`, `Scheduled`, `Depletion` or `Either`. `Manual` is direct-only; weighted sales require a schedule end. See [ADR 0025](adr/0025-sale-closing.md). |
+| Expiry / end timestamp | The configured end used by `Scheduled` or as the fallback for `Either`. |
 | `poke` | A permissionless weighted-sale call that reads the pricing clock and records the current token weight as an observer checkpoint without changing the price schedule. |
 | Pause / freeze | Controls that stop specified actions. Their platform integration and policy remain separate from namespace administration. |
 | Allowlist / proof / nullifier | A fixed private list of approved public trading accounts, evidence that the actual trader is a member and controls the purchase, and a value that prevents spent private state from being used again. Participants can precompute batches of public addresses; approval is not consumed by a buy. Private accounts can still fund trades and receive returns. All three engines implement public buy admission under [ADR 0021](adr/0021-modes-and-open-limits.md), with signed development authority and replay checks; wallet support and complete private execution remain open. |

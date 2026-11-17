@@ -1,3 +1,7 @@
+#[path = "support/lbp_pause_forwarding.rs"]
+mod lbp_pause_forwarding;
+
+use factory_core::events::*;
 use factory_core::{
     CreatorAllocationRelease, Error, LbpCreationStage, LbpLaunchState, LbpSetupMode, Message,
     WeightedInputs, handle,
@@ -14,6 +18,11 @@ fn id(n: u8) -> AccountId {
 fn inputs() -> WeightedInputs {
     WeightedInputs {
         buy_policy: curve_core::BuyPolicy::Open,
+        pause_policy: curve_core::PausePolicy::AuthorityControlled,
+        ending_policy: factory_core::EndingPolicy::Scheduled,
+        trade_mode: factory_core::TradeMode::BuyOnly,
+        sell_fee_bps: 0,
+        graduation_hook: None,
         namespace: id(40),
         launch_salt: [3; 32],
         name: "Weighted".into(),
@@ -198,7 +207,17 @@ fn prepared(release: CreatorAllocationRelease) -> (ReceiveInput, Response, Vec<u
 }
 fn prepared_with_terms(terms: WeightedInputs) -> (ReceiveInput, Response, Vec<u8>) {
     let policy = terms.buy_policy.clone();
+    let pause_policy = terms.pause_policy;
+    let policies = terms.ending_policy;
+    let trade_mode = terms.trade_mode;
+    let sell_fee_bps = terms.sell_fee_bps;
     let (input, response) = minted_with_terms(terms);
+    assert_eq!(
+        LbpLaunchState::decode(response.post_state.as_ref().unwrap())
+            .unwrap()
+            .pause_policy,
+        pause_policy
+    );
     assert_eq!(
         LbpLaunchState::decode(response.post_state.as_ref().unwrap())
             .unwrap()
@@ -206,6 +225,12 @@ fn prepared_with_terms(terms: WeightedInputs) -> (ReceiveInput, Response, Vec<u8
         policy
     );
     let allocated = advance(&input, &response, vec![]).unwrap();
+    assert_eq!(
+        LbpLaunchState::decode(allocated.post_state.as_ref().unwrap())
+            .unwrap()
+            .pause_policy,
+        pause_policy
+    );
     assert_eq!(
         LbpLaunchState::decode(allocated.post_state.as_ref().unwrap())
             .unwrap()
@@ -219,6 +244,12 @@ fn prepared_with_terms(terms: WeightedInputs) -> (ReceiveInput, Response, Vec<u8
             .buy_policy,
         policy
     );
+    for response in [&response, &allocated, &prepared] {
+        let state = LbpLaunchState::decode(response.post_state.as_ref().unwrap()).unwrap();
+        assert_eq!(state.ending_policy, policies);
+        assert_eq!(state.trade_mode, trade_mode);
+        assert_eq!(state.sell_fee_bps, sell_fee_bps);
+    }
     let call = prepared
         .sync_messages
         .iter()
@@ -328,6 +359,21 @@ fn weighted_final_setup_requires_creator_seed_and_keeps_surplus_separate() {
             Some(Error::Overflow)
         );
         let response = advance(&input, &previous, extra(100, 41)).unwrap();
+        if release == CreatorAllocationRelease::AfterEnd {
+            assert!(response.events.is_empty());
+        } else {
+            assert!(matches!(
+                &launch_events(&response)[..],
+                [SaleEventV1 {
+                    kind: SaleEventKindV1::AllocationReleased {
+                        amount: 200,
+                        release: AllocationReleaseV1::AfterSetup,
+                        ..
+                    },
+                    ..
+                }]
+            ));
+        }
         let next = LbpLaunchState::decode(response.post_state.as_ref().unwrap()).unwrap();
         assert_eq!(next.creation_stage, LbpCreationStage::Complete);
         assert_eq!(
@@ -472,5 +518,893 @@ fn weighted_creation_rejects_wrong_policy_version_namespace_or_pool() {
             Some(Error::InvalidTerms),
             "case {case}"
         );
+    }
+}
+
+#[test]
+fn weighted_pause_policy_survives_setup_and_rejects_substitution() {
+    for policy in [
+        curve_core::PausePolicy::Disabled,
+        curve_core::PausePolicy::AuthorityControlled,
+    ] {
+        let mut terms = inputs();
+        terms.pause_policy = policy;
+        let (input, prepared, bytes) = prepared_with_terms(terms);
+        let state = LbpLaunchState::decode(prepared.post_state.as_ref().unwrap()).unwrap();
+        assert_eq!(state.pause_policy, policy);
+        let pool = lbp_core::PoolAccount::decode(&bytes).unwrap();
+        assert_eq!(pool.trade_control.policy(), policy);
+        for control in [
+            curve_core::TradeControl::Unrestricted,
+            curve_core::TradeControl::Running,
+            curve_core::TradeControl::Paused,
+        ] {
+            let mut pool = pool.clone();
+            pool.trade_control = control;
+            let result = advance(
+                &input,
+                &prepared,
+                vec![
+                    borsh::to_vec(&pool).unwrap(),
+                    holding(state.pool_id, state.token_definition_id, 0),
+                    holding(state.pool_id, state.collateral_definition_id, 0),
+                    holding(id(42), state.collateral_definition_id, 100),
+                ],
+            );
+            if control.policy() != policy {
+                assert_eq!(result.err(), Some(Error::InvalidState));
+            } else {
+                let complete =
+                    LbpLaunchState::decode(result.unwrap().post_state.as_ref().unwrap()).unwrap();
+                assert_eq!(complete.pause_policy, policy);
+                assert_eq!(complete.creation_stage, LbpCreationStage::Complete);
+            }
+        }
+    }
+}
+
+#[test]
+fn shared_pause_requires_the_sale_creator_on_every_call_before_pool_forwarding() {
+    let (input, response) = minted(CreatorAllocationRelease::AfterEnd);
+    let mut state = LbpLaunchState::decode(response.post_state.as_ref().unwrap()).unwrap();
+    state.creation_stage = LbpCreationStage::Complete;
+    state.pause_policy = curve_core::PausePolicy::AuthorityControlled;
+    assert!(matches!(
+        state.mode,
+        factory_core::LbpSetupMode::Weighted { .. }
+    ));
+    lbp_pause_forwarding::assert_creator_authority_and_pool_forwarding(input, state);
+}
+
+#[test]
+fn legacy_weighted_pause_keeps_its_weighted_pool_alias() {
+    let (mut input, response) = minted(CreatorAllocationRelease::AfterEnd);
+    let mut state = LbpLaunchState::decode(response.post_state.as_ref().unwrap()).unwrap();
+    state.creation_stage = LbpCreationStage::Complete;
+    input.pre_state = borsh::to_vec(&state).unwrap().into();
+    input.message = borsh::to_vec(&Message::SetWeightedPaused {
+        creator: id(42),
+        paused: true,
+    })
+    .unwrap();
+    let response = handle(&input).unwrap();
+    assert_eq!(response.sync_messages.len(), 1);
+    input.pre_state = response.post_state.unwrap();
+    input.from = Some(Actor::new(
+        state.creator_role_id,
+        factory_core::AUTHORITY_PROGRAM_ACCOUNT_ID,
+    ));
+    input.message = borsh::to_vec(&lez_compat_core::authority::Authorized {
+        role: state.creator_role_id,
+        authority: id(42),
+    })
+    .unwrap();
+    let response = handle(&input).unwrap();
+    assert_eq!(response.sync_messages.len(), 1);
+    assert_eq!(
+        response.sync_messages[0].to,
+        Actor::new(state.pool_id, state.lbp_program_id)
+    );
+    assert_eq!(
+        borsh::from_slice::<lbp_core::Message>(&response.sync_messages[0].message).unwrap(),
+        lbp_core::Message::SetWeightedPaused { paused: true }
+    );
+}
+
+#[test]
+fn weighted_creation_requires_a_supported_ending_and_a_valid_schedule() {
+    use factory_core::EndingPolicy;
+    for ending in [
+        EndingPolicy::Manual,
+        EndingPolicy::Scheduled,
+        EndingPolicy::Depletion,
+        EndingPolicy::Either,
+    ] {
+        let mut terms = inputs();
+        terms.ending_policy = ending;
+        let result = handle(&creation(terms));
+        if matches!(ending, EndingPolicy::Scheduled | EndingPolicy::Either) {
+            assert!(result.is_ok());
+        } else {
+            assert_eq!(result.err(), Some(Error::InvalidTerms));
+        }
+    }
+    for case in 0..2 {
+        let mut terms = inputs();
+        if case == 0 {
+            terms.start_timestamp = u64::MAX;
+        } else {
+            terms.end_timestamp = u64::MAX;
+        }
+        assert_eq!(handle(&creation(terms)).err(), Some(Error::InvalidTerms));
+    }
+}
+
+#[test]
+fn weighted_policy_choices_survive_setup_and_pool_mismatches_reject_funding() {
+    let (input, prepared, bytes) = prepared(CreatorAllocationRelease::AfterEnd);
+    let state = LbpLaunchState::decode(prepared.post_state.as_ref().unwrap()).unwrap();
+    let pool = lbp_core::PoolAccount::decode(&bytes).unwrap();
+    assert_eq!(state.ending_policy, factory_core::EndingPolicy::Scheduled);
+    assert_eq!(pool.ending_policy, state.ending_policy);
+    for case in 0..3 {
+        let mut changed = pool.clone();
+        match case {
+            0 => changed.ending_policy = factory_core::EndingPolicy::Manual,
+            1 => changed.ending_policy = factory_core::EndingPolicy::Depletion,
+            _ => {}
+        }
+        let result = advance(
+            &input,
+            &prepared,
+            vec![
+                borsh::to_vec(&changed).unwrap(),
+                holding(state.pool_id, state.token_definition_id, 0),
+                holding(state.pool_id, state.collateral_definition_id, 0),
+                holding(id(42), state.collateral_definition_id, 100),
+            ],
+        );
+        if case < 2 {
+            assert_eq!(result.err(), Some(Error::InvalidCustody));
+        } else {
+            let complete =
+                LbpLaunchState::decode(result.unwrap().post_state.as_ref().unwrap()).unwrap();
+            assert_eq!(complete.creation_stage, LbpCreationStage::Complete);
+            assert_eq!(complete.ending_policy, state.ending_policy);
+        }
+    }
+}
+
+fn weighted_authorized(input: &ReceiveInput, response: &Response) -> ReceiveInput {
+    let state = LbpLaunchState::decode(response.post_state.as_ref().unwrap()).unwrap();
+    ReceiveInput {
+        receiver: input.receiver,
+        from: Some(Actor::new(
+            state.creator_role_id,
+            factory_core::AUTHORITY_PROGRAM_ACCOUNT_ID,
+        )),
+        is_authorized: false,
+        pre_state: response.post_state.clone().unwrap(),
+        message: borsh::to_vec(&lez_compat_core::authority::Authorized {
+            role: state.creator_role_id,
+            authority: id(42),
+        })
+        .unwrap(),
+    }
+}
+
+#[test]
+fn scheduled_weighted_allocation_keeps_deadline_and_settlement_delegates_to_pool() {
+    let (input, prepared, bytes) = prepared(CreatorAllocationRelease::AfterEnd);
+    let mut state = LbpLaunchState::decode(prepared.post_state.as_ref().unwrap()).unwrap();
+    state.creation_stage = LbpCreationStage::Complete;
+    let mut pool = lbp_core::PoolAccount::decode(&bytes).unwrap();
+    pool.funded = true;
+    pool.remaining_inventory = 0;
+    pool.recorded_collateral = 100;
+    if let lbp_core::PoolMode::Weighted {
+        pricing_collateral, ..
+    } = &mut pool.mode
+    {
+        *pricing_collateral = 100;
+    }
+    for released in [false, true] {
+        state.creator_allocation_released = released;
+        let mut request = input.clone();
+        request.from = None;
+        request.pre_state = borsh::to_vec(&state).unwrap().into();
+        request.message =
+            borsh::to_vec(&Message::ClaimWeightedAllocation { creator: id(42) }).unwrap();
+        let response = handle(&request).unwrap();
+        request = weighted_authorized(&request, &response);
+        let mut response = handle(&request).unwrap();
+        {
+            for bytes in [
+                borsh::to_vec(&pool).unwrap(),
+                holding(state.creator_escrow_id, state.token_definition_id, 200),
+            ] {
+                request = reply(&request, &response, bytes);
+                response = handle(&request).unwrap();
+            }
+        }
+        assert_eq!(response.validity.timestamps.start(), Some(300_000));
+        assert!(!response.validity.timestamps.is_valid_for(299_999));
+        assert!(response.validity.timestamps.is_valid_for(300_000));
+        assert_eq!(response.sync_messages.len(), usize::from(!released));
+        if released {
+            assert!(response.events.is_empty());
+        } else {
+            assert!(matches!(
+                &launch_events(&response)[..],
+                [SaleEventV1 {
+                    kind: SaleEventKindV1::AllocationReleased {
+                        amount: 200,
+                        release: AllocationReleaseV1::AfterEnd,
+                        ..
+                    },
+                    ..
+                }]
+            ));
+        }
+    }
+    let mut request = input;
+    request.from = None;
+    request.pre_state = borsh::to_vec(&state).unwrap().into();
+    request.message =
+        borsh::to_vec(&Message::WithdrawWeightedProceeds { creator: id(42) }).unwrap();
+    let response = handle(&request).unwrap();
+    request = weighted_authorized(&request, &response);
+    let response = handle(&request).unwrap();
+    assert_eq!(
+        borsh::from_slice::<lbp_core::Message>(&response.sync_messages[0].message).unwrap(),
+        lbp_core::Message::ReadState
+    );
+    request = reply(&request, &response, borsh::to_vec(&pool).unwrap());
+    let response = handle(&request).unwrap();
+    assert_eq!(response.validity.timestamps.start(), Some(300_000));
+    assert!(!response.validity.timestamps.is_valid_for(299_999));
+    assert!(response.validity.timestamps.is_valid_for(300_000));
+    assert_eq!(response.sync_messages.len(), 2);
+    assert_eq!(
+        borsh::from_slice::<lbp_core::Message>(&response.sync_messages[1].message).unwrap(),
+        lbp_core::Message::Settle {
+            route: factory_core::SettlementRoute::Manual,
+            creator: id(42),
+            adapter: None
+        }
+    );
+}
+
+#[test]
+fn weighted_malformed_saved_policies_cannot_resume_or_forward_payouts() {
+    let input = creation(inputs());
+    let response = handle(&input).unwrap();
+    let state = LbpLaunchState::decode(response.post_state.as_ref().unwrap()).unwrap();
+    for case in 0..3 {
+        let mut changed = state.clone();
+        match case {
+            0 => changed.ending_policy = factory_core::EndingPolicy::Manual,
+            1 => changed.ending_policy = factory_core::EndingPolicy::Depletion,
+            _ => changed.end_timestamp = None,
+        }
+        let bytes = borsh::to_vec(&changed).unwrap();
+        assert_eq!(
+            LbpLaunchState::decode(&bytes).err(),
+            Some(Error::InvalidState)
+        );
+        let mut next = reply(&input, &response, config());
+        next.pre_state = bytes.into();
+        assert_eq!(handle(&next).err(), Some(Error::InvalidState));
+        changed.creation_stage = LbpCreationStage::Complete;
+        next.pre_state = borsh::to_vec(&changed).unwrap().into();
+        next.message =
+            borsh::to_vec(&Message::WithdrawWeightedProceeds { creator: id(42) }).unwrap();
+        assert_eq!(handle(&next).err(), Some(Error::InvalidState));
+    }
+}
+
+fn weighted_callback<T: borsh::BorshSerialize>(
+    input: &ReceiveInput,
+    response: &Response,
+    message: &T,
+) -> ReceiveInput {
+    ReceiveInput {
+        receiver: input.receiver,
+        from: Some(response.sync_messages.last().unwrap().to),
+        is_authorized: false,
+        pre_state: response.post_state.clone().unwrap(),
+        message: borsh::to_vec(message).unwrap(),
+    }
+}
+
+#[test]
+fn weighted_hook_saves_adapter_binding_and_keeps_seed_outside_the_intent() {
+    use factory_core::{
+        AdapterMessage, GraduationIntent, GraduationIntentKind, GraduationResult,
+        SettlementAmounts, SettlementProgress, SettlementReceipt, SettlementReply, SettlementRoute,
+    };
+    let mut terms = inputs();
+    terms.graduation_hook = Some(factory_core::GraduationHook {
+        program_id: id(9),
+        configuration: b"weighted".to_vec(),
+    });
+    let (mut input, prepared, bytes) = prepared_with_terms(terms.clone());
+    let mut state = LbpLaunchState::decode(prepared.post_state.as_ref().unwrap()).unwrap();
+    assert_eq!(state.graduation_hook, terms.graduation_hook);
+    let mut pool = lbp_core::PoolAccount::decode(&bytes).unwrap();
+    let adapter = Actor::new(
+        factory_core::compute_graduation_pda(id(9), input.receiver.account_id),
+        id(9),
+    );
+    assert_eq!(pool.graduation_adapter, Some(adapter));
+    let mut changed = pool.clone();
+    changed.graduation_adapter = None;
+    assert_eq!(
+        advance(
+            &input,
+            &prepared,
+            vec![
+                borsh::to_vec(&changed).unwrap(),
+                holding(state.pool_id, state.token_definition_id, 0),
+                holding(state.pool_id, state.collateral_definition_id, 0),
+                holding(id(42), state.collateral_definition_id, 100)
+            ]
+        )
+        .err(),
+        Some(Error::InvalidCustody)
+    );
+    state.creation_stage = LbpCreationStage::Complete;
+    pool.funded = true;
+    pool.remaining_inventory = 0;
+    pool.recorded_collateral = 125;
+    pool.accrued_fees = 3;
+    input.pre_state = borsh::to_vec(&state).unwrap().into();
+    input.from = None;
+    input.message = borsh::to_vec(&Message::ExecuteGraduationHook {
+        creator_hint: Some(id(99)),
+    })
+    .unwrap();
+    let response = handle(&input).unwrap();
+    input = reply(&input, &response, borsh::to_vec(&pool).unwrap());
+    let response = handle(&input).unwrap();
+    let adapter_state = factory_core::handle_adapter(&ReceiveInput {
+        receiver: adapter,
+        from: None,
+        is_authorized: false,
+        pre_state: vec![].into(),
+        message: borsh::to_vec(&AdapterMessage::Initialize {
+            factory_program_id: id(7),
+            namespace: state.namespace,
+            launch_salt: state.launch_salt,
+            accepted_intent: Some(GraduationIntentKind::WeightedBuyerProceeds),
+        })
+        .unwrap(),
+    })
+    .unwrap()
+    .post_state
+    .unwrap();
+    input = reply(&input, &response, adapter_state.to_vec());
+    let mut response = handle(&input).unwrap();
+    assert_eq!(response.validity.timestamps.start(), Some(300_000));
+    assert!(!response.validity.timestamps.is_valid_for(299_999));
+    for definition in [state.token_definition_id, state.collateral_definition_id] {
+        input = reply(
+            &input,
+            &response,
+            holding(adapter.account_id, definition, 0),
+        );
+        response = handle(&input).unwrap();
+    }
+    assert_eq!(
+        response.sync_messages[0].to,
+        Actor::new(
+            state.creator_role_id,
+            factory_core::AUTHORITY_PROGRAM_ACCOUNT_ID
+        )
+    );
+    input = weighted_callback(
+        &input,
+        &response,
+        &lez_compat_core::authority::CurrentAuthority {
+            role: state.creator_role_id,
+            authority: id(99),
+        },
+    );
+    let pending = handle(&input).unwrap();
+    assert_eq!(pending.validity.timestamps.start(), Some(300_000));
+    assert_eq!(
+        borsh::from_slice::<lbp_core::Message>(&pending.sync_messages.last().unwrap().message)
+            .unwrap(),
+        lbp_core::Message::Settle {
+            route: SettlementRoute::Graduation,
+            creator: id(99),
+            adapter: Some(adapter)
+        }
+    );
+    let receipt = SettlementReceipt {
+        factory: input.receiver,
+        pool: Actor::new(state.pool_id, state.lbp_program_id),
+        route: SettlementRoute::Graduation,
+        creator: id(99),
+        adapter: Some(adapter),
+        amounts: SettlementAmounts {
+            launch_tokens: 0,
+            collateral: 25,
+        },
+        seed_payment: 100,
+        progress: SettlementProgress::Graduated,
+    };
+    for case in 0..3 {
+        let mut changed = receipt.clone();
+        match case {
+            0 => changed.seed_payment = 0,
+            1 => changed.amounts.collateral = 125,
+            _ => changed.amounts.launch_tokens = 1,
+        }
+        let bad = weighted_callback(
+            &input,
+            &pending,
+            &SettlementReply::Applied { receipt: changed },
+        );
+        assert_eq!(handle(&bad).err(), Some(Error::InvalidState));
+    }
+    input = weighted_callback(
+        &input,
+        &pending,
+        &SettlementReply::Applied {
+            receipt: receipt.clone(),
+        },
+    );
+    let callback = handle(&input).unwrap();
+    assert!(pending.events.is_empty());
+    assert!(callback.events.is_empty());
+    assert!(callback.sync_messages[0].pda_seeds.is_empty());
+    let AdapterMessage::Graduate { request } =
+        borsh::from_slice(&callback.sync_messages[0].message).unwrap()
+    else {
+        panic!("graduate");
+    };
+    assert_eq!(
+        request.intent,
+        GraduationIntent::WeightedBuyerProceeds { collateral: 25 }
+    );
+    assert_eq!(
+        LbpLaunchState::decode(callback.post_state.as_ref().unwrap())
+            .unwrap()
+            .settlement_progress,
+        SettlementProgress::Unselected
+    );
+    input = weighted_callback(
+        &input,
+        &callback,
+        &GraduationResult {
+            factory: input.receiver.account_id,
+            request_hash: request.hash(),
+        },
+    );
+    let finalize = handle(&input).unwrap();
+    assert!(finalize.events.is_empty());
+    assert_eq!(
+        borsh::from_slice::<lbp_core::Message>(&finalize.sync_messages[0].message).unwrap(),
+        lbp_core::Message::FinalizeSettlement {
+            receipt_hash: receipt.hash()
+        }
+    );
+    input = weighted_callback(
+        &input,
+        &finalize,
+        &SettlementReply::Completed {
+            receipt_hash: receipt.hash(),
+            progress: receipt.progress,
+        },
+    );
+    let completed = handle(&input).unwrap();
+    assert_eq!(
+        launch_events(&completed),
+        vec![SaleEventV1::new(
+            *state.namespace.value(),
+            PricingEngineV1::Weighted,
+            EventSubjectV1::Launch {
+                factory: *input.receiver.account_id.value(),
+                pool: *state.pool_id.value()
+            },
+            SaleEventKindV1::Graduated {
+                adapter_program: *adapter.program_account_id.value(),
+                adapter_custody: *adapter.account_id.value(),
+                launch_tokens: 0,
+                collateral: 25
+            }
+        )]
+    );
+    assert_eq!(
+        LbpLaunchState::decode(completed.post_state.as_ref().unwrap())
+            .unwrap()
+            .settlement_progress,
+        SettlementProgress::Graduated
+    );
+}
+
+#[test]
+fn weighted_seed_only_manual_completion_is_final_and_acknowledged_once() {
+    use factory_core::{
+        SettlementAmounts, SettlementProgress, SettlementReceipt, SettlementReply, SettlementRoute,
+    };
+    let (mut input, prepared, bytes) = prepared(CreatorAllocationRelease::AfterEnd);
+    let mut state = LbpLaunchState::decode(prepared.post_state.as_ref().unwrap()).unwrap();
+    state.creation_stage = LbpCreationStage::Complete;
+    let mut pool = lbp_core::PoolAccount::decode(&bytes).unwrap();
+    pool.funded = true;
+    pool.recorded_collateral = 100;
+    input.pre_state = borsh::to_vec(&state).unwrap().into();
+    input.from = None;
+    input.message = borsh::to_vec(&Message::WithdrawWeightedProceeds { creator: id(42) }).unwrap();
+    let response = handle(&input).unwrap();
+    input = weighted_authorized(&input, &response);
+    let response = handle(&input).unwrap();
+    input = reply(&input, &response, borsh::to_vec(&pool).unwrap());
+    let pending = handle(&input).unwrap();
+    assert_eq!(pending.validity.timestamps.start(), Some(300_000));
+    let receipt = SettlementReceipt {
+        factory: input.receiver,
+        pool: Actor::new(state.pool_id, state.lbp_program_id),
+        route: SettlementRoute::Manual,
+        creator: id(42),
+        adapter: None,
+        amounts: SettlementAmounts {
+            launch_tokens: 0,
+            collateral: 0,
+        },
+        seed_payment: 100,
+        progress: SettlementProgress::ManualComplete,
+    };
+    input = weighted_callback(
+        &input,
+        &pending,
+        &SettlementReply::Applied {
+            receipt: receipt.clone(),
+        },
+    );
+    let finalize = handle(&input).unwrap();
+    assert!(finalize.events.is_empty());
+    assert_eq!(
+        LbpLaunchState::decode(finalize.post_state.as_ref().unwrap())
+            .unwrap()
+            .settlement_progress,
+        SettlementProgress::Unselected
+    );
+    input = weighted_callback(
+        &input,
+        &finalize,
+        &SettlementReply::Completed {
+            receipt_hash: receipt.hash(),
+            progress: receipt.progress,
+        },
+    );
+    let completed = handle(&input).unwrap();
+    assert!(completed.events.is_empty());
+    let state = LbpLaunchState::decode(completed.post_state.as_ref().unwrap()).unwrap();
+    assert_eq!(
+        state.settlement_progress,
+        SettlementProgress::ManualComplete
+    );
+    pool.settlement_progress = state.settlement_progress;
+    pool.seed_returned = true;
+    pool.recorded_collateral = 0;
+    input.pre_state = completed.post_state.unwrap();
+    input.from = None;
+    input.message = borsh::to_vec(&Message::WithdrawWeightedProceeds { creator: id(42) }).unwrap();
+    let response = handle(&input).unwrap();
+    input = weighted_authorized(&input, &response);
+    let response = handle(&input).unwrap();
+    input = reply(&input, &response, borsh::to_vec(&pool).unwrap());
+    let noop = handle(&input).unwrap();
+    assert!(noop.events.is_empty());
+    assert!(noop.sync_messages.is_empty());
+    assert_eq!(noop.validity.timestamps.start(), Some(300_000));
+}
+
+#[test]
+fn weighted_allocation_and_retries_use_selected_close_without_releasing_schedule_dust() {
+    for ending in [
+        factory_core::EndingPolicy::Scheduled,
+        factory_core::EndingPolicy::Either,
+    ] {
+        let mut terms = inputs();
+        terms.ending_policy = ending;
+        let (input, prepared, bytes) = prepared_with_terms(terms);
+        let mut state = LbpLaunchState::decode(prepared.post_state.as_ref().unwrap()).unwrap();
+        state.creation_stage = LbpCreationStage::Complete;
+        let original = lbp_core::PoolAccount::decode(&bytes).unwrap();
+        for remaining in [0, 1] {
+            let mut pool = original.clone();
+            pool.funded = true;
+            pool.remaining_inventory = remaining;
+            pool.recorded_collateral = 100;
+            if let lbp_core::PoolMode::Weighted {
+                pricing_collateral, ..
+            } = &mut pool.mode
+            {
+                *pricing_collateral = 100;
+            }
+            for released in [false, true] {
+                state.creator_allocation_released = released;
+                let mut request = input.clone();
+                request.from = None;
+                request.pre_state = borsh::to_vec(&state).unwrap().into();
+                request.message =
+                    borsh::to_vec(&Message::ClaimWeightedAllocation { creator: id(42) }).unwrap();
+                let response = handle(&request).unwrap();
+                request = weighted_authorized(&request, &response);
+                let mut response = handle(&request).unwrap();
+                for bytes in [
+                    borsh::to_vec(&pool).unwrap(),
+                    holding(
+                        state.creator_escrow_id,
+                        state.token_definition_id,
+                        if released { 0 } else { 200 },
+                    ),
+                ] {
+                    request = reply(&request, &response, bytes);
+                    response = handle(&request).unwrap();
+                }
+                let expected = if ending == factory_core::EndingPolicy::Either && remaining == 0 {
+                    None
+                } else {
+                    Some(300_000)
+                };
+                assert_eq!(response.validity.timestamps.start(), expected);
+                assert_eq!(response.sync_messages.len(), usize::from(!released));
+                assert!(
+                    LbpLaunchState::decode(response.post_state.as_ref().unwrap())
+                        .unwrap()
+                        .creator_allocation_released
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn released_after_setup_allocation_retry_stays_available_while_weighted_sale_is_open() {
+    let (input, prepared, bytes) = prepared(CreatorAllocationRelease::AfterSetup);
+    let mut state = LbpLaunchState::decode(prepared.post_state.as_ref().unwrap()).unwrap();
+    state.creation_stage = LbpCreationStage::Complete;
+    state.creator_allocation_released = true;
+    let pool = lbp_core::PoolAccount::decode(&bytes).unwrap();
+    assert!(pool.remaining_inventory > 0);
+    assert_eq!(pool.close_time_bound().unwrap(), Some(300));
+    let mut request = input.clone();
+    request.from = None;
+    request.pre_state = borsh::to_vec(&state).unwrap().into();
+    request.message = borsh::to_vec(&Message::ClaimWeightedAllocation { creator: id(42) }).unwrap();
+    let response = handle(&request).unwrap();
+    let mut callback = weighted_authorized(&request, &response);
+    callback.from = None;
+    assert_eq!(handle(&callback).err(), Some(Error::Unauthorized));
+    let repeated = handle(&weighted_authorized(&request, &response)).unwrap();
+    assert!(repeated.sync_messages.is_empty());
+    assert_eq!(repeated.validity.timestamps.start(), None);
+    assert_eq!(
+        LbpLaunchState::decode(repeated.post_state.as_ref().unwrap()).unwrap(),
+        state
+    );
+}
+
+fn launch_events(response: &Response) -> Vec<SaleEventV1> {
+    response
+        .events
+        .iter()
+        .map(|event| {
+            let payload: SaleEventV1 = borsh::from_slice(&event.data).unwrap();
+            assert_eq!(
+                event.selector,
+                curve_core::sale_event(payload.clone()).selector
+            );
+            payload
+        })
+        .collect()
+}
+
+#[test]
+fn weighted_created_event_names_the_launch_and_original_seed_once() {
+    let input = creation(inputs());
+    let response = handle(&input).unwrap();
+    let state = LbpLaunchState::decode(response.post_state.as_ref().unwrap()).unwrap();
+    assert_eq!(
+        launch_events(&response),
+        vec![SaleEventV1::new(
+            *state.namespace.value(),
+            PricingEngineV1::Weighted,
+            EventSubjectV1::Launch {
+                factory: *input.receiver.account_id.value(),
+                pool: *state.pool_id.value()
+            },
+            SaleEventKindV1::Created {
+                creator: *id(42).value(),
+                creator_role: *state.creator_role_id.value(),
+                token_definition: *state.token_definition_id.value(),
+                collateral_definition: *state.collateral_definition_id.value(),
+                sale_inventory: 800,
+                creator_allocation: 200,
+                curve_reserve: 0,
+                collateral_seed: 100,
+                start_timestamp: Some(150),
+                end_timestamp: Some(300),
+                policies: EventPoliciesV1 {
+                    ending: state.ending_policy,
+                    pause: state.pause_policy,
+                    sell_fee_bps: state.sell_fee_bps
+                }
+            }
+        )]
+    );
+    let (_, minted) = minted(CreatorAllocationRelease::AfterEnd);
+    assert!(minted.events.is_empty());
+    let mut replay = input;
+    replay.pre_state = minted.post_state.unwrap();
+    assert_eq!(handle(&replay).err(), Some(Error::AlreadyInitialized));
+}
+
+#[test]
+fn weighted_trade_mode_survives_setup_and_rejects_substitution() {
+    for mode in [
+        factory_core::TradeMode::BuyOnly,
+        factory_core::TradeMode::BuyAndSell,
+    ] {
+        let mut terms = inputs();
+        terms.trade_mode = mode;
+        let (input, prepared, bytes) = prepared_with_terms(terms);
+        let state = LbpLaunchState::decode(prepared.post_state.as_ref().unwrap()).unwrap();
+        assert_eq!(state.trade_mode, mode);
+        let pool = lbp_core::PoolAccount::decode(&bytes).unwrap();
+        assert_eq!(pool.trade_mode, mode);
+        for pool_mode in [
+            factory_core::TradeMode::BuyOnly,
+            factory_core::TradeMode::BuyAndSell,
+        ] {
+            let mut pool = pool.clone();
+            pool.trade_mode = pool_mode;
+            let result = advance(
+                &input,
+                &prepared,
+                vec![
+                    borsh::to_vec(&pool).unwrap(),
+                    holding(state.pool_id, state.token_definition_id, 0),
+                    holding(state.pool_id, state.collateral_definition_id, 0),
+                    holding(id(42), state.collateral_definition_id, 100),
+                ],
+            );
+            if pool_mode != mode {
+                assert_eq!(result.err(), Some(Error::InvalidCustody));
+            } else {
+                let complete =
+                    LbpLaunchState::decode(result.unwrap().post_state.as_ref().unwrap()).unwrap();
+                assert_eq!(complete.trade_mode, mode);
+                assert_eq!(complete.creation_stage, LbpCreationStage::Complete);
+            }
+        }
+    }
+}
+
+#[test]
+fn weighted_payouts_and_hook_reject_a_substituted_trade_mode() {
+    let mut terms = inputs();
+    terms.graduation_hook = Some(factory_core::GraduationHook {
+        program_id: id(9),
+        configuration: vec![],
+    });
+    let (input, prepared, bytes) = prepared_with_terms(terms);
+    let mut state = LbpLaunchState::decode(prepared.post_state.as_ref().unwrap()).unwrap();
+    state.creation_stage = LbpCreationStage::Complete;
+    let mut pool = lbp_core::PoolAccount::decode(&bytes).unwrap();
+    pool.funded = true;
+    pool.trade_mode = factory_core::TradeMode::BuyAndSell;
+    for command in [
+        Message::ClaimWeightedAllocation { creator: id(42) },
+        Message::WithdrawWeightedProceeds { creator: id(42) },
+        Message::ExecuteGraduationHook {
+            creator_hint: Some(id(42)),
+        },
+    ] {
+        let hook = matches!(command, Message::ExecuteGraduationHook { .. });
+        let allocation = matches!(command, Message::ClaimWeightedAllocation { .. });
+        let mut request = input.clone();
+        request.from = None;
+        request.pre_state = borsh::to_vec(&state).unwrap().into();
+        request.message = borsh::to_vec(&command).unwrap();
+        let mut response = handle(&request).unwrap();
+        if !hook {
+            request = weighted_authorized(&request, &response);
+            response = handle(&request).unwrap();
+        }
+        request = reply(&request, &response, borsh::to_vec(&pool).unwrap());
+        if allocation {
+            response = handle(&request).unwrap();
+            request = reply(
+                &request,
+                &response,
+                holding(state.creator_escrow_id, state.token_definition_id, 200),
+            );
+        }
+        assert_eq!(handle(&request).err(), Some(Error::InvalidCustody));
+    }
+}
+
+#[test]
+fn weighted_sell_fee_survives_setup_and_rejects_substitution() {
+    for rate in [0, 125, 9999] {
+        let mut terms = inputs();
+        terms.sell_fee_bps = rate;
+        let (input, prepared, bytes) = prepared_with_terms(terms);
+        let state = LbpLaunchState::decode(prepared.post_state.as_ref().unwrap()).unwrap();
+        assert_eq!(state.sell_fee_bps, rate);
+        let pool = lbp_core::PoolAccount::decode(&bytes).unwrap();
+        assert_eq!(pool.sell_fee_bps, rate);
+        for pool_rate in [0, 125, 9999] {
+            let mut pool = pool.clone();
+            pool.sell_fee_bps = pool_rate;
+            let result = advance(
+                &input,
+                &prepared,
+                vec![
+                    borsh::to_vec(&pool).unwrap(),
+                    holding(state.pool_id, state.token_definition_id, 0),
+                    holding(state.pool_id, state.collateral_definition_id, 0),
+                    holding(id(42), state.collateral_definition_id, 100),
+                ],
+            );
+            if pool_rate != rate {
+                assert_eq!(result.err(), Some(Error::InvalidCustody));
+            } else {
+                let complete =
+                    LbpLaunchState::decode(result.unwrap().post_state.as_ref().unwrap()).unwrap();
+                assert_eq!(complete.sell_fee_bps, rate);
+                assert_eq!(complete.creation_stage, LbpCreationStage::Complete);
+            }
+        }
+    }
+}
+
+#[test]
+fn weighted_payouts_and_hook_reject_a_substituted_sell_fee() {
+    let mut terms = inputs();
+    terms.graduation_hook = Some(factory_core::GraduationHook {
+        program_id: id(9),
+        configuration: vec![],
+    });
+    let (input, prepared, bytes) = prepared_with_terms(terms);
+    let mut state = LbpLaunchState::decode(prepared.post_state.as_ref().unwrap()).unwrap();
+    state.creation_stage = LbpCreationStage::Complete;
+    let mut pool = lbp_core::PoolAccount::decode(&bytes).unwrap();
+    pool.funded = true;
+    pool.sell_fee_bps = 1;
+    for command in [
+        Message::ClaimWeightedAllocation { creator: id(42) },
+        Message::WithdrawWeightedProceeds { creator: id(42) },
+        Message::ExecuteGraduationHook {
+            creator_hint: Some(id(42)),
+        },
+    ] {
+        let hook = matches!(command, Message::ExecuteGraduationHook { .. });
+        let allocation = matches!(command, Message::ClaimWeightedAllocation { .. });
+        let mut request = input.clone();
+        request.from = None;
+        request.pre_state = borsh::to_vec(&state).unwrap().into();
+        request.message = borsh::to_vec(&command).unwrap();
+        let mut response = handle(&request).unwrap();
+        if !hook {
+            request = weighted_authorized(&request, &response);
+            response = handle(&request).unwrap();
+        }
+        request = reply(&request, &response, borsh::to_vec(&pool).unwrap());
+        if allocation {
+            response = handle(&request).unwrap();
+            request = reply(
+                &request,
+                &response,
+                holding(state.creator_escrow_id, state.token_definition_id, 200),
+            );
+        }
+        assert_eq!(handle(&request).err(), Some(Error::InvalidCustody));
     }
 }

@@ -54,6 +54,12 @@ struct Cli {
 
 impl Cli {
     fn validate_route(&self) -> Result<()> {
+        if let Command::CreateSale(args) = &self.command {
+            let request = args.sale_request();
+            request
+                .ending_policy
+                .validate(None, request.end_timestamp)?;
+        }
         if let Command::TransferAuthority(args) = &self.command
             && (args.from.is_private() || args.to.is_private())
         {
@@ -226,10 +232,33 @@ impl From<launchpad_client::TradeMode> for TradeModeArg {
     }
 }
 
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+enum EndingPolicyArg {
+    Depletion,
+    Scheduled,
+    Either,
+}
+
+impl From<EndingPolicyArg> for launchpad_client::EndingPolicy {
+    fn from(ending: EndingPolicyArg) -> Self {
+        match ending {
+            EndingPolicyArg::Depletion => Self::Depletion,
+            EndingPolicyArg::Scheduled => Self::Scheduled,
+            EndingPolicyArg::Either => Self::Either,
+        }
+    }
+}
+
 #[derive(Debug, Args)]
 struct CreateSaleArgs {
     #[arg(long, value_enum)]
     trade_mode: TradeModeArg,
+    /// Collateral retained by the sale on sells, in basis points.
+    #[arg(long, default_value_t = 0, value_parser = clap::value_parser!(u16).range(0..10_000))]
+    sell_fee_bps: u16,
+    /// Let the current creator pause and resume swaps.
+    #[arg(long)]
+    pausable: bool,
     /// Saved adapter deployment address.
     #[arg(long, value_parser = parse_public_account_id)]
     graduation_hook_program_id: Option<lee::AccountId>,
@@ -252,8 +281,11 @@ struct CreateSaleArgs {
     virtual_token_reserve: u128,
     #[arg(long = "virtual-collateral-reserve", alias = "vc")]
     virtual_collateral_reserve: u128,
-    /// Optional sale end time in Unix seconds.
-    #[arg(long = "end-timestamp")]
+    /// Ending rule; defaults to depletion without an end, or either with an end.
+    #[arg(long, value_enum)]
+    ending_policy: Option<EndingPolicyArg>,
+    /// Sale end time in Unix seconds; required for scheduled or either ending.
+    #[arg(long = "end-timestamp", required_if_eq_any = [("ending_policy", "scheduled"), ("ending_policy", "either")])]
     end_timestamp: Option<u64>,
     #[arg(long = "collateral-definition", value_parser = parse_account_location)]
     collateral_definition: AccountLocation,
@@ -279,7 +311,20 @@ impl CreateSaleArgs {
     fn sale_request(&self) -> CreateSaleRequest {
         CreateSaleRequest {
             buy_policy: launchpad_client::BuyPolicy::Open,
+            pause_policy: if self.pausable {
+                launchpad_client::PausePolicy::AuthorityControlled
+            } else {
+                launchpad_client::PausePolicy::Disabled
+            },
+            ending_policy: self.ending_policy.map(Into::into).unwrap_or_else(|| {
+                if self.end_timestamp.is_some() {
+                    launchpad_client::EndingPolicy::Either
+                } else {
+                    launchpad_client::EndingPolicy::Depletion
+                }
+            }),
             trade_mode: self.trade_mode.into(),
+            sell_fee_bps: self.sell_fee_bps,
             graduation_hook: self.graduation_hook_program_id.map(|program_id| {
                 launchpad_client::GraduationHook {
                     program_id,
@@ -579,7 +624,6 @@ fn settlement_stage_name(stage: launchpad_client::SettlementStage) -> &'static s
         SettlementStage::Complete => "complete",
         SettlementStage::HookReady { .. } => "hook_ready",
         SettlementStage::Graduated => "graduated",
-        SettlementStage::NoPayout => "no_payout",
     }
 }
 
@@ -858,8 +902,13 @@ async fn graduate(namespace: lee::AccountId, json: bool, args: GraduationArgs) -
         sale.collateral_definition,
     )
     .await?;
-    let mut invocation =
-        launchpad_client::build_graduation_invocation(sale, &state, treasury, current_time()?)?;
+    let mut invocation = launchpad_client::build_graduation_invocation(
+        launchpad_client::GraduationTarget::Curve {
+            sale,
+            state: &state,
+        },
+        treasury,
+    )?;
     invocation.fee_payer = Some(args.fee_payer);
     let transaction_hash = submit_public_invocation(&wallet, &factory, invocation).await?;
     print_submission(
@@ -2011,6 +2060,82 @@ mod tests {
             panic!("create sale")
         };
         assert!(args.sale_request().graduation_hook.is_none());
+        assert_eq!(args.sale_request().sell_fee_bps, 0);
+        for rate in ["0", "125", "9999"] {
+            let mut selected = arguments.clone();
+            selected.extend(["--sell-fee-bps", rate]);
+            let Command::CreateSale(args) = Cli::try_parse_from(selected).unwrap().command else {
+                panic!("create sale")
+            };
+            assert_eq!(
+                args.sale_request().sell_fee_bps,
+                rate.parse::<u16>().unwrap()
+            );
+        }
+        for rate in ["10000", "65535", "65536", "-1"] {
+            let mut selected = arguments.clone();
+            selected.extend(["--sell-fee-bps", rate]);
+            assert!(Cli::try_parse_from(selected).is_err());
+        }
+
+        assert_eq!(
+            args.sale_request().ending_policy,
+            launchpad_client::EndingPolicy::Depletion
+        );
+        assert_eq!(
+            args.sale_request().pause_policy,
+            launchpad_client::PausePolicy::Disabled
+        );
+        for (options, expected) in [
+            (vec![], launchpad_client::EndingPolicy::Depletion),
+            (
+                vec!["--end-timestamp", "100"],
+                launchpad_client::EndingPolicy::Either,
+            ),
+            (
+                vec!["--ending-policy", "depletion"],
+                launchpad_client::EndingPolicy::Depletion,
+            ),
+            (
+                vec!["--ending-policy", "scheduled", "--end-timestamp", "100"],
+                launchpad_client::EndingPolicy::Scheduled,
+            ),
+            (
+                vec!["--ending-policy", "either", "--end-timestamp", "100"],
+                launchpad_client::EndingPolicy::Either,
+            ),
+        ] {
+            let mut selected = arguments.clone();
+            selected.extend(options);
+            let cli = Cli::try_parse_from(selected).unwrap();
+            cli.validate_route().unwrap();
+            let Command::CreateSale(args) = cli.command else {
+                panic!("create sale")
+            };
+            assert_eq!(args.sale_request().ending_policy, expected);
+        }
+        for ending in ["scheduled", "either", "manual", "unknown"] {
+            let mut missing_end = arguments.clone();
+            missing_end.extend(["--ending-policy", ending]);
+            assert!(Cli::try_parse_from(missing_end).is_err());
+        }
+        let mut depletion_with_end = arguments.clone();
+        depletion_with_end.extend(["--ending-policy", "depletion", "--end-timestamp", "100"]);
+        assert!(
+            Cli::try_parse_from(depletion_with_end)
+                .unwrap()
+                .validate_route()
+                .is_err()
+        );
+        let mut pausable = arguments.clone();
+        pausable.push("--pausable");
+        let Command::CreateSale(args) = Cli::try_parse_from(pausable).unwrap().command else {
+            panic!("create sale")
+        };
+        assert_eq!(
+            args.sale_request().pause_policy,
+            launchpad_client::PausePolicy::AuthorityControlled
+        );
         let mut configuration_without_program = arguments.clone();
         configuration_without_program.extend(["--graduation-hook-configuration", "070b"]);
         assert!(Cli::try_parse_from(configuration_without_program).is_err());
@@ -2216,7 +2341,6 @@ mod tests {
                 "hook_ready",
             ),
             (SettlementStage::Graduated, "graduated"),
-            (SettlementStage::NoPayout, "no_payout"),
         ] {
             assert_eq!(
                 serde_json::to_value(settlement_stage_name(stage)).unwrap(),

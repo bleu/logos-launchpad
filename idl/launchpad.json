@@ -1,29 +1,107 @@
 {
   "encoding": "borsh",
+  "events": {
+    "events::SaleEventV1": {
+      "name": "launchpad::SaleEventV1",
+      "payload": "events::SaleEventV1",
+      "selector": "e1961d35ac82206c"
+    },
+    "events::WeightedCheckpoint": {
+      "name": "lbp::WeightedCheckpoint",
+      "payload": "events::WeightedCheckpoint",
+      "selector": "ae2f6d457fb379cf"
+    },
+    "events::WeightedPauseChanged": {
+      "name": "lbp::WeightedPauseChanged",
+      "payload": "events::WeightedPauseChanged",
+      "selector": "6d8c1803e82b3a9d"
+    }
+  },
   "imports": {
+    "controls": [],
     "curve": [
       "eligibility_policy",
-      "pool"
+      "events",
+      "pool",
+      "sale_policy"
+    ],
+    "eligibility_policy": [],
+    "events": [
+      "controls",
+      "terms"
     ],
     "factory": [
       "curve",
       "eligibility_policy",
+      "events",
       "hook",
+      "lbp",
       "lbp_setup"
     ],
     "hook": [
       "factory"
     ],
     "lbp": [
-      "curve"
+      "curve",
+      "lbp_settlement",
+      "sale_policy"
+    ],
+    "lbp_settlement": [
+      "lbp"
     ],
     "lbp_setup": [
       "curve",
       "factory",
       "lbp"
-    ]
+    ],
+    "pool": [
+      "sale_policy"
+    ],
+    "sale_policy": [
+      "controls",
+      "events",
+      "settlement",
+      "terms"
+    ],
+    "settlement": [],
+    "terms": []
   },
   "modules": {
+    "controls": {
+      "PausePolicy": {
+        "variants": [
+          {
+            "fields": [],
+            "name": "Disabled",
+            "tag": 0
+          },
+          {
+            "fields": [],
+            "name": "AuthorityControlled",
+            "tag": 1
+          }
+        ]
+      },
+      "TradeControl": {
+        "variants": [
+          {
+            "fields": [],
+            "name": "Unrestricted",
+            "tag": 0
+          },
+          {
+            "fields": [],
+            "name": "Running",
+            "tag": 1
+          },
+          {
+            "fields": [],
+            "name": "Paused",
+            "tag": 2
+          }
+        ]
+      }
+    },
     "curve": {
       "AdminCandidate": {
         "variants": [
@@ -201,6 +279,18 @@
               {
                 "name": "buy_policy",
                 "type": "BuyPolicy"
+              },
+              {
+                "name": "pause_policy",
+                "type": "PausePolicy"
+              },
+              {
+                "name": "ending_policy",
+                "type": "EndingPolicy"
+              },
+              {
+                "name": "sell_fee_bps",
+                "type": "u16"
               },
               {
                 "name": "namespace",
@@ -381,6 +471,16 @@
             ],
             "name": "InitializeNamespace",
             "tag": 16
+          },
+          {
+            "fields": [
+              {
+                "name": "paused",
+                "type": "bool"
+              }
+            ],
+            "name": "SetPaused",
+            "tag": 17
           }
         ]
       },
@@ -391,11 +491,19 @@
             "type": "BuyPolicy"
           },
           {
+            "name": "trade_control",
+            "type": "TradeControl"
+          },
+          {
             "name": "allowed_input_token",
             "type": "Option<pool::TokenSide>"
           },
           {
             "name": "funded",
+            "type": "bool"
+          },
+          {
+            "name": "closure_observed",
             "type": "bool"
           },
           {
@@ -482,6 +590,572 @@
         ]
       }
     },
+    "events": {
+      "AllocationReleaseV1": {
+        "variants": [
+          {
+            "fields": [],
+            "name": "AfterSetup",
+            "tag": 0
+          },
+          {
+            "fields": [],
+            "name": "AfterEnd",
+            "tag": 1
+          }
+        ]
+      },
+      "ClosureReasonV1": {
+        "variants": [
+          {
+            "fields": [],
+            "name": "Manual",
+            "tag": 0
+          },
+          {
+            "fields": [
+              {
+                "name": "definition",
+                "type": "[u8;32]"
+              }
+            ],
+            "name": "Depleted",
+            "tag": 1
+          },
+          {
+            "fields": [
+              {
+                "name": "timestamp",
+                "type": "u64"
+              }
+            ],
+            "name": "ScheduledEnd",
+            "tag": 2
+          }
+        ]
+      },
+      "EventPoliciesV1": {
+        "fields": [
+          {
+            "name": "ending",
+            "type": "EndingPolicy"
+          },
+          {
+            "name": "pause",
+            "type": "PausePolicy"
+          },
+          {
+            "name": "sell_fee_bps",
+            "type": "u16"
+          }
+        ]
+      },
+      "EventSubjectV1": {
+        "variants": [
+          {
+            "fields": [
+              {
+                "name": "factory",
+                "type": "[u8;32]"
+              },
+              {
+                "name": "pool",
+                "type": "[u8;32]"
+              }
+            ],
+            "name": "Launch",
+            "tag": 0
+          },
+          {
+            "fields": [
+              {
+                "name": "pool",
+                "type": "[u8;32]"
+              }
+            ],
+            "name": "Pool",
+            "tag": 1
+          }
+        ]
+      },
+      "EventTimeBoundsV1": {
+        "fields": [
+          {
+            "name": "at_least",
+            "type": "Option<u64>"
+          },
+          {
+            "name": "before",
+            "type": "Option<u64>"
+          }
+        ]
+      },
+      "PayoutPurposeV1": {
+        "variants": [
+          {
+            "fields": [],
+            "name": "Reserve",
+            "tag": 0
+          },
+          {
+            "fields": [],
+            "name": "CreatorProceeds",
+            "tag": 1
+          },
+          {
+            "fields": [],
+            "name": "CreatorSeed",
+            "tag": 2
+          },
+          {
+            "fields": [],
+            "name": "CurveReserve",
+            "tag": 3
+          }
+        ]
+      },
+      "PricingEngineV1": {
+        "variants": [
+          {
+            "fields": [],
+            "name": "Curve",
+            "tag": 0
+          },
+          {
+            "fields": [],
+            "name": "FixedPrice",
+            "tag": 1
+          },
+          {
+            "fields": [],
+            "name": "Weighted",
+            "tag": 2
+          }
+        ]
+      },
+      "SaleEventKindV1": {
+        "variants": [
+          {
+            "fields": [
+              {
+                "name": "creator",
+                "type": "[u8;32]"
+              },
+              {
+                "name": "creator_role",
+                "type": "[u8;32]"
+              },
+              {
+                "name": "token_definition",
+                "type": "[u8;32]"
+              },
+              {
+                "name": "collateral_definition",
+                "type": "[u8;32]"
+              },
+              {
+                "name": "sale_inventory",
+                "type": "u128"
+              },
+              {
+                "name": "creator_allocation",
+                "type": "u128"
+              },
+              {
+                "name": "curve_reserve",
+                "type": "u128"
+              },
+              {
+                "name": "collateral_seed",
+                "type": "u128"
+              },
+              {
+                "name": "start_timestamp",
+                "type": "Option<u64>"
+              },
+              {
+                "name": "end_timestamp",
+                "type": "Option<u64>"
+              },
+              {
+                "name": "policies",
+                "type": "EventPoliciesV1"
+              }
+            ],
+            "name": "Created",
+            "tag": 0
+          },
+          {
+            "fields": [
+              {
+                "name": "owner",
+                "type": "[u8;32]"
+              },
+              {
+                "name": "token0_definition",
+                "type": "[u8;32]"
+              },
+              {
+                "name": "token1_definition",
+                "type": "[u8;32]"
+              },
+              {
+                "name": "reserve0",
+                "type": "u128"
+              },
+              {
+                "name": "reserve1",
+                "type": "u128"
+              },
+              {
+                "name": "policies",
+                "type": "EventPoliciesV1"
+              }
+            ],
+            "name": "Prepared",
+            "tag": 1
+          },
+          {
+            "fields": [
+              {
+                "name": "reserve0",
+                "type": "u128"
+              },
+              {
+                "name": "reserve1",
+                "type": "u128"
+              },
+              {
+                "name": "collateral_seed",
+                "type": "u128"
+              }
+            ],
+            "name": "Activated",
+            "tag": 2
+          },
+          {
+            "fields": [
+              {
+                "name": "trader",
+                "type": "[u8;32]"
+              },
+              {
+                "name": "form",
+                "type": "TradeFormV1"
+              },
+              {
+                "name": "token_in",
+                "type": "[u8;32]"
+              },
+              {
+                "name": "token_out",
+                "type": "[u8;32]"
+              },
+              {
+                "name": "amount_in",
+                "type": "u128"
+              },
+              {
+                "name": "pricing_input",
+                "type": "u128"
+              },
+              {
+                "name": "gross_output",
+                "type": "u128"
+              },
+              {
+                "name": "amount_out",
+                "type": "u128"
+              },
+              {
+                "name": "fee_definition",
+                "type": "[u8;32]"
+              },
+              {
+                "name": "fee_amount",
+                "type": "u128"
+              },
+              {
+                "name": "fee_bps",
+                "type": "u16"
+              },
+              {
+                "name": "retained_fee",
+                "type": "u128"
+              },
+              {
+                "name": "sell_fee_bps",
+                "type": "u16"
+              },
+              {
+                "name": "pricing_time",
+                "type": "Option<u64>"
+              }
+            ],
+            "name": "Trade",
+            "tag": 3
+          },
+          {
+            "fields": [
+              {
+                "name": "paused",
+                "type": "bool"
+              }
+            ],
+            "name": "PauseChanged",
+            "tag": 4
+          },
+          {
+            "fields": [
+              {
+                "name": "definition",
+                "type": "[u8;32]"
+              },
+              {
+                "name": "treasury",
+                "type": "[u8;32]"
+              },
+              {
+                "name": "liability_discharged",
+                "type": "u128"
+              },
+              {
+                "name": "tokens_transferred",
+                "type": "u128"
+              }
+            ],
+            "name": "FeesCollected",
+            "tag": 5
+          },
+          {
+            "fields": [
+              {
+                "name": "definition",
+                "type": "[u8;32]"
+              },
+              {
+                "name": "recipient",
+                "type": "[u8;32]"
+              },
+              {
+                "name": "amount",
+                "type": "u128"
+              },
+              {
+                "name": "release",
+                "type": "AllocationReleaseV1"
+              }
+            ],
+            "name": "AllocationReleased",
+            "tag": 6
+          },
+          {
+            "fields": [
+              {
+                "name": "reason",
+                "type": "ClosureReasonV1"
+              },
+              {
+                "name": "inclusion_bounds",
+                "type": "EventTimeBoundsV1"
+              }
+            ],
+            "name": "Closed",
+            "tag": 7
+          },
+          {
+            "fields": [
+              {
+                "name": "step",
+                "type": "SettlementStepV1"
+              },
+              {
+                "name": "route",
+                "type": "Option<SettlementRouteV1>"
+              },
+              {
+                "name": "effects",
+                "type": "Vec<SettlementEffectV1>"
+              }
+            ],
+            "name": "Settlement",
+            "tag": 8
+          },
+          {
+            "fields": [
+              {
+                "name": "adapter_program",
+                "type": "[u8;32]"
+              },
+              {
+                "name": "adapter_custody",
+                "type": "[u8;32]"
+              },
+              {
+                "name": "launch_tokens",
+                "type": "u128"
+              },
+              {
+                "name": "collateral",
+                "type": "u128"
+              }
+            ],
+            "name": "Graduated",
+            "tag": 9
+          }
+        ]
+      },
+      "SaleEventV1": {
+        "fields": [
+          {
+            "name": "version",
+            "type": "u8"
+          },
+          {
+            "name": "namespace",
+            "type": "[u8;32]"
+          },
+          {
+            "name": "engine",
+            "type": "PricingEngineV1"
+          },
+          {
+            "name": "subject",
+            "type": "EventSubjectV1"
+          },
+          {
+            "name": "kind",
+            "type": "SaleEventKindV1"
+          }
+        ]
+      },
+      "SettlementEffectV1": {
+        "variants": [
+          {
+            "fields": [
+              {
+                "name": "definition",
+                "type": "[u8;32]"
+              },
+              {
+                "name": "amount",
+                "type": "u128"
+              }
+            ],
+            "name": "Burn",
+            "tag": 0
+          },
+          {
+            "fields": [
+              {
+                "name": "definition",
+                "type": "[u8;32]"
+              },
+              {
+                "name": "recipient",
+                "type": "[u8;32]"
+              },
+              {
+                "name": "purpose",
+                "type": "PayoutPurposeV1"
+              },
+              {
+                "name": "liability_discharged",
+                "type": "u128"
+              },
+              {
+                "name": "tokens_transferred",
+                "type": "u128"
+              }
+            ],
+            "name": "Payout",
+            "tag": 1
+          }
+        ]
+      },
+      "SettlementRouteV1": {
+        "variants": [
+          {
+            "fields": [],
+            "name": "Manual",
+            "tag": 0
+          },
+          {
+            "fields": [],
+            "name": "Graduation",
+            "tag": 1
+          }
+        ]
+      },
+      "SettlementStepV1": {
+        "variants": [
+          {
+            "fields": [],
+            "name": "Prepared",
+            "tag": 0
+          },
+          {
+            "fields": [],
+            "name": "ReservesWithdrawn",
+            "tag": 1
+          },
+          {
+            "fields": [],
+            "name": "UnsoldBurned",
+            "tag": 2
+          },
+          {
+            "fields": [],
+            "name": "SeedReturned",
+            "tag": 3
+          },
+          {
+            "fields": [],
+            "name": "Payout",
+            "tag": 4
+          },
+          {
+            "fields": [],
+            "name": "Completed",
+            "tag": 5
+          }
+        ]
+      },
+      "TradeFormV1": {
+        "variants": [
+          {
+            "fields": [],
+            "name": "ExactInput",
+            "tag": 0
+          },
+          {
+            "fields": [],
+            "name": "ExactOutput",
+            "tag": 1
+          }
+        ]
+      },
+      "WeightedCheckpoint": {
+        "fields": [
+          {
+            "name": "time",
+            "type": "u64"
+          },
+          {
+            "name": "token_weight",
+            "type": "u128"
+          }
+        ]
+      },
+      "WeightedPauseChanged": {
+        "fields": [
+          {
+            "name": "paused",
+            "type": "bool"
+          }
+        ]
+      }
+    },
     "factory": {
       "CreationStage": {
         "variants": [
@@ -514,8 +1188,20 @@
             "type": "BuyPolicy"
           },
           {
+            "name": "pause_policy",
+            "type": "PausePolicy"
+          },
+          {
+            "name": "ending_policy",
+            "type": "EndingPolicy"
+          },
+          {
             "name": "trade_mode",
             "type": "TradeMode"
+          },
+          {
+            "name": "sell_fee_bps",
+            "type": "u16"
           },
           {
             "name": "graduation_hook",
@@ -628,8 +1314,20 @@
                 "type": "BuyPolicy"
               },
               {
+                "name": "pause_policy",
+                "type": "PausePolicy"
+              },
+              {
+                "name": "ending_policy",
+                "type": "EndingPolicy"
+              },
+              {
                 "name": "trade_mode",
                 "type": "u8"
+              },
+              {
+                "name": "sell_fee_bps",
+                "type": "u16"
               },
               {
                 "name": "graduation_hook_program_id",
@@ -744,8 +1442,8 @@
           {
             "fields": [
               {
-                "name": "now",
-                "type": "u64"
+                "name": "creator_hint",
+                "type": "Option<AccountId>"
               }
             ],
             "name": "ExecuteGraduationHook",
@@ -841,6 +1539,20 @@
             ],
             "name": "ClaimWeightedAllocation",
             "tag": 12
+          },
+          {
+            "fields": [
+              {
+                "name": "creator",
+                "type": "AccountId"
+              },
+              {
+                "name": "paused",
+                "type": "bool"
+              }
+            ],
+            "name": "SetPaused",
+            "tag": 13
           }
         ]
       },
@@ -941,25 +1653,6 @@
             "fields": [],
             "name": "Graduated",
             "tag": 7
-          },
-          {
-            "fields": [],
-            "name": "NoPayout",
-            "tag": 8
-          }
-        ]
-      },
-      "TradeMode": {
-        "variants": [
-          {
-            "fields": [],
-            "name": "BuyOnly",
-            "tag": 0
-          },
-          {
-            "fields": [],
-            "name": "BuyAndSell",
-            "tag": 1
           }
         ]
       }
@@ -982,8 +1675,8 @@
                 "type": "[u8;32]"
               },
               {
-                "name": "ready",
-                "type": "bool"
+                "name": "accepted_intent",
+                "type": "Option<GraduationIntentKind>"
               }
             ],
             "name": "Initialize",
@@ -1013,8 +1706,8 @@
             "type": "Actor"
           },
           {
-            "name": "ready",
-            "type": "bool"
+            "name": "accepted_intent",
+            "type": "Option<GraduationIntentKind>"
           },
           {
             "name": "receipt",
@@ -1023,6 +1716,63 @@
           {
             "name": "pending",
             "type": "Option<(GraduationRequest,u8)>"
+          }
+        ]
+      },
+      "GraduationIntent": {
+        "variants": [
+          {
+            "fields": [
+              {
+                "name": "launch_tokens",
+                "type": "u128"
+              },
+              {
+                "name": "collateral",
+                "type": "u128"
+              }
+            ],
+            "name": "CurveReserves",
+            "tag": 0
+          },
+          {
+            "fields": [
+              {
+                "name": "collateral",
+                "type": "u128"
+              }
+            ],
+            "name": "FixedPriceProceeds",
+            "tag": 1
+          },
+          {
+            "fields": [
+              {
+                "name": "collateral",
+                "type": "u128"
+              }
+            ],
+            "name": "WeightedBuyerProceeds",
+            "tag": 2
+          }
+        ]
+      },
+      "GraduationIntentKind": {
+        "variants": [
+          {
+            "fields": [],
+            "name": "CurveReserves",
+            "tag": 0
+          },
+          {
+            "fields": [],
+            "name": "FixedPriceProceeds",
+            "tag": 1
+          },
+          {
+            "fields": [],
+            "name": "WeightedBuyerProceeds",
+            "tag": 2
           }
         ]
       },
@@ -1049,12 +1799,8 @@
             "type": "AccountId"
           },
           {
-            "name": "dex_seed_reserve",
-            "type": "u128"
-          },
-          {
-            "name": "collateral_amount",
-            "type": "u128"
+            "name": "intent",
+            "type": "GraduationIntent"
           },
           {
             "name": "configuration",
@@ -1067,6 +1813,10 @@
           {
             "name": "factory",
             "type": "AccountId"
+          },
+          {
+            "name": "request_hash",
+            "type": "[u8;32]"
           }
         ]
       }
@@ -1103,6 +1853,26 @@
           {
             "name": "buy_policy",
             "type": "BuyPolicy"
+          },
+          {
+            "name": "pause_policy",
+            "type": "PausePolicy"
+          },
+          {
+            "name": "ending_policy",
+            "type": "EndingPolicy"
+          },
+          {
+            "name": "trade_mode",
+            "type": "TradeMode"
+          },
+          {
+            "name": "sell_fee_bps",
+            "type": "u16"
+          },
+          {
+            "name": "graduation_adapter",
+            "type": "Option<Actor>"
           },
           {
             "name": "namespace",
@@ -1328,6 +2098,76 @@
             "fields": [],
             "name": "PokeWeighted",
             "tag": 14
+          },
+          {
+            "fields": [
+              {
+                "name": "paused",
+                "type": "bool"
+              }
+            ],
+            "name": "SetPaused",
+            "tag": 15
+          },
+          {
+            "fields": [
+              {
+                "name": "route",
+                "type": "SettlementRoute"
+              },
+              {
+                "name": "creator",
+                "type": "AccountId"
+              },
+              {
+                "name": "adapter",
+                "type": "Option<Actor>"
+              }
+            ],
+            "name": "Settle",
+            "tag": 16
+          },
+          {
+            "fields": [
+              {
+                "name": "receipt_hash",
+                "type": "[u8;32]"
+              }
+            ],
+            "name": "FinalizeSettlement",
+            "tag": 17
+          },
+          {
+            "fields": [
+              {
+                "name": "amount_in",
+                "type": "u128"
+              },
+              {
+                "name": "min_amount_out",
+                "type": "u128"
+              },
+              {
+                "name": "now",
+                "type": "u64"
+              }
+            ],
+            "name": "SellExactInput",
+            "tag": 18
+          },
+          {
+            "fields": [
+              {
+                "name": "amount_in",
+                "type": "u128"
+              },
+              {
+                "name": "min_amount_out",
+                "type": "u128"
+              }
+            ],
+            "name": "SellWeightedExactInput",
+            "tag": 19
           }
         ]
       },
@@ -1350,11 +2190,35 @@
             "type": "BuyPolicy"
           },
           {
+            "name": "trade_control",
+            "type": "TradeControl"
+          },
+          {
+            "name": "ending_policy",
+            "type": "EndingPolicy"
+          },
+          {
+            "name": "trade_mode",
+            "type": "TradeMode"
+          },
+          {
+            "name": "sell_fee_bps",
+            "type": "u16"
+          },
+          {
+            "name": "graduation_adapter",
+            "type": "Option<Actor>"
+          },
+          {
             "name": "mode",
             "type": "PoolMode"
           },
           {
             "name": "funded",
+            "type": "bool"
+          },
+          {
+            "name": "closure_observed",
             "type": "bool"
           },
           {
@@ -1422,7 +2286,11 @@
             "type": "u128"
           },
           {
-            "name": "proceeds_settled",
+            "name": "settlement_progress",
+            "type": "SettlementProgress"
+          },
+          {
+            "name": "seed_returned",
             "type": "bool"
           },
           {
@@ -1440,10 +2308,6 @@
           },
           {
             "fields": [
-              {
-                "name": "paused",
-                "type": "bool"
-              },
               {
                 "name": "token_weight_start",
                 "type": "u128"
@@ -1479,6 +2343,26 @@
           {
             "name": "buy_policy",
             "type": "BuyPolicy"
+          },
+          {
+            "name": "pause_policy",
+            "type": "PausePolicy"
+          },
+          {
+            "name": "ending_policy",
+            "type": "EndingPolicy"
+          },
+          {
+            "name": "trade_mode",
+            "type": "TradeMode"
+          },
+          {
+            "name": "sell_fee_bps",
+            "type": "u16"
+          },
+          {
+            "name": "graduation_adapter",
+            "type": "Option<Actor>"
           },
           {
             "name": "namespace",
@@ -1539,12 +2423,122 @@
         ]
       }
     },
+    "lbp_settlement": {
+      "AwaitFactoryFinalize": {
+        "fields": [
+          {
+            "name": "tag",
+            "type": "[u8;8]"
+          },
+          {
+            "name": "state",
+            "type": "PoolAccount"
+          },
+          {
+            "name": "receipt",
+            "type": "SettlementReceipt"
+          },
+          {
+            "name": "receipt_hash",
+            "type": "[u8;32]"
+          },
+          {
+            "name": "expiry",
+            "type": "Option<u64>"
+          }
+        ]
+      },
+      "SettlementReceipt": {
+        "fields": [
+          {
+            "name": "factory",
+            "type": "Actor"
+          },
+          {
+            "name": "pool",
+            "type": "Actor"
+          },
+          {
+            "name": "route",
+            "type": "SettlementRoute"
+          },
+          {
+            "name": "creator",
+            "type": "AccountId"
+          },
+          {
+            "name": "adapter",
+            "type": "Option<Actor>"
+          },
+          {
+            "name": "amounts",
+            "type": "SettlementAmounts"
+          },
+          {
+            "name": "seed_payment",
+            "type": "u128"
+          },
+          {
+            "name": "progress",
+            "type": "SettlementProgress"
+          }
+        ]
+      },
+      "SettlementReply": {
+        "variants": [
+          {
+            "fields": [
+              {
+                "name": "receipt",
+                "type": "SettlementReceipt"
+              }
+            ],
+            "name": "Applied",
+            "tag": 0
+          },
+          {
+            "fields": [
+              {
+                "name": "receipt_hash",
+                "type": "[u8;32]"
+              },
+              {
+                "name": "progress",
+                "type": "SettlementProgress"
+              }
+            ],
+            "name": "Completed",
+            "tag": 1
+          }
+        ]
+      }
+    },
     "lbp_setup": {
       "FixedPriceInputs": {
         "fields": [
           {
             "name": "buy_policy",
             "type": "curve::BuyPolicy"
+          },
+          {
+            "name": "pause_policy",
+            "type": "PausePolicy"
+          },
+          {
+            "name": "ending_policy",
+            "type": "EndingPolicy"
+          },
+          {
+            "name": "trade_mode",
+            "type": "TradeMode"
+          },
+          {
+            "name": "sell_fee_bps",
+            "type": "u16"
+          },
+          {
+            "name": "graduation_hook",
+            "type": "Option<GraduationHook>"
           },
           {
             "name": "namespace",
@@ -1639,6 +2633,26 @@
             "type": "curve::BuyPolicy"
           },
           {
+            "name": "pause_policy",
+            "type": "PausePolicy"
+          },
+          {
+            "name": "ending_policy",
+            "type": "EndingPolicy"
+          },
+          {
+            "name": "trade_mode",
+            "type": "TradeMode"
+          },
+          {
+            "name": "sell_fee_bps",
+            "type": "u16"
+          },
+          {
+            "name": "graduation_hook",
+            "type": "Option<GraduationHook>"
+          },
+          {
             "name": "format",
             "type": "[u8;8]"
           },
@@ -1657,6 +2671,10 @@
           {
             "name": "creation_stage",
             "type": "LbpCreationStage"
+          },
+          {
+            "name": "settlement_progress",
+            "type": "SettlementProgress"
           },
           {
             "name": "namespace",
@@ -1733,6 +2751,88 @@
           {
             "name": "pending",
             "type": "Option<Pending>"
+          },
+          {
+            "name": "settlement_pending",
+            "type": "Option<LbpSettlementPhase>"
+          }
+        ]
+      },
+      "LbpSettlementPhase": {
+        "variants": [
+          {
+            "fields": [
+              {
+                "name": "pool",
+                "type": "lbp::PoolAccount"
+              },
+              {
+                "name": "creator_hint",
+                "type": "AccountId"
+              },
+              {
+                "name": "step",
+                "type": "u8"
+              }
+            ],
+            "name": "AdapterHoldings",
+            "tag": 0
+          },
+          {
+            "fields": [
+              {
+                "name": "pool",
+                "type": "lbp::PoolAccount"
+              },
+              {
+                "name": "creator_hint",
+                "type": "AccountId"
+              }
+            ],
+            "name": "Creator",
+            "tag": 1
+          },
+          {
+            "fields": [
+              {
+                "name": "receipt",
+                "type": "SettlementReceipt"
+              }
+            ],
+            "name": "PoolApplied",
+            "tag": 2
+          },
+          {
+            "fields": [
+              {
+                "name": "receipt",
+                "type": "SettlementReceipt"
+              },
+              {
+                "name": "request_hash",
+                "type": "[u8;32]"
+              }
+            ],
+            "name": "AdapterResult",
+            "tag": 3
+          },
+          {
+            "fields": [
+              {
+                "name": "receipt_hash",
+                "type": "[u8;32]"
+              },
+              {
+                "name": "progress",
+                "type": "SettlementProgress"
+              },
+              {
+                "name": "graduation_amounts",
+                "type": "Option<SettlementAmounts>"
+              }
+            ],
+            "name": "PoolCompleted",
+            "tag": 4
           }
         ]
       },
@@ -1792,6 +2892,26 @@
           {
             "name": "buy_policy",
             "type": "curve::BuyPolicy"
+          },
+          {
+            "name": "pause_policy",
+            "type": "PausePolicy"
+          },
+          {
+            "name": "ending_policy",
+            "type": "EndingPolicy"
+          },
+          {
+            "name": "trade_mode",
+            "type": "TradeMode"
+          },
+          {
+            "name": "sell_fee_bps",
+            "type": "u16"
+          },
+          {
+            "name": "graduation_hook",
+            "type": "Option<GraduationHook>"
           },
           {
             "name": "namespace",
@@ -1872,6 +2992,10 @@
             "type": "u128"
           },
           {
+            "name": "initial_k",
+            "type": "u128"
+          },
+          {
             "name": "k",
             "type": "u128"
           },
@@ -1890,6 +3014,14 @@
           {
             "name": "fees_collected",
             "type": "u128"
+          },
+          {
+            "name": "ending_policy",
+            "type": "EndingPolicy"
+          },
+          {
+            "name": "sell_fee_bps",
+            "type": "u16"
           },
           {
             "name": "close_timestamp",
@@ -1934,6 +3066,99 @@
           {
             "fields": [],
             "name": "Token1",
+            "tag": 1
+          }
+        ]
+      }
+    },
+    "sale_policy": {},
+    "settlement": {
+      "SettlementAmounts": {
+        "fields": [
+          {
+            "name": "launch_tokens",
+            "type": "u128"
+          },
+          {
+            "name": "collateral",
+            "type": "u128"
+          }
+        ]
+      },
+      "SettlementProgress": {
+        "variants": [
+          {
+            "fields": [],
+            "name": "Unselected",
+            "tag": 0
+          },
+          {
+            "fields": [],
+            "name": "ManualStarted",
+            "tag": 1
+          },
+          {
+            "fields": [],
+            "name": "ManualComplete",
+            "tag": 2
+          },
+          {
+            "fields": [],
+            "name": "Graduated",
+            "tag": 3
+          }
+        ]
+      },
+      "SettlementRoute": {
+        "variants": [
+          {
+            "fields": [],
+            "name": "Manual",
+            "tag": 0
+          },
+          {
+            "fields": [],
+            "name": "Graduation",
+            "tag": 1
+          }
+        ]
+      }
+    },
+    "terms": {
+      "EndingPolicy": {
+        "variants": [
+          {
+            "fields": [],
+            "name": "Manual",
+            "tag": 0
+          },
+          {
+            "fields": [],
+            "name": "Scheduled",
+            "tag": 1
+          },
+          {
+            "fields": [],
+            "name": "Depletion",
+            "tag": 2
+          },
+          {
+            "fields": [],
+            "name": "Either",
+            "tag": 3
+          }
+        ]
+      },
+      "TradeMode": {
+        "variants": [
+          {
+            "fields": [],
+            "name": "BuyOnly",
+            "tag": 0
+          },
+          {
+            "fields": [],
+            "name": "BuyAndSell",
             "tag": 1
           }
         ]

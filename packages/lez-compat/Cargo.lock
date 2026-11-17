@@ -1156,6 +1156,7 @@ dependencies = [
  "lee_core",
  "lez-compat-core",
  "quote",
+ "risc0-zkvm",
  "serde_json",
  "syn 2.0.119",
 ]

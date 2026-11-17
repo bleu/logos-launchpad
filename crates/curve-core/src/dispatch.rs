@@ -88,6 +88,7 @@ impl Pending {
         Actor::new(account, TOKEN_PROGRAM_ACCOUNT_ID)
     }
     pub fn advance(self, receiver: Actor) -> Result<Response, Error> {
+        self.state.validate_address(receiver)?;
         let Some(query) = self.queries.first() else {
             return match self.message {
                 Message::SwapExactInput { .. } | Message::SwapExactOutput { .. } => {
@@ -95,6 +96,7 @@ impl Pending {
                 }
                 Message::WithdrawReserves { .. }
                 | Message::ClosePool { .. }
+                | Message::SetPaused { .. }
                 | Message::CollectFees => crate::pool_lifecycle::finish(self, receiver),
                 _ => crate::pool_create::finish(self, receiver),
             };

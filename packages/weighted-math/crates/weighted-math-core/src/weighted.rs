@@ -114,8 +114,7 @@ pub fn calc_in_given_out(
 ) -> u128 {
     assert!(balance_in >= 1 && balance_out >= 1, "empty reserve");
     check_weights(weight_in, weight_out);
-    // floor(0.3 · balance_out) without overflowing 3·balance_out
-    let cap = balance_out / 10 * 3 + balance_out % 10 * 3 / 10;
+    let cap = max_exact_output(balance_out);
     assert!(
         amount_out <= cap,
         "amount_out envelope: <= 30% of the reserve"
@@ -139,6 +138,11 @@ pub fn calc_in_given_out(
 
     // ceil(balance_in · r62 / 2^62); the fit assert is the payment envelope.
     wide::mul_shr_up(balance_in, r62, pow::LN_SCALE)
+}
+
+pub(crate) const fn max_exact_output(balance_out: u128) -> u128 {
+    // floor(0.3 * balance_out) without overflowing 3 * balance_out.
+    balance_out / 10 * 3 + balance_out % 10 * 3 / 10
 }
 
 const ONE_62: i128 = 1 << pow::LN_SCALE;
@@ -188,4 +192,55 @@ pub(crate) fn ratio_down(num: u128, den: u128) -> Fixed {
     let q = (n << SCALE) / d;
     debug_assert!(q < ONE.0 as u128, "num < den keeps the ratio below one");
     Fixed(q as i128)
+}
+
+#[cfg(test)]
+mod tests {
+    extern crate std;
+
+    use super::*;
+
+    #[test]
+    fn exact_output_cap_matches_bounded_direct_oracle() {
+        const ZERO_CAP: u128 = max_exact_output(0);
+        assert_eq!(ZERO_CAP, 0);
+        for balance in 0..=100_000 {
+            assert_eq!(max_exact_output(balance), balance * 3 / 10);
+        }
+        let residues = [0, 0, 0, 0, 1, 1, 1, 2, 2, 2];
+        for (residue, extra) in residues.into_iter().enumerate() {
+            assert_eq!(max_exact_output(100 + residue as u128), 30 + extra);
+        }
+        // MAX = 10 * 34028236692093846346337460743176821145 + 5.
+        assert_eq!(
+            max_exact_output(u128::MAX),
+            102_084_710_076_281_539_039_012_382_229_530_463_436
+        );
+    }
+
+    #[test]
+    fn exact_output_above_cap_keeps_raw_panic() {
+        for balance in (1..=100).chain([u128::MAX]) {
+            let panic = std::panic::catch_unwind(|| {
+                calc_in_given_out(1, 1, balance, 1, max_exact_output(balance) + 1)
+            })
+            .unwrap_err();
+            assert_eq!(
+                panic.downcast_ref::<&str>(),
+                Some(&"amount_out envelope: <= 30% of the reserve")
+            );
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "empty reserve")]
+    fn empty_reserve_precedes_raw_cap_check() {
+        calc_in_given_out(0, 0, 1, 0, 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "zero weight")]
+    fn invalid_weight_precedes_raw_cap_check() {
+        calc_in_given_out(1, 0, 1, 0, 1);
+    }
 }
