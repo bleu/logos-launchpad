@@ -79,8 +79,8 @@ execution_lane() {
   run_check --execution
   [ "$status" = 0 ] || exit 1
   assert_contains "$(< "$COMMAND_LOG")" 'cargo +1.98.1 test --manifest-path packages/lez-compat/execution/Cargo.toml --locked'
-  assert_contains "$(< "$COMMAND_LOG")" 'cargo +1.98.1 test --manifest-path methods/Cargo.toml --release --locked --features actor-execution-tests --test actor_sale'
-  assert_contains "$(< "$COMMAND_LOG")" 'cargo +1.98.1 test -p launchpad-client --release --locked --test role_authority_guest -- --ignored'
+  assert_contains "$(< "$COMMAND_LOG")" 'cargo +1.98.1 test --manifest-path methods/Cargo.toml --locked --features actor-execution-tests --test actor_sale'
+  assert_contains "$(< "$COMMAND_LOG")" 'cargo +1.98.1 test -p launchpad-client --locked --features actor-execution-tests --test role_authority_guest -- --ignored'
   assert_contains "$output" 'selected actor execution fixtures passed; service integration, real proofs and deployment readiness not tested'
   export LAUNCHPAD_CLOCK_ELF="$tmp/missing-clock.bin"
   run_check --execution

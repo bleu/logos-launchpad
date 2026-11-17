@@ -114,11 +114,14 @@ fn seeded_state_with_sell_fee(
     }
     (
         V03State::new()
-            .with_named_programs([
-                (CURVE, curve),
-                (TOKEN_PROGRAM_ACCOUNT_ID, token),
-                (clock_core::clock_account_id(), programs::clock()),
-            ])
+            .with_programs_at(
+                [
+                    (CURVE, curve),
+                    (TOKEN_PROGRAM_ACCOUNT_ID, token),
+                    (clock_core::clock_account_id(), programs::clock()),
+                ]
+                .map(|(address, program)| (address, program, true)),
+            )
             .with_public_accounts(accounts),
         pool,
     )
@@ -143,7 +146,7 @@ fn buy_transaction(
         holding(buyer, LAUNCH),
         holding(buyer, COLLATERAL),
         Actor::new(
-            clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID,
+            clock_core::CLOCK_PROGRAM_ACCOUNT_ID,
             clock_core::clock_account_id(),
         ),
     ];
@@ -194,23 +197,14 @@ fn balance(state: &V03State, owner: AccountId, definition: AccountId) -> u128 {
 }
 
 fn clock_state(state: V03State, timestamp: u64) -> V03State {
-    state.with_public_accounts([
-        account(
-            lbp_core::pricing_clock::actor(),
-            borsh::to_vec(&timestamp).unwrap(),
-        ),
-        account(
-            Actor::new(
-                clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID,
-                clock_core::clock_account_id(),
-            ),
-            clock_core::ClockAccountData {
-                block_id: 1,
-                timestamp,
-            }
-            .to_bytes(),
-        ),
-    ])
+    state.with_public_accounts([account(
+        clock_core::clock_actor(),
+        clock_core::ClockAccountData {
+            block_id: 1,
+            timestamp,
+        }
+        .to_bytes(),
+    )])
 }
 
 fn fixed_config(state: V03State, fee_bps: u16, treasury: AccountId, frozen: bool) -> V03State {
@@ -297,25 +291,24 @@ fn fixed_state(buyer: AccountId, end: Option<u64>) -> (V03State, AccountId) {
         ));
     }
     let state = V03State::new()
-        .with_named_programs([
-            (
-                LBP,
-                Program::new(Cow::Borrowed(launchpad_methods::LBP_ELF)).unwrap(),
-            ),
-            (
-                CURVE,
-                Program::new(Cow::Borrowed(launchpad_methods::CURVE_ELF)).unwrap(),
-            ),
-            (
-                TOKEN_PROGRAM_ACCOUNT_ID,
-                Program::new(Cow::Borrowed(lez_compat_methods::COMPAT_TOKEN_ELF)).unwrap(),
-            ),
-            (clock_core::clock_account_id(), programs::clock()),
-            (
-                lbp_core::pricing_clock::PROGRAM,
-                Program::new(Cow::Borrowed(launchpad_methods::MOCK_CLOCK_ELF)).unwrap(),
-            ),
-        ])
+        .with_programs_at(
+            [
+                (
+                    LBP,
+                    Program::new(Cow::Borrowed(launchpad_methods::LBP_ELF)).unwrap(),
+                ),
+                (
+                    CURVE,
+                    Program::new(Cow::Borrowed(launchpad_methods::CURVE_ELF)).unwrap(),
+                ),
+                (
+                    TOKEN_PROGRAM_ACCOUNT_ID,
+                    Program::new(Cow::Borrowed(lez_compat_methods::COMPAT_TOKEN_ELF)).unwrap(),
+                ),
+                (clock_core::clock_account_id(), programs::clock()),
+            ]
+            .map(|(address, program)| (address, program, true)),
+        )
         .with_public_accounts(accounts);
     (
         clock_state(fixed_config(state, 333, TREASURY, false), 100_000),
@@ -599,9 +592,8 @@ fn fixed_transaction(
         holding(buyer, COLLATERAL),
         holding(TREASURY, COLLATERAL),
         holding(NEXT_TREASURY, COLLATERAL),
-        lbp_core::pricing_clock::actor(),
         Actor::new(
-            clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID,
+            clock_core::CLOCK_PROGRAM_ACCOUNT_ID,
             clock_core::clock_account_id(),
         ),
     ];
@@ -1301,25 +1293,29 @@ fn curve_factory_locks_allowlist_before_setup_and_buys_with_the_same_policy() {
         let (policy, path) = allowlist_for(pool, creator);
         let mut state = fixed_config(
             V03State::new()
-                .with_named_programs([
-                    (
-                        FACTORY,
-                        Program::new(Cow::Borrowed(launchpad_methods::FACTORY_ELF)).unwrap(),
-                    ),
-                    (
-                        CURVE,
-                        Program::new(Cow::Borrowed(launchpad_methods::CURVE_ELF)).unwrap(),
-                    ),
-                    (
-                        TOKEN_PROGRAM_ACCOUNT_ID,
-                        Program::new(Cow::Borrowed(lez_compat_methods::COMPAT_TOKEN_ELF)).unwrap(),
-                    ),
-                    (
-                        factory_core::AUTHORITY_PROGRAM_ACCOUNT_ID,
-                        Program::new(Cow::Borrowed(lez_compat_methods::COMPAT_AUTHORITY_ELF))
-                            .unwrap(),
-                    ),
-                ])
+                .with_programs_at(
+                    [
+                        (
+                            FACTORY,
+                            Program::new(Cow::Borrowed(launchpad_methods::FACTORY_ELF)).unwrap(),
+                        ),
+                        (
+                            CURVE,
+                            Program::new(Cow::Borrowed(launchpad_methods::CURVE_ELF)).unwrap(),
+                        ),
+                        (
+                            TOKEN_PROGRAM_ACCOUNT_ID,
+                            Program::new(Cow::Borrowed(lez_compat_methods::COMPAT_TOKEN_ELF))
+                                .unwrap(),
+                        ),
+                        (
+                            factory_core::AUTHORITY_PROGRAM_ACCOUNT_ID,
+                            Program::new(Cow::Borrowed(lez_compat_methods::COMPAT_AUTHORITY_ELF))
+                                .unwrap(),
+                        ),
+                    ]
+                    .map(|(address, program)| (address, program, true)),
+                )
                 .with_public_accounts([
                     account(
                         Actor::new(COLLATERAL, TOKEN_PROGRAM_ACCOUNT_ID),
@@ -1803,30 +1799,34 @@ fn fixed_factory_env_with_sell_fee(
     let mut state = fixed_config(
         clock_state(
             V03State::new()
-                .with_named_programs([
-                    (
-                        FACTORY,
-                        Program::new(Cow::Borrowed(launchpad_methods::FACTORY_ELF)).unwrap(),
-                    ),
-                    (
-                        LBP,
-                        Program::new(Cow::Borrowed(launchpad_methods::LBP_ELF)).unwrap(),
-                    ),
-                    (
-                        CURVE,
-                        Program::new(Cow::Borrowed(launchpad_methods::CURVE_ELF)).unwrap(),
-                    ),
-                    (
-                        TOKEN_PROGRAM_ACCOUNT_ID,
-                        Program::new(Cow::Borrowed(lez_compat_methods::COMPAT_TOKEN_ELF)).unwrap(),
-                    ),
-                    (
-                        factory_core::AUTHORITY_PROGRAM_ACCOUNT_ID,
-                        Program::new(Cow::Borrowed(lez_compat_methods::COMPAT_AUTHORITY_ELF))
-                            .unwrap(),
-                    ),
-                    (clock_core::clock_account_id(), programs::clock()),
-                ])
+                .with_programs_at(
+                    [
+                        (
+                            FACTORY,
+                            Program::new(Cow::Borrowed(launchpad_methods::FACTORY_ELF)).unwrap(),
+                        ),
+                        (
+                            LBP,
+                            Program::new(Cow::Borrowed(launchpad_methods::LBP_ELF)).unwrap(),
+                        ),
+                        (
+                            CURVE,
+                            Program::new(Cow::Borrowed(launchpad_methods::CURVE_ELF)).unwrap(),
+                        ),
+                        (
+                            TOKEN_PROGRAM_ACCOUNT_ID,
+                            Program::new(Cow::Borrowed(lez_compat_methods::COMPAT_TOKEN_ELF))
+                                .unwrap(),
+                        ),
+                        (
+                            factory_core::AUTHORITY_PROGRAM_ACCOUNT_ID,
+                            Program::new(Cow::Borrowed(lez_compat_methods::COMPAT_AUTHORITY_ELF))
+                                .unwrap(),
+                        ),
+                        (clock_core::clock_account_id(), programs::clock()),
+                    ]
+                    .map(|(address, program)| (address, program, true)),
+                )
                 .with_public_accounts([
                     account(
                         Actor::new(COLLATERAL, TOKEN_PROGRAM_ACCOUNT_ID),
@@ -1864,7 +1864,7 @@ fn fixed_factory_env_with_sell_fee(
         Actor::new(launch, TOKEN_PROGRAM_ACCOUNT_ID),
         Actor::new(COLLATERAL, TOKEN_PROGRAM_ACCOUNT_ID),
         Actor::new(
-            clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID,
+            clock_core::CLOCK_PROGRAM_ACCOUNT_ID,
             clock_core::clock_account_id(),
         ),
     ];
@@ -2120,7 +2120,7 @@ fn weighted_allowlist_signed_buy_checks_control_replay_reuse_and_rollback() {
     )
     .unwrap();
     eprintln!(
-        "weighted allowlist exact-input cycles (mock clock): {}",
+        "weighted allowlist exact-input cycles (upstream clock): {}",
         charge.cycles
     );
     state.apply_state_diff(diff).unwrap();
@@ -2147,7 +2147,7 @@ fn weighted_allowlist_signed_buy_checks_control_replay_reuse_and_rollback() {
     )
     .unwrap();
     eprintln!(
-        "weighted allowlist exact-output cycles (mock clock): {}",
+        "weighted allowlist exact-output cycles (upstream clock): {}",
         charge.cycles
     );
     state.apply_state_diff(diff).unwrap();
@@ -2246,33 +2246,33 @@ fn weighted_factory_executes_all_stages_and_rolls_back_failed_funding() {
         let (policy, path) = allowlist_for(pool, creator);
         let authority = factory_core::AUTHORITY_PROGRAM_ACCOUNT_ID;
         let mut state = V03State::new()
-            .with_named_programs([
-                (
-                    FACTORY,
-                    Program::new(Cow::Borrowed(launchpad_methods::FACTORY_ELF)).unwrap(),
-                ),
-                (
-                    LBP,
-                    Program::new(Cow::Borrowed(launchpad_methods::LBP_ELF)).unwrap(),
-                ),
-                (
-                    CURVE,
-                    Program::new(Cow::Borrowed(launchpad_methods::CURVE_ELF)).unwrap(),
-                ),
-                (
-                    TOKEN_PROGRAM_ACCOUNT_ID,
-                    Program::new(Cow::Borrowed(lez_compat_methods::COMPAT_TOKEN_ELF)).unwrap(),
-                ),
-                (
-                    authority,
-                    Program::new(Cow::Borrowed(lez_compat_methods::COMPAT_AUTHORITY_ELF)).unwrap(),
-                ),
-                (clock_core::clock_account_id(), programs::clock()),
-                (
-                    lbp_core::pricing_clock::PROGRAM,
-                    Program::new(Cow::Borrowed(launchpad_methods::MOCK_CLOCK_ELF)).unwrap(),
-                ),
-            ])
+            .with_programs_at(
+                [
+                    (
+                        FACTORY,
+                        Program::new(Cow::Borrowed(launchpad_methods::FACTORY_ELF)).unwrap(),
+                    ),
+                    (
+                        LBP,
+                        Program::new(Cow::Borrowed(launchpad_methods::LBP_ELF)).unwrap(),
+                    ),
+                    (
+                        CURVE,
+                        Program::new(Cow::Borrowed(launchpad_methods::CURVE_ELF)).unwrap(),
+                    ),
+                    (
+                        TOKEN_PROGRAM_ACCOUNT_ID,
+                        Program::new(Cow::Borrowed(lez_compat_methods::COMPAT_TOKEN_ELF)).unwrap(),
+                    ),
+                    (
+                        authority,
+                        Program::new(Cow::Borrowed(lez_compat_methods::COMPAT_AUTHORITY_ELF))
+                            .unwrap(),
+                    ),
+                    (clock_core::clock_account_id(), programs::clock()),
+                ]
+                .map(|(address, program)| (address, program, true)),
+            )
             .with_public_accounts([
                 account(
                     Actor::new(COLLATERAL, TOKEN_PROGRAM_ACCOUNT_ID),
@@ -2305,7 +2305,7 @@ fn weighted_factory_executes_all_stages_and_rolls_back_failed_funding() {
             Actor::new(COLLATERAL, TOKEN_PROGRAM_ACCOUNT_ID),
             Actor::new(curve_core::compute_config_pda(NAMESPACE, CURVE), CURVE),
             Actor::new(
-                clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID,
+                clock_core::CLOCK_PROGRAM_ACCOUNT_ID,
                 clock_core::clock_account_id(),
             ),
         ];
@@ -2387,7 +2387,18 @@ fn weighted_factory_executes_all_stages_and_rolls_back_failed_funding() {
             ));
             assert!(rejected == state, "late creation changed state or nonce");
         }
-        let mut at_start = state.clone();
+        // The saved-clock check also runs when inclusion alone would permit setup.
+        let mut future_clock = clock_state(state.clone(), 150_001);
+        let unchanged = future_clock.clone();
+        assert!(
+            matches!(execute_at(&mut future_clock, creation.clone(), 150_000),
+            Err(lee::error::LeeError::ProgramExecutionFailed(message)) if message.contains("InvalidTerms"))
+        );
+        assert!(
+            future_clock == unchanged,
+            "rejected clock changed creation effects or nonce"
+        );
+        let mut at_start = clock_state(state.clone(), 150_000);
         execute_at(&mut at_start, creation.clone(), 150_000).unwrap();
         execute(&mut state, creation).unwrap();
         assert_eq!(balance(&state, mint, launch), 1000);
@@ -2413,6 +2424,15 @@ fn weighted_factory_executes_all_stages_and_rolls_back_failed_funding() {
                 ));
                 assert!(rejected == state, "late setup changed state or nonce");
             }
+            let mut ended_clock = clock_state(state.clone(), 300_000);
+            let unchanged = ended_clock.clone();
+            assert!(matches!(execute_at(&mut ended_clock,
+                factory_core::Message::ContinueWeightedCreation { expected_stage: stage, creator }, 299_999),
+                Err(lee::error::LeeError::ProgramExecutionFailed(message)) if message.contains("InvalidTerms")));
+            assert!(
+                ended_clock == unchanged,
+                "rejected saved deadline changed setup effects or nonce"
+            );
             let mut before_end = state.clone();
             execute_at(
                 &mut before_end,
@@ -2570,7 +2590,7 @@ fn weighted_factory_executes_all_stages_and_rolls_back_failed_funding() {
         )
         .unwrap();
         eprintln!(
-            "created weighted allowlist exact-input cycles (mock clock): {}",
+            "created weighted allowlist exact-input cycles (upstream clock): {}",
             charge.cycles
         );
         state.apply_state_diff(diff).unwrap();
@@ -2598,7 +2618,7 @@ fn weighted_factory_executes_all_stages_and_rolls_back_failed_funding() {
         )
         .unwrap();
         eprintln!(
-            "created weighted allowlist buy cycles (mock clock): {}",
+            "created weighted allowlist buy cycles (upstream clock): {}",
             charge.cycles
         );
         state.apply_state_diff(diff).unwrap();
@@ -2621,8 +2641,14 @@ fn weighted_clock_failure_and_freeze_preserve_state() {
     for bytes in [vec![], vec![1, 2, 3]] {
         let mut invalid = state
             .clone()
-            .with_public_accounts([account(lbp_core::pricing_clock::actor(), bytes)]);
-        fixed_rejected(&mut invalid, pool, &key, buy.clone(), "InvalidState");
+            .with_public_accounts([account(clock_core::clock_actor(), bytes)]);
+        fixed_rejected(
+            &mut invalid,
+            pool,
+            &key,
+            buy.clone(),
+            "ClockAccountData deserialization should not fail",
+        );
     }
     let mut frozen = fixed_config(state, 333, TREASURY, true);
     fixed_rejected(&mut frozen, pool, &key, buy, "Frozen");
@@ -2723,33 +2749,32 @@ fn weighted_factory_env_with_sell_fee(
     let pool = lbp_core::compute_pool_pda(NAMESPACE, LBP, launch, COLLATERAL, factory);
     let authority = factory_core::AUTHORITY_PROGRAM_ACCOUNT_ID;
     let mut state = V03State::new()
-        .with_named_programs([
-            (
-                FACTORY,
-                Program::new(Cow::Borrowed(launchpad_methods::FACTORY_ELF)).unwrap(),
-            ),
-            (
-                LBP,
-                Program::new(Cow::Borrowed(launchpad_methods::LBP_ELF)).unwrap(),
-            ),
-            (
-                CURVE,
-                Program::new(Cow::Borrowed(launchpad_methods::CURVE_ELF)).unwrap(),
-            ),
-            (
-                TOKEN_PROGRAM_ACCOUNT_ID,
-                Program::new(Cow::Borrowed(lez_compat_methods::COMPAT_TOKEN_ELF)).unwrap(),
-            ),
-            (
-                authority,
-                Program::new(Cow::Borrowed(lez_compat_methods::COMPAT_AUTHORITY_ELF)).unwrap(),
-            ),
-            (clock_core::clock_account_id(), programs::clock()),
-            (
-                lbp_core::pricing_clock::PROGRAM,
-                Program::new(Cow::Borrowed(launchpad_methods::MOCK_CLOCK_ELF)).unwrap(),
-            ),
-        ])
+        .with_programs_at(
+            [
+                (
+                    FACTORY,
+                    Program::new(Cow::Borrowed(launchpad_methods::FACTORY_ELF)).unwrap(),
+                ),
+                (
+                    LBP,
+                    Program::new(Cow::Borrowed(launchpad_methods::LBP_ELF)).unwrap(),
+                ),
+                (
+                    CURVE,
+                    Program::new(Cow::Borrowed(launchpad_methods::CURVE_ELF)).unwrap(),
+                ),
+                (
+                    TOKEN_PROGRAM_ACCOUNT_ID,
+                    Program::new(Cow::Borrowed(lez_compat_methods::COMPAT_TOKEN_ELF)).unwrap(),
+                ),
+                (
+                    authority,
+                    Program::new(Cow::Borrowed(lez_compat_methods::COMPAT_AUTHORITY_ELF)).unwrap(),
+                ),
+                (clock_core::clock_account_id(), programs::clock()),
+            ]
+            .map(|(address, program)| (address, program, true)),
+        )
         .with_public_accounts([
             account(
                 Actor::new(COLLATERAL, TOKEN_PROGRAM_ACCOUNT_ID),
@@ -2802,10 +2827,9 @@ fn weighted_factory_env_with_sell_fee(
         Actor::new(COLLATERAL, TOKEN_PROGRAM_ACCOUNT_ID),
         Actor::new(curve_core::compute_config_pda(NAMESPACE, CURVE), CURVE),
         Actor::new(
-            clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID,
+            clock_core::CLOCK_PROGRAM_ACCOUNT_ID,
             clock_core::clock_account_id(),
         ),
-        lbp_core::pricing_clock::actor(),
         holding(TREASURY, launch),
         holding(NEXT_TREASURY, launch),
         holding(TREASURY, COLLATERAL),
@@ -3648,7 +3672,8 @@ fn weighted_stale_clock_at_inclusion_boundary_preserves_state() {
     let transaction = fixed_transaction(&state, pool, &key, buy);
 
     // Inclusion time before start must be rejected
-    for timestamp in [149_999u64] {
+    {
+        let timestamp = 149_999u64;
         let mut rejected = state.clone();
         let before = rejected.clone();
         let nonce = rejected.get_account_by_id(creator).nonce;
@@ -3676,6 +3701,88 @@ fn weighted_stale_clock_at_inclusion_boundary_preserves_state() {
             "rejected buy changed state at {timestamp}"
         );
     }
+}
+
+/// Runs the real clock guest in the node-free state fixture. Sequencer guards and
+/// end-of-block ordering are outside this fixture.
+fn tick_clock(state: &mut V03State, timestamp: u64) {
+    let clock = clock_core::clock_actor();
+    let old = clock_core::ClockAccountData::from_bytes(
+        state
+            .get_account_by_id(clock.account_id)
+            .data
+            .actor_state(clock.program_account_id),
+    );
+    let message = Message::try_new(
+        clock,
+        vec![clock],
+        BTreeMap::new(),
+        clock_core::Message::Tick {
+            timestamp,
+            block_id: old.block_id + 1,
+        },
+    )
+    .unwrap();
+    let tx = PublicTransaction::new(message.clone(), WitnessSet::for_message(&message, &[]));
+    state
+        .transition_from_public_transaction(&tx, old.block_id + 1, timestamp)
+        .unwrap();
+    let updated = clock_core::ClockAccountData::from_bytes(
+        state
+            .get_account_by_id(clock.account_id)
+            .data
+            .actor_state(clock.program_account_id),
+    );
+    assert_eq!(
+        (updated.block_id, updated.timestamp),
+        (old.block_id + 1, timestamp)
+    );
+}
+
+#[test]
+fn upstream_clock_tick_changes_weighted_price_and_preserves_inclusion_deadline() {
+    let key = PrivateKey::try_new([23; 32]).unwrap();
+    let buyer = AccountId::from(&PublicKey::new_from_private_key(&key));
+    let (mut state, pool) = weighted_state(buyer);
+    let mut sale = fixed_pool(&state, pool);
+    if let lbp_core::PoolMode::Weighted {
+        token_weight_end, ..
+    } = &mut sale.mode
+    {
+        *token_weight_end = 90 * lbp_core::WEIGHT_TOTAL / 100;
+    }
+    state = state.with_public_accounts([account(
+        Actor::new(pool, LBP),
+        borsh::to_vec(&sale).unwrap(),
+    )]);
+    let buy = lbp_core::Message::BuyWeightedExactInput {
+        amount_in: 50,
+        min_amount_out: 1,
+        membership: None,
+    };
+    let tx = fixed_transaction(&state, pool, &key, buy.clone());
+    let mut early = state.clone();
+    early
+        .transition_from_public_transaction(&tx, 2, 100_000)
+        .unwrap();
+    let early_output = balance(&early, buyer, LAUNCH);
+    tick_clock(&mut state, 199_999);
+    let mut later = state.clone();
+    later
+        .transition_from_public_transaction(&tx, 3, 199_999)
+        .unwrap();
+    let later_output = balance(&later, buyer, LAUNCH);
+    assert!(later_output < early_output);
+    // This is still the same signed buy, with saved time held before the end.
+    let before = state.clone();
+    assert!(matches!(
+        state.transition_from_public_transaction(&tx, 3, 200_000),
+        Err(lee::error::LeeError::OutOfValidityWindow)
+    ));
+    assert!(state == before);
+    // Advancing the real clock to the end also rejects pricing itself.
+    tick_clock(&mut state, 200_000);
+    fixed_rejected(&mut state, pool, &key, buy, "Closed");
 }
 
 // ---------------------------------------------------------------------------
@@ -3740,6 +3847,33 @@ fn guest_poke_records_checkpoint_permissionlessly() {
     let (time, w) = checkpoint_of(&state, pool);
     assert_eq!(time, 100);
     assert!(w > 0);
+}
+
+#[test]
+fn upstream_clock_ticks_advance_poke_checkpoints_once_per_second() {
+    let key = PrivateKey::try_new([23; 32]).unwrap();
+    let buyer = AccountId::from(&PublicKey::new_from_private_key(&key));
+    let (mut state, pool) = weighted_state(buyer);
+    for (timestamp, block, expected_events) in [
+        (100_000, 1, 1),
+        (100_999, 2, 0),
+        (101_000, 3, 1),
+        (200_000, 4, 1),
+    ] {
+        if block > 1 {
+            tick_clock(&mut state, timestamp);
+        }
+        let tx = poke_transaction(&state, pool);
+        let events = state
+            .transition_from_public_transaction(&tx, block, timestamp)
+            .unwrap();
+        let checkpoint = checkpoint_of(&state, pool);
+        assert_eq!(checkpoint.0, timestamp / 1000);
+        assert_eq!(events.len(), expected_events);
+        if expected_events == 1 {
+            assert_eq!(events[0].event.data, borsh::to_vec(&checkpoint).unwrap());
+        }
+    }
 }
 
 #[test]
@@ -3825,6 +3959,14 @@ fn guest_poke_in_settlement_flow() {
         sale.settlement_progress,
         lbp_core::SettlementProgress::ManualComplete
     );
+    // Observations remain available after settlement and use the real clock.
+    tick_clock(&mut state, 301_000);
+    let tx = poke_transaction(&state, pool);
+    let events = state
+        .transition_from_public_transaction(&tx, 3, 301_000)
+        .unwrap();
+    assert_eq!(checkpoint_of(&state, pool).0, 301);
+    assert_eq!(events.len(), 1);
 }
 
 fn token_holding(owner: AccountId, definition: AccountId, balance: u128) -> (AccountId, Account) {
@@ -4710,30 +4852,34 @@ fn factory_creation_rejects_invalid_ending_matrix_without_state_changes() {
     let mut state = fixed_config(
         clock_state(
             V03State::new()
-                .with_named_programs([
-                    (
-                        FACTORY,
-                        Program::new(Cow::Borrowed(launchpad_methods::FACTORY_ELF)).unwrap(),
-                    ),
-                    (
-                        CURVE,
-                        Program::new(Cow::Borrowed(launchpad_methods::CURVE_ELF)).unwrap(),
-                    ),
-                    (
-                        LBP,
-                        Program::new(Cow::Borrowed(launchpad_methods::LBP_ELF)).unwrap(),
-                    ),
-                    (
-                        TOKEN_PROGRAM_ACCOUNT_ID,
-                        Program::new(Cow::Borrowed(lez_compat_methods::COMPAT_TOKEN_ELF)).unwrap(),
-                    ),
-                    (
-                        authority,
-                        Program::new(Cow::Borrowed(lez_compat_methods::COMPAT_AUTHORITY_ELF))
-                            .unwrap(),
-                    ),
-                    (clock_core::clock_account_id(), programs::clock()),
-                ])
+                .with_programs_at(
+                    [
+                        (
+                            FACTORY,
+                            Program::new(Cow::Borrowed(launchpad_methods::FACTORY_ELF)).unwrap(),
+                        ),
+                        (
+                            CURVE,
+                            Program::new(Cow::Borrowed(launchpad_methods::CURVE_ELF)).unwrap(),
+                        ),
+                        (
+                            LBP,
+                            Program::new(Cow::Borrowed(launchpad_methods::LBP_ELF)).unwrap(),
+                        ),
+                        (
+                            TOKEN_PROGRAM_ACCOUNT_ID,
+                            Program::new(Cow::Borrowed(lez_compat_methods::COMPAT_TOKEN_ELF))
+                                .unwrap(),
+                        ),
+                        (
+                            authority,
+                            Program::new(Cow::Borrowed(lez_compat_methods::COMPAT_AUTHORITY_ELF))
+                                .unwrap(),
+                        ),
+                        (clock_core::clock_account_id(), programs::clock()),
+                    ]
+                    .map(|(address, program)| (address, program, true)),
+                )
                 .with_public_accounts([
                     account(
                         Actor::new(COLLATERAL, TOKEN_PROGRAM_ACCOUNT_ID),
@@ -4770,10 +4916,7 @@ fn factory_creation_rejects_invalid_ending_matrix_without_state_changes() {
                 factory_core::compute_curve_creator_role_pda(NAMESPACE, FACTORY, salt),
                 authority,
             ),
-            Actor::new(
-                clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID,
-                clock_core::clock_account_id(),
-            ),
+            clock_core::clock_actor(),
         ];
         for owner in [factory, mint, escrow, pool, creator, launch] {
             actors.extend([
@@ -5367,13 +5510,16 @@ fn lbp_graduation_env(
         }
         env
     };
-    env.state = env.state.with_named_programs([(
-        LBP_HOOK_PROGRAM,
-        Program::new(Cow::Borrowed(
-            launchpad_methods::GRADUATION_FAULT_ADAPTER_ELF,
-        ))
-        .unwrap(),
-    )]);
+    env.state = env.state.with_programs_at(
+        [(
+            LBP_HOOK_PROGRAM,
+            Program::new(Cow::Borrowed(
+                launchpad_methods::GRADUATION_FAULT_ADAPTER_ELF,
+            ))
+            .unwrap(),
+        )]
+        .map(|(address, program)| (address, program, true)),
+    );
     initialize_lbp_adapter(&mut env, accepted_intent);
     let saved = lbp_launch(&env);
     assert_eq!(
@@ -6080,11 +6226,16 @@ fn lbp_graduation_late_faults_roll_back_every_effect_and_repaired_retry_pays_onc
                     "InsufficientBalance"
                 }
                 "completed" => {
-                    env.state = env.state.with_named_programs([(
-                        LBP,
-                        Program::new(Cow::Borrowed(launchpad_methods::LBP_COMPLETION_FAULT_ELF))
+                    env.state = env.state.with_programs_at(
+                        [(
+                            LBP,
+                            Program::new(Cow::Borrowed(
+                                launchpad_methods::LBP_COMPLETION_FAULT_ELF,
+                            ))
                             .unwrap(),
-                    )]);
+                        )]
+                        .map(|(address, program)| (address, program, true)),
+                    );
                     "InvalidState"
                 }
                 "callback" => "callback rejected",
@@ -6102,16 +6253,23 @@ fn lbp_graduation_late_faults_roll_back_every_effect_and_repaired_retry_pays_onc
             }
             // These program mappings exist only in this disposable fault fixture.
             if matches!(fault, "callback" | "ack" | "hash") {
-                env.state = env.state.with_named_programs([(
-                    LBP_HOOK_PROGRAM,
-                    Program::new(Cow::Borrowed(launchpad_methods::GRADUATION_ADAPTER_ELF)).unwrap(),
-                )]);
+                env.state = env.state.with_programs_at(
+                    [(
+                        LBP_HOOK_PROGRAM,
+                        Program::new(Cow::Borrowed(launchpad_methods::GRADUATION_ADAPTER_ELF))
+                            .unwrap(),
+                    )]
+                    .map(|(address, program)| (address, program, true)),
+                );
             }
             if fault == "completed" {
-                env.state = env.state.with_named_programs([(
-                    LBP,
-                    Program::new(Cow::Borrowed(launchpad_methods::LBP_ELF)).unwrap(),
-                )]);
+                env.state = env.state.with_programs_at(
+                    [(
+                        LBP,
+                        Program::new(Cow::Borrowed(launchpad_methods::LBP_ELF)).unwrap(),
+                    )]
+                    .map(|(address, program)| (address, program, true)),
+                );
             }
             let events = env
                 .execute_events(lbp_hook_message(creator), 300_000)
@@ -6318,10 +6476,13 @@ fn lbp_nested_adapter_calls_cannot_reenter_pending_factory_or_pool_and_retry_pay
                 lbp_core::SettlementProgress::Unselected
             );
             assert!(lbp_adapter_state(&env).receipt.is_none());
-            env.state = env.state.with_named_programs([(
-                LBP_HOOK_PROGRAM,
-                Program::new(Cow::Borrowed(launchpad_methods::GRADUATION_ADAPTER_ELF)).unwrap(),
-            )]);
+            env.state = env.state.with_programs_at(
+                [(
+                    LBP_HOOK_PROGRAM,
+                    Program::new(Cow::Borrowed(launchpad_methods::GRADUATION_ADAPTER_ELF)).unwrap(),
+                )]
+                .map(|(address, program)| (address, program, true)),
+            );
             env.execute(lbp_hook_message(creator), 300_000).unwrap();
             assert_lbp_graduated(&env, weighted, &initial, collateral, supply, false, false);
             assert_eq!(
@@ -6684,10 +6845,13 @@ fn curve_event_env_with_sell_fee(
     let pool = curve_core::compute_pool_pda(NAMESPACE, CURVE, LAUNCH, COLLATERAL, owner);
     let role = curve_core::compute_pool_owner_role(NAMESPACE, pool, CURVE);
     let state = state
-        .with_named_programs([(
-            factory_core::AUTHORITY_PROGRAM_ACCOUNT_ID,
-            Program::new(Cow::Borrowed(lez_compat_methods::COMPAT_AUTHORITY_ELF)).unwrap(),
-        )])
+        .with_programs_at(
+            [(
+                factory_core::AUTHORITY_PROGRAM_ACCOUNT_ID,
+                Program::new(Cow::Borrowed(lez_compat_methods::COMPAT_AUTHORITY_ELF)).unwrap(),
+            )]
+            .map(|(address, program)| (address, program, true)),
+        )
         .with_public_accounts([
             account(Actor::new(pool, CURVE), borsh::to_vec(&pool_state).unwrap()),
             seeded_role(role, owner),
@@ -6719,10 +6883,7 @@ fn curve_execute_events_at(
             factory_core::AUTHORITY_PROGRAM_ACCOUNT_ID,
         ),
         Actor::new(owner, factory_core::AUTHORITY_PROGRAM_ACCOUNT_ID),
-        Actor::new(
-            clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID,
-            clock_core::clock_account_id(),
-        ),
+        clock_core::clock_actor(),
     ];
     for account in [owner, pool, TREASURY, NEXT_TREASURY] {
         actors.extend([

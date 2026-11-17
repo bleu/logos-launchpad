@@ -534,7 +534,9 @@ fn initialize_adapter(fixture: &mut FactoryFixture, ready: bool) {
 
 fn hook_ready(configuration: Vec<u8>, reserve: u128, buy: bool, elf: &str) -> FactoryFixture {
     let mut fixture = closed_sale(Some(ADAPTER), configuration, reserve, buy);
-    fixture.state = fixture.state.with_named_programs([(ADAPTER, guest(elf))]);
+    fixture.state = fixture.state.with_programs_at(
+        [(ADAPTER, guest(elf))].map(|(address, program)| (address, program, true)),
+    );
     initialize_adapter(&mut fixture, true);
     let mut events = vec![];
     for _ in 0..4 {
@@ -736,9 +738,10 @@ fn settlement_final_ack_failure_rolls_back_adapter_receipt_payouts_and_graduated
     );
     assert_eq!(balance(&fixture.state, fixture.factory, COLLATERAL), 112);
     // Remove the test-only fault; this does not prove a production adapter upgrade route.
-    fixture.state = fixture
-        .state
-        .with_named_programs([(ADAPTER, guest("LAUNCHPAD_ADAPTER_ELF"))]);
+    fixture.state = fixture.state.with_programs_at(
+        [(ADAPTER, guest("LAUNCHPAD_ADAPTER_ELF"))]
+            .map(|(address, program)| (address, program, true)),
+    );
     let events = hook_events(&mut fixture).unwrap();
     assert_graduation_sequence(&fixture, &events);
     assert!(adapter_state(&fixture).receipt.is_some());
@@ -887,9 +890,10 @@ fn settlement_nested_adapter_calls_roll_back_and_repaired_retry_pays_once() {
         rejected(&mut fixture, creator_hook, reason);
         assert_hook_custody(&fixture, false);
         // Replace only test code, not the saved adapter identity or configuration.
-        fixture.state = fixture
-            .state
-            .with_named_programs([(ADAPTER, guest("LAUNCHPAD_ADAPTER_ELF"))]);
+        fixture.state = fixture.state.with_programs_at(
+            [(ADAPTER, guest("LAUNCHPAD_ADAPTER_ELF"))]
+                .map(|(address, program)| (address, program, true)),
+        );
         creator_hook(&mut fixture).unwrap();
         assert_hook_custody(&fixture, true);
         assert_eq!(
@@ -963,9 +967,10 @@ fn settlement_failed_callback_allows_manual_recovery_without_replacing_adapter()
 #[ignore = "requires fresh application, adapter and compatibility ELFs and the pinned clock ELF"]
 fn settlement_zero_manual_completion_blocks_hooks_and_keeps_allocation_claims() {
     let mut fixture = closed_sale(Some(ADAPTER), b"zero-payout".to_vec(), 0, false);
-    fixture.state = fixture
-        .state
-        .with_named_programs([(ADAPTER, guest("LAUNCHPAD_ADAPTER_ELF"))]);
+    fixture.state = fixture.state.with_programs_at(
+        [(ADAPTER, guest("LAUNCHPAD_ADAPTER_ELF"))]
+            .map(|(address, program)| (address, program, true)),
+    );
     initialize_adapter(&mut fixture, true);
     let adapter_actors = [
         Actor::new(custody(&fixture), ADAPTER),
@@ -1025,9 +1030,10 @@ fn settlement_zero_manual_completion_blocks_hooks_and_keeps_allocation_claims() 
 #[ignore = "requires fresh application, adapter and compatibility ELFs and the pinned clock ELF"]
 fn settlement_zero_hook_can_graduate_before_manual_completion() {
     let mut fixture = closed_sale(Some(ADAPTER), b"zero-payout".to_vec(), 0, false);
-    fixture.state = fixture
-        .state
-        .with_named_programs([(ADAPTER, guest("LAUNCHPAD_ADAPTER_ELF"))]);
+    fixture.state = fixture.state.with_programs_at(
+        [(ADAPTER, guest("LAUNCHPAD_ADAPTER_ELF"))]
+            .map(|(address, program)| (address, program, true)),
+    );
     initialize_adapter(&mut fixture, true);
     for _ in 0..4 {
         hook(&mut fixture).unwrap();

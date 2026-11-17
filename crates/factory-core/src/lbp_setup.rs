@@ -898,8 +898,7 @@ pub(super) fn resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
                 };
                 let response = response
                     .send_sync(Actor::new(state.pool_id, state.lbp_program_id), &activation);
-                let response = state.with_setup_deadline(response)?;
-                return Ok(if state.creator_allocation_released {
+                let response = if state.creator_allocation_released {
                     state.allocation_event(
                         transfer(
                             response,
@@ -914,7 +913,8 @@ pub(super) fn resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
                     )
                 } else {
                     response
-                });
+                };
+                return state.with_setup_deadline(input.receiver, response);
             }
             if expected_stage == LbpCreationStage::Allocated {
                 if balance(&pending.values[1], mint, state.token_definition_id)? != 0
@@ -988,6 +988,7 @@ pub(super) fn resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
                     },
                 };
                 return state.with_setup_deadline(
+                    input.receiver,
                     state
                         .response()
                         .send_sync(Actor::new(state.pool_id, state.lbp_program_id), &prepare),
@@ -1020,14 +1021,17 @@ pub(super) fn resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
                 input.receiver.account_id,
                 state.sale_inventory,
             );
-            return state.with_setup_deadline(transfer(
-                response,
-                mint,
-                compute_mint_seed(state.namespace, state.launch_salt),
-                state.token_definition_id,
-                state.creator_escrow_id,
-                state.creator_allocation,
-            ));
+            return state.with_setup_deadline(
+                input.receiver,
+                transfer(
+                    response,
+                    mint,
+                    compute_mint_seed(state.namespace, state.launch_salt),
+                    state.token_definition_id,
+                    state.creator_escrow_id,
+                    state.creator_allocation,
+                ),
+            );
         }
         let (creator, start) = match pending.command {
             Message::CreateFixedPriceLbp { inputs } => (inputs.creator, inputs.start),
@@ -1116,15 +1120,13 @@ pub(super) fn resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
             }
         };
         if matches!(state.mode, LbpSetupMode::FixedPrice) {
-            return state.with_setup_deadline(response);
+            return state.with_setup_deadline(input.receiver, response);
         }
-        state.with_setup_deadline(response.send_sync(
-            Actor::new(
-                clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID,
-                clock_core::clock_account_id(),
-            ),
-            &clock_core::Message::AssertTimestamp { at_least, at_most },
-        ))
+        state.with_setup_deadline(
+            input.receiver,
+            lez_compat_core::clock::guard(input.receiver, response, at_least, at_most)
+                .map_err(|_| Error::InvalidTerms)?,
+        )
     })())
 }
 impl LbpLaunchState {
@@ -1184,7 +1186,7 @@ impl LbpLaunchState {
         }
         Ok(())
     }
-    fn with_setup_deadline(&self, response: Response) -> Result<Response, Error> {
+    fn with_setup_deadline(&self, receiver: Actor, response: Response) -> Result<Response, Error> {
         if matches!(self.mode, LbpSetupMode::FixedPrice) {
             return curve_core::with_time_bounds(response, None, self.end_timestamp)
                 .map_err(|_| Error::InvalidTerms);
@@ -1202,14 +1204,12 @@ impl LbpLaunchState {
         } else {
             response
         };
-        Ok(response.send_sync(
-            Actor::new(
-                clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID,
-                clock_core::clock_account_id(),
-            ),
-            &curve_core::clock_assertion(0, Some(end_timestamp))
-                .map_err(|_| Error::InvalidTerms)?,
-        ))
+        let at_most = curve_core::timestamp_millis(end_timestamp)
+            .map_err(|_| Error::InvalidTerms)?
+            .checked_sub(1)
+            .ok_or(Error::InvalidTerms)?;
+        lez_compat_core::clock::guard(receiver, response, 0, at_most)
+            .map_err(|_| Error::InvalidTerms)
     }
     fn response(&self) -> Response {
         Response::set_state(borsh::to_vec(self).unwrap())

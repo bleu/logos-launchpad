@@ -39,7 +39,7 @@ See the architecture [creation and private-purchase sequences](../architecture/s
 
 ## Scope limits
 
-The QML apps and shared core remain status placeholders. Private routes return explicit unsupported errors. Normal weighted trades fail with `ClockUnavailable` until a supported timestamp provider replaces the temporary test clock. Weighted math is unaudited. See the [workspace guide](../architecture/workspace-guide.md#execution-and-evidence-limits) for current checks and evidence gaps; no project deployment is claimed.
+The QML apps and shared core remain status placeholders. Private routes return explicit unsupported errors. Normal weighted trades use the pinned upstream clock; [ADR 0026](../adr/0026-lbp-clock-and-poke.md#pricing-clock) states its limits. Weighted math is unaudited. See the [workspace guide](../architecture/workspace-guide.md#execution-and-evidence-limits) for current checks and evidence gaps; no project deployment is claimed.
 
 Allowlists apply to buys in all three engines. Approval permits repeated buys without a purchase cap and does not prove human uniqueness. The wallet should prefer an unused approved address and warn before deliberate reuse. Fresh addresses do not guarantee unlinkability. See [ADR 0021](../adr/0021-modes-and-open-limits.md) and the [public execution evidence](../architecture/allowlist-proof.md#public-execution-evidence).
 

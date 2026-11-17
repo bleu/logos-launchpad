@@ -146,7 +146,11 @@ pub fn holding_seed(owner: AccountId, definition: AccountId) -> PdaSeed {
     use lee_core::program::PdaSeed;
     // The domain keeps custody addresses separate from other program PDAs.
     use lee_core::account::AccountId;
-    let domain = AccountId::from_builtin_program_name(b"launchpad/token-holding/v1");
+    // SHA-256 of the former built-in prefix and "launchpad/token-holding/v1".
+    let domain = AccountId::new([
+        44, 152, 204, 141, 89, 144, 238, 238, 167, 61, 210, 128, 46, 187, 168, 105, 47, 232, 55,
+        135, 110, 15, 173, 47, 131, 11, 110, 192, 39, 8, 35, 68,
+    ]);
     let first = AccountId::for_public_pda(&domain, &PdaSeed::new(*owner.value()));
     let seed = AccountId::for_public_pda(&first, &PdaSeed::new(*definition.value()));
     PdaSeed::new(*seed.value())

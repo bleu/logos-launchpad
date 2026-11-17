@@ -7,8 +7,8 @@ license = "MIT"
 [workspace]
 
 [build-dependencies]
-risc0-build = "=3.0.5"
-risc0-zkos-v1compat = "=2.2.2"
+risc0-build = "=3.0.7"
+risc0-zkos-v1compat = "=2.2.3"
 
 [package.metadata.risc0]
 methods = ["guest"]

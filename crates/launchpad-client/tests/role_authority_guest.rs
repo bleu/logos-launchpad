@@ -60,7 +60,7 @@ fn base_state(namespace: &PrivateKey, holders: &[AccountId]) -> (V03State, Vec<A
             AUTHORITY,
         ),
         Actor::new(
-            clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID,
+            clock_core::CLOCK_PROGRAM_ACCOUNT_ID,
             clock_core::clock_account_id(),
         ),
     ];
@@ -106,12 +106,15 @@ fn base_state(namespace: &PrivateKey, holders: &[AccountId]) -> (V03State, Vec<A
     actors.sort();
     actors.dedup();
     let mut state = V03State::new()
-        .with_named_programs([
-            (CURVE, guest("LAUNCHPAD_CURVE_ELF")),
-            (TOKEN, guest("LAUNCHPAD_TOKEN_ELF")),
-            (AUTHORITY, guest("LAUNCHPAD_AUTHORITY_ELF")),
-            (clock_core::clock_account_id(), guest("LAUNCHPAD_CLOCK_ELF")),
-        ])
+        .with_programs_at(
+            [
+                (CURVE, guest("LAUNCHPAD_CURVE_ELF")),
+                (TOKEN, guest("LAUNCHPAD_TOKEN_ELF")),
+                (AUTHORITY, guest("LAUNCHPAD_AUTHORITY_ELF")),
+                (clock_core::clock_account_id(), guest("LAUNCHPAD_CLOCK_ELF")),
+            ]
+            .map(|(address, program)| (address, program, true)),
+        )
         .with_public_accounts(accounts);
     execute(
         &mut state,
@@ -339,7 +342,10 @@ fn factory_fixture() -> FactoryFixture {
         holding(id(&successor), definition),
     ]);
     FactoryFixture {
-        state: state.with_named_programs([(FACTORY, guest("LAUNCHPAD_FACTORY_ELF"))]),
+        state: state.with_programs_at(
+            [(FACTORY, guest("LAUNCHPAD_FACTORY_ELF"))]
+                .map(|(address, program)| (address, program, true)),
+        ),
         inclusion_timestamp_ms: 1_000,
         actors,
         namespace: namespace_id,
@@ -365,7 +371,10 @@ fn program_controlled_admin_accepts_and_updates_namespace_fee() {
         Actor::new(successor, CURVE),
         Actor::new(successor, AUTHORITY),
     ]);
-    let mut state = state.with_named_programs([(owner_program, guest("LAUNCHPAD_OWNER_ELF"))]);
+    let mut state = state.with_programs_at(
+        [(owner_program, guest("LAUNCHPAD_OWNER_ELF"))]
+            .map(|(address, program)| (address, program, true)),
+    );
     execute_with_evidence(
         &mut state,
         Actor::new(namespace_id, CURVE),
@@ -995,7 +1004,10 @@ fn transfer_only_role_requires_successor_consent_and_cannot_renounce() {
         Actor::new(id(&next), AUTHORITY),
     ];
     let mut state = V03State::new()
-        .with_named_programs([(AUTHORITY, guest("LAUNCHPAD_AUTHORITY_ELF"))])
+        .with_programs_at(
+            [(AUTHORITY, guest("LAUNCHPAD_AUTHORITY_ELF"))]
+                .map(|(address, program)| (address, program, true)),
+        )
         .with_public_accounts([account(actors[2], vec![])]);
     execute(
         &mut state,

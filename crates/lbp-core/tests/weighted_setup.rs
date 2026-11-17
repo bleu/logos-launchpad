@@ -114,7 +114,7 @@ fn prepared() -> (ReceiveInput, lee_core::program::Response) {
     let inputs = weighted_inputs();
     let factory = prepare().from.unwrap().account_id;
     let mut input = prepare();
-    let mut response = handle(&input).unwrap();
+    let mut response = handle_completed(&input);
     for bytes in [
         namespace_state(),
         definition(),
@@ -125,7 +125,7 @@ fn prepared() -> (ReceiveInput, lee_core::program::Response) {
     ] {
         let source = response.sync_messages.last().unwrap().to;
         input = reply(&input, &response, source, bytes);
-        response = handle(&input).unwrap();
+        response = handle_completed(&input);
     }
     (input, response)
 }
@@ -198,7 +198,7 @@ fn weighted_preparation_rejects_invalid_terms() {
 #[test]
 fn weighted_preparation_checks_namespace_through_its_actor() {
     let input = prepare();
-    let response = handle(&input).unwrap();
+    let response = handle_completed(&input);
     assert_eq!(
         response.sync_messages[0].to,
         Actor::new(curve_core::compute_config_pda(id(40), id(6)), id(6))
@@ -243,7 +243,7 @@ fn activation(
     input.pre_state = prepared.post_state.unwrap();
     input.from = prepare().from;
     input.message = borsh::to_vec(&Message::ActivateWeighted).unwrap();
-    let mut response = handle(&input).unwrap();
+    let mut response = handle_completed(&input);
     let inputs = weighted_inputs();
     for bytes in [
         namespace_state(),
@@ -255,7 +255,7 @@ fn activation(
     ] {
         let source = response.sync_messages.last().unwrap().to;
         input = reply(&input, &response, source, bytes);
-        response = handle(&input).unwrap();
+        response = handle_completed(&input);
     }
     let _ = inputs;
     (input, response)
@@ -305,7 +305,7 @@ fn weighted_activation_rejects_wrong_token_vault_balance() {
         input.pre_state = prepared.post_state.unwrap();
         input.from = prepare().from;
         input.message = borsh::to_vec(&Message::ActivateWeighted).unwrap();
-        let mut response = handle(&input).unwrap();
+        let mut response = handle_completed(&input);
         for (index, bytes) in [
             namespace_state(),
             definition(),
@@ -331,6 +331,26 @@ fn weighted_activation_rejects_wrong_token_vault_balance() {
     }
 }
 
+fn handle_completed(input: &ReceiveInput) -> lee_core::program::Response {
+    let mut response = handle(input).unwrap();
+    while response
+        .post_state
+        .as_ref()
+        .is_some_and(|state| state.starts_with(b"LZCLK001"))
+    {
+        assert_eq!(response.sync_messages[0].to, clock_core::clock_actor());
+        response = handle(&ReceiveInput {
+            receiver: input.receiver,
+            from: Some(clock_core::clock_actor()),
+            is_authorized: false,
+            pre_state: response.post_state.unwrap(),
+            message: borsh::to_vec(&clock_core::Reply::Timestamp(100_000)).unwrap(),
+        })
+        .unwrap();
+    }
+    response
+}
+
 #[test]
 fn weighted_preparation_saves_the_initial_bound_buy_policy() {
     let mut input = prepare();
@@ -345,7 +365,7 @@ fn weighted_preparation_saves_the_initial_bound_buy_policy() {
         inputs: inputs.clone(),
     })
     .unwrap();
-    let response = handle(&input).unwrap();
+    let response = handle_completed(&input);
     assert_eq!(
         lbp_core::PoolAccount::decode(response.post_state.as_ref().unwrap())
             .unwrap()
@@ -400,13 +420,13 @@ fn weighted_policy_survives_every_prepare_and_activation_callback() {
     inputs.graduation_adapter = Some(Actor::new(id(70), id(71)));
     input.message = borsh::to_vec(&Message::PrepareWeighted { inputs }).unwrap();
     let factory = input.from;
-    let mut response = handle(&input).unwrap();
+    let mut response = handle_completed(&input);
     for activate in [false, true] {
         if activate {
             input.pre_state = response.post_state.clone().unwrap();
             input.from = factory;
             input.message = borsh::to_vec(&Message::ActivateWeighted).unwrap();
-            response = handle(&input).unwrap();
+            response = handle_completed(&input);
         }
         for bytes in [
             namespace_state(),
@@ -430,7 +450,7 @@ fn weighted_policy_survives_every_prepare_and_activation_callback() {
         ] {
             let source = response.sync_messages.last().unwrap().to;
             input = reply(&input, &response, source, bytes);
-            response = handle(&input).unwrap();
+            response = handle_completed(&input);
             let saved =
                 lbp_core::PoolAccount::decode(response.post_state.as_ref().unwrap()).unwrap();
             assert_eq!(saved.buy_policy, policy);
@@ -584,7 +604,7 @@ fn malformed_weighted_policies_cannot_bypass_pool_entry_or_setup_replies() {
 }
 
 #[test]
-fn snapshot_quotes_work_without_a_provider_but_weighted_sells_require_one() {
+fn snapshot_quotes_and_weighted_sells_use_the_same_saved_time() {
     let (mut input, response) = activation(1_000_000, 100);
     let mut state = lbp_core::PoolAccount::decode(response.post_state.as_ref().unwrap()).unwrap();
     state.trade_mode = lbp_core::TradeMode::BuyAndSell;
@@ -611,19 +631,43 @@ fn snapshot_quotes_work_without_a_provider_but_weighted_sells_require_one() {
     )
     .unwrap();
     assert!(quoted.amount_out > 0);
-    if !cfg!(local_mock_clock) {
-        input.from = Some(Actor::new(id(50), input.receiver.program_account_id));
-        input.pre_state = borsh::to_vec(&state).unwrap().into();
-        input.message = borsh::to_vec(&Message::SellWeightedExactInput {
-            amount_in: 1000,
-            min_amount_out: 0,
-        })
-        .unwrap();
-        assert_eq!(
-            handle(&input).err(),
-            Some(lbp_core::Error::ClockUnavailable)
-        );
+    let trader = id(50);
+    input.from = Some(Actor::new(trader, input.receiver.program_account_id));
+    input.pre_state = borsh::to_vec(&state).unwrap().into();
+    input.message = borsh::to_vec(&Message::SellWeightedExactInput {
+        amount_in: 1000,
+        min_amount_out: quoted.amount_out,
+    })
+    .unwrap();
+    let mut response = handle(&input).unwrap();
+    for bytes in [
+        namespace_state(),
+        holding(input.receiver.account_id, id(42), state.recorded_collateral),
+        holding(input.receiver.account_id, id(41), state.remaining_inventory),
+        holding(trader, id(41), 1000),
+    ] {
+        let source = response.sync_messages.last().unwrap().to;
+        input = reply(&input, &response, source, bytes);
+        response = handle(&input).unwrap();
     }
+    assert_eq!(response.sync_messages.len(), 1);
+    let request = &response.sync_messages[0];
+    assert_eq!(request.to, clock_core::clock_actor());
+    assert_eq!(
+        borsh::from_slice::<clock_core::Message>(&request.message).unwrap(),
+        clock_core::Message::ReadTimestamp { granularity: 1 }
+    );
+    input.pre_state = response.post_state.unwrap();
+    input.from = Some(clock_core::clock_actor());
+    input.message = borsh::to_vec(&clock_core::Reply::Timestamp(150_999)).unwrap();
+    let response = handle(&input).unwrap();
+    let saved = lbp_core::PoolAccount::decode(response.post_state.as_ref().unwrap()).unwrap();
+    assert_eq!(
+        saved.recorded_collateral,
+        state.recorded_collateral - quoted.gross_collateral
+    );
+    assert_eq!(saved.accrued_fees, quoted.protocol_fee);
+    assert_eq!(saved.remaining_inventory, state.remaining_inventory + 1000);
 }
 
 #[test]

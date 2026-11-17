@@ -396,7 +396,7 @@ dependencies = [
 [[package]]
 name = "bridge_core"
 version = "0.1.0"
-source = "git+https://github.com/logos-blockchain/logos-execution-zone.git?rev=578ce58a71b79c49d48e97e51c520bf71f0252d9#578ce58a71b79c49d48e97e51c520bf71f0252d9"
+source = "git+https://github.com/logos-blockchain/logos-execution-zone.git?rev=cb075d5777cb812ba44216429d4f2837ea8518bd#cb075d5777cb812ba44216429d4f2837ea8518bd"
 dependencies = [
  "borsh",
  "lee_core",
@@ -406,9 +406,10 @@ dependencies = [
 [[package]]
 name = "bridge_lock_core"
 version = "0.1.0"
-source = "git+https://github.com/logos-blockchain/logos-execution-zone.git?rev=578ce58a71b79c49d48e97e51c520bf71f0252d9#578ce58a71b79c49d48e97e51c520bf71f0252d9"
+source = "git+https://github.com/logos-blockchain/logos-execution-zone.git?rev=cb075d5777cb812ba44216429d4f2837ea8518bd#cb075d5777cb812ba44216429d4f2837ea8518bd"
 dependencies = [
  "borsh",
+ "cross_zone_emission_core",
  "lee_core",
  "risc0-zkvm",
 ]
@@ -425,7 +426,7 @@ dependencies = [
 [[package]]
 name = "build_utils"
 version = "0.1.0"
-source = "git+https://github.com/logos-blockchain/logos-execution-zone.git?rev=578ce58a71b79c49d48e97e51c520bf71f0252d9#578ce58a71b79c49d48e97e51c520bf71f0252d9"
+source = "git+https://github.com/logos-blockchain/logos-execution-zone.git?rev=cb075d5777cb812ba44216429d4f2837ea8518bd#cb075d5777cb812ba44216429d4f2837ea8518bd"
 dependencies = [
  "anyhow",
  "risc0-binfmt",
@@ -563,7 +564,7 @@ dependencies = [
 [[package]]
 name = "clock_core"
 version = "0.1.0"
-source = "git+https://github.com/logos-blockchain/logos-execution-zone.git?rev=578ce58a71b79c49d48e97e51c520bf71f0252d9#578ce58a71b79c49d48e97e51c520bf71f0252d9"
+source = "git+https://github.com/logos-blockchain/logos-execution-zone.git?rev=cb075d5777cb812ba44216429d4f2837ea8518bd#cb075d5777cb812ba44216429d4f2837ea8518bd"
 dependencies = [
  "borsh",
  "lee_core",
@@ -651,11 +652,21 @@ dependencies = [
 ]
 
 [[package]]
-name = "cross_zone_inbox_core"
+name = "cross_zone_emission_core"
 version = "0.1.0"
-source = "git+https://github.com/logos-blockchain/logos-execution-zone.git?rev=578ce58a71b79c49d48e97e51c520bf71f0252d9#578ce58a71b79c49d48e97e51c520bf71f0252d9"
+source = "git+https://github.com/logos-blockchain/logos-execution-zone.git?rev=cb075d5777cb812ba44216429d4f2837ea8518bd#cb075d5777cb812ba44216429d4f2837ea8518bd"
 dependencies = [
  "borsh",
+ "lee_core",
+]
+
+[[package]]
+name = "cross_zone_inbox_core"
+version = "0.1.0"
+source = "git+https://github.com/logos-blockchain/logos-execution-zone.git?rev=cb075d5777cb812ba44216429d4f2837ea8518bd#cb075d5777cb812ba44216429d4f2837ea8518bd"
+dependencies = [
+ "borsh",
+ "cross_zone_emission_core",
  "cross_zone_marker_core",
  "lee_core",
  "risc0-zkvm",
@@ -665,9 +676,10 @@ dependencies = [
 [[package]]
 name = "cross_zone_marker_core"
 version = "0.1.0"
-source = "git+https://github.com/logos-blockchain/logos-execution-zone.git?rev=578ce58a71b79c49d48e97e51c520bf71f0252d9#578ce58a71b79c49d48e97e51c520bf71f0252d9"
+source = "git+https://github.com/logos-blockchain/logos-execution-zone.git?rev=cb075d5777cb812ba44216429d4f2837ea8518bd#cb075d5777cb812ba44216429d4f2837ea8518bd"
 dependencies = [
  "borsh",
+ "cross_zone_emission_core",
  "lee_core",
  "risc0-zkvm",
 ]
@@ -675,11 +687,22 @@ dependencies = [
 [[package]]
 name = "cross_zone_outbox_core"
 version = "0.1.0"
-source = "git+https://github.com/logos-blockchain/logos-execution-zone.git?rev=578ce58a71b79c49d48e97e51c520bf71f0252d9#578ce58a71b79c49d48e97e51c520bf71f0252d9"
+source = "git+https://github.com/logos-blockchain/logos-execution-zone.git?rev=cb075d5777cb812ba44216429d4f2837ea8518bd#cb075d5777cb812ba44216429d4f2837ea8518bd"
 dependencies = [
  "borsh",
+ "cross_zone_emission_core",
  "lee_core",
  "risc0-zkvm",
+]
+
+[[package]]
+name = "cross_zone_receiver_core"
+version = "0.1.0"
+source = "git+https://github.com/logos-blockchain/logos-execution-zone.git?rev=cb075d5777cb812ba44216429d4f2837ea8518bd#cb075d5777cb812ba44216429d4f2837ea8518bd"
+dependencies = [
+ "borsh",
+ "cross_zone_marker_core",
+ "lee_core",
 ]
 
 [[package]]
@@ -1198,7 +1221,7 @@ checksum = "da7c62ceae207dd37ea5b845da6a0696c799f85e97da1ab5b7910be3c1c80223"
 [[package]]
 name = "fee_core"
 version = "0.1.0"
-source = "git+https://github.com/logos-blockchain/logos-execution-zone.git?rev=578ce58a71b79c49d48e97e51c520bf71f0252d9#578ce58a71b79c49d48e97e51c520bf71f0252d9"
+source = "git+https://github.com/logos-blockchain/logos-execution-zone.git?rev=cb075d5777cb812ba44216429d4f2837ea8518bd#cb075d5777cb812ba44216429d4f2837ea8518bd"
 dependencies = [
  "borsh",
  "lee_core",
@@ -1690,7 +1713,7 @@ dependencies = [
 [[package]]
 name = "lee"
 version = "0.1.0"
-source = "git+https://github.com/logos-blockchain/logos-execution-zone.git?rev=578ce58a71b79c49d48e97e51c520bf71f0252d9#578ce58a71b79c49d48e97e51c520bf71f0252d9"
+source = "git+https://github.com/logos-blockchain/logos-execution-zone.git?rev=cb075d5777cb812ba44216429d4f2837ea8518bd#cb075d5777cb812ba44216429d4f2837ea8518bd"
 dependencies = [
  "anyhow",
  "borsh",
@@ -1698,7 +1721,6 @@ dependencies = [
  "hex",
  "k256",
  "lee_core",
- "log",
  "program_loader_core",
  "rand 0.8.7",
  "risc0-binfmt",
@@ -1709,13 +1731,14 @@ dependencies = [
  "serde_with",
  "sha2",
  "thiserror",
+ "tracing",
  "zeroize",
 ]
 
 [[package]]
 name = "lee_core"
 version = "0.1.0"
-source = "git+https://github.com/logos-blockchain/logos-execution-zone.git?rev=578ce58a71b79c49d48e97e51c520bf71f0252d9#578ce58a71b79c49d48e97e51c520bf71f0252d9"
+source = "git+https://github.com/logos-blockchain/logos-execution-zone.git?rev=cb075d5777cb812ba44216429d4f2837ea8518bd#cb075d5777cb812ba44216429d4f2837ea8518bd"
 dependencies = [
  "base58",
  "borsh",
@@ -1733,6 +1756,7 @@ name = "lez-compat-core"
 version = "0.1.0"
 dependencies = [
  "borsh",
+ "clock_core",
  "lee_core",
  "risc0-zkvm",
 ]
@@ -1979,9 +2003,11 @@ checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 [[package]]
 name = "ping_core"
 version = "0.1.0"
-source = "git+https://github.com/logos-blockchain/logos-execution-zone.git?rev=578ce58a71b79c49d48e97e51c520bf71f0252d9#578ce58a71b79c49d48e97e51c520bf71f0252d9"
+source = "git+https://github.com/logos-blockchain/logos-execution-zone.git?rev=cb075d5777cb812ba44216429d4f2837ea8518bd#cb075d5777cb812ba44216429d4f2837ea8518bd"
 dependencies = [
  "borsh",
+ "cross_zone_emission_core",
+ "cross_zone_receiver_core",
  "lee_core",
 ]
 
@@ -2088,18 +2114,19 @@ dependencies = [
 [[package]]
 name = "program_loader_core"
 version = "0.1.0"
-source = "git+https://github.com/logos-blockchain/logos-execution-zone.git?rev=578ce58a71b79c49d48e97e51c520bf71f0252d9#578ce58a71b79c49d48e97e51c520bf71f0252d9"
+source = "git+https://github.com/logos-blockchain/logos-execution-zone.git?rev=cb075d5777cb812ba44216429d4f2837ea8518bd#cb075d5777cb812ba44216429d4f2837ea8518bd"
 dependencies = [
  "borsh",
  "lee_core",
  "risc0-binfmt",
  "risc0-zkos-v1compat",
+ "thiserror",
 ]
 
 [[package]]
 name = "programs"
 version = "0.1.0"
-source = "git+https://github.com/logos-blockchain/logos-execution-zone.git?rev=578ce58a71b79c49d48e97e51c520bf71f0252d9#578ce58a71b79c49d48e97e51c520bf71f0252d9"
+source = "git+https://github.com/logos-blockchain/logos-execution-zone.git?rev=cb075d5777cb812ba44216429d4f2837ea8518bd#cb075d5777cb812ba44216429d4f2837ea8518bd"
 dependencies = [
  "borsh",
  "bridge_core",
@@ -2112,6 +2139,7 @@ dependencies = [
  "lee",
  "ping_core",
  "sequencer_stake_core",
+ "system_upgrader_core",
  "wrapped_token_core",
 ]
 
@@ -2315,9 +2343,9 @@ dependencies = [
 
 [[package]]
 name = "risc0-binfmt"
-version = "3.0.5"
+version = "3.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d836c6ad82f4ced7c61d5feedf905a17780312e393aa681d29cc0bbc5131672b"
+checksum = "6b93e36f8e78ea163b0f69c84a2f858ba1c1be27676c2f8c44fda463cac353d1"
 dependencies = [
  "anyhow",
  "borsh",
@@ -2337,9 +2365,9 @@ dependencies = [
 
 [[package]]
 name = "risc0-build"
-version = "3.0.5"
+version = "3.0.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f89937fa1c424b188cc4cabf65335736eca9c1e3df79c127f48636f55682f3a4"
+checksum = "8d273f3c964b1f350b880ec22bf279a1a48e8d40aa8135c3ad15db714bc0ea84"
 dependencies = [
  "anyhow",
  "cargo_metadata",
@@ -2361,9 +2389,9 @@ dependencies = [
 
 [[package]]
 name = "risc0-circuit-keccak"
-version = "4.0.6"
+version = "4.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7c731e12429eb4457e1ddc69c56ee7343a1e10b86e4aa55bc8f4d2b13734abb9"
+checksum = "1b7eacd7699646e47b0f4563304feb13ac5e4ea7ba9e48cf5f950328ded10035"
 dependencies = [
  "anyhow",
  "bytemuck",
@@ -2377,13 +2405,12 @@ dependencies = [
 
 [[package]]
 name = "risc0-circuit-recursion"
-version = "4.0.5"
+version = "4.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "40dd640122abcc67d4d4e4f055c68cbc3ad2efb8589c65c2b23d354632971b60"
+checksum = "7669f85fd71e871d4de56bdd5964e951132b4e0be39846982fd8517ee66678a9"
 dependencies = [
  "anyhow",
  "bytemuck",
- "hex",
  "metal",
  "risc0-core",
  "risc0-zkp",
@@ -2392,9 +2419,9 @@ dependencies = [
 
 [[package]]
 name = "risc0-circuit-rv32im"
-version = "4.0.5"
+version = "4.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cb11231aa4b74bcc0c8d16597893fbd7ea6f6a9ebbc35e16bfd06b467c7ee104"
+checksum = "22ba1052a54888200a31d104e1c560ef6d95965ab8eb801cfa3a3e534b90dca7"
 dependencies = [
  "anyhow",
  "bit-vec",
@@ -2420,9 +2447,9 @@ dependencies = [
 
 [[package]]
 name = "risc0-groth16"
-version = "3.0.5"
+version = "3.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b0ca702ea7d0162766defe7ed6a79bda4a747ad9e2684000a6edd14df0a6d1f3"
+checksum = "386b24397b788d034a4c77d8be2f53eb897e663848437ed13e23c43b8a3c8370"
 dependencies = [
  "anyhow",
  "ark-bn254",
@@ -2441,9 +2468,9 @@ dependencies = [
 
 [[package]]
 name = "risc0-zkos-v1compat"
-version = "2.2.2"
+version = "2.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8bd70cb45b5d37d025f25663b87c6b9dc9df7f413ee2068531a57f50b0eb95db"
+checksum = "b8b0b598ba7946354b10ca5c56e382de801e6c7fce9fccad0396ec436bc5072b"
 dependencies = [
  "include_bytes_aligned",
  "no_std_strings",
@@ -2452,9 +2479,9 @@ dependencies = [
 
 [[package]]
 name = "risc0-zkp"
-version = "3.0.5"
+version = "3.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "21c0c921e5e2d44197940d387a45e29c6165e318b5a168fdfdbd50f50ba03678"
+checksum = "34b077406ce8fcf21a28052958936aa8c8653cd7b00df59a62574811e39bd3ce"
 dependencies = [
  "anyhow",
  "blake2",
@@ -2477,9 +2504,9 @@ dependencies = [
 
 [[package]]
 name = "risc0-zkvm"
-version = "3.0.5"
+version = "3.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "22b7eafb5d85be59cbd9da83f662cf47d834f1b836e14f675d1530b12c666867"
+checksum = "e204f853cb4e40174b1c1fb697cbc79fbd443595311e2d68c33a6a7be7ba6351"
 dependencies = [
  "anyhow",
  "bincode",
@@ -2696,7 +2723,7 @@ dependencies = [
 [[package]]
 name = "sequencer_stake_core"
 version = "0.1.0"
-source = "git+https://github.com/logos-blockchain/logos-execution-zone.git?rev=578ce58a71b79c49d48e97e51c520bf71f0252d9#578ce58a71b79c49d48e97e51c520bf71f0252d9"
+source = "git+https://github.com/logos-blockchain/logos-execution-zone.git?rev=cb075d5777cb812ba44216429d4f2837ea8518bd#cb075d5777cb812ba44216429d4f2837ea8518bd"
 dependencies = [
  "borsh",
  "ed25519-dalek",
@@ -2966,6 +2993,17 @@ dependencies = [
  "proc-macro2",
  "quote",
  "unicode-ident",
+]
+
+[[package]]
+name = "system_upgrader_core"
+version = "0.1.0"
+source = "git+https://github.com/logos-blockchain/logos-execution-zone.git?rev=cb075d5777cb812ba44216429d4f2837ea8518bd#cb075d5777cb812ba44216429d4f2837ea8518bd"
+dependencies = [
+ "borsh",
+ "lee_core",
+ "sequencer_stake_core",
+ "sha2",
 ]
 
 [[package]]
@@ -3366,9 +3404,10 @@ checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
 [[package]]
 name = "wrapped_token_core"
 version = "0.1.0"
-source = "git+https://github.com/logos-blockchain/logos-execution-zone.git?rev=578ce58a71b79c49d48e97e51c520bf71f0252d9#578ce58a71b79c49d48e97e51c520bf71f0252d9"
+source = "git+https://github.com/logos-blockchain/logos-execution-zone.git?rev=cb075d5777cb812ba44216429d4f2837ea8518bd#cb075d5777cb812ba44216429d4f2837ea8518bd"
 dependencies = [
  "borsh",
+ "cross_zone_emission_core",
  "lee_core",
  "risc0-zkvm",
 ]

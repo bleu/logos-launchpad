@@ -1,52 +1,17 @@
-//! TEMPORARY timestamp-read protocol. Replace with the verified LEZ clock API.
-//! The pinned LEZ clock cannot return time. Enable only for local fixtures with
-//! LAUNCHPAD_MOCK_CLOCK=1; normal builds reject weighted trades.
+//! Upstream clock adapter for weighted pricing. The schedule uses Unix seconds.
 use crate::Error;
-use borsh::{BorshDeserialize, BorshSerialize};
-use lee_core::{
-    account::{AccountId, Actor},
-    program::{ReceiveInput, Response},
-};
-
-pub const ACCOUNT: AccountId = AccountId::new([201; 32]);
-pub const PROGRAM: AccountId = AccountId::new([202; 32]);
+use lee_core::{account::Actor, program::ReceiveInput};
 pub fn actor() -> Actor {
-    Actor::new(ACCOUNT, PROGRAM)
+    clock_core::clock_actor()
 }
-#[derive(BorshSerialize, BorshDeserialize)]
-pub enum Request {
-    ReadTimestamp,
-}
-#[derive(BorshSerialize, BorshDeserialize)]
-pub struct Reply {
-    pub timestamp_ms: u64,
-}
-pub fn require_available() -> Result<(), Error> {
-    if cfg!(local_mock_clock) {
-        Ok(())
-    } else {
-        Err(Error::ClockUnavailable)
-    }
+pub fn request() -> clock_core::Message {
+    lez_compat_core::clock::request()
 }
 pub fn read(input: &ReceiveInput) -> Result<u64, Error> {
-    require_available()?;
-    if input.from != Some(actor()) {
-        return Err(Error::Unauthorized);
-    }
-    let reply: Reply = borsh::from_slice(&input.message).map_err(|_| Error::InvalidMessage)?;
-    Ok(reply.timestamp_ms / 1000)
-}
-/// TEMPORARY fake actor: fixture state is milliseconds, not trusted chain time.
-/// No message can set its time. Only the test harness seeds/advances its state.
-pub fn mock_handle(input: &ReceiveInput) -> Result<Response, Error> {
-    require_available()?;
-    if input.receiver != actor() {
-        return Err(Error::WrongAccount);
-    }
-    let _: Request = borsh::from_slice(&input.message).map_err(|_| Error::InvalidMessage)?;
-    let timestamp_ms: u64 = borsh::from_slice(&input.pre_state).map_err(|_| Error::InvalidState)?;
-    Ok(Response::keep_state().send_sync(
-        input.from.ok_or(Error::Unauthorized)?,
-        &Reply { timestamp_ms },
-    ))
+    lez_compat_core::clock::read(input)
+        .map(|timestamp| timestamp / 1000)
+        .map_err(|error| match error {
+            lez_compat_core::Error::Unauthorized => Error::Unauthorized,
+            _ => Error::InvalidMessage,
+        })
 }

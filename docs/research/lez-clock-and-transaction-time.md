@@ -1,6 +1,6 @@
 # LEZ clock and transaction time
 
-Source review: 2026-10-29. No live-node or proof test was run. "Current" below means the sources reviewed on that date. Drafts and open proposals are design evidence, not released guarantees. [ADR 0026](../adr/0026-lbp-clock-and-poke.md#pricing-clock) defines the selected pricing design; the [workspace guide](../architecture/workspace-guide.md#temporary-weighted-pricing-clock) records current project support.
+Source review: 2026-10-29. No live-node or proof test was run. "Current" below means the sources reviewed on that date. Drafts and open proposals are design evidence, not released guarantees. [ADR 0026](../adr/0026-lbp-clock-and-poke.md#pricing-clock) defines the selected pricing design; the [workspace guide](../architecture/workspace-guide.md#weighted-pricing-clock) records current project support.
 
 ## Versions checked
 

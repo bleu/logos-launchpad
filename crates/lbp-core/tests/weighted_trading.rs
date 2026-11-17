@@ -1,4 +1,3 @@
-#![cfg(local_mock_clock)]
 use lbp_core::{CreatorAllocationRelease, Message, WeightedPoolInputs, compute_pool_pda, handle};
 use lee_core::{
     account::{AccountId, Actor},
@@ -134,6 +133,14 @@ fn prepared() -> (ReceiveInput, lee_core::program::Response) {
         input = reply(&input, &response, source, bytes);
         response = handle(&input).unwrap();
     }
+    input = ReceiveInput {
+        receiver: input.receiver,
+        from: Some(clock_core::clock_actor()),
+        is_authorized: false,
+        pre_state: response.post_state.unwrap(),
+        message: borsh::to_vec(&clock_core::Reply::Timestamp(1_000_000)).unwrap(),
+    };
+    response = handle(&input).unwrap();
     (input, response)
 }
 
@@ -155,6 +162,21 @@ fn funded() -> (ReceiveInput, lbp_core::PoolAccount) {
     ] {
         let source = response.sync_messages.last().unwrap().to;
         input = reply(&input, &response, source, bytes);
+        response = handle(&input).unwrap();
+    }
+    if response
+        .post_state
+        .as_ref()
+        .unwrap()
+        .starts_with(b"LZCLK001")
+    {
+        input = ReceiveInput {
+            receiver: input.receiver,
+            from: Some(clock_core::clock_actor()),
+            is_authorized: false,
+            pre_state: response.post_state.unwrap(),
+            message: borsh::to_vec(&clock_core::Reply::Timestamp(1_000_000)).unwrap(),
+        };
         response = handle(&input).unwrap();
     }
     let state = lbp_core::PoolAccount::decode(response.post_state.as_ref().unwrap()).unwrap();
@@ -207,7 +229,7 @@ fn operation_at(
             from: Some(source),
             is_authorized: false,
             pre_state: response.post_state.unwrap(),
-            message: borsh::to_vec(&lbp_core::pricing_clock::Reply { timestamp_ms }).unwrap(),
+            message: borsh::to_vec(&clock_core::Reply::Timestamp(timestamp_ms)).unwrap(),
         };
         response = handle(&input)?;
     }
@@ -1099,10 +1121,7 @@ fn clock_replies_require_the_expected_actor_and_pending_phase() {
         from: Some(lbp_core::pricing_clock::actor()),
         is_authorized: false,
         pre_state: response.post_state.clone().unwrap(),
-        message: borsh::to_vec(&lbp_core::pricing_clock::Reply {
-            timestamp_ms: 1_500_000,
-        })
-        .unwrap(),
+        message: borsh::to_vec(&clock_core::Reply::Timestamp(1_500_000)).unwrap(),
     };
     assert_eq!(handle(&early).err(), Some(lbp_core::Error::Unauthorized));
 
@@ -1121,13 +1140,10 @@ fn clock_replies_require_the_expected_actor_and_pending_phase() {
         lbp_core::pricing_clock::actor()
     );
     input.pre_state = response.post_state.unwrap();
-    input.message = borsh::to_vec(&lbp_core::pricing_clock::Reply {
-        timestamp_ms: 1_500_000,
-    })
-    .unwrap();
+    input.message = borsh::to_vec(&clock_core::Reply::Timestamp(1_500_000)).unwrap();
     for actor in [
-        Actor::new(id(1), lbp_core::pricing_clock::PROGRAM),
-        Actor::new(lbp_core::pricing_clock::ACCOUNT, id(1)),
+        Actor::new(id(1), clock_core::clock_account_id()),
+        Actor::new(clock_core::CLOCK_PROGRAM_ACCOUNT_ID, id(1)),
     ] {
         input.from = Some(actor);
         assert_eq!(handle(&input).err(), Some(lbp_core::Error::Unauthorized));
@@ -1138,6 +1154,12 @@ fn clock_replies_require_the_expected_actor_and_pending_phase() {
     malformed.message = vec![0];
     assert_eq!(
         handle(&malformed).err(),
+        Some(lbp_core::Error::InvalidMessage)
+    );
+    let mut wrong_kind = input.clone();
+    wrong_kind.message = borsh::to_vec(&clock_core::Reply::BlockId(1500)).unwrap();
+    assert_eq!(
+        handle(&wrong_kind).err(),
         Some(lbp_core::Error::InvalidMessage)
     );
     input.pre_state = done.post_state.unwrap();
@@ -1844,7 +1866,7 @@ fn poke_at(
         from: Some(source),
         is_authorized: false,
         pre_state: response.post_state.unwrap(),
-        message: borsh::to_vec(&lbp_core::pricing_clock::Reply { timestamp_ms }).unwrap(),
+        message: borsh::to_vec(&clock_core::Reply::Timestamp(timestamp_ms)).unwrap(),
     };
     handle(&input)
 }
@@ -1903,6 +1925,46 @@ fn poke_is_permissionless_and_records_checkpoint() {
     let mut payload = 1500u64.to_le_bytes().to_vec();
     payload.extend_from_slice(&expected.to_le_bytes());
     assert_eq!(checkpoint_events(&response)[0].data, payload);
+}
+
+#[test]
+fn poke_authenticates_upstream_replies_and_rejects_replayed_replies() {
+    let (mut input, state) = funded();
+    input.pre_state = borsh::to_vec(&state).unwrap().into();
+    input.message = borsh::to_vec(&Message::PokeWeighted).unwrap();
+    let pending = handle(&input).unwrap();
+    assert_eq!(pending.sync_messages.len(), 1);
+    assert_eq!(
+        pending.sync_messages[0].message,
+        borsh::to_vec(&clock_core::Message::ReadTimestamp { granularity: 1 }).unwrap()
+    );
+    input.pre_state = pending.post_state.unwrap();
+    input.from = Some(clock_core::clock_actor());
+    input.message = borsh::to_vec(&clock_core::Reply::Timestamp(1_500_999)).unwrap();
+    let valid = input.clone();
+    let clock = clock_core::clock_actor();
+    for sender in [
+        None,
+        Some(Actor::new(id(99), clock.program_account_id)),
+        Some(Actor::new(clock.account_id, id(99))),
+    ] {
+        input.from = sender;
+        assert_eq!(handle(&input).err(), Some(lbp_core::Error::Unauthorized));
+    }
+    for bytes in [
+        vec![],
+        vec![255],
+        borsh::to_vec(&clock_core::Reply::BlockId(1500)).unwrap(),
+    ] {
+        input = valid.clone();
+        input.message = bytes;
+        assert_eq!(handle(&input).err(), Some(lbp_core::Error::InvalidMessage));
+    }
+    let completed = handle(&valid).unwrap();
+    assert_eq!(checkpoint(&state_of(&completed)).0, 1500);
+    input = valid;
+    input.pre_state = completed.post_state.unwrap();
+    assert_eq!(handle(&input).err(), Some(lbp_core::Error::InvalidMessage));
 }
 
 #[test]
@@ -2448,10 +2510,7 @@ fn pending_poke_rechecks_saved_policy_and_schedule_before_clock_reply() {
             from: Some(lbp_core::pricing_clock::actor()),
             is_authorized: false,
             pre_state: borsh::to_vec(&(*b"LZLBPOKE", state)).unwrap().into(),
-            message: borsh::to_vec(&lbp_core::pricing_clock::Reply {
-                timestamp_ms: 1_500_000,
-            })
-            .unwrap(),
+            message: borsh::to_vec(&clock_core::Reply::Timestamp(1_500_000)).unwrap(),
         };
         assert_eq!(handle(&callback).err(), Some(expected));
     }
@@ -3141,6 +3200,12 @@ fn weighted_setup_events_preserve_configured_seed_and_activated_accounting() {
         input = reply(&input, &response, source, bytes);
         response = handle(&input).unwrap();
     }
+    assert!(sale_events(&response).is_empty());
+    assert_eq!(response.sync_messages[0].to, clock_core::clock_actor());
+    input.pre_state = response.post_state.unwrap();
+    input.from = Some(clock_core::clock_actor());
+    input.message = borsh::to_vec(&clock_core::Reply::Timestamp(1_000_000)).unwrap();
+    response = handle(&input).unwrap();
     assert_eq!(sale_events(&response).len(), 1);
     assert_eq!(
         sale_events(&response)[0].kind,
