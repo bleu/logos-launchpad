@@ -38,7 +38,7 @@ Run from the repository root after setting `CURVE_EMERGENCY_AUTHORITY` as above:
 
 ```sh
 bash verify/check-pins.sh
-LAUNCHPAD_MOCK_CLOCK=1 bash verify/check-builds.sh --execution
+bash verify/check-builds.sh --execution
 bash verify/check-idl.sh
 ```
 
@@ -70,7 +70,7 @@ The curve packages use the root [MIT license](../../LICENSE). Weighted math reta
 
 ## Weighted pricing clock
 
-Normal builds use the pinned upstream clock. Weighted buys send `ReadTimestamp { granularity: 1 }` to the canonical actor. The reply contains Unix milliseconds. Pricing divides by 1000. There is no mock guest or build flag. See [ADR 0026](../adr/0026-lbp-clock-and-poke.md#upstream-clock-amendment-2026-11-09).
+Normal builds use the pinned upstream clock. Weighted buys, sells and poke send `ReadTimestamp { granularity: 1 }` to the canonical actor. The reply contains Unix milliseconds. Pricing divides by 1000. There is no mock guest or build flag. See [ADR 0026](../adr/0026-lbp-clock-and-poke.md#upstream-clock-amendment-2026-11-09).
 
 Actor execution fixtures use the upstream `test-utils` feature in debug host builds. LEZ rejects that feature in release builds. Guest binaries and production host checks still use release builds. Release-overflow checks keep their release profile.
 
@@ -93,3 +93,9 @@ The first check used `dev` revision `cb075d5777cb812ba44216429d4f2837ea8518bd` b
 ## Main merge verification: 2026-11-16
 
 Main commit `5e64eba` was merged with the upstream clock integration on LEZ revision `cb075d5777cb812ba44216429d4f2837ea8518bd`. The full locked gate passed all 34 sale guest tests and 31 curve, role-authority and settlement guest tests. The sale suite includes allowlisted public buys and fresh setup for all three engines. Weighted cases use the upstream clock and retain their cycle limits. The development gate passed 375 host tests. IDL and wire checks, all shell regressions, formatting and strict workspace lints passed. Verification did not change lockfiles. The generated interface matches the merged source. Live sequencer timing, private execution, real proofs and deployment readiness remain unverified.
+
+## Shared-policy merge verification: 2026-11-17
+
+Main commit `554f71d` is included with LEZ revision `cb075d5777cb812ba44216429d4f2837ea8518bd`. The development gate passed 613 host tests. Release host, client and CLI tests, application and compatibility guest builds, weighted-math parity, release-overflow checks and token execution passed. After the fixture fixes, separate signed execution runs passed all 82 sale tests and 38 curve, role-authority and settlement tests. Weighted buys, sells, setup and poke use the upstream clock.
+
+IDL and wire checks, all eight shell regressions, formatting and strict root host lints passed. Execution-test host lints also passed with guest compilation skipped; guest builds and execution were checked separately. The inclusion-boundary test passed again after its lint fix. Lockfiles stayed unchanged. These local checks use development receipts. Live sequencer timing, private execution, real proofs, package loading and deployment readiness remain unverified.

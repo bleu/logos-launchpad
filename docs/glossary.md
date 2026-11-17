@@ -19,7 +19,7 @@ This page explains technical shorthand used in this repository. [CONTEXT.md](../
 | `D` / `R` | `D` is the purchasable curve allocation. `R` is the curve allocation reserved for possible DEX seeding after close. |
 | Allocation / supply | Tokens assigned to a purpose in a sale, or the total tokens available for that purpose. |
 | Fixed-price sale | A sale with a strictly positive exact price in collateral and launch-token smallest units; token decimals are for display. Locked local verification of its four-stage setup passed using development receipts; trading, real proofs and deployment readiness remain pending. See [ADR 0032](adr/0032-fixed-price-lbp-setup.md). |
-| Weighted sale | A sale whose pricing uses token balances and weights that change on a set schedule. Setup, buys, controls, settlement and observer checkpoints are implemented. See [ADR 0026](adr/0026-lbp-clock-and-poke.md) for clock rules. |
+| Weighted sale | A sale whose pricing uses token balances and weights that change on a set schedule. Setup, trades, controls, settlement and observer checkpoints are implemented. See [ADR 0026](adr/0026-lbp-clock-and-poke.md) for clock rules. |
 | Weight / weight schedule | A pricing input that changes over time for a weighted sale. The schedule defines its start, end and progress. |
 | Quote | A price calculation from current state. It does not reserve that price for later execution. |
 | Exact-input / exact-output | A trade where the input is fixed and output is calculated, or where the desired output is fixed and required input is calculated. |

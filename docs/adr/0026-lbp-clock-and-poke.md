@@ -28,13 +28,13 @@ This earlier design removed the buyer's choice of pricing time. It made weighted
 
 This amendment replaces the temporary provider in the 5 November implementation. Use LEZ revision `cb075d5777cb812ba44216429d4f2837ea8518bd` from `dev`, selected on 16 November 2026. It is a development pin. The upstream clock PR merged into `dev` on 10 November 2026.
 
-Send `ReadTimestamp { granularity: 1 }` to `clock_core::clock_actor()`. Verify both sender addresses. Accept only `Reply::Timestamp` during the pending read. Decode fallibly and reject a block-ID reply. Values are Unix milliseconds. Divide by 1000 only for weighted pricing. Each buy and poke reads once. Buys use the same timestamp and weight calculation for pricing and the observer checkpoint. Keep participant limits and sale inclusion bounds.
+Send `ReadTimestamp { granularity: 1 }` to `clock_core::clock_actor()`. Verify both sender addresses. Accept only `Reply::Timestamp` during the pending read. Decode fallibly and reject a block-ID reply. Values are Unix milliseconds. Divide by 1000 only for weighted pricing. Each weighted buy, sell and poke reads once. Trades use the same timestamp and weight calculation for pricing and the observer checkpoint. Keep participant limits and sale inclusion bounds.
 
 The merged clock API and block application code were checked on 16 November 2026. The clock ticks at the end of each block. Programs read the previous block's saved time. The API does not expose the current inclusion-block timestamp. Local guest ticks can check state updates. They do not prove sequencer ordering or timestamp trust. Factory setup and pool activation replace removed `AssertTimestamp` calls with authenticated replies and the same inclusive millisecond comparisons. Keep their inclusion bounds.
 
 A prepared private proof can require an exact return message. The local native-token probe at the earlier feature-branch pin found that a changed public clock reply alone can pass when the private return stays fixed. A return that changes from 100 to 99 fails with `CrossMessageMismatch` even when the minimum is 98. A fresh proof succeeds. Slippage does not change that proof requirement. This probe uses development receipts and does not complete the launchpad private route. It has not been repeated on the current `dev` pin.
 
-The temporary guest, mock build flag and normal-build availability error are removed. Poke and observer checkpoints use the same upstream adapter. Same-second observations emit no duplicate checkpoint event. Failed calls commit no checkpoint or event changes. Poke remains available at the schedule endpoint and after settlement; buy time bounds do not restrict observation calls.
+The temporary guest, mock build flag and normal-build availability error are removed. Poke and observer checkpoints use the same upstream adapter. Same-second observations emit no duplicate checkpoint event. Failed calls commit no checkpoint or event changes. Poke remains available at the schedule endpoint and after settlement; trade time bounds do not restrict observation calls.
 
 ## Earlier window decision (superseded for weighted buy pricing)
 

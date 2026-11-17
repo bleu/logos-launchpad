@@ -15,8 +15,8 @@ The current [clock API](https://github.com/logos-blockchain/logos-execution-zone
 ## Implemented behavior
 
 - Request `ReadTimestamp { granularity: 1 }`. Keep full millisecond precision at the platform boundary. Convert to seconds only for weighted pricing and checkpoints.
-- Read once per weighted buy. Poke also reads once per call. Accept only a timestamp reply from `clock_core::clock_actor()` during the expected pending phase.
-- Retain participant price limits, recorded reserves, creator-borne fees, math limits, freeze checks and checkpoint rules.
+- Read once per weighted buy or sell. Poke also reads once per call. Accept only a timestamp reply from `clock_core::clock_actor()` during the expected pending phase.
+- Retain participant price limits, recorded reserves, math limits, freeze checks and checkpoint rules. Apply the current shared namespace fee rule under [ADR 0031](../docs/adr/0031-shared-launch-factory.md).
 - Retain the sale's start-inclusive, end-exclusive inclusion bounds. Saved clock time cannot replace them.
 - Retain the current setup checks against saved time. Replace assertions with authenticated reads and local comparisons. Keep their inclusive or exclusive bounds exactly as implemented.
 - Keep weighted math independent of the clock API. Use normal builds for real-clock execution.
@@ -128,3 +128,5 @@ The full local gate passed with unchanged lockfiles on 9 November 2026 at the ea
 On 16 November 2026, the full locked gate passed on the selected `dev` pin. See the [verification record](../docs/architecture/workspace-guide.md#dev-pin-verification-2026-11-16). The SDK uses the upstream loader-state decoder. Execution fixtures use the renamed program-seeding API and its test-only feature in debug host builds. Guest and production builds retain their release profile.
 
 The later merge of main retained the allowlist policy and tests from PR #37. The combined checks passed. See the [main merge verification](../docs/architecture/workspace-guide.md#main-merge-verification-2026-11-16).
+
+The 17 November main merge retains shared policies, sells, retained sell fees, graduation and common events. New fixtures use the upstream clock and program-registration API. See the [combined verification](../docs/architecture/workspace-guide.md#shared-policy-merge-verification-2026-11-17).

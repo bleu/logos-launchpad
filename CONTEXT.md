@@ -14,7 +14,7 @@ This is the shared language for the launchpad and its three sale types. The repo
 | Treasury | Current namespace destination for collected protocol fees. |
 | Fixed-price sale | Sale with a positive exact price in collateral and launch-token smallest units. It supports four-stage setup, public buys, permissionless fee collection and creator-authorized payouts on the actor interface. Creation selects `Scheduled`, `Depletion` or `Either`; no separate close call is needed. |
 | Bonding-curve sale | Sale that uses the curve pool for pricing and custody, with factory allocation and closing rules. |
-| Weighted sale | Sale whose pricing uses token balances and weights that change on a set schedule. Weighted setup, public buys, fee collection, controls, settlement and observer checkpoints are implemented. |
+| Weighted sale | Sale whose pricing uses token balances and weights that change on a set schedule. Weighted setup, public trades, fee collection, controls, settlement and observer checkpoints are implemented. |
 | Curve | Neutral bounded constant-product AMM with virtual reserves. Curve factory policy turns it into a bonding-curve sale. |
 | Pool | Mechanism state and token custody. A curve pool is an ordered token pair with reserves, owner and lifecycle. Direct curve pools are internal primitives and test surfaces. |
 | Token0 / token1 | Ordered curve token roles. Bonding-curve sales use the launch token as token0 and collateral as token1. |
@@ -23,7 +23,7 @@ This is the shared language for the launchpad and its three sale types. The repo
 | Factory | Shared launch adapter for common new-token creation, allocation, namespace binding and setup checks when the rules match. Current typed inputs and pool rules remain separate. All three engines use shared eligibility, fee and ending decisions without combining pricing state or weakening custody checks. |
 | `D` | Purchasable bonding-curve sale allocation. Exhausting `D` ends trading only when the ending policy selects depletion. |
 | `R` | Owner-reserved bonding-curve allocation designated as the DEX-seed reserve. It remains untouched until close; the curve factory can transfer it to the creator after close when it is not used for graduation. |
-| Weight checkpoint | Weighted-sale observation record storing the last observed pricing second and token weight. Recorded by permissionless poke and by buys when the trusted timestamp changes. It does not affect pricing or settlement. See [ADR 0026](docs/adr/0026-lbp-clock-and-poke.md). |
+| Weight checkpoint | Weighted-sale observation record storing the last observed pricing second and token weight. Recorded by permissionless poke and by trades when the trusted timestamp changes. It does not affect pricing or settlement. See [ADR 0026](docs/adr/0026-lbp-clock-and-poke.md). |
 | Recorded collateral | Collateral counted by sale accounting, separate from the actual vault balance. Fixed-price setup keeps it at zero; unsolicited transfers remain surplus. See [ADR 0033](docs/adr/0033-fixed-price-lbp-recorded-collateral.md). |
 | Pricing collateral | Weighted-sale record equal to recorded collateral during trading: the seed plus net buyer inputs minus gross sell outputs plus retained sell collateral. It excludes accrued namespace fees and surplus; the vault must cover recorded collateral plus accrued fees. |
 | Weighted math | Pure arithmetic kernel for weighted-sale pricing. It has no namespace, account custody or sale policy. It is unaudited. |
