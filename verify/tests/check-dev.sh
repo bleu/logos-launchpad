@@ -28,7 +28,7 @@ tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 fixture="$tmp/source"
 mkdir -p "$fixture/verify" "$fixture/crates/curve-core/tests/fixtures" "$tmp/bin"
-cp "$root/verify/check-dev.sh" "$root/verify/actor-tools.env" "$fixture/verify/"
+cp "$root/verify/check-dev.sh" "$root/verify/check-weighted-clock.sh" "$root/verify/actor-tools.env" "$fixture/verify/"
 cp "$root/crates/curve-core/tests/fixtures/emergency-authority.hex" "$fixture/crates/curve-core/tests/fixtures/"
 lockfiles=(Cargo.lock packages/lez-compat/Cargo.lock packages/weighted-math/Cargo.lock packages/launchpad/core/logic/Cargo.lock)
 for lock in "${lockfiles[@]}"; do
@@ -105,3 +105,17 @@ run_check --full
 [ "$status" = 2 ] && [ ! -s "$COMMAND_LOG" ] || exit 1
 assert_contains "$output" 'usage: check-dev.sh'
 printf 'lockfile drift and unexpected arguments rejected: passed\n'
+
+: > "$COMMAND_LOG"
+bash "$fixture/verify/check-weighted-clock.sh"
+expected="+$ACTOR_RUST_VERSION test --locked -p lbp-core
++$ACTOR_RUST_VERSION test --manifest-path methods/Cargo.toml --locked --features actor-execution-tests --test actor_sale"
+[ "$(< "$COMMAND_LOG")" = "$expected" ] || { printf 'unexpected weighted clock commands\n' >&2; exit 1; }
+: > "$COMMAND_LOG"
+export FAIL_COMMAND='test --locked -p lbp-core'
+status=0
+bash "$fixture/verify/check-weighted-clock.sh" || status=$?
+unset FAIL_COMMAND
+[ "$status" = 19 ] || exit 1
+[ "$(< "$COMMAND_LOG")" = "+$ACTOR_RUST_VERSION test --locked -p lbp-core" ] || exit 1
+printf 'weighted clock commands and early failure: passed\n'
