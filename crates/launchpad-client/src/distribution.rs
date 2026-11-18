@@ -114,11 +114,32 @@ pub fn distribute_remaining(
 
 pub use factory_core::GraduationIntentKind;
 
+/// Check structure and percentages only. Use `hook` before sale creation.
 pub fn encode_configuration(configuration: &Configuration) -> Result<Vec<u8>> {
     configuration
         .validate()
         .map_err(ClientError::Distribution)?;
     borsh::to_vec(configuration).map_err(ClientError::EncodeMessage)
+}
+
+/// Build immutable hook terms after checking the exact sale's custody restriction.
+/// The returned hook can be used by any of the three sale creation builders.
+pub fn hook(
+    configuration: &Configuration,
+    adapter_program: AccountId,
+    factory_program: AccountId,
+    namespace: AccountId,
+    launch_salt: [u8; 32],
+) -> Result<GraduationHook> {
+    let factory = factory_core::compute_factory_pda(namespace, factory_program, launch_salt);
+    let custody = factory_core::compute_graduation_pda(adapter_program, factory);
+    configuration
+        .validate_custody(custody)
+        .map_err(ClientError::Distribution)?;
+    Ok(GraduationHook {
+        program_id: adapter_program,
+        configuration: encode_configuration(configuration)?,
+    })
 }
 
 pub async fn load_state(
