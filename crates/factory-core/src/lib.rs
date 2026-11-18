@@ -86,6 +86,7 @@ pub struct FactoryState {
     pub token_definition_id: AccountId,
     pub collateral_definition_id: AccountId,
     pub sale_reserve: u128,
+    pub graduation_reserve: u128,
     pub graduation_policy: GraduationPolicy,
     pub creator_allocation: u128,
     pub total_supply: u128,
@@ -158,6 +159,16 @@ impl FactoryState {
         self.response().send(call)
     }
     fn validate_terms(&self) -> Result<(), Error> {
+        if total_supply(
+            self.sale_reserve,
+            self.graduation_reserve,
+            self.creator_allocation,
+        )
+        .map_err(|_| Error::InvalidState)?
+            != self.total_supply
+        {
+            return Err(Error::InvalidState);
+        }
         SellFeeRate::new(self.sell_fee_bps).map_err(|_| Error::InvalidState)?;
         self.graduation_policy
             .validate(self.graduation_hook.is_some())
@@ -218,6 +229,7 @@ pub enum Message {
         name: String,
         uri: String,
         sale_reserve: u128,
+        graduation_reserve: u128,
         graduation_policy: GraduationPolicy,
         creator_allocation: u128,
         virtual_token_reserve: u128,
@@ -336,11 +348,12 @@ impl From<lez_compat_core::Error> for Error {
     }
 }
 
-pub fn total_supply(sale: u128, allocation: u128) -> Result<u128, CreateError> {
+pub fn total_supply(sale: u128, reserve: u128, allocation: u128) -> Result<u128, CreateError> {
     if sale == 0 {
         return Err(CreateError::SaleReserveZero);
     }
-    sale.checked_add(allocation)
+    sale.checked_add(reserve)
+        .and_then(|amount| amount.checked_add(allocation))
         .ok_or(CreateError::SupplyOverflow)
 }
 pub fn validate_curve_parameters(
@@ -503,6 +516,16 @@ fn curve_payouts(
     payouts: SettlementPayouts,
 ) -> Response {
     let mut effects = vec![];
+    response = reserve_payout(
+        response,
+        factory,
+        state.namespace,
+        state.launch_salt,
+        state.token_definition_id,
+        adapter.unwrap_or(creator),
+        state.graduation_reserve,
+        &mut effects,
+    );
     for (recipient, amounts, launch_purpose, collateral_purpose) in [
         (
             creator,
@@ -565,6 +588,38 @@ fn curve_payouts(
         },
     ))
 }
+
+#[allow(clippy::too_many_arguments)]
+fn reserve_payout(
+    response: Response,
+    factory: Actor,
+    namespace: AccountId,
+    salt: [u8; 32],
+    definition: AccountId,
+    recipient: AccountId,
+    amount: u128,
+    effects: &mut Vec<SettlementEffectV1>,
+) -> Response {
+    if amount == 0 {
+        return response;
+    }
+    let custody = compute_mint_pda(namespace, factory.program_account_id, salt);
+    effects.push(SettlementEffectV1::Payout {
+        definition: *definition.value(),
+        recipient: *recipient.value(),
+        purpose: PayoutPurposeV1::GraduationReserve,
+        liability_discharged: amount,
+        tokens_transferred: if recipient == custody { 0 } else { amount },
+    });
+    transfer(
+        response,
+        custody,
+        compute_mint_seed(namespace, salt),
+        definition,
+        recipient,
+        amount,
+    )
+}
 fn validate_window(
     ending: EndingPolicy,
     start: Option<u64>,
@@ -597,6 +652,7 @@ fn create_curve(input: &ReceiveInput, command: Message) -> Result<Response, Erro
         name,
         uri,
         sale_reserve,
+        graduation_reserve,
         graduation_policy,
         creator_allocation,
         virtual_token_reserve,
@@ -629,8 +685,8 @@ fn create_curve(input: &ReceiveInput, command: Message) -> Result<Response, Erro
     SellFeeRate::new(sell_fee_bps).map_err(|_| Error::InvalidTerms)?;
     validate_curve_policies(ending_policy, end_timestamp)?;
     graduation_policy.validate(graduation_hook_program_id.is_some())?;
-    let total_supply =
-        total_supply(sale_reserve, creator_allocation).map_err(|_| Error::InvalidTerms)?;
+    let total_supply = total_supply(sale_reserve, graduation_reserve, creator_allocation)
+        .map_err(|_| Error::InvalidTerms)?;
     validate_curve_parameters(
         sale_reserve,
         virtual_token_reserve,
@@ -660,6 +716,7 @@ fn create_curve(input: &ReceiveInput, command: Message) -> Result<Response, Erro
         token_definition_id,
         collateral_definition_id,
         sale_reserve,
+        graduation_reserve,
         graduation_policy,
         creator_allocation,
         total_supply,
@@ -716,6 +773,7 @@ fn create_curve(input: &ReceiveInput, command: Message) -> Result<Response, Erro
             creator_role: *state.creator_role_id.value(),
             token_definition: *state.token_definition_id.value(),
             collateral_definition: *state.collateral_definition_id.value(),
+            graduation_reserve: state.graduation_reserve,
             sale_inventory: state.sale_reserve,
             creator_allocation: state.creator_allocation,
             graduation_policy: state.graduation_policy,
@@ -1027,16 +1085,24 @@ fn curve_resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
                         effects: vec![],
                     },
                 ))
-                .event(state.event(
-                    input.receiver.account_id,
-                    SaleEventKindV1::Graduated {
-                        adapter_program: *program.value(),
-                        adapter_custody:
-                            *compute_graduation_pda(program, input.receiver.account_id).value(),
-                        launch_tokens: amounts.launch_tokens,
-                        collateral: amounts.collateral,
-                    },
-                )));
+                .event(
+                    state.event(
+                        input.receiver.account_id,
+                        SaleEventKindV1::Graduated {
+                            adapter_program: *program.value(),
+                            adapter_custody: *compute_graduation_pda(
+                                program,
+                                input.receiver.account_id,
+                            )
+                            .value(),
+                            launch_tokens: amounts
+                                .launch_tokens
+                                .checked_add(state.graduation_reserve)
+                                .ok_or(Error::Overflow)?,
+                            collateral: amounts.collateral,
+                        },
+                    ),
+                ));
         }
         if pending.proof {
             let creator = match pending.command {
@@ -1310,9 +1376,15 @@ fn curve_resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
                     token_definition_id: state.token_definition_id,
                     collateral_definition_id: state.collateral_definition_id,
                     intent: GraduationIntent::Curve {
-                        launch_tokens: payouts.adapter.launch_tokens,
+                        launch_tokens: payouts
+                            .adapter
+                            .launch_tokens
+                            .checked_add(state.graduation_reserve)
+                            .ok_or(Error::Overflow)?,
                         collateral: payouts.adapter.collateral,
                     },
+                    reserve_tokens: state.graduation_reserve,
+                    unsold_tokens: payouts.adapter.launch_tokens,
                     configuration: hook.configuration.clone(),
                 };
                 state.pending = Some(Pending {
@@ -1360,7 +1432,8 @@ fn curve_resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
                     state.launch_salt,
                 );
                 if state.creation_stage == CreationStage::PoolPrepared {
-                    if balance(&pending.values[1], mint, state.token_definition_id)? != 0
+                    if balance(&pending.values[1], mint, state.token_definition_id)?
+                        != state.graduation_reserve
                         || balance(
                             &pending.values[2],
                             input.receiver.account_id,
@@ -1403,7 +1476,8 @@ fn curve_resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
                     ));
                 }
                 if state.creation_stage == CreationStage::Allocated {
-                    if balance(&pending.values[1], mint, state.token_definition_id)? != 0
+                    if balance(&pending.values[1], mint, state.token_definition_id)?
+                        != state.graduation_reserve
                         || balance(
                             &pending.values[2],
                             input.receiver.account_id,

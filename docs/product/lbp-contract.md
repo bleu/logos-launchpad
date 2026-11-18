@@ -4,7 +4,7 @@ Fixed-price and weighted sales use four-stage setup on the actor interface. They
 
 ## Fixed-price sale
 
-The creator supplies inventory, a positive exact price in smallest units and an optional creator allocation. Setup binds the sale to its namespace and initializes a separate creator role. It funds inventory and releases an `AfterSetup` allocation in the final stage; an `AfterEnd` allocation stays in escrow. Recorded collateral starts at zero. Donations remain surplus. See [setup](../adr/0032-fixed-price-lbp-setup.md), [recorded collateral](../adr/0033-fixed-price-lbp-recorded-collateral.md) and the [setup sequence](../architecture/sequence-diagrams/create-lbp-pool.md).
+The creator supplies inventory, a positive exact price in smallest units and an optional creator allocation. All three sale types also support a protected [graduation reserve `R`](../adr/0020-settlement-and-graduation.md#graduation-reserve). Setup binds the sale to its namespace and initializes a separate creator role. It funds inventory and releases an `AfterSetup` allocation in the final stage; an `AfterEnd` allocation stays in escrow. Recorded collateral starts at zero. Donations remain surplus. See [setup](../adr/0032-fixed-price-lbp-setup.md), [recorded collateral](../adr/0033-fixed-price-lbp-recorded-collateral.md) and the [setup sequence](../architecture/sequence-diagrams/create-lbp-pool.md).
 
 The selected ending policy controls settlement and the separate `AfterEnd` claim. Unsold inventory and recorded collateral follow the shared [payout route](../adr/0020-settlement-and-graduation.md). Manual settlement requires no configured adapter. See [ADR 0025](../adr/0025-sale-closing.md) for ending rules.
 

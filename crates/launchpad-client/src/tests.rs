@@ -40,6 +40,7 @@ fn creation() -> CreateSaleRequest {
         graduation_policy: GraduationPolicy::default(),
         name: "E2E token".into(),
         uri: "https://example.invalid/e2e-token.json".into(),
+        graduation_reserve: 0,
         sale_reserve: 800,
         creator_allocation: 50,
         virtual_token_reserve: 2_000,
@@ -111,6 +112,7 @@ fn valid_factory_state(sale: FactorySale) -> FactoryState {
     field!(addresses.token_definition);
     field!(sale.collateral_definition);
     field!(800u128);
+    field!(0u128); // Graduation reserve.
     field!(GraduationPolicy::default());
     field!(50u128);
     field!(850u128);
@@ -286,6 +288,7 @@ fn fixed_creation() -> factory_core::FixedPriceInputs {
         launch_salt: sale.launch_salt,
         name: "Sale".into(),
         uri: "ipfs://sale".into(),
+        graduation_reserve: 0,
         sale_inventory: 800,
         creator_allocation: 200,
         price: lbp_core::FixedPrice {
@@ -453,6 +456,7 @@ fn weighted_creation() -> factory_core::WeightedInputs {
         launch_salt: fixed.launch_salt,
         name: fixed.name,
         uri: fixed.uri,
+        graduation_reserve: 0,
         sale_inventory: fixed.sale_inventory,
         creator_allocation: fixed.creator_allocation,
         collateral_seed: 100,
@@ -1943,7 +1947,7 @@ fn valid_lbp_factory_state(weighted: bool) -> factory_core::LbpLaunchState {
     }));
     field!(GraduationPolicy::default());
     field!(if weighted { *b"LZWGLAUN" } else { *b"LZFXLAUN" });
-    field!(4u16);
+    field!(5u16);
     field!(factory_core::compute_creator_role_pda(
         sale.namespace,
         sale.factory_program_id,
@@ -1969,6 +1973,7 @@ fn valid_lbp_factory_state(weighted: bool) -> factory_core::LbpLaunchState {
     field!(sale.namespace_program_id);
     field!(sale.lbp_program_id);
     field!(800u128);
+    field!(0u128); // Graduation reserve.
     field!(200u128);
     field!(1_000u128);
     field!(if weighted {
@@ -2759,4 +2764,27 @@ fn curve_graduation_admits_both_current_creator_holdings_without_signing() {
             );
         }
     }
+}
+
+#[test]
+fn resumed_creation_cannot_change_the_graduation_reserve() {
+    let sale = sale();
+    let creator = AccountId::new([9; 32]);
+    let mut state = valid_factory_state(sale);
+    state.creation_stage = CreationStage::Minted;
+    state.graduation_reserve = 120;
+    state.total_supply += 120;
+    let mut request = creation();
+    assert!(matches!(
+        super::next_creation_invocation(sale, creator, request.clone(), Some(&state)),
+        Err(ClientError::LaunchParametersMismatch)
+    ));
+    request.graduation_reserve = 120;
+    let invocation = super::next_creation_invocation(sale, creator, request, Some(&state))
+        .unwrap()
+        .unwrap();
+    assert!(matches!(
+        invocation.instruction,
+        factory_core::Message::ContinueCreation { .. }
+    ));
 }

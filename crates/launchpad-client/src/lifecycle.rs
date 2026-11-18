@@ -199,6 +199,7 @@ pub fn next_creation_invocation(
             && state.sell_fee_bps == request.sell_fee_bps
             && state.graduation_hook == request.graduation_hook
             && state.sale_reserve == request.sale_reserve
+            && state.graduation_reserve == request.graduation_reserve
             && state.graduation_policy == request.graduation_policy
             && state.creator_allocation == request.creator_allocation
             && state.virtual_token_reserve == request.virtual_token_reserve

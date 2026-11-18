@@ -76,6 +76,7 @@ pub enum SaleEventKindV1 {
         token_definition: [u8; 32],
         collateral_definition: [u8; 32],
         sale_inventory: u128,
+        graduation_reserve: u128,
         creator_allocation: u128,
         graduation_policy: GraduationPolicy,
         collateral_seed: u128,
@@ -215,6 +216,7 @@ pub enum PayoutPurposeV1 {
     CreatorLaunch,
     AdapterLaunch,
     AdapterCollateral,
+    GraduationReserve,
 }
 
 #[derive(

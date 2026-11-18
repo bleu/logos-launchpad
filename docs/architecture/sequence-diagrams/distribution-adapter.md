@@ -14,7 +14,8 @@ sequenceDiagram
     Adapter->>Adapter: Bind configuration and identities
     Caller->>Factory: Execute graduation after close
     Factory->>Token: Pay creator and adapter shares
-    Factory->>Adapter: Graduate with authenticated request
+    Factory->>Token: Pay recorded R from mint custody to adapter
+    Factory->>Adapter: Graduate with R, unsold share and combined total
     Adapter->>Token: Read full custody balances
     Adapter->>Token: Prepare and read recipient holdings
     Adapter->>Token: Transfer saved percentage payouts

@@ -1,5 +1,6 @@
 use super::*;
 use distribution_adapter::{Configuration, Message as DistributionMessage, Rule, State, VERSION};
+use lez_compat_core::authority;
 
 const RECIPIENT_A: AccountId = AccountId::new([180; 32]);
 const RECIPIENT_B: AccountId = AccountId::new([181; 32]);
@@ -41,6 +42,14 @@ fn env_configuration(
     zero: bool,
     config: Configuration,
 ) -> FixedFactoryEnv {
+    env_configuration_with_reserve(kind, zero, config, 0)
+}
+fn env_configuration_with_reserve(
+    kind: factory_core::GraduationIntentKind,
+    zero: bool,
+    config: Configuration,
+    graduation_reserve: u128,
+) -> FixedFactoryEnv {
     let policy = if zero {
         factory_core::GraduationPolicy::default()
     } else {
@@ -48,20 +57,22 @@ fn env_configuration(
     };
     let bytes = borsh::to_vec(&config).unwrap();
     let mut env = if kind == factory_core::GraduationIntentKind::Curve {
-        curve_factory_env_with_adapter(
+        curve_factory_env_with_reserve(
             true,
             bytes,
             policy,
             launchpad_methods::DISTRIBUTION_ADAPTER_ELF,
+            graduation_reserve,
         )
     } else {
-        lbp_graduation_env_with_adapter(
+        lbp_graduation_env_with_reserve(
             kind == factory_core::GraduationIntentKind::Weighted,
             true,
             bytes,
             kind,
             policy,
             launchpad_methods::DISTRIBUTION_ADAPTER_ELF,
+            graduation_reserve,
         )
     };
     for (side, rules) in [&config.launch_rules, &config.collateral_rules]
@@ -139,6 +150,7 @@ fn call(
         lbp_adapter(env).account_id,
         RECIPIENT_A,
         RECIPIENT_B,
+        factory_core::compute_mint_pda(NAMESPACE, LBP_FACTORY_PROGRAM, env.salt),
     ] {
         for definition in [env.launch, COLLATERAL] {
             message
@@ -332,7 +344,7 @@ fn distribution_failures_restore_balances_receipts_progress_and_nonce_then_retry
         factory_core::GraduationIntentKind::Weighted,
     ] {
         for callback_fault in [false, true] {
-            let mut env = env(kind, false);
+            let mut env = env_configuration_with_reserve(kind, false, configuration(), 120);
             if kind == factory_core::GraduationIntentKind::Curve {
                 for _ in 0..3 {
                     call(&mut env, false).unwrap();
@@ -462,4 +474,310 @@ fn distribution_destination_preparation_failure_rolls_back_new_holdings_and_retr
         .with_public_accounts([token_holding(RECIPIENT_B, launch, 0)]);
     graduate(&mut env);
     assert_eq!(adapter_state(&env).distribution_count, 1);
+}
+
+#[test]
+fn graduation_reserve_stays_outside_trading_and_pays_only_recorded_amount_all_engines() {
+    for kind in [
+        factory_core::GraduationIntentKind::Curve,
+        factory_core::GraduationIntentKind::FixedPrice,
+        factory_core::GraduationIntentKind::Weighted,
+    ] {
+        let baseline = env(kind, false);
+        let mut reserved = env_configuration_with_reserve(kind, false, configuration(), 120);
+        let reserve_owner =
+            factory_core::compute_mint_pda(NAMESPACE, LBP_FACTORY_PROGRAM, reserved.salt);
+        assert_eq!(
+            balance(&reserved.state, reserve_owner, reserved.launch),
+            120
+        );
+        if kind == factory_core::GraduationIntentKind::Curve {
+            assert_eq!(
+                baseline
+                    .state
+                    .get_account_by_id(baseline.pool)
+                    .data
+                    .actor_state(CURVE),
+                reserved
+                    .state
+                    .get_account_by_id(reserved.pool)
+                    .data
+                    .actor_state(CURVE)
+            );
+        } else {
+            assert_eq!(
+                fixed_pool(&baseline.state, baseline.pool),
+                fixed_pool(&reserved.state, reserved.pool)
+            );
+        }
+        let supply = token_supply(&reserved.state, reserved.launch);
+        assert_eq!(supply, token_supply(&baseline.state, baseline.launch) + 120);
+        // Curve fixtures buy launch tokens. Release the separate allocation in the
+        // other engines before donating.
+        if kind != factory_core::GraduationIntentKind::Curve {
+            let creator = reserved.creator();
+            let factory = reserved.factory;
+            let key = PrivateKey::try_new([23; 32]).unwrap();
+            lbp_signed_call(
+                &mut reserved,
+                Actor::new(factory, LBP_FACTORY_PROGRAM),
+                lbp_allocation_message(
+                    kind == factory_core::GraduationIntentKind::Weighted,
+                    creator,
+                ),
+                &[&key],
+                vec![],
+            )
+            .unwrap();
+        }
+        let creator = reserved.creator();
+        let launch = reserved.launch;
+        let key = PrivateKey::try_new([23; 32]).unwrap();
+        lbp_signed_call(
+            &mut reserved,
+            Actor::new(creator, TOKEN_PROGRAM_ACCOUNT_ID),
+            token::Message::Transfer {
+                definition: launch,
+                recipient: reserve_owner,
+                amount: 7,
+            },
+            &[&key],
+            vec![lee::PublicAccountEvidence::Pda {
+                program: TOKEN_PROGRAM_ACCOUNT_ID,
+                seed: token::holding_seed(reserve_owner, launch),
+            }],
+        )
+        .unwrap();
+        graduate(&mut reserved);
+        let saved = adapter_state(&reserved);
+        let request = saved.receipt.unwrap();
+        assert_eq!(request.reserve_tokens, 120);
+        assert_eq!(
+            request.reserve_tokens + request.unsold_tokens,
+            request.intent.amounts().0
+        );
+        assert_eq!(balance(&reserved.state, reserve_owner, launch), 7);
+        assert_eq!(token_supply(&reserved.state, launch), supply);
+        let recipients = maybe_balance(&reserved, RECIPIENT_A, launch)
+            + maybe_balance(&reserved, RECIPIENT_B, launch);
+        assert_eq!(recipients, request.intent.amounts().0);
+        assert!(call(&mut reserved, false).is_err());
+        assert_eq!(balance(&reserved.state, reserve_owner, launch), 7);
+    }
+}
+
+#[test]
+fn graduation_reserve_is_paid_with_zero_adapter_percentages_and_no_collateral() {
+    let mut reserved = lbp_graduation_env_with_reserve(
+        false,
+        false,
+        borsh::to_vec(&configuration()).unwrap(),
+        factory_core::GraduationIntentKind::FixedPrice,
+        factory_core::GraduationPolicy::default(),
+        launchpad_methods::DISTRIBUTION_ADAPTER_ELF,
+        120,
+    );
+    for owner in [RECIPIENT_A, RECIPIENT_B] {
+        for definition in [reserved.launch, COLLATERAL] {
+            reserved.actors.push(holding(owner, definition));
+        }
+    }
+    graduate(&mut reserved);
+    let request = adapter_state(&reserved).receipt.unwrap();
+    assert_eq!(request.reserve_tokens, 120);
+    assert_eq!(request.unsold_tokens, 0);
+    assert_eq!(request.intent.amounts(), (120, 0));
+    assert_eq!(maybe_balance(&reserved, RECIPIENT_A, reserved.launch), 84);
+    assert_eq!(maybe_balance(&reserved, RECIPIENT_B, reserved.launch), 36);
+}
+
+#[test]
+fn graduation_reserve_manual_settlement_returns_to_creator_once_all_engines() {
+    for kind in [
+        factory_core::GraduationIntentKind::Curve,
+        factory_core::GraduationIntentKind::FixedPrice,
+        factory_core::GraduationIntentKind::Weighted,
+    ] {
+        let mut reserved = match kind {
+            factory_core::GraduationIntentKind::Curve => curve_factory_env_with_reserve(
+                false,
+                vec![],
+                factory_core::GraduationPolicy::default(),
+                launchpad_methods::GRADUATION_ADAPTER_ELF,
+                120,
+            ),
+            factory_core::GraduationIntentKind::FixedPrice => fixed_factory_env_with_reserve(
+                Some(300),
+                factory_core::CreatorAllocationRelease::AfterEnd,
+                curve_core::PausePolicy::Disabled,
+                lbp_core::EndingPolicy::Either,
+                None,
+                lbp_core::TradeMode::BuyOnly,
+                0,
+                factory_core::GraduationPolicy::default(),
+                120,
+            ),
+            factory_core::GraduationIntentKind::Weighted => {
+                let (state, factory, pool, launch, escrow, key, actors, salt) =
+                    weighted_factory_env_with_reserve(
+                        false,
+                        None,
+                        lbp_core::TradeMode::BuyOnly,
+                        0,
+                        factory_core::GraduationPolicy::default(),
+                        120,
+                    );
+                let creator = AccountId::from(&PublicKey::new_from_private_key(&key));
+                let (_, path) = allowlist_for(pool, creator);
+                FixedFactoryEnv {
+                    state,
+                    factory,
+                    pool,
+                    launch,
+                    escrow,
+                    key,
+                    actors,
+                    salt,
+                    path,
+                }
+            }
+        };
+        reserved.state = clock_state(reserved.state, 300_000);
+        let old_creator = reserved.creator();
+        let old_key = PrivateKey::try_new([23; 32]).unwrap();
+        let next_key = PrivateKey::try_new([95; 32]).unwrap();
+        let next_creator = AccountId::from(&PublicKey::new_from_private_key(&next_key));
+        let role = if kind == factory_core::GraduationIntentKind::Curve {
+            saved_curve_factory(&reserved).creator_role_id
+        } else {
+            lbp_launch(&reserved).creator_role_id
+        };
+        reserved.actors.extend([
+            Actor::new(next_creator, factory_core::AUTHORITY_PROGRAM_ACCOUNT_ID),
+            Actor::new(next_creator, TOKEN_PROGRAM_ACCOUNT_ID),
+            holding(next_creator, reserved.launch),
+            holding(next_creator, COLLATERAL),
+        ]);
+        lbp_signed_call(
+            &mut reserved,
+            Actor::new(old_creator, factory_core::AUTHORITY_PROGRAM_ACCOUNT_ID),
+            authority::Message::Transfer {
+                role,
+                successor: next_creator,
+            },
+            &[&old_key, &next_key],
+            vec![],
+        )
+        .unwrap();
+        let before_rejected = reserved.state.clone();
+        assert!(
+            reserved
+                .execute(
+                    lbp_manual_message(
+                        kind == factory_core::GraduationIntentKind::Weighted,
+                        old_creator
+                    ),
+                    300_000
+                )
+                .is_err()
+        );
+        assert!(reserved.state == before_rejected);
+        reserved.key = next_key;
+        let creator = reserved.creator();
+        let launch = reserved.launch;
+        let custody = factory_core::compute_mint_pda(NAMESPACE, LBP_FACTORY_PROGRAM, reserved.salt);
+        let before = maybe_balance(&reserved, creator, launch);
+        let inventory = if kind == factory_core::GraduationIntentKind::Curve {
+            3000
+        } else {
+            800
+        };
+        for _ in 0..5 {
+            reserved
+                .execute(
+                    lbp_manual_message(
+                        kind == factory_core::GraduationIntentKind::Weighted,
+                        creator,
+                    ),
+                    300_000,
+                )
+                .unwrap();
+            if balance(&reserved.state, custody, launch) == 0 {
+                break;
+            }
+        }
+        assert_eq!(balance(&reserved.state, custody, launch), 0);
+        assert_eq!(
+            maybe_balance(&reserved, creator, launch),
+            before + inventory + 120
+        );
+        let before_retry = maybe_balance(&reserved, creator, launch);
+        let _ = reserved.execute(
+            lbp_manual_message(
+                kind == factory_core::GraduationIntentKind::Weighted,
+                creator,
+            ),
+            300_000,
+        );
+        assert_eq!(maybe_balance(&reserved, creator, launch), before_retry);
+    }
+}
+
+#[test]
+fn graduation_reserve_survives_fixed_price_sellout() {
+    let mut reserved = env_configuration_with_reserve(
+        factory_core::GraduationIntentKind::FixedPrice,
+        false,
+        configuration(),
+        120,
+    );
+    let creator = reserved.creator();
+    reserved.state = reserved
+        .state
+        .with_public_accounts([token_holding(creator, COLLATERAL, 5000)]);
+    let remaining = fixed_pool(&reserved.state, reserved.pool).remaining_inventory;
+    reserved.buy(remaining, 5000);
+    assert_eq!(
+        fixed_pool(&reserved.state, reserved.pool).remaining_inventory,
+        0
+    );
+    graduate(&mut reserved);
+    let request = adapter_state(&reserved).receipt.unwrap();
+    assert_eq!(request.reserve_tokens, 120);
+    assert_eq!(request.unsold_tokens, 0);
+    assert_eq!(request.intent.amounts().0, 120);
+}
+
+#[test]
+fn graduation_reserve_debit_failure_rolls_back_other_payouts_and_can_retry() {
+    for kind in [
+        factory_core::GraduationIntentKind::Curve,
+        factory_core::GraduationIntentKind::FixedPrice,
+        factory_core::GraduationIntentKind::Weighted,
+    ] {
+        let mut reserved = env_configuration_with_reserve(kind, false, configuration(), 120);
+        if kind == factory_core::GraduationIntentKind::Curve {
+            for _ in 0..3 {
+                call(&mut reserved, false).unwrap();
+            }
+        }
+        let custody = factory_core::compute_mint_pda(NAMESPACE, LBP_FACTORY_PROGRAM, reserved.salt);
+        let launch = reserved.launch;
+        reserved.state = reserved
+            .state
+            .with_public_accounts([token_holding(custody, launch, 119)]);
+        let before = reserved.state.clone();
+        assert!(call(&mut reserved, false).is_err());
+        assert!(reserved.state == before);
+        assert!(adapter_state(&reserved).receipt.is_none());
+        reserved.state = reserved
+            .state
+            .with_public_accounts([token_holding(custody, launch, 120)]);
+        graduate(&mut reserved);
+        assert_eq!(balance(&reserved.state, custody, launch), 0);
+        assert_eq!(
+            adapter_state(&reserved).receipt.unwrap().reserve_tokens,
+            120
+        );
+    }
 }

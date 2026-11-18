@@ -154,6 +154,7 @@ fn created_reports_both_saved_graduation_shares() {
         creator_role: [2; 32],
         token_definition: [3; 32],
         collateral_definition: [4; 32],
+        graduation_reserve: 0,
         sale_inventory: 100,
         creator_allocation: 20,
         graduation_policy: GraduationPolicy {
@@ -167,7 +168,7 @@ fn created_reports_both_saved_graduation_shares() {
     };
     let mut expected = vec![0];
     expected.extend(borsh::to_vec(&([1u8; 32], [2u8; 32], [3u8; 32], [4u8; 32])).unwrap());
-    expected.extend(borsh::to_vec(&(100u128, 20u128, 2_500u16, 7_500u16, 50u128)).unwrap());
+    expected.extend(borsh::to_vec(&(100u128, 0u128, 20u128, 2_500u16, 7_500u16, 50u128)).unwrap());
     expected.extend(borsh::to_vec(&(Some(100u64), Some(200u64), policies())).unwrap());
     assert_eq!(borsh::to_vec(&event).unwrap(), expected);
     roundtrip(&event);

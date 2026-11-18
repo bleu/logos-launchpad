@@ -73,6 +73,7 @@ fn factory_state(kind: GraduationIntentKind) -> Vec<u8> {
             launch_salt: [3; 32],
             name: "Launch".into(),
             uri: "uri".into(),
+            graduation_reserve: 0,
             sale_reserve: 800,
             graduation_policy: GraduationPolicy::default(),
             creator_allocation: 100,
@@ -97,6 +98,7 @@ fn factory_state(kind: GraduationIntentKind) -> Vec<u8> {
                 launch_salt: [3; 32],
                 name: "Launch".into(),
                 uri: "uri".into(),
+                graduation_reserve: 0,
                 sale_inventory: 800,
                 creator_allocation: 100,
                 price: FixedPrice {
@@ -126,6 +128,7 @@ fn factory_state(kind: GraduationIntentKind) -> Vec<u8> {
                 launch_salt: [3; 32],
                 name: "Launch".into(),
                 uri: "uri".into(),
+                graduation_reserve: 0,
                 sale_inventory: 800,
                 creator_allocation: 100,
                 collateral_seed: 100,
@@ -291,6 +294,8 @@ fn pre_graduation_distribution_is_rejected_and_request_terms_cannot_change() {
             launch_tokens: 0,
             collateral: 0,
         },
+        reserve_tokens: 0,
+        unsold_tokens: 0,
         configuration: borsh::to_vec(&configuration()).unwrap(),
     };
     for fault in 0..7 {
@@ -358,6 +363,8 @@ fn token_replies_require_the_expected_actor_asset_owner_kind_and_coverage() {
                 launch_tokens: 100,
                 collateral: 0,
             },
+            reserve_tokens: 0,
+            unsold_tokens: 100,
             configuration: borsh::to_vec(&state.configuration).unwrap(),
         },
     })

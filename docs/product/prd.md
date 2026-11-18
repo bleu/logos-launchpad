@@ -20,7 +20,7 @@ The admin app handles namespace administration. The configured-sales app handles
 | Participant | Use a sale allowlist | Prove membership and control of an approved public trader. Wallet preparation and private execution remain pending ([allowlist design](../architecture/allowlist-proof.md)) |
 | Participant | Use and recover a private trade | Complete deshield, public trade and private returns in one transaction. An unknown outcome blocks replacement ([private participation](../architecture/private-participation.md)) |
 | Any caller | Collect namespace fees | Pay all accrued fees to the current treasury; the caller cannot redirect them ([0015](../adr/0015-fee-accounting.md)) |
-| Creator | Settle manually without an adapter | Receive unsold inventory and recorded collateral after the selected ending condition; allocation claims remain separate ([0020](../adr/0020-settlement-and-graduation.md)) |
+| Creator | Settle manually without an adapter | Receive unsold inventory, recorded collateral and `R` after the selected ending condition; allocation claims remain separate ([0020](../adr/0020-settlement-and-graduation.md)) |
 | Any caller | Execute or retry a configured graduation hook | Use the saved adapter and post-close settlement route. Callback success does not prove DEX liquidity ([0020](../adr/0020-settlement-and-graduation.md)) |
 | Participant or operator | Inspect listings and history | Read the existing indexer through a backend module API. Chain state governs execution ([0027](../adr/0027-events-and-history.md)) |
 

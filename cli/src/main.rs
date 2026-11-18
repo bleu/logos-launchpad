@@ -336,6 +336,9 @@ struct CreateSaleArgs {
     uri: String,
     #[arg(long = "sale-reserve", alias = "d")]
     sale_reserve: u128,
+    /// Launch tokens kept outside trading for graduation or manual settlement.
+    #[arg(long, default_value_t = 0)]
+    graduation_reserve: u128,
     /// Adapter share of unsold launch tokens, in basis points.
     #[arg(long, value_parser = clap::value_parser!(u16).range(0..=10_000))]
     graduation_launch_bps: Option<u16>,
@@ -377,6 +380,7 @@ struct CreateSaleArgs {
 impl CreateSaleArgs {
     fn prepared_sale_request(&self, namespace: lee::AccountId) -> Result<CreateSaleRequest> {
         let mut request = self.sale_request();
+        request.total_supply()?;
         if let Some(file) = &self.distribution_configuration {
             let configuration = read_distribution_configuration(file)?;
             request.graduation_hook = Some(launchpad_client::distribution::hook(
@@ -421,6 +425,7 @@ impl CreateSaleArgs {
             name: self.name.clone(),
             uri: self.uri.clone(),
             sale_reserve: self.sale_reserve,
+            graduation_reserve: self.graduation_reserve,
             graduation_policy: launchpad_client::GraduationPolicy {
                 launch_bps: self.graduation_launch_bps.unwrap_or(0),
                 collateral_bps: self.graduation_collateral_bps.unwrap_or(0),
@@ -742,6 +747,7 @@ enum QuoteMode {
 
 #[derive(Serialize)]
 struct SaleSnapshot {
+    graduation_reserve: u128,
     trade_mode: TradeModeArg,
     graduation_hook: Option<HookSnapshot>,
     graduation_launch_bps: u16,
@@ -1212,6 +1218,7 @@ async fn sale_snapshot(namespace: lee::AccountId, json: bool, args: LaunchReadAr
     };
     let config = load_curve_config(namespace, &wallet, curve_program.account_id).await?;
     let snapshot = SaleSnapshot {
+        graduation_reserve: factory.graduation_reserve,
         trade_mode: factory.trade_mode.into(),
         graduation_hook: factory.graduation_hook.as_ref().map(HookSnapshot::from),
         graduation_launch_bps: factory.graduation_policy.launch_bps,
@@ -1272,8 +1279,10 @@ async fn sale_snapshot(namespace: lee::AccountId, json: bool, args: LaunchReadAr
             snapshot.fees_collected
         );
         println!(
-            "graduation split: launch_bps={} collateral_bps={}",
-            snapshot.graduation_launch_bps, snapshot.graduation_collateral_bps,
+            "graduation split: launch_bps={} collateral_bps={} reserve={}",
+            snapshot.graduation_launch_bps,
+            snapshot.graduation_collateral_bps,
+            snapshot.graduation_reserve,
         );
         if let Some(hook) = &snapshot.graduation_hook {
             println!(
@@ -2515,6 +2524,7 @@ mod tests {
                 collateral_definition: "collateral".to_owned(),
                 status,
                 creator_allocation_claimed: false,
+                graduation_reserve: 0,
                 sale_quantity: 0,
                 tokens_sold: 0,
                 real_token_reserve: 0,
@@ -2741,6 +2751,26 @@ mod distribution_tests {
                 bps: 10000,
             }],
         }
+    }
+
+    #[tokio::test]
+    async fn reserve_input_is_saved_and_supply_overflow_fails_before_io() {
+        let mut arguments = creation_arguments(Path::new("missing-rules.json"));
+        arguments.extend(["--graduation-reserve".into(), "200".into()]);
+        let Command::CreateSale(mut args) = Cli::try_parse_from(arguments).unwrap().command else {
+            panic!("create sale")
+        };
+        let request = args.sale_request();
+        assert_eq!(request.graduation_reserve, 200);
+        assert_eq!(request.total_supply().unwrap(), 1100);
+        args.graduation_reserve = u128::MAX;
+        let error = create_sale(lee::AccountId::new([40; 32]), false, args, None)
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            error.downcast_ref::<launchpad_client::ClientError>(),
+            Some(launchpad_client::ClientError::FactoryParameters(_))
+        ));
     }
 
     #[tokio::test]

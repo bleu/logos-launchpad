@@ -1031,6 +1031,11 @@
             "fields": [],
             "name": "AdapterCollateral",
             "tag": 4
+          },
+          {
+            "fields": [],
+            "name": "GraduationReserve",
+            "tag": 5
           }
         ]
       },
@@ -1075,6 +1080,10 @@
               },
               {
                 "name": "sale_inventory",
+                "type": "u128"
+              },
+              {
+                "name": "graduation_reserve",
                 "type": "u128"
               },
               {
@@ -1550,6 +1559,10 @@
             "type": "u128"
           },
           {
+            "name": "graduation_reserve",
+            "type": "u128"
+          },
+          {
             "name": "graduation_policy",
             "type": "GraduationPolicy"
           },
@@ -1665,6 +1678,10 @@
               },
               {
                 "name": "sale_reserve",
+                "type": "u128"
+              },
+              {
+                "name": "graduation_reserve",
                 "type": "u128"
               },
               {
@@ -2127,6 +2144,14 @@
           {
             "name": "intent",
             "type": "GraduationIntent"
+          },
+          {
+            "name": "reserve_tokens",
+            "type": "u128"
+          },
+          {
+            "name": "unsold_tokens",
+            "type": "u128"
           },
           {
             "name": "configuration",
@@ -2899,6 +2924,10 @@
             "type": "u128"
           },
           {
+            "name": "graduation_reserve",
+            "type": "u128"
+          },
+          {
             "name": "creator_allocation",
             "type": "u128"
           },
@@ -3052,6 +3081,10 @@
           },
           {
             "name": "sale_inventory",
+            "type": "u128"
+          },
+          {
+            "name": "graduation_reserve",
             "type": "u128"
           },
           {
@@ -3277,6 +3310,10 @@
           },
           {
             "name": "sale_inventory",
+            "type": "u128"
+          },
+          {
+            "name": "graduation_reserve",
             "type": "u128"
           },
           {

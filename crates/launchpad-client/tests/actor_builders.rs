@@ -347,6 +347,7 @@ fn creation_request_preserves_unix_seconds_on_the_public_wire() {
             graduation_hook: None,
             name: "Sale".into(),
             uri: "ipfs://sale".into(),
+            graduation_reserve: 0,
             sale_reserve: 800,
             graduation_policy: launchpad_client::GraduationPolicy::default(),
             creator_allocation: 0,
@@ -366,10 +367,10 @@ fn creation_request_preserves_unix_seconds_on_the_public_wire() {
         }
     ));
     let bytes = call.message_bytes().unwrap();
-    assert_eq!(bytes.len(), 280);
+    assert_eq!(bytes.len(), 296);
     assert_eq!(&bytes[..8], &[0, 0, 0, 3, 1, 0, 0, 0]);
-    assert_eq!(&bytes[167..176], &[1, 0x10, 0xff, 0x53, 0x65, 0, 0, 0, 0]);
-    assert_eq!(&bytes[272..], &[0x00, 0xf1, 0x53, 0x65, 0, 0, 0, 0]);
+    assert_eq!(&bytes[183..192], &[1, 0x10, 0xff, 0x53, 0x65, 0, 0, 0, 0]);
+    assert_eq!(&bytes[288..], &[0x00, 0xf1, 0x53, 0x65, 0, 0, 0, 0]);
 }
 
 #[test]

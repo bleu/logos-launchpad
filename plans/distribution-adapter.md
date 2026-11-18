@@ -1,6 +1,6 @@
 # Distribution adapter implementation plan
 
-Status: Implemented on `distribution-graduation-adapter`; local verification passed. This plan records the agreed scope. [ADR 0036](../docs/adr/0036-graduation-adapter-delivery.md) owns the final contract. The workspace guide records verification limits.
+Status: Implemented on `distribution-graduation-adapter`; local verification passed. This plan records the initial adapter scope. The later [reserve rules](../docs/adr/0020-settlement-and-graduation.md#graduation-reserve) restore `R` and extend the request breakdown. [ADR 0036](../docs/adr/0036-graduation-adapter-delivery.md) owns the final contract. The workspace guide records verification limits.
 
 ## Pull request base
 

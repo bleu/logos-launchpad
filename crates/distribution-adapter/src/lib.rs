@@ -353,6 +353,9 @@ pub fn handle(input: &ReceiveInput) -> Result<Response, Error> {
             if state.receipt.is_some() {
                 return Err(Error::AlreadyGraduated);
             }
+            request
+                .validate_amounts()
+                .map_err(|_| Error::InvalidMessage)?;
             if request.factory_program_id != state.factory.program_account_id
                 || request.namespace != state.namespace
                 || request.launch_salt != state.launch_salt

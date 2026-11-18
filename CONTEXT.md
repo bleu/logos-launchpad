@@ -22,6 +22,7 @@ This page defines the shared domain language. The [glossary](docs/glossary.md) e
 | Virtual reserve | Pricing-only curve state. The creation-time product is `initial_k`; current `k` can grow through retained sell collateral. |
 | Factory | Shared launch adapter for matching creation, allocation, namespace-binding and setup rules. It shares policy decisions without combining pricing state or custody. |
 | `D` | Purchasable bonding-curve sale allocation. |
+| `R` | Graduation reserve of launch tokens, separate from purchasable inventory, for all three sale types. The selected adapter defines its use; it does not promise DEX liquidity. See [reserve rules](docs/adr/0020-settlement-and-graduation.md#graduation-reserve). |
 | Graduation policy | Immutable adapter shares of unsold launch inventory and recorded collateral. The current creator receives the remainder. See [ADR 0020](docs/adr/0020-settlement-and-graduation.md). |
 | Weight checkpoint | Observation of a weighted sale's pricing second and token weight. It does not control pricing or settlement. |
 | Recorded collateral | Collateral counted by sale accounting, separate from the vault's actual balance. Unsolicited transfers are surplus. |
