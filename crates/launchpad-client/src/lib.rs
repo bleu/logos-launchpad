@@ -22,6 +22,8 @@ pub use types::{
 #[cfg(test)]
 mod tests;
 
+pub mod distribution;
+
 use borsh::BorshSerialize;
 use common::HashType;
 use curve_core::{Config, Message as CurveInstruction, compute_config_pda, compute_pool_pda};

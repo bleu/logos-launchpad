@@ -2289,6 +2289,7 @@ fn generated_event_metadata_binds_selectors_to_concrete_payload_types() {
     assert_eq!(
         schema()["events"],
         json!({
+            "distribution_adapter::DistributionEvent": {"name":"distribution_adapter::DistributionV1","selector":"4ea9de7d9d1e2e6d","payload":"distribution_adapter::DistributionEvent"},
             "events::SaleEventV1": {"name":"launchpad::SaleEventV1","selector":"e1961d35ac82206c","payload":"events::SaleEventV1"},
             "events::WeightedCheckpoint": {"name":"lbp::WeightedCheckpoint","selector":"ae2f6d457fb379cf","payload":"events::WeightedCheckpoint"},
             "events::WeightedPauseChanged": {"name":"lbp::WeightedPauseChanged","selector":"6d8c1803e82b3a9d","payload":"events::WeightedPauseChanged"}

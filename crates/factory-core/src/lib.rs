@@ -165,7 +165,8 @@ impl FactoryState {
         validate_curve_policies(self.ending_policy, self.end_timestamp)
             .map_err(|_| Error::InvalidState)
     }
-    fn validate(&self, actor: Actor) -> Result<(), Error> {
+    /// Check canonical factory identity and stored setup terms.
+    pub fn validate(&self, actor: Actor) -> Result<(), Error> {
         self.validate_terms()?;
         if actor.account_id
             != compute_factory_pda(self.namespace, actor.program_account_id, self.launch_salt)

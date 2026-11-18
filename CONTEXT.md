@@ -62,3 +62,5 @@ Public sale timestamps use Unix seconds. Lifecycle deadlines use LEZ inclusion-b
 The SDK owns quotes and transaction construction. CLI and QML clients must not copy protocol logic. QML reads indexed data through a backend module API. The Wallet Provider SDK will own account selection, approval, signing and submission. The shared core does not hold user keys. See the [system view](docs/architecture/system.md) and [private-route contract](docs/architecture/private-participation.md).
 
 An accepted internal design is not proof of implementation or external approval. Keep RFP departures and open decisions visible in the [ADR index](docs/adr/README.md). Keep execution coverage, unsupported private routes, clock restrictions and other readiness limits in the [workspace guide](docs/architecture/workspace-guide.md#execution-and-evidence-limits).
+
+The [distribution adapter](docs/adr/0036-graduation-adapter-delivery.md) uses immutable percentage lists for full adapter custody balances. Later permissionless distributions require successful graduation. It supports plain transfers only.

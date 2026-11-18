@@ -145,3 +145,7 @@ This page explains technical terms. [CONTEXT.md](../CONTEXT.md) defines the doma
 | Smoke check / integration check | A small check that a build or package can start or be called; and a check that components work together. |
 | Build, install and package evidence | Proof that planned artifacts can be produced, installed and used. It does not by itself prove production readiness. |
 | Status labels | Terms such as `Accepted`, `To be reviewed by Logos team`, `unaudited`, and `unverified` that state decision and evidence limits. |
+
+## Distribution adapter
+
+A graduation adapter that transfers full custody balances of the two sale assets by saved percentage lists. Later deposits can be distributed after graduation. See [ADR 0036](adr/0036-graduation-adapter-delivery.md).

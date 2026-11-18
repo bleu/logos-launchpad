@@ -152,6 +152,11 @@ enum Command {
     Withdraw(FactoryLifecycleArgs),
     /// Execute or retry one public post-close graduation stage.
     Graduate(GraduationArgs),
+    /// Encode, preview, initialize or run a distribution adapter.
+    Distribution {
+        #[command(subcommand)]
+        command: DistributionCommand,
+    },
     Claim(FactoryLifecycleArgs),
     Buy(BuyArgs),
     /// Spend an exact collateral amount, with a minimum launch-token output.
@@ -172,6 +177,51 @@ enum Command {
     TransferAuthority(TransferAuthorityArgs),
     NamespaceInfo(NamespaceReadArgs),
     RenounceAdmin(NamespaceAdminArgs),
+}
+
+#[derive(Debug, Subcommand)]
+enum DistributionCommand {
+    Encode {
+        #[arg(long)]
+        file: PathBuf,
+    },
+    Preview {
+        #[arg(long)]
+        file: PathBuf,
+        #[arg(long)]
+        launch_balance: u128,
+        #[arg(long)]
+        collateral_balance: u128,
+    },
+    Initialize {
+        #[command(flatten)]
+        adapter: DistributionIdentity,
+        #[arg(long, value_enum)]
+        kind: DistributionKind,
+    },
+    Remaining {
+        #[command(flatten)]
+        adapter: DistributionIdentity,
+    },
+}
+#[derive(Debug, Args)]
+struct DistributionIdentity {
+    #[arg(long)]
+    adapter_program_path: PathBuf,
+    #[arg(long, value_parser = parse_public_account_id)]
+    adapter_program_account: lee::AccountId,
+    #[arg(long, value_parser = parse_public_account_id)]
+    factory_program_account: lee::AccountId,
+    #[arg(long, value_parser = parse_public_account_id)]
+    fee_payer: lee::AccountId,
+    #[command(flatten)]
+    launch: LaunchArgs,
+}
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+enum DistributionKind {
+    Curve,
+    FixedPrice,
+    Weighted,
 }
 
 #[derive(Debug, Args)]
@@ -457,6 +507,9 @@ struct FactoryLifecycleArgs {
 
 #[derive(Debug, Args)]
 struct GraduationArgs {
+    /// Admit saved distribution destinations and validate its typed configuration.
+    #[arg(long)]
+    distribution: bool,
     /// Current creator role holder. The factory verifies this hint through role authority.
     #[arg(long, value_parser = parse_public_account_id)]
     creator_hint: lee::AccountId,
@@ -729,11 +782,40 @@ async fn main() {
 async fn run(json: bool, cli: Cli) -> Result<()> {
     cli.validate_route()?;
     let router = cli.authority_router_path.as_deref();
+    if let Command::Distribution { command } = &cli.command {
+        match command {
+            DistributionCommand::Encode { file } => {
+                let config = read_distribution_configuration(file)?;
+                let bytes = launchpad_client::distribution::encode_configuration(&config)?;
+                let encoded = hex::encode(bytes);
+                if json {
+                    println!("{}", serde_json::json!({ "configuration": encoded }));
+                } else {
+                    println!("{encoded}");
+                }
+                return Ok(());
+            }
+            DistributionCommand::Preview {
+                file,
+                launch_balance,
+                collateral_balance,
+            } => {
+                let config = read_distribution_configuration(file)?;
+                let plan = config
+                    .plan([*launch_balance, *collateral_balance])
+                    .map_err(|error| eyre::eyre!("{error:?}"))?;
+                println!("{}", serde_json::to_string_pretty(&plan)?);
+                return Ok(());
+            }
+            _ => {}
+        }
+    }
     let namespace = cli
         .namespace
         .ok_or_else(|| eyre::eyre!("--namespace is required; use the stable namespace AccountId"))?
         .account_id();
     match cli.command {
+        Command::Distribution { command } => run_distribution(namespace, json, command).await,
         Command::CreateSale(args) => create_sale(namespace, json, args, router).await,
         Command::CollectFees(args) => {
             let wallet = WalletCore::from_env()
@@ -918,14 +1000,16 @@ async fn graduate(namespace: lee::AccountId, json: bool, args: GraduationArgs) -
         sale.collateral_definition,
     )
     .await?;
-    let mut invocation = launchpad_client::build_graduation_invocation(
-        launchpad_client::GraduationTarget::Curve {
-            sale,
-            state: &state,
-            creator_hint: args.creator_hint,
-        },
-        treasury,
-    )?;
+    let target = launchpad_client::GraduationTarget::Curve {
+        sale,
+        state: &state,
+        creator_hint: args.creator_hint,
+    };
+    let mut invocation = if args.distribution {
+        launchpad_client::distribution::graduation(target, treasury)?
+    } else {
+        launchpad_client::build_graduation_invocation(target, treasury)?
+    };
     invocation.fee_payer = Some(args.fee_payer);
     let transaction_hash = submit_public_invocation(&wallet, &factory, invocation).await?;
     print_submission(
@@ -933,6 +1017,66 @@ async fn graduate(namespace: lee::AccountId, json: bool, args: GraduationArgs) -
         "graduation stage",
         transaction_hash,
         args.launch.launch_salt,
+    )
+}
+
+fn read_distribution_configuration(
+    path: &Path,
+) -> Result<launchpad_client::distribution::Configuration> {
+    let config = serde_json::from_slice(&std::fs::read(path)?)?;
+    launchpad_client::distribution::encode_configuration(&config)?;
+    Ok(config)
+}
+
+async fn run_distribution(
+    namespace: lee::AccountId,
+    json: bool,
+    command: DistributionCommand,
+) -> Result<()> {
+    use launchpad_client::distribution;
+    let (identity, kind) = match command {
+        DistributionCommand::Initialize { adapter, kind } => (adapter, Some(kind)),
+        DistributionCommand::Remaining { adapter } => (adapter, None),
+        _ => unreachable!("offline commands handled before wallet setup"),
+    };
+    let adapter = load_deployment(
+        &identity.adapter_program_path,
+        identity.adapter_program_account,
+    )?;
+    let wallet =
+        WalletCore::from_env().map_err(|error| eyre::eyre!(error.into_boxed_dyn_error()))?;
+    let mut call = if let Some(kind) = kind {
+        let kind = match kind {
+            DistributionKind::Curve => distribution::GraduationIntentKind::Curve,
+            DistributionKind::FixedPrice => distribution::GraduationIntentKind::FixedPrice,
+            DistributionKind::Weighted => distribution::GraduationIntentKind::Weighted,
+        };
+        distribution::initialize(
+            adapter.account_id,
+            identity.factory_program_account,
+            namespace,
+            identity.launch.launch_salt,
+            kind,
+        )
+    } else {
+        let state = distribution::load_state(
+            &wallet,
+            adapter.account_id,
+            identity.factory_program_account,
+            namespace,
+            identity.launch.launch_salt,
+        )
+        .await?;
+        distribution::distribute_remaining(adapter.account_id, &state)
+            .map_err(|error| eyre::eyre!("{error:?}"))?
+    };
+    call.fee_payer = Some(identity.fee_payer);
+    let transaction_hash = submit_public_invocation(&wallet, &adapter, call).await?;
+    print_submission(
+        json,
+        "distribution adapter",
+        transaction_hash,
+        identity.launch.launch_salt,
     )
 }
 
@@ -2504,5 +2648,37 @@ mod tests {
         let error = Cli::try_parse_from(["launchpad", "status", "--launch-salt", "00"])
             .expect_err("short launch salts must be rejected");
         assert!(error.to_string().contains("exactly 32 bytes"));
+    }
+}
+
+#[cfg(test)]
+mod distribution_tests {
+    use super::*;
+    #[test]
+    fn offline_distribution_commands_parse_without_wallet_or_namespace() {
+        for args in [
+            vec![
+                "launchpad",
+                "distribution",
+                "encode",
+                "--file",
+                "rules.json",
+            ],
+            vec![
+                "launchpad",
+                "distribution",
+                "preview",
+                "--file",
+                "rules.json",
+                "--launch-balance",
+                "101",
+                "--collateral-balance",
+                "0",
+            ],
+        ] {
+            let cli = Cli::try_parse_from(args).unwrap();
+            assert!(cli.namespace.is_none());
+            cli.validate_route().unwrap();
+        }
     }
 }

@@ -19,3 +19,5 @@ Each weighted trade reads one pricing timestamp through a temporary interface. L
 Trade modes and sells follow [ADR 0021](../adr/0021-modes-and-open-limits.md); quotes and slippage follow [ADR 0017](../adr/0017-quotes-and-slippage.md). [ADR 0015](../adr/0015-fee-accounting.md) defines live namespace fees, retained sell fees and anytime collection. Fixed-price and weighted-sale RFP departures are accepted internally but remain `To be reviewed by Logos team` externally.
 
 Public buy allowlists have [signed local execution evidence](../architecture/allowlist-proof.md#public-execution-evidence). Wallet allowlist flows and complete private routes remain pending. Private helpers are explicitly unsupported. The weighted-math kernel is unaudited; its qualification does not prove sale custody, clock support or deployment readiness. See the workspace guide for the full evidence limits.
+
+See [ADR 0036](../adr/0036-graduation-adapter-delivery.md) for the plain-transfer distribution adapter and later deposits.

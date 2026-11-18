@@ -432,3 +432,40 @@ fn event_payloads_resolve_types_from_nested_source_imports() {
     );
     std::fs::remove_dir_all(temporary).unwrap();
 }
+
+#[test]
+fn distribution_schema_records_post_graduation_wire_and_event() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+    let output = Command::new(env!("CARGO_BIN_EXE_lez-compat-tools"))
+        .current_dir(root)
+        .args([
+            "idl-source",
+            "distribution_adapter=crates/distribution-adapter/src/lib.rs",
+            "hook=crates/factory-core/src/hook.rs",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let idl: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        idl["modules"]["distribution_adapter"]["Message"]["variants"][3]["name"],
+        "DistributeRemaining"
+    );
+    assert_eq!(
+        idl["modules"]["distribution_adapter"]["Message"]["variants"][3]["tag"],
+        3
+    );
+    assert_eq!(
+        idl["events"]["distribution_adapter::DistributionEvent"]["name"],
+        "distribution_adapter::DistributionV1"
+    );
+    assert!(
+        idl["modules"]["distribution_adapter"]
+            .get("Pending")
+            .is_some()
+    );
+}

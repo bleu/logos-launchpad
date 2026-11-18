@@ -5388,6 +5388,20 @@ fn curve_factory_env(
     configuration: Vec<u8>,
     policy_terms: factory_core::GraduationPolicy,
 ) -> FixedFactoryEnv {
+    curve_factory_env_with_adapter(
+        hook,
+        configuration,
+        policy_terms,
+        launchpad_methods::GRADUATION_FAULT_ADAPTER_ELF,
+    )
+}
+
+fn curve_factory_env_with_adapter(
+    hook: bool,
+    configuration: Vec<u8>,
+    policy_terms: factory_core::GraduationPolicy,
+    adapter_elf: &'static [u8],
+) -> FixedFactoryEnv {
     const FACTORY: AccountId = AccountId::new([17; 32]);
     let key = PrivateKey::try_new([23; 32]).unwrap();
     let creator = AccountId::from(&PublicKey::new_from_private_key(&key));
@@ -5546,10 +5560,7 @@ fn curve_factory_env(
     state = clock_state(state, 100_000)
         .with_named_programs([(
             LBP_HOOK_PROGRAM,
-            Program::new(Cow::Borrowed(
-                launchpad_methods::GRADUATION_FAULT_ADAPTER_ELF,
-            ))
-            .unwrap(),
+            Program::new(Cow::Borrowed(adapter_elf)).unwrap(),
         )])
         .with_public_accounts([
             token_holding(TREASURY, COLLATERAL, 0),
@@ -5650,6 +5661,24 @@ fn lbp_graduation_env_with_policy(
     accepted_intent: factory_core::GraduationIntentKind,
     graduation_policy: factory_core::GraduationPolicy,
 ) -> FixedFactoryEnv {
+    lbp_graduation_env_with_adapter(
+        weighted,
+        buy,
+        configuration,
+        accepted_intent,
+        graduation_policy,
+        launchpad_methods::GRADUATION_FAULT_ADAPTER_ELF,
+    )
+}
+
+fn lbp_graduation_env_with_adapter(
+    weighted: bool,
+    buy: bool,
+    configuration: Vec<u8>,
+    accepted_intent: factory_core::GraduationIntentKind,
+    graduation_policy: factory_core::GraduationPolicy,
+    adapter_elf: &'static [u8],
+) -> FixedFactoryEnv {
     let hook = Some(factory_core::GraduationHook {
         program_id: LBP_HOOK_PROGRAM,
         configuration,
@@ -5694,10 +5723,7 @@ fn lbp_graduation_env_with_policy(
     };
     env.state = env.state.with_named_programs([(
         LBP_HOOK_PROGRAM,
-        Program::new(Cow::Borrowed(
-            launchpad_methods::GRADUATION_FAULT_ADAPTER_ELF,
-        ))
-        .unwrap(),
+        Program::new(Cow::Borrowed(adapter_elf)).unwrap(),
     )]);
     initialize_lbp_adapter(&mut env, accepted_intent);
     let saved = lbp_launch(&env);
@@ -9110,3 +9136,6 @@ fn signed_wrong_kind_adapter_initialization_rolls_back_then_correct_kind_succeed
         reject_lbp_adapter_reinitialization(&mut env, lbp_kind(weighted));
     }
 }
+
+#[path = "actor_sale/distribution.rs"]
+mod distribution;

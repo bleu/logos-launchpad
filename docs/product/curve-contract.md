@@ -23,3 +23,5 @@ The [generated actor schema](../../idl/launchpad.json) defines the public wire i
 ## Acceptance evidence
 
 The workspace guide is the current evidence record. Host tests alone do not prove child-call rollback; development receipts are not secure production proofs. Private routes remain unsupported, and live DEX integration remains unverified. See [verification boundaries](../adr/0022-verification-boundaries.md).
+
+See [ADR 0036](../adr/0036-graduation-adapter-delivery.md) for the plain-transfer distribution adapter and later deposits.

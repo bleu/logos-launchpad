@@ -13,6 +13,7 @@ path = "../../verify/weighted_math.rs"
 name = "idl_wire"
 
 [dependencies]
+distribution-adapter.workspace = true
 borsh.workspace = true
 lez-compat-core.workspace = true
 thiserror.workspace = true

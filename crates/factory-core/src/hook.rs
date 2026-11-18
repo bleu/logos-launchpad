@@ -96,6 +96,20 @@ pub struct GraduationResult {
     pub request_hash: [u8; 32],
 }
 impl AdapterState {
+    /// Stable idle state view for adapters with their own private storage.
+    pub fn public_view(
+        factory: Actor,
+        accepted_intent: GraduationIntentKind,
+        receipt: Option<GraduationRequest>,
+    ) -> Self {
+        Self {
+            factory,
+            accepted_intent,
+            receipt,
+            pending: None,
+        }
+    }
+
     pub fn decode(bytes: &[u8]) -> Result<Self, Error> {
         borsh::from_slice(bytes).map_err(|_| Error::InvalidState)
     }

@@ -98,3 +98,24 @@ Each replacement must switch client/program interfaces together, remove supersed
 - [ ] <a id="upstream-wallet"></a> Integrate compatible wallet/provider and module interfaces under [ADR 0029](../adr/0029-wallet-integration.md). Use platform network-fee handling; missing support is a platform dependency, not grounds for a replacement wallet or fee mechanism. Finish package loading and backend smoke checks without replacing the existing shells.
 - [ ] <a id="release-check"></a> Compare the official v0.4 release with the selected revision. Update dependency pins and generated artifacts together, then repeat affected checks.
 - [ ] <a id="deferred-evidence"></a> Complete deferred service integration, real proofs, live verification and focused guest gaps listed above. Use host tests for routine work; do not require a full network. Full private-route completion remains separate work under [ADR 0018](../adr/0018-private-participation.md).
+
+## Distribution adapter checks
+
+The handler is in `crates/distribution-adapter/`. The guest is `methods/guest/src/bin/distribution_adapter.rs`. It registers as `DISTRIBUTION_ADAPTER_ELF` in the methods crate. `distribution_fault_adapter` and `distribution_fault_token` are test fixtures; do not deploy them. The SDK owns configuration validation, previews and transaction account declarations.
+
+After selecting the emergency-authority fixture above, run:
+
+```sh
+cargo +1.98.1 test -p distribution-adapter --locked
+cargo +1.98.1 test -p launchpad-client --test distribution --locked
+RISC0_BUILD_LOCKED=1 LAUNCHPAD_MOCK_CLOCK=1 cargo +1.98.1 test --manifest-path methods/Cargo.toml --locked --features actor-execution-tests --test actor_sale distribution
+bash verify/check-idl.sh
+```
+
+On 2026-11-18, the five focused distribution guest tests passed. They cover all three sale types, full balances, direct deposits, zero requests, repeated recipients, both eight-rule lists, later calls, preparation failure, intermediate credit failure, callback failure, full-state rollback and repaired retry. Adapter host tests, factory and shared settlement host tests, client/CLI tests, adapter lint checks, schema drift comparison, wire fixtures, source schema tests, formatting and static dependency pins passed. The broader ignored client guest suite and the full release script were not run.
+
+The focused guest tests use real factory, pool, authority, token and distribution guests. Weighted fixtures use the explicit mock clock. Tests replace named programs only to inject and repair faults in disposable state. This is not a live adapter replacement path. Local execution does not prove real proofs, service integration, package loading, production tool compatibility or deployment readiness.
+
+The CLI accepts `distribution encode --file rules.json` and `distribution preview --file rules.json --launch-balance 101 --collateral-balance 11` without a wallet or namespace. JSON uses `version: 1` and the two rule lists; each rule has `destination` as a base58 string and `bps` as an integer. Preview balances are explicit inputs and are estimates until execution.
+
+Use `distribution initialize` with the adapter deployment, factory deployment, launch salt, sale kind and fee payer in the selected namespace. It reads configuration from the factory. Use `graduate --distribution` to admit saved recipient accounts for curve graduation. Use `distribution remaining` with the same identity after graduation. Run `--help` for exact flags. The SDK supports all three sale kinds; complete fixed-price and weighted CLI journeys remain outside this change.
