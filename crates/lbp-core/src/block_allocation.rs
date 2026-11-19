@@ -30,6 +30,16 @@ impl BlockAllocation {
         }
     }
 
+    /// Tokens still available to buys that observe `block`. `None` means no ceiling.
+    pub fn remaining(&self, block: u64) -> Option<u128> {
+        let limit = self.limit?;
+        if self.observed_block == Some(block) {
+            Some(limit.saturating_sub(self.tokens_sold))
+        } else {
+            Some(limit)
+        }
+    }
+
     pub(crate) fn record(&mut self, block: u64, tokens: u128) -> Result<(), Error> {
         self.validate()?;
         let limit = self.limit.ok_or(Error::InvalidState)?;
@@ -65,8 +75,11 @@ mod tests {
         assert_eq!(allocation.record(8, 1), Err(Error::BlockAllocationExceeded));
         assert_eq!(allocation, full);
         assert_eq!(allocation.record(7, 1), Err(Error::InvalidState));
+        assert_eq!(allocation.remaining(8), Some(0));
+        assert_eq!(allocation.remaining(9), Some(100));
         allocation.record(9, 100).unwrap();
         assert_eq!(allocation.tokens_sold, 100);
+        assert_eq!(BlockAllocation::new(None).unwrap().remaining(9), None);
     }
     #[test]
     fn validates_disabled_zero_and_full_width_limits() {

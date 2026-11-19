@@ -22,4 +22,4 @@ Public buy allowlists have [signed local execution evidence](../architecture/all
 
 See [ADR 0036](../adr/0036-graduation-adapter-delivery.md) for the plain-transfer distribution adapter and later deposits.
 
-Creators can set an optional immutable per-block token ceiling. The pool counts all buy outputs in the inclusion block; splitting buys across accounts does not bypass it. Excess buys fail in full and sells do not restore allowance. This limits accumulation speed, not ownership concentration over the whole sale. See [sale limits](../adr/0021-modes-and-open-limits.md).
+Creators can set an optional immutable per-block token ceiling. The pool counts all buy outputs in the inclusion block; splitting buys across accounts does not bypass it. Excess buys fail in full and sells do not restore allowance. This limits accumulation speed, not ownership concentration over the whole sale. Each capped buy is valid only in the block after the observed block ID, which constrains private routes. SDK quotes check the remaining block allowance but do not reserve it. See [sale limits](../adr/0021-modes-and-open-limits.md).
