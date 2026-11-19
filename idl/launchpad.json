@@ -2202,6 +2202,10 @@
       "FixedPricePoolInputs": {
         "fields": [
           {
+            "name": "protocol_fee_bps",
+            "type": "u16"
+          },
+          {
             "name": "buy_policy",
             "type": "BuyPolicy"
           },
@@ -2541,6 +2545,10 @@
       "PoolAccount": {
         "fields": [
           {
+            "name": "protocol_fee_bps",
+            "type": "u16"
+          },
+          {
             "name": "buy_policy",
             "type": "BuyPolicy"
           },
@@ -2695,6 +2703,10 @@
       },
       "WeightedPoolInputs": {
         "fields": [
+          {
+            "name": "protocol_fee_bps",
+            "type": "u16"
+          },
           {
             "name": "buy_policy",
             "type": "BuyPolicy"
@@ -2995,6 +3007,10 @@
       },
       "LbpLaunchState": {
         "fields": [
+          {
+            "name": "protocol_fee_bps",
+            "type": "u16"
+          },
           {
             "name": "buy_policy",
             "type": "curve::BuyPolicy"

@@ -1932,6 +1932,7 @@ fn valid_lbp_factory_state(weighted: bool) -> factory_core::LbpLaunchState {
             bytes.extend(borsh::to_vec(&$value).unwrap());
         };
     }
+    field!(1000u16);
     field!(curve_core::BuyPolicy::Open);
     field!(curve_core::PausePolicy::Disabled);
     field!(if weighted {
@@ -1947,7 +1948,7 @@ fn valid_lbp_factory_state(weighted: bool) -> factory_core::LbpLaunchState {
     }));
     field!(GraduationPolicy::default());
     field!(if weighted { *b"LZWGLAUN" } else { *b"LZFXLAUN" });
-    field!(5u16);
+    field!(6u16);
     field!(factory_core::compute_creator_role_pda(
         sale.namespace,
         sale.factory_program_id,
@@ -2220,6 +2221,7 @@ fn lbp_pool_snapshot(weighted: bool) -> (lbp_core::PoolAccount, curve_core::Conf
         lbp_core::PoolMode::FixedPrice
     };
     let mut bytes = borsh::to_vec(&(
+        1000u16,
         curve_core::BuyPolicy::Open,
         curve_core::TradeControl::Unrestricted,
         curve_core::EndingPolicy::Scheduled,
@@ -2277,8 +2279,7 @@ fn lbp_quotes_reuse_core_results_for_each_engine_and_trade_form() {
                 min_collateral_out: 1,
             },
         ] {
-            let expected =
-                lbp_core::quote_trade(&pool, request, config.protocol_fee_bps, 50).unwrap();
+            let expected = lbp_core::quote_trade(&pool, request, 50).unwrap();
             let before = pool.clone();
             assert_eq!(
                 super::quote_lbp_trade(lbp_sale(), &pool, &config, request, 50).unwrap(),
@@ -2610,8 +2611,7 @@ fn lbp_quotes_expose_independent_retained_fees_and_net_slippage() {
             tokens_in: 10,
             min_collateral_out: quote.amount_out + 1,
         };
-        let core_error =
-            lbp_core::quote_trade(&pool, too_high, config.protocol_fee_bps, 50).unwrap_err();
+        let core_error = lbp_core::quote_trade(&pool, too_high, 50).unwrap_err();
         let Err(ClientError::QuoteLbpTrade(error)) =
             super::quote_lbp_trade(lbp_sale(), &pool, &config, too_high, 50)
         else {

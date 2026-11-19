@@ -1559,3 +1559,29 @@ fn weighted_funding_rejects_either_substituted_graduation_percentage() {
         );
     }
 }
+
+#[test]
+fn fee_snapshot_is_captured_from_namespace_before_minting() {
+    let mut input = creation(inputs());
+    let mut response = handle(&input).unwrap();
+    let mut namespace = curve_core::Config::decode(&config()).unwrap();
+    namespace.protocol_fee_bps = 777;
+    for bytes in [borsh::to_vec(&namespace).unwrap(), definition()] {
+        input = reply(&input, &response, bytes);
+        response = handle(&input).unwrap();
+    }
+    let response = finish_clock(&input, response).unwrap();
+    let state =
+        factory_core::LbpLaunchState::decode(response.post_state.as_ref().unwrap()).unwrap();
+    assert_eq!(state.protocol_fee_bps, 777);
+    let allocated = advance(&input, &response, vec![]).unwrap();
+    let prepared = advance(&input, &allocated, vec![]).unwrap();
+    let call = prepared
+        .sync_messages
+        .iter()
+        .find(|call| call.to.program_account_id == id(8))
+        .unwrap();
+    assert!(
+        matches!(borsh::from_slice::<lbp_core::Message>(&call.message).unwrap(), lbp_core::Message::PrepareWeighted { inputs } if inputs.protocol_fee_bps == 777)
+    );
+}

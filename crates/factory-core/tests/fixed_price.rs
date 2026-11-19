@@ -396,6 +396,7 @@ fn pool_preparation_uses_saved_terms_and_separate_setup_stage() {
 
 fn prepared_pool(state: &factory_core::FixedPriceLaunchState, factory: Actor) -> Vec<u8> {
     let inputs = lbp_core::FixedPricePoolInputs {
+        protocol_fee_bps: state.protocol_fee_bps,
         buy_policy: state.buy_policy.clone(),
         pause_policy: state.pause_policy,
         ending_policy: state.ending_policy,
@@ -1781,6 +1782,7 @@ fn fixed_price_rejects_malformed_saved_terms_and_the_old_record_version() {
     }
     let mut bytes = borsh::to_vec(&state).unwrap();
     let version_offset = borsh::to_vec(&(
+        state.protocol_fee_bps,
         state.buy_policy,
         state.pause_policy,
         state.ending_policy,
@@ -1794,7 +1796,7 @@ fn fixed_price_rejects_malformed_saved_terms_and_the_old_record_version() {
         + 8;
     assert_eq!(
         &bytes[version_offset..version_offset + 2],
-        &5_u16.to_le_bytes()
+        &6_u16.to_le_bytes()
     );
     bytes[version_offset..version_offset + 2].copy_from_slice(&2_u16.to_le_bytes());
     assert_eq!(

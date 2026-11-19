@@ -14,6 +14,7 @@ fn id(n: u8) -> AccountId {
 
 fn weighted_inputs() -> WeightedPoolInputs {
     WeightedPoolInputs {
+        protocol_fee_bps: 100,
         buy_policy: curve_core::BuyPolicy::Open,
         pause_policy: lbp_core::PausePolicy::AuthorityControlled,
         ending_policy: lbp_core::EndingPolicy::Scheduled,
@@ -626,7 +627,6 @@ fn snapshot_quotes_and_weighted_sells_use_the_same_saved_time() {
             tokens_in: 1000,
             min_collateral_out: 0,
         },
-        100,
         150,
     )
     .unwrap();
