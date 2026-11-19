@@ -34,7 +34,7 @@ flowchart TB
     Programs -.->|Event delivery unverified| Indexer
 ```
 
-Solid lines show implemented code boundaries. Dashed lines show pending integration. The factory shares setup and policies, not pricing state or custody. Weighted trades need a [supported clock provider](workspace-guide.md#temporary-weighted-pricing-clock). A successful graduation callback does not prove DEX liquidity.
+Solid lines show implemented code boundaries. Dashed lines show pending integration. The factory shares setup and policies, not pricing state or custody. Weighted trades use the [upstream pricing clock](workspace-guide.md#weighted-pricing-clock). A successful graduation callback does not prove DEX liquidity.
 
 The admin app is for namespace administration. The configured-sales app is for creators and participants. Planned QML reads go through the shared-core backend module API. Indexed data can lag; programs enforce current state.
 

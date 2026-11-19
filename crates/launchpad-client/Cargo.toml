@@ -24,9 +24,11 @@ curve-core.workspace = true
 factory-core.workspace = true
 lbp-core.workspace = true
 lee.workspace = true
+program_loader_core.workspace = true
 lee_core.workspace = true
 pool.workspace = true
 wallet.workspace = true
+sequencer_service_rpc.workspace = true
 hex.workspace = true
 tokio = { workspace = true, features = ["time"] }
 
@@ -36,3 +38,10 @@ workspace = true
 [dev-dependencies]
 serde_json.workspace = true
 weighted-math-core = { path = "../../packages/weighted-math/crates/weighted-math-core" }
+
+[features]
+actor-execution-tests = ["lee/test-utils"]
+
+[[test]]
+name = "role_authority_guest"
+required-features = ["actor-execution-tests"]

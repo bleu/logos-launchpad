@@ -2426,8 +2426,11 @@ fn lbp_sell_builders_keep_participant_authority_reverse_holdings_and_clock() {
             }
         );
         assert_eq!(
-            call.actors.contains(&lbp_core::pricing_clock::actor()),
-            weighted
+            call.actors
+                .iter()
+                .filter(|actor| **actor == clock_core::clock_actor())
+                .count(),
+            1
         );
         for owner in [participant, a.pool] {
             for definition in [a.token_definition, sale.collateral_definition] {

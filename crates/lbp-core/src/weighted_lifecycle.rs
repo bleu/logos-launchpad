@@ -143,7 +143,6 @@ pub(super) fn poke(input: &ReceiveInput) -> Result<Response, Error> {
     if !state.funded {
         return Err(Error::PendingFunding);
     }
-    crate::pricing_clock::require_available()?;
     let pending = PokePending {
         tag: POKE_TAG,
         state,
@@ -151,7 +150,7 @@ pub(super) fn poke(input: &ReceiveInput) -> Result<Response, Error> {
     Ok(
         Response::set_state(borsh::to_vec(&pending).unwrap()).send_sync(
             crate::pricing_clock::actor(),
-            &crate::pricing_clock::Request::ReadTimestamp,
+            &crate::pricing_clock::request(),
         ),
     )
 }

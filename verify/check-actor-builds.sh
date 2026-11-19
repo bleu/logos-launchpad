@@ -77,7 +77,7 @@ run 'weighted-math guest parity (execution only, release, locked)' cargo +"$ACTO
 run 'release overflow tests (host and guest execution, locked)' cargo +"$ACTOR_RUST_VERSION" test --manifest-path methods/Cargo.toml --release --features overflow-tests --test release_overflow --locked
 if [ "${1:-}" = --execution ]; then
   run 'node-free token actor execution (locked)' cargo +"$ACTOR_RUST_VERSION" test --manifest-path "$base/execution/Cargo.toml" --locked
-  run 'seeded sale trade and fee actor execution (release, locked)' cargo +"$ACTOR_RUST_VERSION" test --manifest-path methods/Cargo.toml --release --locked --features actor-execution-tests --test actor_sale
+  run 'seeded sale trade and fee actor execution (locked)' cargo +"$ACTOR_RUST_VERSION" test --manifest-path methods/Cargo.toml --locked --features actor-execution-tests --test actor_sale
   if [ -z "${LAUNCHPAD_CLOCK_ELF:-}" ]; then
     LAUNCHPAD_CLOCK_ELF="$(cargo +"$ACTOR_RUST_VERSION" metadata --format-version 1 --locked | python3 -c '
 import json, sys
@@ -98,7 +98,7 @@ for parent in Path(package["manifest_path"]).parents:
     [ -n "$artifact" ] || fail "missing role execution guest: $guest.bin"
     export "LAUNCHPAD_${role}_ELF=$root/$artifact"
   done
-  run 'public curve contract actor execution (release, locked)' cargo +"$ACTOR_RUST_VERSION" test -p launchpad-client --release --locked --test role_authority_guest -- --ignored
+  run 'public curve contract actor execution (locked)' cargo +"$ACTOR_RUST_VERSION" test -p launchpad-client --locked --features actor-execution-tests --test role_authority_guest -- --ignored
   printf 'check-builds: selected actor execution fixtures passed; service integration, real proofs and deployment readiness not tested\n'
 else
   printf 'check-builds: token and sale actor execution deferred; select --execution for available real fixtures\n'

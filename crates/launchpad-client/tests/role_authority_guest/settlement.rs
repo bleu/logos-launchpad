@@ -318,9 +318,10 @@ fn prepare_hook(fixture: &mut FactoryFixture) {
 
 fn hook_fixture(buy: bool, policy: launchpad_client::GraduationPolicy) -> FactoryFixture {
     let mut fixture = closed_sale(Some(ADAPTER), b"saved-route".to_vec(), policy, buy);
-    fixture.state = fixture
-        .state
-        .with_named_programs([(ADAPTER, guest("LAUNCHPAD_ADAPTER_ELF"))]);
+    fixture.state = fixture.state.with_programs_at(
+        ([(ADAPTER, guest("LAUNCHPAD_ADAPTER_ELF"))])
+            .map(|(address, program)| (address, program, true)),
+    );
     initialize_adapter(&mut fixture, factory_core::GraduationIntentKind::Curve).unwrap();
     prepare_hook(&mut fixture);
     fixture
@@ -479,9 +480,10 @@ fn settlement_wrong_adapter_kind_cannot_enable_manual_fallback() {
         },
         true,
     );
-    fixture.state = fixture
-        .state
-        .with_named_programs([(ADAPTER, guest("LAUNCHPAD_ADAPTER_ELF"))]);
+    fixture.state = fixture.state.with_programs_at(
+        ([(ADAPTER, guest("LAUNCHPAD_ADAPTER_ELF"))])
+            .map(|(address, program)| (address, program, true)),
+    );
     let before = fixture.state.clone();
     let result = initialize_adapter(&mut fixture, factory_core::GraduationIntentKind::Weighted);
     assert!(format!("{result:?}").contains("AdapterIntentMismatch"));
@@ -536,9 +538,10 @@ fn settlement_callback_failure_restores_payouts_and_preserves_required_route() {
     assert_eq!(balance(&fixture.state, id(&key(48)), fixture.definition), 0);
     assert!(adapter_state(&fixture).receipt.is_none());
     rejected(&mut fixture, manual, "InvalidTerms");
-    fixture.state = fixture
-        .state
-        .with_named_programs([(ADAPTER, guest("LAUNCHPAD_ADAPTER_ELF"))]);
+    fixture.state = fixture.state.with_programs_at(
+        ([(ADAPTER, guest("LAUNCHPAD_ADAPTER_ELF"))])
+            .map(|(address, program)| (address, program, true)),
+    );
     hook(&mut fixture).unwrap();
     assert_eq!(
         saved(&fixture).settlement_stage,
@@ -871,9 +874,10 @@ fn fault_hook_fixture(configuration: Vec<u8>) -> FactoryFixture {
         },
         true,
     );
-    fixture.state = fixture
-        .state
-        .with_named_programs([(ADAPTER, guest("LAUNCHPAD_GRADUATION_FAULT_ELF"))]);
+    fixture.state = fixture.state.with_programs_at(
+        ([(ADAPTER, guest("LAUNCHPAD_GRADUATION_FAULT_ELF"))])
+            .map(|(address, program)| (address, program, true)),
+    );
     initialize_adapter(&mut fixture, factory_core::GraduationIntentKind::Curve).unwrap();
     prepare_hook(&mut fixture);
     fixture
@@ -923,9 +927,10 @@ fn settlement_final_ack_failure_rolls_back_adapter_receipt_payouts_and_graduated
     let mut fixture = fault_hook_fixture(b"corrupt-final-ack".to_vec());
     rejected(&mut fixture, hook, "InvalidState");
     assert_hook_custody(&fixture, false);
-    fixture.state = fixture
-        .state
-        .with_named_programs([(ADAPTER, guest("LAUNCHPAD_ADAPTER_ELF"))]);
+    fixture.state = fixture.state.with_programs_at(
+        ([(ADAPTER, guest("LAUNCHPAD_ADAPTER_ELF"))])
+            .map(|(address, program)| (address, program, true)),
+    );
     hook(&mut fixture).unwrap();
     assert_hook_custody(&fixture, true);
     rejected(&mut fixture, hook, "AlreadySettled");
@@ -1096,9 +1101,10 @@ fn settlement_nested_adapter_calls_roll_back_and_repaired_retry_pays_once() {
         rejected(&mut fixture, creator_hook, reason);
         assert_hook_custody(&fixture, false);
         // Replace only test code, not the saved adapter identity or configuration.
-        fixture.state = fixture
-            .state
-            .with_named_programs([(ADAPTER, guest("LAUNCHPAD_ADAPTER_ELF"))]);
+        fixture.state = fixture.state.with_programs_at(
+            ([(ADAPTER, guest("LAUNCHPAD_ADAPTER_ELF"))])
+                .map(|(address, program)| (address, program, true)),
+        );
         creator_hook(&mut fixture).unwrap();
         assert_hook_custody(&fixture, true);
         assert_eq!(

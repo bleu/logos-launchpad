@@ -253,7 +253,6 @@ struct Pending {
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Error {
-    ClockUnavailable,
     InvalidMessage,
     InvalidState,
     Unauthorized,
@@ -544,14 +543,18 @@ fn advance_setup_steps(
                     .map_err(|_| Error::InvalidTerms)?
                     .event(state.event(input.receiver, kind));
             let response = if matches!(state.mode, PoolMode::Weighted { .. }) {
-                response.send_sync(
-                    Actor::new(
-                        clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID,
-                        clock_core::clock_account_id(),
-                    ),
-                    &curve_core::clock_assertion(0, state.end_timestamp)
-                        .map_err(|_| Error::InvalidTerms)?,
-                )
+                let at_most = state
+                    .end_timestamp
+                    .map(|end| {
+                        curve_core::timestamp_millis(end)
+                            .map_err(|_| Error::InvalidTerms)?
+                            .checked_sub(1)
+                            .ok_or(Error::InvalidTerms)
+                    })
+                    .transpose()?
+                    .unwrap_or(u64::MAX);
+                lez_compat_core::clock::guard(input.receiver, response, 0, at_most)
+                    .map_err(|_| Error::InvalidTerms)?
             } else {
                 response
             };
@@ -621,6 +624,15 @@ fn advance_setup_steps(
 // ---------------------------------------------------------------------------
 
 pub fn handle(input: &ReceiveInput) -> Result<Response, Error> {
+    if let Some(result) = lez_compat_core::clock::resume(input) {
+        return result.map_err(|error| match error {
+            lez_compat_core::Error::Unauthorized => Error::Unauthorized,
+            lez_compat_core::Error::InvalidMessage => Error::InvalidMessage,
+            lez_compat_core::Error::OutsideTimeBounds => Error::Closed,
+            _ => Error::InvalidState,
+        });
+    }
+
     if let Some(result) = lbp_settlement::resume(input) {
         return result;
     }

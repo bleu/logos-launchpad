@@ -73,19 +73,7 @@ Account approval does not prove that each account belongs to a different person.
 
 ## Public execution evidence
 
-Recorded on 2026-11-10, not rerun for this documentation cleanup. The locked signed [actor sale suite](../../methods/tests/actor_sale.rs) passed all 32 tests at that revision. Coverage included fresh factory setup for all three engines, both buy forms, actual-trader control, missing and copied membership, changed signed messages, admission-only Key/PDA attempts, native replay, repeat buys and full state rollback on late output failure. Only authorized `Execute` forwards buys to another pool; new messages must preserve this narrow forwarding rule.
-
-Complete allowlisted buys passed the unchanged 10,000,000-cycle budget:
-
-| Engine | Exact input | Exact output | Buy after fresh setup |
-| --- | ---: | ---: | ---: |
-| Bonding curve | 658,565 | 658,680 | 665,182 |
-| Fixed price | 758,814 | 758,859 | 758,828 |
-| Weighted, fake clock | 838,557 | 840,447 | 870,899-874,364 |
-
-The same record reports offline locked passes for `verify/check-dev.sh`, IDL generation/drift, 104 client tests, CLI compilation, `verify/check-weighted-clock.sh`, signed actor execution, release overflow, scoped strict Rust lint and formatting. The 31 ELF-dependent client guest tests remained ignored; signed execution came from the separate actor suite. Lockfiles stayed unchanged. Use the [workspace commands](workspace-guide.md#manual-full-checks) to reproduce checks against current source; historical test counts and cycles are not current performance guarantees.
-
-These are signed public executions, not native privacy proofs or deployment evidence. Weighted setup covered both allocation-release choices, but weighted execution used a fake clock. Normal weighted trades still need a [supported clock provider](workspace-guide.md#temporary-weighted-pricing-clock). Public rollback does not establish private-return rollback. Earlier isolated verifier measurements above are not full-buy measurements.
+Public pools store immutable policy and check admission for all three engines. [Workspace evidence](workspace-guide.md#execution-and-evidence-limits) covers actual-trader authority, replay rejection and complete public buys. Weighted public buys use the pinned upstream clock, which normal builds use. This evidence does not establish native private proving or deployment readiness.
 
 ## Remaining private work
 

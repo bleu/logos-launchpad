@@ -34,7 +34,7 @@ Use public SHA-256 Merkle paths of fixed depth 17, independent random 32-byte sa
 
 Public paths reveal the used salt, index and sibling hashes. Hash comparisons, structure and metadata leakage are accepted; roster-size secrecy is not guaranteed. Protect unused salts and the roster. Membership is not consumed and does not replace native authorization.
 
-All engines use `crates/eligibility-policy`. [Signed public execution evidence](../architecture/allowlist-proof.md#public-execution-evidence) covers actual-trader authority, replay rejection and complete public buys. Weighted tests use a mock clock; normal builds require a trusted provider. Isolated verifier measurements do not prove complete buys, native private proving or a private-proof speedup.
+All engines use `crates/eligibility-policy`. [Signed public execution evidence](../architecture/allowlist-proof.md#public-execution-evidence) covers actual-trader authority, replay rejection and complete public buys. Weighted public buys use the pinned upstream clock, which normal builds use. These checks do not establish native private proving or deployment readiness.
 
 ## Limits and open work
 

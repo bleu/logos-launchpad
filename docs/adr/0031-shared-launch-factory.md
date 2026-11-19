@@ -26,7 +26,7 @@ Separate permission to trade from permission to settle. Preserve authority, free
 
 All engines use collateral namespace fees and immutable factory trade modes. See [fees](0015-fee-accounting.md), [modes](0021-modes-and-open-limits.md), [weighted accounting](0030-lbp-pricing-collateral.md) and [settlement routes](0020-settlement-and-graduation.md). New policy choices require explicit accounting rules. All engines save the shared immutable graduation policy at creation.
 
-The shared buy allowlist uses `crates/eligibility-policy`, pre-approved public account batches and repeated authorized purchases. Setup preserves the initial policy. [Public execution evidence](../architecture/allowlist-proof.md#public-execution-evidence) does not supply private holdings or complete private routes; weighted tests use a mock clock.
+The shared buy allowlist uses `crates/eligibility-policy`, pre-approved public account batches and repeated authorized purchases. Setup preserves the initial policy. [Public execution evidence](../architecture/allowlist-proof.md#public-execution-evidence) does not supply private holdings or complete private routes; normal weighted builds use the pinned upstream clock under [ADR 0026](0026-lbp-clock-and-poke.md).
 
 Creation fixes `PausePolicy` as disabled or authority-controlled. The current creator controls factory sales; the current owner controls direct pools. Authenticate every call, including retries. Pause blocks swaps but permits fees and safe settlement. Resume cannot move the schedule, clear emergency freeze or reopen an ended sale. Authorized unchanged controls emit no change event.
 

@@ -1626,6 +1626,15 @@ fn curve_resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
     })())
 }
 pub fn handle(input: &ReceiveInput) -> Result<Response, Error> {
+    if let Some(result) = lez_compat_core::clock::resume(input) {
+        return result.map_err(|error| match error {
+            lez_compat_core::Error::Unauthorized => Error::Unauthorized,
+            lez_compat_core::Error::InvalidMessage => Error::InvalidMessage,
+            lez_compat_core::Error::OutsideTimeBounds => Error::InvalidTerms,
+            _ => Error::InvalidState,
+        });
+    }
+
     if let Some(result) = curve_resume(input) {
         return result;
     }

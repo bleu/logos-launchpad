@@ -28,7 +28,7 @@ tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 fixture="$tmp/source"
 mkdir -p "$fixture/verify" "$fixture/crates/curve-core/tests/fixtures" "$tmp/bin"
-cp "$root/verify/check-dev.sh" "$root/verify/actor-tools.env" "$fixture/verify/"
+cp "$root/verify/check-dev.sh" "$root/verify/check-weighted-clock.sh" "$root/verify/actor-tools.env" "$fixture/verify/"
 cp "$root/crates/curve-core/tests/fixtures/emergency-authority.hex" "$fixture/crates/curve-core/tests/fixtures/"
 lockfiles=(Cargo.lock packages/lez-compat/Cargo.lock packages/weighted-math/Cargo.lock packages/launchpad/core/logic/Cargo.lock)
 for lock in "${lockfiles[@]}"; do
@@ -38,17 +38,15 @@ done
 cat_script='#!/bin/bash
 printf "%s\n" "$*" >> "$COMMAND_LOG"
 printf "%s\n" "$CURVE_EMERGENCY_AUTHORITY" >> "$AUTHORITY_LOG"
-printf "%s\n" "${LAUNCHPAD_MOCK_CLOCK:-unset}" >> "$CLOCK_LOG"
 if [[ -n "${DRIFT_LOCK:-}" ]]; then printf "changed\n" >> "$DRIFT_LOCK"; fi
 if [[ -n "${FAIL_COMMAND:-}" && "$*" == *"$FAIL_COMMAND"* ]]; then exit 19; fi
 '
 printf '%s' "$cat_script" > "$tmp/bin/cargo"
 chmod +x "$tmp/bin/cargo"
-export PATH="$tmp/bin:/usr/bin:/bin" COMMAND_LOG="$tmp/commands" AUTHORITY_LOG="$tmp/authority" CLOCK_LOG="$tmp/clock"
+export PATH="$tmp/bin:/usr/bin:/bin" COMMAND_LOG="$tmp/commands" AUTHORITY_LOG="$tmp/authority"
 run_check() {
   : > "$COMMAND_LOG"
   : > "$AUTHORITY_LOG"
-  : > "$CLOCK_LOG"
   status=0
   output="$(bash "$fixture/verify/check-dev.sh" "$@" 2>&1)" || status=$?
 }
@@ -56,21 +54,13 @@ assert_contains() {
   [[ "$1" == *"$2"* ]] || { printf 'expected: %s\nactual: %s\n' "$2" "$1" >&2; exit 1; }
 }
 unset CURVE_EMERGENCY_AUTHORITY
-unset LAUNCHPAD_MOCK_CLOCK
 run_check
 [ "$status" = 0 ] || { printf '%s\n' "$output" >&2; exit 1; }
 expected="+$ACTOR_RUST_VERSION test --locked
-+$ACTOR_RUST_VERSION test --locked -p lbp-core
 +$ACTOR_RUST_VERSION test --manifest-path packages/lez-compat/Cargo.toml --workspace --locked
 +$ACTOR_RUST_VERSION test --manifest-path packages/weighted-math/Cargo.toml --workspace --locked
 +$ACTOR_RUST_VERSION test --manifest-path packages/launchpad/core/logic/Cargo.toml --locked"
 [ "$(< "$COMMAND_LOG")" = "$expected" ] || { printf 'unexpected host test commands\n' >&2; exit 1; }
-expected_clock='unset
-1
-unset
-unset
-unset'
-[ "$(< "$CLOCK_LOG")" = "$expected_clock" ] || { printf 'unexpected mock clock environment\n' >&2; exit 1; }
 assert_contains "$output" 'host tests passed; lockfiles unchanged'
 expected_authority="$(< "$root/crates/curve-core/tests/fixtures/emergency-authority.hex")"
 while IFS= read -r authority; do [ "$authority" = "$expected_authority" ] || exit 1; done < "$AUTHORITY_LOG"
@@ -86,7 +76,7 @@ run_check
 [ -z "$(< "$AUTHORITY_LOG")" ] || exit 1
 printf 'explicit authority values preserved: passed\n'
 
-for command in 'test --locked' 'test --locked -p lbp-core' 'packages/lez-compat/Cargo.toml' 'packages/weighted-math/Cargo.toml' 'packages/launchpad/core/logic/Cargo.toml'; do
+for command in 'test --locked' 'packages/lez-compat/Cargo.toml' 'packages/weighted-math/Cargo.toml' 'packages/launchpad/core/logic/Cargo.toml'; do
   export FAIL_COMMAND="$command"
   run_check
   unset FAIL_COMMAND
@@ -115,3 +105,17 @@ run_check --full
 [ "$status" = 2 ] && [ ! -s "$COMMAND_LOG" ] || exit 1
 assert_contains "$output" 'usage: check-dev.sh'
 printf 'lockfile drift and unexpected arguments rejected: passed\n'
+
+: > "$COMMAND_LOG"
+bash "$fixture/verify/check-weighted-clock.sh"
+expected="+$ACTOR_RUST_VERSION test --locked -p lbp-core
++$ACTOR_RUST_VERSION test --manifest-path methods/Cargo.toml --locked --features actor-execution-tests --test actor_sale"
+[ "$(< "$COMMAND_LOG")" = "$expected" ] || { printf 'unexpected weighted clock commands\n' >&2; exit 1; }
+: > "$COMMAND_LOG"
+export FAIL_COMMAND='test --locked -p lbp-core'
+status=0
+bash "$fixture/verify/check-weighted-clock.sh" || status=$?
+unset FAIL_COMMAND
+[ "$status" = 19 ] || exit 1
+[ "$(< "$COMMAND_LOG")" = "+$ACTOR_RUST_VERSION test --locked -p lbp-core" ] || exit 1
+printf 'weighted clock commands and early failure: passed\n'

@@ -19,10 +19,10 @@ for lock in Cargo.lock methods/Cargo.lock methods/guest/Cargo.lock "$base/Cargo.
   fi
 done
 for lock in Cargo.lock methods/Cargo.lock methods/guest/Cargo.lock "$base/Cargo.lock" "$base/methods/Cargo.lock" "$base/methods/guest/Cargo.lock" "$base/execution/Cargo.lock"; do
-  awk -v expected="$ACTOR_RISC0_VERSION" '
+  awk -v expected="$ACTOR_RISC0_VERSION" -v build_expected="$ACTOR_RISC0_BUILD_VERSION" '
     /^name = / {name=$3}
     /^version = / && (name == "\"risc0-zkvm\"" || name == "\"risc0-build\"") {
-      version=$3; gsub(/"/, "", version); found=1; if (version != expected) exit 1
+      version=$3; gsub(/"/, "", version); found=1; if (version != (name == "\"risc0-build\"" ? build_expected : expected)) exit 1
     }
     END {if (!found) exit 1}
   ' "$lock" || fail "RISC0 version differs in $lock"
