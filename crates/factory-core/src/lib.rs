@@ -1638,6 +1638,13 @@ pub fn validate_curve_duration(end: Option<u64>, now: u64) -> Result<(), Error> 
     Ok(())
 }
 
+pub fn validate_curve_continuation_duration(end: Option<u64>, now: u64) -> Result<(), Error> {
+    if end.is_some_and(|end| now >= end) {
+        return Ok(());
+    }
+    validate_curve_duration(end, now)
+}
+
 pub fn handle(input: &ReceiveInput) -> Result<Response, Error> {
     let saved = FactoryState::decode(&input.pre_state).ok();
     let command = saved
@@ -1649,22 +1656,37 @@ pub fn handle(input: &ReceiveInput) -> Result<Response, Error> {
                 .map(|pending| pending.command.clone())
         })
         .or_else(|| borsh::from_slice::<Message>(&input.message).ok());
-    let expiry = match command {
+    let (expiry, recovery) = match command {
         Some(Message::CreateFactoryPool {
             end_timestamp, now, ..
         }) => {
             validate_curve_duration(end_timestamp, now)?;
-            end_timestamp
+            (end_timestamp, false)
         }
         Some(Message::ContinueCreation { now, .. }) => {
             let end = saved.as_ref().ok_or(Error::InvalidState)?.end_timestamp;
-            validate_curve_duration(end, now)?;
-            end
+            validate_curve_continuation_duration(end, now)?;
+            (end, end.is_some_and(|end| now >= end))
         }
-        _ => None,
+        _ => (None, false),
     };
     let mut response = handle_inner(input)?;
     if let Some(end) = expiry {
+        if recovery {
+            let lower = curve_core::timestamp_millis(end).map_err(|_| Error::InvalidTerms)?;
+            let lower = response
+                .validity
+                .timestamps
+                .start()
+                .map_or(lower, |existing| existing.max(lower));
+            response = match response.validity.timestamps.end() {
+                Some(upper) => response
+                    .try_timestamp_window(lower..upper)
+                    .map_err(|_| Error::InvalidTerms)?,
+                None => response.timestamp_window(lower..),
+            };
+            return Ok(response);
+        }
         // Inclusion time, not the caller's hint, limits every setup callback and activation.
         let latest = end
             .checked_sub(MIN_CURVE_SALE_DURATION_SECONDS)

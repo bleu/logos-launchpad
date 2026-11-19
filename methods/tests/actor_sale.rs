@@ -9549,6 +9549,58 @@ fn curve_minimum_duration_rejects_late_creation_and_activation_atomically() {
         .is_err()
     );
     assert!(state == before);
+    let mut expired = state.clone();
+    let recover = factory_core::Message::ContinueCreation { creator, now: 200 };
+    let saved = expired.clone();
+    assert!(
+        factory_execute_at(
+            &mut expired,
+            factory,
+            &actors,
+            &key,
+            salt,
+            launch,
+            pool,
+            recover.clone(),
+            199_999
+        )
+        .is_err()
+    );
+    assert!(expired == saved);
+    factory_execute_at(
+        &mut expired,
+        factory,
+        &actors,
+        &key,
+        salt,
+        launch,
+        pool,
+        recover,
+        200_000,
+    )
+    .unwrap();
+    assert_eq!(
+        PoolAccount::decode(expired.get_account_by_id(pool).data.actor_state(CURVE))
+            .unwrap()
+            .pool
+            .lifecycle,
+        pool::PoolLifecycle::Closed
+    );
+    for _ in 0..3 {
+        factory_execute_at(
+            &mut expired,
+            factory,
+            &actors,
+            &key,
+            salt,
+            launch,
+            pool,
+            factory_core::Message::WithdrawFactoryProceeds { creator, now: 200 },
+            200_000,
+        )
+        .unwrap();
+    }
+    assert_eq!(balance(&expired, creator, launch), 800);
     factory_execute_at(
         &mut state,
         factory,

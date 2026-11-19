@@ -2791,3 +2791,35 @@ fn resumed_creation_cannot_change_the_graduation_reserve() {
         factory_core::Message::ContinueCreation { .. }
     ));
 }
+
+#[test]
+fn curve_continuation_recovers_after_expiry_without_allowing_a_short_live_sale() {
+    let mut state = valid_factory_state(sale());
+    state.creation_stage = CreationStage::Minted;
+    state.ending_policy = factory_core::EndingPolicy::Either;
+    state.end_timestamp = Some(100);
+    for (now, accepted) in [
+        (40, true),
+        (41, false),
+        (99, false),
+        (100, true),
+        (101, true),
+    ] {
+        let mut request = creation();
+        request.ending_policy = state.ending_policy;
+        request.end_timestamp = state.end_timestamp;
+        request.now = now;
+        let result = super::next_creation_invocation(
+            sale(),
+            AccountId::new([9; 32]),
+            request.clone(),
+            Some(&state),
+        );
+        assert_eq!(result.is_ok(), accepted, "hint {now}");
+        if now >= 100 {
+            assert!(
+                build_create_sale_invocation(sale(), AccountId::new([9; 32]), request).is_err()
+            );
+        }
+    }
+}

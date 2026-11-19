@@ -26,4 +26,4 @@ The workspace guide is the current evidence record. Host tests alone do not prov
 
 See [ADR 0036](../adr/0036-graduation-adapter-delivery.md) for the plain-transfer distribution adapter and later deposits.
 
-Configured expiry requires at least 60 seconds remaining through factory setup and activation. Inclusion bounds enforce this rule. This operational minimum is not a verified private-path latency guarantee. See [ending policy](../adr/0025-sale-closing.md).
+Configured expiry requires at least 60 seconds remaining through factory setup and activation. Inclusion bounds enforce this rule. An existing setup can finish after expiry only into a closed pool for asset recovery. This operational minimum is not a verified private-path latency guarantee. See [ending policy](../adr/0025-sale-closing.md).

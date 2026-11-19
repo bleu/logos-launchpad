@@ -215,7 +215,7 @@ pub fn next_creation_invocation(
         }
     }
     let now = request.now;
-    let mut call = build_create_sale_invocation(sale, holder, request)?;
+    let mut call = build_curve_sale_invocation(sale, holder, request, state.is_some())?;
     if state.is_some() {
         call.instruction = FactoryInstruction::ContinueCreation {
             creator: holder,
