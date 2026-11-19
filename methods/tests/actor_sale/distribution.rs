@@ -363,9 +363,10 @@ fn distribution_failures_restore_balances_receipts_progress_and_nonce_then_retry
                     lez_compat_methods::COMPAT_TOKEN_ELF,
                 )
             };
-            env.state = env
-                .state
-                .with_named_programs([(program, Program::new(Cow::Borrowed(fault)).unwrap())]);
+            env.state = env.state.with_programs_at(
+                ([(program, Program::new(Cow::Borrowed(fault)).unwrap())])
+                    .map(|(address, program)| (address, program, true)),
+            );
             let before = env.state.clone();
             let result = call(&mut env, false);
             assert!(
@@ -380,28 +381,35 @@ fn distribution_failures_restore_balances_receipts_progress_and_nonce_then_retry
             let before = env.state.clone();
             assert!(call(&mut env, true).is_err());
             assert!(env.state == before);
-            env.state = env
-                .state
-                .with_named_programs([(program, Program::new(Cow::Borrowed(repaired)).unwrap())]);
+            env.state = env.state.with_programs_at(
+                ([(program, Program::new(Cow::Borrowed(repaired)).unwrap())])
+                    .map(|(address, program)| (address, program, true)),
+            );
             graduate(&mut env);
             assert_eq!(adapter_state(&env).distribution_count, 1);
             let launch = env.launch;
             donate(&mut env, launch, 101);
-            env.state = env.state.with_named_programs([(
-                TOKEN_PROGRAM_ACCOUNT_ID,
-                Program::new(Cow::Borrowed(
-                    launchpad_methods::DISTRIBUTION_FAULT_TOKEN_ELF,
-                ))
-                .unwrap(),
-            )]);
+            env.state = env.state.with_programs_at(
+                ([(
+                    TOKEN_PROGRAM_ACCOUNT_ID,
+                    Program::new(Cow::Borrowed(
+                        launchpad_methods::DISTRIBUTION_FAULT_TOKEN_ELF,
+                    ))
+                    .unwrap(),
+                )])
+                .map(|(address, program)| (address, program, true)),
+            );
             let before = env.state.clone();
             assert!(call(&mut env, true).is_err());
             assert!(env.state == before);
             assert_eq!(adapter_state(&env).distribution_count, 1);
-            env.state = env.state.with_named_programs([(
-                TOKEN_PROGRAM_ACCOUNT_ID,
-                Program::new(Cow::Borrowed(lez_compat_methods::COMPAT_TOKEN_ELF)).unwrap(),
-            )]);
+            env.state = env.state.with_programs_at(
+                ([(
+                    TOKEN_PROGRAM_ACCOUNT_ID,
+                    Program::new(Cow::Borrowed(lez_compat_methods::COMPAT_TOKEN_ELF)).unwrap(),
+                )])
+                .map(|(address, program)| (address, program, true)),
+            );
             call(&mut env, true).unwrap();
             assert_eq!(adapter_state(&env).distribution_count, 2);
         }

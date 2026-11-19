@@ -172,6 +172,27 @@ fn factory_state(kind: GraduationIntentKind) -> Vec<u8> {
         input = factory_reply(&input, &response, value);
         response = handle(&input).unwrap();
     }
+    while response
+        .post_state
+        .as_ref()
+        .is_some_and(|state| state.starts_with(b"LZCLK001"))
+    {
+        assert_eq!(kind, GraduationIntentKind::Weighted);
+        assert_eq!(response.sync_messages.len(), 1);
+        assert_eq!(response.sync_messages[0].to, clock_core::clock_actor());
+        assert_eq!(
+            borsh::from_slice::<clock_core::Message>(&response.sync_messages[0].message).unwrap(),
+            clock_core::Message::ReadTimestamp { granularity: 1 }
+        );
+        response = handle(&ReceiveInput {
+            receiver: input.receiver,
+            from: Some(clock_core::clock_actor()),
+            is_authorized: false,
+            pre_state: response.post_state.unwrap(),
+            message: borsh::to_vec(&clock_core::Reply::Timestamp(100_000)).unwrap(),
+        })
+        .unwrap();
+    }
     let state = response.post_state.unwrap();
     let read = handle(&ReceiveInput {
         receiver: input.receiver,

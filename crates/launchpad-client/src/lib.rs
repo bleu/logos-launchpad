@@ -34,8 +34,12 @@ use factory_core::{
 use lee::{AccountId, program::Program};
 use lee_core::{account::Actor, program::ProgramId};
 use lez_compat_core::token;
+use program_loader_core::LoaderActorState as _;
 use std::path::Path;
-use wallet::{AccountIdentity, WalletCore};
+use wallet::AccountIdentity;
+
+/// The upstream wallet with the RPC client used by the launchpad SDK and CLI.
+pub type LaunchpadWallet = wallet::WalletCore<sequencer_service_rpc::SequencerClient>;
 
 /// A deployed program address and its expected binary image. PDAs use `account_id`.
 #[derive(Debug, Clone)]
@@ -131,7 +135,7 @@ pub struct PrivateBuyRoute<'a> {
 
 /// Canonical public token holdings do not implement the full private route.
 pub async fn submit_private_buy(
-    _wallet: &mut WalletCore,
+    _wallet: &mut LaunchpadWallet,
     _sale: FactorySale,
     _route: PrivateBuyRoute<'_>,
     request: PrivateBuyRequest,
@@ -375,10 +379,7 @@ fn token_actor(account: AccountId) -> Actor {
     Actor::new(account, curve_core::TOKEN_PROGRAM_ACCOUNT_ID)
 }
 fn clock_actor() -> Actor {
-    Actor::new(
-        clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID,
-        clock_core::clock_account_id(),
-    )
+    clock_core::clock_actor()
 }
 fn factory_actors(
     sale: FactorySale,
@@ -1090,14 +1091,6 @@ fn lbp_trade_invocation(
             actors.push(token_actor(associated_token_account(owner, definition)));
         }
     }
-    if matches!(
-        &instruction,
-        lbp_core::Message::BuyWeightedExactInput { .. }
-            | lbp_core::Message::BuyWeightedExactOutput { .. }
-            | lbp_core::Message::SellWeightedExactInput { .. }
-    ) {
-        actors.push(lbp_core::pricing_clock::actor());
-    }
     let mut call = invocation(
         Actor::new(participant, sale.lbp_program_id),
         actors,
@@ -1278,7 +1271,7 @@ pub fn build_private_authority_instruction<I: PrivateInstruction>(
     Err(ClientError::UnsupportedPrivateAuthority)
 }
 pub async fn submit_private_authority<I: PrivateInstruction>(
-    _wallet: &mut WalletCore,
+    _wallet: &mut LaunchpadWallet,
     _router: &ProgramHandle,
     _action_program: &ProgramHandle,
     _extra_dependencies: Vec<ProgramHandle>,
@@ -1289,7 +1282,7 @@ pub async fn submit_private_authority<I: PrivateInstruction>(
 }
 
 async fn read_actor(
-    wallet: &WalletCore,
+    wallet: &LaunchpadWallet,
     actor: Actor,
 ) -> std::result::Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
     let account = wallet
@@ -1310,7 +1303,7 @@ async fn read_actor(
 }
 pub async fn load_curve_config(
     namespace: AccountId,
-    wallet: &WalletCore,
+    wallet: &LaunchpadWallet,
     curve: AccountId,
 ) -> Result<Config> {
     let data = read_actor(
@@ -1325,7 +1318,10 @@ pub async fn load_curve_config(
     }
     Ok(config)
 }
-pub async fn load_factory_state(wallet: &WalletCore, sale: FactorySale) -> Result<FactoryState> {
+pub async fn load_factory_state(
+    wallet: &LaunchpadWallet,
+    sale: FactorySale,
+) -> Result<FactoryState> {
     let a = factory_pool_addresses(sale);
     let data = read_actor(wallet, Actor::new(a.factory, sale.factory_program_id))
         .await
@@ -1335,7 +1331,7 @@ pub async fn load_factory_state(wallet: &WalletCore, sale: FactorySale) -> Resul
     Ok(state)
 }
 pub async fn load_factory_pool(
-    wallet: &WalletCore,
+    wallet: &LaunchpadWallet,
     sale: FactorySale,
 ) -> Result<curve_core::PoolAccount> {
     let a = factory_pool_addresses(sale);
@@ -1416,7 +1412,7 @@ pub(crate) fn validate_factory_state(sale: FactorySale, state: &FactoryState) ->
 
 /// The upstream wallet selects fees, reads nonces, signs and submits.
 pub async fn submit_public_invocation<I: BorshSerialize>(
-    wallet: &WalletCore,
+    wallet: &LaunchpadWallet,
     program: &ProgramHandle,
     call: PublicInvocation<I>,
 ) -> Result<HashType> {
@@ -1430,7 +1426,7 @@ pub async fn submit_public_invocation<I: BorshSerialize>(
     let header_bytes = read_actor(wallet, header_actor)
         .await
         .map_err(ClientError::ReadProgramHeader)?;
-    let header = lee_core::program::ProgramHeader::from_bytes(&header_bytes)
+    let header = lee_core::program::ProgramHeader::from_loader_actor_state(&header_bytes)
         .ok_or(ClientError::DecodeProgramHeader)?;
     if header.image_id != program.image_id() {
         return Err(ClientError::InvocationImageMismatch);
@@ -1449,7 +1445,7 @@ pub async fn submit_public_invocation<I: BorshSerialize>(
     wait_for_confirmation(wallet, hash).await?;
     Ok(hash)
 }
-async fn wait_for_confirmation(wallet: &WalletCore, hash: HashType) -> Result<()> {
+async fn wait_for_confirmation(wallet: &LaunchpadWallet, hash: HashType) -> Result<()> {
     tokio::time::timeout(
         std::time::Duration::from_secs(60),
         wallet.poll_transaction(hash),
@@ -1462,7 +1458,7 @@ async fn wait_for_confirmation(wallet: &WalletCore, hash: HashType) -> Result<()
 
 /// Reads a legacy NFT holding, not a launch role authority.
 pub async fn load_authority_identity(
-    wallet: &WalletCore,
+    wallet: &LaunchpadWallet,
     location: AccountLocation,
     definition: AccountId,
 ) -> Result<AccountId> {
@@ -1488,7 +1484,7 @@ pub async fn load_authority_identity(
 }
 /// Transfers a legacy NFT, not a launch role authority.
 pub async fn transfer_authority(
-    wallet: &mut WalletCore,
+    wallet: &mut LaunchpadWallet,
     token_program: &ProgramHandle,
     source: AccountLocation,
     destination: AccountLocation,
@@ -1536,7 +1532,7 @@ pub fn build_collect_fees_invocation(
     .with_holding(treasury, collateral)
 }
 pub async fn prepare_fee_collection(
-    wallet: &WalletCore,
+    wallet: &LaunchpadWallet,
     namespace: AccountId,
     curve: AccountId,
     _collateral: AccountId,
@@ -1545,7 +1541,7 @@ pub async fn prepare_fee_collection(
     Ok(load_curve_config(namespace, wallet, curve).await?.treasury)
 }
 pub async fn collect_pool_fees(
-    wallet: &WalletCore,
+    wallet: &LaunchpadWallet,
     namespace: AccountId,
     curve: &ProgramHandle,
     targets: &[PoolFeeTarget],

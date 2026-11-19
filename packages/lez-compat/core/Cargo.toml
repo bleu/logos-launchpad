@@ -9,3 +9,5 @@ license.workspace = true
 borsh.workspace = true
 lee_core.workspace = true
 risc0-zkvm.workspace = true
+
+clock_core.workspace = true

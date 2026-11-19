@@ -14,10 +14,12 @@ Use per-definition and per-holding token actors with synchronous credits and bur
 
 Use supported upstream wallet, network-fee, clock and event primitives where available. Do not build a replacement wallet/provider or separate network-fee mechanism. Repository-owned build, interface-generation and verification tools can remain after runtime support is replaced.
 
+Use the upstream generic wallet with its RPC client type. Setup and weighted pricing use upstream timestamp reads under [ADR 0026](0026-lbp-clock-and-poke.md). Rebuild application and compatibility guests together when the platform pin changes.
+
 Use ordinary host tests by default and optional node-free guest execution without a running node or local network. Keep heavy execution checks explicit and report gaps. Host tests and generated messages do not prove cross-program execution or rollback. [ADR 0022](0022-verification-boundaries.md) defines readiness requirements.
 
 ## Reason and limits
 
 The fixed actor revision provides one development target while upstream dependencies are incomplete. Temporary support adds maintenance and needs later comparison with upstream behavior. Exact revisions, toolchains, commands and current execution evidence belong in the [workspace guide](../architecture/workspace-guide.md) and [development base guide](../../packages/lez-compat/README.md), not a second version inventory here.
 
-Temporary tokens have no private holdings. Private purchase and authority helpers return explicit unsupported errors; they do not complete private routes. Weighted trades need the [temporary pricing clock](../architecture/workspace-guide.md#temporary-weighted-pricing-clock). Package loading, service integration, wallet workflows and real proofs remain evidence gaps. Distinguish source compatibility, host checks, guest execution, package loading and deferred checks. No migration result proves deployment or production readiness.
+Temporary tokens have no private holdings. Private purchase and authority helpers return explicit unsupported errors; they do not complete private routes. Package loading, service integration, wallet workflows and real proofs remain evidence gaps. Distinguish source compatibility, host checks, guest execution, package loading and deferred checks. No migration result proves deployment or production readiness.

@@ -12,7 +12,7 @@ from pathlib import Path
 import re
 import sys
 root = Path(sys.argv[1])
-revision = '578ce58a71b79c49d48e97e51c520bf71f0252d9'
+revision = 'cb075d5777cb812ba44216429d4f2837ea8518bd'
 for relative in ['Cargo.toml', 'methods/guest/Cargo.toml']:
     path = root / relative
     path.write_text(re.sub(r'(logos-execution-zone.git", rev = ")[0-9a-f]{40}', rf'\g<1>{revision}', path.read_text()))
@@ -22,7 +22,7 @@ for relative in ['Cargo.lock', 'methods/guest/Cargo.lock']:
 PY
 output="$(bash "$fixture/verify/check-pins.sh")"
 case "$output" in
-  *'actor LEZ pinned at 578ce58a71b79c49d48e97e51c520bf71f0252d9'*) ;;
+  *'actor LEZ pinned at cb075d5777cb812ba44216429d4f2837ea8518bd'*) ;;
   *) printf 'application-pins: default command did not check the actor target\n%s\n' "$output" >&2; exit 1 ;;
 esac
 printf 'application-pins: default checks accept the pinned actor application\n'

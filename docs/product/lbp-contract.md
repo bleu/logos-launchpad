@@ -12,7 +12,7 @@ The selected ending policy controls settlement and the separate `AfterEnd` claim
 
 Weighted setup also requires a positive collateral seed, normalized weight endpoints and an explicit start and end. Final setup transfers the full seed from the creator; a donation cannot replace it. Pricing collateral includes the seed and excludes accrued namespace fees and surplus. See [ADR 0030](../adr/0030-lbp-pricing-collateral.md).
 
-Each weighted trade reads one pricing timestamp through a temporary interface. Local tests use a fake clock. Normal builds reject weighted trades with `ClockUnavailable` until a supported provider is available. Inclusion-time bounds separately enforce the sale start and end. Observer checkpoints do not select prices or affect settlement. See [ADR 0026](../adr/0026-lbp-clock-and-poke.md) and the [temporary clock guide](../architecture/workspace-guide.md#temporary-weighted-pricing-clock).
+Each weighted trade and `poke` read one saved previous-block timestamp from the pinned upstream clock. Normal builds use this provider. Inclusion-time bounds separately enforce the sale start and end. Observer checkpoints do not select prices or affect settlement. See [ADR 0026](../adr/0026-lbp-clock-and-poke.md).
 
 ## Shared rules and limits
 

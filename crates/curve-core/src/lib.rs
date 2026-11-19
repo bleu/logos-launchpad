@@ -202,21 +202,6 @@ pub fn with_time_bounds(
     Ok(response)
 }
 
-/// Check a saved-clock interval for weighted-sale pricing.
-pub fn clock_assertion(at_least: u64, before: Option<u64>) -> Result<clock_core::Message, Error> {
-    let at_least = timestamp_millis(at_least)?;
-    let at_most = match before {
-        Some(end) => timestamp_millis(end)?
-            .checked_sub(1)
-            .ok_or(Error::Arithmetic)?,
-        None => u64::MAX,
-    };
-    if at_least > at_most {
-        return Err(Error::Closed);
-    }
-    Ok(clock_core::Message::AssertTimestamp { at_least, at_most })
-}
-
 /// Intersect inclusion-time bounds in LEZ milliseconds with the response window.
 pub fn with_inclusion_bounds(
     mut response: Response,
@@ -239,7 +224,11 @@ pub fn compute_config_pda(namespace: AccountId, program: AccountId) -> AccountId
     AccountId::for_public_pda(&program, &compute_config_pda_seed(namespace))
 }
 pub fn compute_admin_role_seed(namespace: AccountId) -> PdaSeed {
-    let domain = AccountId::from_builtin_program_name(b"launchpad/namespace-admin/v1");
+    // SHA-256 of the former built-in prefix and "launchpad/namespace-admin/v1".
+    let domain = AccountId::new([
+        202, 179, 230, 8, 80, 103, 159, 52, 218, 71, 149, 16, 229, 130, 65, 175, 130, 154, 11, 52,
+        162, 8, 63, 134, 178, 189, 145, 251, 114, 239, 129, 75,
+    ]);
     PdaSeed::new(*AccountId::for_public_pda(&domain, &compute_config_pda_seed(namespace)).value())
 }
 pub fn compute_admin_role(namespace: AccountId, program: AccountId) -> AccountId {
@@ -247,7 +236,11 @@ pub fn compute_admin_role(namespace: AccountId, program: AccountId) -> AccountId
 }
 
 pub fn compute_pool_owner_role_seed(namespace: AccountId, pool: AccountId) -> PdaSeed {
-    let domain = AccountId::from_builtin_program_name(b"launchpad/curve-pool-owner/v1");
+    // SHA-256 of the former built-in prefix and "launchpad/curve-pool-owner/v1".
+    let domain = AccountId::new([
+        241, 13, 33, 201, 0, 209, 182, 218, 191, 240, 229, 76, 87, 243, 218, 32, 99, 38, 215, 22,
+        23, 15, 222, 201, 252, 99, 9, 83, 251, 181, 60, 103,
+    ]);
     let namespace_domain = AccountId::for_public_pda(&domain, &PdaSeed::new(*namespace.value()));
     PdaSeed::new(
         *AccountId::for_public_pda(&namespace_domain, &PdaSeed::new(*pool.value())).value(),

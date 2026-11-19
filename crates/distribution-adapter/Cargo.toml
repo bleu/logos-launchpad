@@ -18,5 +18,6 @@ serde.workspace = true
 workspace = true
 
 [dev-dependencies]
+clock_core.workspace = true
 curve-core.workspace = true
 lbp-core.workspace = true
