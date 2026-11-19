@@ -48,6 +48,7 @@ fn factory_state(kind: GraduationIntentKind) -> Vec<u8> {
             launch_salt: [3; 32],
             name: "Launch".into(),
             uri: "uri".into(),
+            graduation_reserve: 0,
             sale_reserve: 800,
             graduation_policy: GraduationPolicy::default(),
             creator_allocation: 100,
@@ -72,6 +73,7 @@ fn factory_state(kind: GraduationIntentKind) -> Vec<u8> {
                 launch_salt: [3; 32],
                 name: "Launch".into(),
                 uri: "uri".into(),
+                graduation_reserve: 0,
                 sale_inventory: 800,
                 creator_allocation: 100,
                 price: FixedPrice {
@@ -101,6 +103,7 @@ fn factory_state(kind: GraduationIntentKind) -> Vec<u8> {
                 launch_salt: [3; 32],
                 name: "Launch".into(),
                 uri: "uri".into(),
+                graduation_reserve: 0,
                 sale_inventory: 800,
                 creator_allocation: 100,
                 collateral_seed: 100,
@@ -189,6 +192,8 @@ fn request() -> GraduationRequest {
             launch_tokens: 100,
             collateral: 50,
         },
+        reserve_tokens: 0,
+        unsold_tokens: 100,
         configuration: b"route".to_vec(),
     }
 }
@@ -306,6 +311,7 @@ fn initialized_kind(kind: GraduationIntentKind) -> (ReceiveInput, Response) {
 fn begin_intent(intent: GraduationIntent) -> (ReceiveInput, Response, GraduationRequest) {
     let (mut input, initialized) = initialized_kind(intent.kind());
     let mut request = request();
+    request.unsold_tokens = intent.amounts().0;
     request.intent = intent;
     input.pre_state = initialized.post_state.unwrap();
     input.from = Some(AdapterState::decode(&input.pre_state).unwrap().factory);
@@ -852,4 +858,21 @@ fn initialization_rejects_uncreated_factory_and_wrong_saved_hook_or_sale_identit
             kind
         );
     }
+}
+
+#[test]
+fn reserve_breakdown_is_checked_and_both_components_are_bound_to_the_hash() {
+    let mut value = request();
+    value.reserve_tokens = 40;
+    value.unsold_tokens = 60;
+    assert!(value.validate_amounts().is_ok());
+    let original = value.hash();
+    value.reserve_tokens = 41;
+    value.unsold_tokens = 59;
+    assert!(value.validate_amounts().is_ok());
+    assert_ne!(value.hash(), original);
+    value.unsold_tokens = 60;
+    assert_eq!(value.validate_amounts(), Err(Error::InvalidTerms));
+    value.reserve_tokens = u128::MAX;
+    assert_eq!(value.validate_amounts(), Err(Error::InvalidTerms));
 }

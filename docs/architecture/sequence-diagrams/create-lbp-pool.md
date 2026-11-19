@@ -29,6 +29,7 @@ sequenceDiagram
     else AfterEnd creator allocation
         Factory->>Factory: Retain allocation escrow
     end
+    Note over Factory: Keep R in mint custody outside pool inventory
 ```
 
 Each stage is atomic, but the four-transaction workflow is not. Authority, saved terms and custody are rechecked. Final setup can fund before a scheduled start. [ADR 0032](../../adr/0032-fixed-price-lbp-setup.md) owns immediate-start and trusted-clock rules.

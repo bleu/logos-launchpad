@@ -6,6 +6,8 @@ use lee::AccountId;
 #[derive(Debug, thiserror::Error, strum::IntoStaticStr)]
 #[strum(serialize_all = "snake_case")]
 pub enum ClientError {
+    #[error("distribution adapter: {0:?}")]
+    Distribution(distribution_adapter::Error),
     #[error("private purchases are not supported by canonical public token holdings")]
     UnsupportedPrivateRoute,
     #[error("private authority actions are not supported by canonical public token holdings")]

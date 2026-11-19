@@ -12,7 +12,7 @@ Bonding-curve sales support public trades, controls, fee collection and shared s
 | Authority | [Namespace, creator and pool-owner roles](../adr/0006-namespaces-and-authority.md) |
 | Lifecycle | [Closing](../adr/0025-sale-closing.md) and [manual settlement or adapter hook](../adr/0020-settlement-and-graduation.md) |
 
-Pricing uses virtual reserves; payouts require real reserves. Surplus deposits do not increase payout rights. See the [pool code](../../crates/pool/src/lib.rs) and [solvency tests](../../crates/pool/tests/proptest_invariants.rs).
+Pricing uses virtual reserves; payouts require real reserves. The separate [graduation reserve `R`](../adr/0020-settlement-and-graduation.md#graduation-reserve) stays outside trading. Surplus deposits do not increase payout rights. See the [pool code](../../crates/pool/src/lib.rs) and [solvency tests](../../crates/pool/tests/proptest_invariants.rs).
 
 ## Integration
 
@@ -23,3 +23,5 @@ The [generated actor schema](../../idl/launchpad.json) defines the public wire i
 ## Acceptance evidence
 
 The workspace guide is the current evidence record. Host tests alone do not prove child-call rollback; development receipts are not secure production proofs. Private routes remain unsupported, and live DEX integration remains unverified. See [verification boundaries](../adr/0022-verification-boundaries.md).
+
+See [ADR 0036](../adr/0036-graduation-adapter-delivery.md) for the plain-transfer distribution adapter and later deposits.

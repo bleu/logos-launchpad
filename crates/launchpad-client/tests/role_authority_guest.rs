@@ -470,6 +470,7 @@ fn transferred_curve_creator_funds_and_settles_without_pool_custody() {
                 launch_salt: SALT,
                 name: "Sale".into(),
                 uri: "ipfs://sale".into(),
+                graduation_reserve: 0,
                 sale_reserve: 400,
                 graduation_policy: launchpad_client::GraduationPolicy::default(),
                 creator_allocation: 50,

@@ -738,6 +738,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "distribution-adapter"
+version = "0.1.0"
+dependencies = [
+ "borsh",
+ "factory-core",
+ "integer-math",
+ "lee_core",
+ "lez-compat-core",
+ "risc0-zkvm",
+ "serde",
+]
+
+[[package]]
 name = "downcast-rs"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1161,9 +1174,11 @@ version = "0.1.0"
 dependencies = [
  "borsh",
  "curve-core",
+ "distribution-adapter",
  "factory-core",
  "lbp-core",
  "lee_core",
+ "lez-compat-core",
  "private-flow-core",
  "risc0-zkvm",
 ]

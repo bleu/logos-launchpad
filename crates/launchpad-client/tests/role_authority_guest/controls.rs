@@ -382,6 +382,7 @@ fn sale_with_pause(
                 launch_salt: SALT,
                 name: "Controls sale".into(),
                 uri: "ipfs://controls".into(),
+                graduation_reserve: 0,
                 sale_reserve: 400,
                 graduation_policy: launchpad_client::GraduationPolicy::default(),
                 creator_allocation: 50,

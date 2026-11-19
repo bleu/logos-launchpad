@@ -21,6 +21,7 @@ workspace = true
 risc0-build = "3.0.5"
 
 [dev-dependencies]
+distribution-adapter = { path = "../crates/distribution-adapter" }
 risc0-build = { version = "3.0.5", features = ["unstable"] }
 risc0-binfmt = "3.0.5"
 risc0-zkvm = { version = "3.0.5", default-features = false, features = ["client"] }

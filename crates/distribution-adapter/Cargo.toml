@@ -1,0 +1,22 @@
+[package]
+name = "distribution-adapter"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license = "MIT"
+
+[dependencies]
+borsh.workspace = true
+factory-core.workspace = true
+integer-math.workspace = true
+lee_core.workspace = true
+lez-compat-core.workspace = true
+risc0-zkvm.workspace = true
+serde.workspace = true
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+curve-core.workspace = true
+lbp-core.workspace = true

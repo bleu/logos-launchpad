@@ -22,6 +22,7 @@ pub struct FixedPriceInputs {
     pub name: String,
     pub uri: String,
     pub sale_inventory: u128,
+    pub graduation_reserve: u128,
     pub creator_allocation: u128,
     pub price: FixedPrice,
     pub start: SaleStart,
@@ -47,6 +48,7 @@ pub struct WeightedInputs {
     pub name: String,
     pub uri: String,
     pub sale_inventory: u128,
+    pub graduation_reserve: u128,
     pub creator_allocation: u128,
     pub collateral_seed: u128,
     pub token_weight_start: u128,
@@ -122,6 +124,7 @@ pub struct LbpLaunchState {
     pub namespace_program_id: AccountId,
     pub lbp_program_id: AccountId,
     pub sale_inventory: u128,
+    pub graduation_reserve: u128,
     pub creator_allocation: u128,
     pub total_supply: u128,
     pub price: FixedPrice,
@@ -172,6 +175,7 @@ struct SetupInputs {
     name: String,
     uri: String,
     sale_inventory: u128,
+    graduation_reserve: u128,
     creator_allocation: u128,
     price: FixedPrice,
     start: SaleStart,
@@ -205,6 +209,7 @@ pub(super) fn create_fixed(
             name: inputs.name,
             uri: inputs.uri,
             sale_inventory: inputs.sale_inventory,
+            graduation_reserve: inputs.graduation_reserve,
             creator_allocation: inputs.creator_allocation,
             price: inputs.price,
             start: inputs.start,
@@ -246,6 +251,7 @@ pub(super) fn create_weighted(
             name: inputs.name,
             uri: inputs.uri,
             sale_inventory: inputs.sale_inventory,
+            graduation_reserve: inputs.graduation_reserve,
             creator_allocation: inputs.creator_allocation,
             price: FixedPrice {
                 collateral_units: 0,
@@ -355,7 +361,7 @@ fn create(input: &ReceiveInput, inputs: SetupInputs, command: Message) -> Result
             LbpSetupMode::FixedPrice => *b"LZFXLAUN",
             LbpSetupMode::Weighted { .. } => *b"LZWGLAUN",
         },
-        version: 4,
+        version: 5,
         creator_role_id: compute_creator_role_pda(inputs.namespace, program, inputs.launch_salt),
         mode: inputs.mode,
         creation_stage: LbpCreationStage::Minted,
@@ -370,10 +376,12 @@ fn create(input: &ReceiveInput, inputs: SetupInputs, command: Message) -> Result
         namespace_program_id: inputs.namespace_program_id,
         lbp_program_id: inputs.lbp_program_id,
         sale_inventory: inputs.sale_inventory,
+        graduation_reserve: inputs.graduation_reserve,
         creator_allocation: inputs.creator_allocation,
         total_supply: inputs
             .sale_inventory
-            .checked_add(inputs.creator_allocation)
+            .checked_add(inputs.graduation_reserve)
+            .and_then(|amount| amount.checked_add(inputs.creator_allocation))
             .ok_or(Error::Overflow)?,
         price: inputs.price,
         start_timestamp,
@@ -413,6 +421,7 @@ fn create(input: &ReceiveInput, inputs: SetupInputs, command: Message) -> Result
             creator_role: *state.creator_role_id.value(),
             token_definition: *state.token_definition_id.value(),
             collateral_definition: *state.collateral_definition_id.value(),
+            graduation_reserve: state.graduation_reserve,
             sale_inventory: state.sale_inventory,
             creator_allocation: state.creator_allocation,
             graduation_policy: state.graduation_policy,
@@ -816,7 +825,8 @@ pub(super) fn resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
                 state.launch_salt,
             );
             if expected_stage == LbpCreationStage::PoolPrepared {
-                if balance(&pending.values[1], mint, state.token_definition_id)? != 0
+                if balance(&pending.values[1], mint, state.token_definition_id)?
+                    != state.graduation_reserve
                     || balance(
                         &pending.values[2],
                         input.receiver.account_id,
@@ -938,7 +948,8 @@ pub(super) fn resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
                 });
             }
             if expected_stage == LbpCreationStage::Allocated {
-                if balance(&pending.values[1], mint, state.token_definition_id)? != 0
+                if balance(&pending.values[1], mint, state.token_definition_id)?
+                    != state.graduation_reserve
                     || balance(
                         &pending.values[2],
                         input.receiver.account_id,
@@ -1183,6 +1194,16 @@ impl LbpLaunchState {
         ))
     }
     fn validate_terms(&self) -> Result<(), Error> {
+        if total_supply(
+            self.sale_inventory,
+            self.graduation_reserve,
+            self.creator_allocation,
+        )
+        .map_err(|_| Error::InvalidState)?
+            != self.total_supply
+        {
+            return Err(Error::InvalidState);
+        }
         self.graduation_policy
             .validate(self.graduation_hook.is_some())
             .map_err(|_| Error::InvalidState)?;
@@ -1205,7 +1226,7 @@ impl LbpLaunchState {
             LbpSetupMode::FixedPrice => *b"LZFXLAUN",
             LbpSetupMode::Weighted { .. } => *b"LZWGLAUN",
         };
-        if self.format != expected || self.version != 4 {
+        if self.format != expected || self.version != 5 {
             return Err(Error::InvalidState);
         }
         Ok(())
@@ -1460,11 +1481,21 @@ impl LbpLaunchState {
             .ok_or(Error::HookNotConfigured)?;
         let intent = match self.mode {
             LbpSetupMode::FixedPrice => GraduationIntent::FixedPrice {
-                launch_tokens: receipt.payouts.adapter.launch_tokens,
+                launch_tokens: receipt
+                    .payouts
+                    .adapter
+                    .launch_tokens
+                    .checked_add(self.graduation_reserve)
+                    .ok_or(Error::Overflow)?,
                 collateral: receipt.payouts.adapter.collateral,
             },
             LbpSetupMode::Weighted { .. } => GraduationIntent::Weighted {
-                launch_tokens: receipt.payouts.adapter.launch_tokens,
+                launch_tokens: receipt
+                    .payouts
+                    .adapter
+                    .launch_tokens
+                    .checked_add(self.graduation_reserve)
+                    .ok_or(Error::Overflow)?,
                 collateral: receipt.payouts.adapter.collateral,
             },
         };
@@ -1475,6 +1506,8 @@ impl LbpLaunchState {
             token_definition_id: self.token_definition_id,
             collateral_definition_id: self.collateral_definition_id,
             intent,
+            reserve_tokens: self.graduation_reserve,
+            unsold_tokens: receipt.payouts.adapter.launch_tokens,
             configuration: hook.configuration.clone(),
         })
     }
@@ -1692,6 +1725,41 @@ fn resume_settlement(input: &ReceiveInput, mut state: LbpLaunchState) -> Result<
             if receipt != expected {
                 return Err(Error::InvalidState);
             }
+            let recipient = receipt
+                .adapter
+                .map_or(receipt.creator, |adapter| adapter.account_id);
+            let mut reserve_effects = vec![];
+            let response = reserve_payout(
+                Response::keep_state(),
+                input.receiver,
+                state.namespace,
+                state.launch_salt,
+                state.token_definition_id,
+                recipient,
+                state.graduation_reserve,
+                &mut reserve_effects,
+            );
+            let reserve_messages = response.sync_messages;
+            let reserve_events = if reserve_effects.is_empty() {
+                vec![]
+            } else {
+                vec![state.event(
+                    input.receiver.account_id,
+                    SaleEventKindV1::Settlement {
+                        step: SettlementStepV1::Payout,
+                        route: Some(match receipt.route {
+                            SettlementRoute::Manual => SettlementRouteV1::Manual,
+                            SettlementRoute::Graduation => SettlementRouteV1::Graduation,
+                        }),
+                        effects: reserve_effects,
+                    },
+                )]
+            };
+            let with_reserve = |mut response: Response| {
+                response.sync_messages.splice(0..0, reserve_messages);
+                response.events.extend(reserve_events);
+                response
+            };
             if receipt.route == SettlementRoute::Manual {
                 let receipt_hash = receipt.hash();
                 state.settlement_pending = Some(LbpSettlementPhase::PoolCompleted {
@@ -1699,10 +1767,10 @@ fn resume_settlement(input: &ReceiveInput, mut state: LbpLaunchState) -> Result<
                     progress: receipt.progress,
                     graduation_amounts: None,
                 });
-                Ok(state.response().send_sync(
+                Ok(with_reserve(state.response().send_sync(
                     receipt.pool,
                     &lbp_core::Message::FinalizeSettlement { receipt_hash },
-                ))
+                )))
             } else {
                 let request = state.graduation_request(input.receiver, &receipt)?;
                 let adapter = receipt.adapter.ok_or(Error::InvalidState)?;
@@ -1710,9 +1778,11 @@ fn resume_settlement(input: &ReceiveInput, mut state: LbpLaunchState) -> Result<
                     receipt,
                     request_hash: request.hash(),
                 });
-                Ok(state
-                    .response()
-                    .send_sync(adapter, &AdapterMessage::Graduate { request }))
+                Ok(with_reserve(
+                    state
+                        .response()
+                        .send_sync(adapter, &AdapterMessage::Graduate { request }),
+                ))
             }
         }
         LbpSettlementPhase::AdapterResult {
@@ -1731,7 +1801,15 @@ fn resume_settlement(input: &ReceiveInput, mut state: LbpLaunchState) -> Result<
             state.settlement_pending = Some(LbpSettlementPhase::PoolCompleted {
                 receipt_hash,
                 progress: receipt.progress,
-                graduation_amounts: Some(receipt.payouts.adapter),
+                graduation_amounts: Some(SettlementAmounts {
+                    launch_tokens: receipt
+                        .payouts
+                        .adapter
+                        .launch_tokens
+                        .checked_add(state.graduation_reserve)
+                        .ok_or(Error::Overflow)?,
+                    collateral: receipt.payouts.adapter.collateral,
+                }),
             });
             Ok(state.response().send_sync(
                 receipt.pool,

@@ -152,6 +152,11 @@ enum Command {
     Withdraw(FactoryLifecycleArgs),
     /// Execute or retry one public post-close graduation stage.
     Graduate(GraduationArgs),
+    /// Encode, preview, initialize or run a distribution adapter.
+    Distribution {
+        #[command(subcommand)]
+        command: DistributionCommand,
+    },
     Claim(FactoryLifecycleArgs),
     Buy(BuyArgs),
     /// Spend an exact collateral amount, with a minimum launch-token output.
@@ -172,6 +177,51 @@ enum Command {
     TransferAuthority(TransferAuthorityArgs),
     NamespaceInfo(NamespaceReadArgs),
     RenounceAdmin(NamespaceAdminArgs),
+}
+
+#[derive(Debug, Subcommand)]
+enum DistributionCommand {
+    Encode {
+        #[arg(long)]
+        file: PathBuf,
+    },
+    Preview {
+        #[arg(long)]
+        file: PathBuf,
+        #[arg(long)]
+        launch_balance: u128,
+        #[arg(long)]
+        collateral_balance: u128,
+    },
+    Initialize {
+        #[command(flatten)]
+        adapter: DistributionIdentity,
+        #[arg(long, value_enum)]
+        kind: DistributionKind,
+    },
+    Remaining {
+        #[command(flatten)]
+        adapter: DistributionIdentity,
+    },
+}
+#[derive(Debug, Args)]
+struct DistributionIdentity {
+    #[arg(long)]
+    adapter_program_path: PathBuf,
+    #[arg(long, value_parser = parse_public_account_id)]
+    adapter_program_account: lee::AccountId,
+    #[arg(long, value_parser = parse_public_account_id)]
+    factory_program_account: lee::AccountId,
+    #[arg(long, value_parser = parse_public_account_id)]
+    fee_payer: lee::AccountId,
+    #[command(flatten)]
+    launch: LaunchArgs,
+}
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+enum DistributionKind {
+    Curve,
+    FixedPrice,
+    Weighted,
 }
 
 #[derive(Debug, Args)]
@@ -271,6 +321,13 @@ struct CreateSaleArgs {
     /// Saved opaque adapter configuration as hexadecimal bytes.
     #[arg(long, value_parser = parse_hook_configuration, requires = "graduation_hook_program_id")]
     graduation_hook_configuration: Option<HookConfiguration>,
+    /// Distribution rules as JSON. Check recipients for this sale before creation.
+    #[arg(
+        long,
+        requires = "graduation_hook_program_id",
+        conflicts_with = "graduation_hook_configuration"
+    )]
+    distribution_configuration: Option<PathBuf>,
     #[command(flatten)]
     launch: LaunchArgs,
     #[arg(long)]
@@ -279,6 +336,9 @@ struct CreateSaleArgs {
     uri: String,
     #[arg(long = "sale-reserve", alias = "d")]
     sale_reserve: u128,
+    /// Launch tokens kept outside trading for graduation or manual settlement.
+    #[arg(long, default_value_t = 0)]
+    graduation_reserve: u128,
     /// Adapter share of unsold launch tokens, in basis points.
     #[arg(long, value_parser = clap::value_parser!(u16).range(0..=10_000))]
     graduation_launch_bps: Option<u16>,
@@ -318,6 +378,24 @@ struct CreateSaleArgs {
 }
 
 impl CreateSaleArgs {
+    fn prepared_sale_request(&self, namespace: lee::AccountId) -> Result<CreateSaleRequest> {
+        let mut request = self.sale_request();
+        request.total_supply()?;
+        if let Some(file) = &self.distribution_configuration {
+            let configuration = read_distribution_configuration(file)?;
+            request.graduation_hook = Some(launchpad_client::distribution::hook(
+                &configuration,
+                self.graduation_hook_program_id.ok_or_else(|| {
+                    eyre::eyre!("distribution requires --graduation-hook-program-id")
+                })?,
+                self.factory_program_account,
+                namespace,
+                self.launch.launch_salt,
+            )?);
+        }
+        Ok(request)
+    }
+
     fn sale_request(&self) -> CreateSaleRequest {
         CreateSaleRequest {
             buy_policy: launchpad_client::BuyPolicy::Open,
@@ -347,6 +425,7 @@ impl CreateSaleArgs {
             name: self.name.clone(),
             uri: self.uri.clone(),
             sale_reserve: self.sale_reserve,
+            graduation_reserve: self.graduation_reserve,
             graduation_policy: launchpad_client::GraduationPolicy {
                 launch_bps: self.graduation_launch_bps.unwrap_or(0),
                 collateral_bps: self.graduation_collateral_bps.unwrap_or(0),
@@ -457,6 +536,9 @@ struct FactoryLifecycleArgs {
 
 #[derive(Debug, Args)]
 struct GraduationArgs {
+    /// Admit saved distribution destinations and validate its typed configuration.
+    #[arg(long)]
+    distribution: bool,
     /// Current creator role holder. The factory verifies this hint through role authority.
     #[arg(long, value_parser = parse_public_account_id)]
     creator_hint: lee::AccountId,
@@ -665,6 +747,7 @@ enum QuoteMode {
 
 #[derive(Serialize)]
 struct SaleSnapshot {
+    graduation_reserve: u128,
     trade_mode: TradeModeArg,
     graduation_hook: Option<HookSnapshot>,
     graduation_launch_bps: u16,
@@ -729,11 +812,40 @@ async fn main() {
 async fn run(json: bool, cli: Cli) -> Result<()> {
     cli.validate_route()?;
     let router = cli.authority_router_path.as_deref();
+    if let Command::Distribution { command } = &cli.command {
+        match command {
+            DistributionCommand::Encode { file } => {
+                let config = read_distribution_configuration(file)?;
+                let bytes = launchpad_client::distribution::encode_configuration(&config)?;
+                let encoded = hex::encode(bytes);
+                if json {
+                    println!("{}", serde_json::json!({ "configuration": encoded }));
+                } else {
+                    println!("{encoded}");
+                }
+                return Ok(());
+            }
+            DistributionCommand::Preview {
+                file,
+                launch_balance,
+                collateral_balance,
+            } => {
+                let config = read_distribution_configuration(file)?;
+                let plan = config
+                    .plan([*launch_balance, *collateral_balance])
+                    .map_err(|error| eyre::eyre!("{error:?}"))?;
+                println!("{}", serde_json::to_string_pretty(&plan)?);
+                return Ok(());
+            }
+            _ => {}
+        }
+    }
     let namespace = cli
         .namespace
         .ok_or_else(|| eyre::eyre!("--namespace is required; use the stable namespace AccountId"))?
         .account_id();
     match cli.command {
+        Command::Distribution { command } => run_distribution(namespace, json, command).await,
         Command::CreateSale(args) => create_sale(namespace, json, args, router).await,
         Command::CollectFees(args) => {
             let wallet = WalletCore::from_env()
@@ -918,14 +1030,16 @@ async fn graduate(namespace: lee::AccountId, json: bool, args: GraduationArgs) -
         sale.collateral_definition,
     )
     .await?;
-    let mut invocation = launchpad_client::build_graduation_invocation(
-        launchpad_client::GraduationTarget::Curve {
-            sale,
-            state: &state,
-            creator_hint: args.creator_hint,
-        },
-        treasury,
-    )?;
+    let target = launchpad_client::GraduationTarget::Curve {
+        sale,
+        state: &state,
+        creator_hint: args.creator_hint,
+    };
+    let mut invocation = if args.distribution {
+        launchpad_client::distribution::graduation(target, treasury)?
+    } else {
+        launchpad_client::build_graduation_invocation(target, treasury)?
+    };
     invocation.fee_payer = Some(args.fee_payer);
     let transaction_hash = submit_public_invocation(&wallet, &factory, invocation).await?;
     print_submission(
@@ -933,6 +1047,66 @@ async fn graduate(namespace: lee::AccountId, json: bool, args: GraduationArgs) -
         "graduation stage",
         transaction_hash,
         args.launch.launch_salt,
+    )
+}
+
+fn read_distribution_configuration(
+    path: &Path,
+) -> Result<launchpad_client::distribution::Configuration> {
+    let config = serde_json::from_slice(&std::fs::read(path)?)?;
+    launchpad_client::distribution::encode_configuration(&config)?;
+    Ok(config)
+}
+
+async fn run_distribution(
+    namespace: lee::AccountId,
+    json: bool,
+    command: DistributionCommand,
+) -> Result<()> {
+    use launchpad_client::distribution;
+    let (identity, kind) = match command {
+        DistributionCommand::Initialize { adapter, kind } => (adapter, Some(kind)),
+        DistributionCommand::Remaining { adapter } => (adapter, None),
+        _ => unreachable!("offline commands handled before wallet setup"),
+    };
+    let adapter = load_deployment(
+        &identity.adapter_program_path,
+        identity.adapter_program_account,
+    )?;
+    let wallet =
+        WalletCore::from_env().map_err(|error| eyre::eyre!(error.into_boxed_dyn_error()))?;
+    let mut call = if let Some(kind) = kind {
+        let kind = match kind {
+            DistributionKind::Curve => distribution::GraduationIntentKind::Curve,
+            DistributionKind::FixedPrice => distribution::GraduationIntentKind::FixedPrice,
+            DistributionKind::Weighted => distribution::GraduationIntentKind::Weighted,
+        };
+        distribution::initialize(
+            adapter.account_id,
+            identity.factory_program_account,
+            namespace,
+            identity.launch.launch_salt,
+            kind,
+        )
+    } else {
+        let state = distribution::load_state(
+            &wallet,
+            adapter.account_id,
+            identity.factory_program_account,
+            namespace,
+            identity.launch.launch_salt,
+        )
+        .await?;
+        distribution::distribute_remaining(adapter.account_id, &state)
+            .map_err(|error| eyre::eyre!("{error:?}"))?
+    };
+    call.fee_payer = Some(identity.fee_payer);
+    let transaction_hash = submit_public_invocation(&wallet, &adapter, call).await?;
+    print_submission(
+        json,
+        "distribution adapter",
+        transaction_hash,
+        identity.launch.launch_salt,
     )
 }
 
@@ -1044,6 +1218,7 @@ async fn sale_snapshot(namespace: lee::AccountId, json: bool, args: LaunchReadAr
     };
     let config = load_curve_config(namespace, &wallet, curve_program.account_id).await?;
     let snapshot = SaleSnapshot {
+        graduation_reserve: factory.graduation_reserve,
         trade_mode: factory.trade_mode.into(),
         graduation_hook: factory.graduation_hook.as_ref().map(HookSnapshot::from),
         graduation_launch_bps: factory.graduation_policy.launch_bps,
@@ -1104,8 +1279,10 @@ async fn sale_snapshot(namespace: lee::AccountId, json: bool, args: LaunchReadAr
             snapshot.fees_collected
         );
         println!(
-            "graduation split: launch_bps={} collateral_bps={}",
-            snapshot.graduation_launch_bps, snapshot.graduation_collateral_bps,
+            "graduation split: launch_bps={} collateral_bps={} reserve={}",
+            snapshot.graduation_launch_bps,
+            snapshot.graduation_collateral_bps,
+            snapshot.graduation_reserve,
         );
         if let Some(hook) = &snapshot.graduation_hook {
             println!(
@@ -1354,6 +1531,7 @@ async fn create_sale(
     args: CreateSaleArgs,
     router: Option<&Path>,
 ) -> Result<()> {
+    let request = args.prepared_sale_request(namespace)?;
     let factory_program =
         load_deployment(&args.factory_program_path, args.factory_program_account)?;
     let curve_program = load_deployment(&args.curve_program_path, args.curve_program_account)?;
@@ -1364,7 +1542,6 @@ async fn create_sale(
         args.launch.launch_salt,
         args.collateral_definition.account_id(),
     );
-    let request = args.sale_request();
     let mut wallet = WalletCore::from_env()
         .map_err(|error| eyre::eyre!(error.into_boxed_dyn_error()))
         .context("opening the project wallet")?;
@@ -2347,6 +2524,7 @@ mod tests {
                 collateral_definition: "collateral".to_owned(),
                 status,
                 creator_allocation_claimed: false,
+                graduation_reserve: 0,
                 sale_quantity: 0,
                 tokens_sold: 0,
                 real_token_reserve: 0,
@@ -2504,5 +2682,199 @@ mod tests {
         let error = Cli::try_parse_from(["launchpad", "status", "--launch-salt", "00"])
             .expect_err("short launch salts must be rejected");
         assert!(error.to_string().contains("exactly 32 bytes"));
+    }
+}
+
+#[cfg(test)]
+mod distribution_tests {
+    use super::*;
+
+    fn creation_arguments(file: &Path) -> Vec<String> {
+        let mut args: Vec<String> = [
+            "launchpad",
+            "create-sale",
+            "--trade-mode",
+            "buy-only",
+            "--name",
+            "Launch",
+            "--uri",
+            "https://example.invalid/token",
+            "--sale-reserve",
+            "800",
+            "--creator-allocation",
+            "100",
+            "--virtual-token-reserve",
+            "2000",
+            "--virtual-collateral-reserve",
+            "100",
+            "--collateral-definition",
+            "11111111111111111111111111111111",
+            "--creator",
+            "Public/11111111111111111111111111111111",
+            "--factory-program-path",
+            "missing-factory.bin",
+            "--curve-program-path",
+            "missing-curve.bin",
+            "--curve-program-account",
+            "11111111111111111111111111111111",
+            "--graduation-launch-bps",
+            "5000",
+            "--graduation-collateral-bps",
+            "5000",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+        args.extend([
+            "--launch-salt".into(),
+            hex::encode([3; 32]),
+            "--factory-program-account".into(),
+            lee::AccountId::new([7; 32]).to_string(),
+            "--graduation-hook-program-id".into(),
+            lee::AccountId::new([9; 32]).to_string(),
+            "--distribution-configuration".into(),
+            file.to_str().unwrap().into(),
+        ]);
+        args
+    }
+
+    fn configuration(destination: lee::AccountId) -> launchpad_client::distribution::Configuration {
+        use launchpad_client::distribution::{Configuration, Rule, VERSION};
+        Configuration {
+            version: VERSION,
+            launch_rules: vec![Rule {
+                destination,
+                bps: 10000,
+            }],
+            collateral_rules: vec![Rule {
+                destination,
+                bps: 10000,
+            }],
+        }
+    }
+
+    #[tokio::test]
+    async fn reserve_input_is_saved_and_supply_overflow_fails_before_io() {
+        let mut arguments = creation_arguments(Path::new("missing-rules.json"));
+        arguments.extend(["--graduation-reserve".into(), "200".into()]);
+        let Command::CreateSale(mut args) = Cli::try_parse_from(arguments).unwrap().command else {
+            panic!("create sale")
+        };
+        let request = args.sale_request();
+        assert_eq!(request.graduation_reserve, 200);
+        assert_eq!(request.total_supply().unwrap(), 1100);
+        args.graduation_reserve = u128::MAX;
+        let error = create_sale(lee::AccountId::new([40; 32]), false, args, None)
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            error.downcast_ref::<launchpad_client::ClientError>(),
+            Some(launchpad_client::ClientError::FactoryParameters(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn creation_rejects_custody_before_loading_programs_or_wallet() {
+        use launchpad_client::distribution::{DistributionError, GraduationIntentKind, initialize};
+        let namespace = lee::AccountId::new([40; 32]);
+        let custody = initialize(
+            lee::AccountId::new([9; 32]),
+            lee::AccountId::new([7; 32]),
+            namespace,
+            [3; 32],
+            GraduationIntentKind::Curve,
+        )
+        .destination
+        .account_id;
+        for side in 0..2 {
+            let mut config = configuration(lee::AccountId::new([80; 32]));
+            if side == 0 {
+                config.launch_rules[0].destination = custody;
+            } else {
+                config.collateral_rules[0].destination = custody;
+            }
+            let file = std::env::temp_dir().join(format!(
+                "launchpad-invalid-distribution-{}-{side}.json",
+                std::process::id()
+            ));
+            std::fs::write(&file, serde_json::to_vec(&config).unwrap()).unwrap();
+            let cli = Cli::try_parse_from(creation_arguments(&file)).unwrap();
+            cli.validate_route().unwrap();
+            let Command::CreateSale(args) = cli.command else {
+                panic!("create sale")
+            };
+            let result = create_sale(namespace, false, args, None).await;
+            std::fs::remove_file(file).unwrap();
+            assert!(matches!(
+                result
+                    .unwrap_err()
+                    .downcast_ref::<launchpad_client::ClientError>(),
+                Some(launchpad_client::ClientError::Distribution(
+                    DistributionError::InvalidConfiguration
+                ))
+            ));
+        }
+    }
+
+    #[test]
+    fn creation_saves_valid_rules_and_requires_one_configuration_source() {
+        let config = configuration(lee::AccountId::new([80; 32]));
+        let file = std::env::temp_dir().join(format!(
+            "launchpad-valid-distribution-{}.json",
+            std::process::id()
+        ));
+        std::fs::write(&file, serde_json::to_vec(&config).unwrap()).unwrap();
+        let arguments = creation_arguments(&file);
+        let cli = Cli::try_parse_from(&arguments).unwrap();
+        let Command::CreateSale(args) = cli.command else {
+            panic!("create sale")
+        };
+        let request = args.prepared_sale_request(lee::AccountId::new([40; 32]));
+        std::fs::remove_file(file).unwrap();
+        let saved = request.unwrap().graduation_hook.unwrap();
+        assert_eq!(saved.program_id, lee::AccountId::new([9; 32]));
+        assert_eq!(
+            launchpad_client::distribution::Configuration::decode(&saved.configuration).unwrap(),
+            config
+        );
+
+        let mut conflicting = arguments.clone();
+        conflicting.extend(["--graduation-hook-configuration".into(), "00".into()]);
+        assert!(Cli::try_parse_from(conflicting).is_err());
+        let mut missing_program = arguments;
+        let index = missing_program
+            .iter()
+            .position(|arg| arg == "--graduation-hook-program-id")
+            .unwrap();
+        missing_program.drain(index..index + 2);
+        assert!(Cli::try_parse_from(missing_program).is_err());
+    }
+
+    #[test]
+    fn offline_distribution_commands_parse_without_wallet_or_namespace() {
+        for args in [
+            vec![
+                "launchpad",
+                "distribution",
+                "encode",
+                "--file",
+                "rules.json",
+            ],
+            vec![
+                "launchpad",
+                "distribution",
+                "preview",
+                "--file",
+                "rules.json",
+                "--launch-balance",
+                "101",
+                "--collateral-balance",
+                "0",
+            ],
+        ] {
+            let cli = Cli::try_parse_from(args).unwrap();
+            assert!(cli.namespace.is_none());
+            cli.validate_route().unwrap();
+        }
     }
 }

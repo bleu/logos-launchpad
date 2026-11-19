@@ -22,6 +22,7 @@ This page defines the shared domain language. The [glossary](docs/glossary.md) e
 | Virtual reserve | Pricing-only curve state. The creation-time product is `initial_k`; current `k` can grow through retained sell collateral. |
 | Factory | Shared launch adapter for matching creation, allocation, namespace-binding and setup rules. It shares policy decisions without combining pricing state or custody. |
 | `D` | Purchasable bonding-curve sale allocation. |
+| `R` | Graduation reserve of launch tokens, separate from purchasable inventory, for all three sale types. The selected adapter defines its use; it does not promise DEX liquidity. See [reserve rules](docs/adr/0020-settlement-and-graduation.md#graduation-reserve). |
 | Graduation policy | Immutable adapter shares of unsold launch inventory and recorded collateral. The current creator receives the remainder. See [ADR 0020](docs/adr/0020-settlement-and-graduation.md). |
 | Weight checkpoint | Observation of a weighted sale's pricing second and token weight. It does not control pricing or settlement. |
 | Recorded collateral | Collateral counted by sale accounting, separate from the vault's actual balance. Unsolicited transfers are surplus. |
@@ -62,3 +63,5 @@ Public sale timestamps use Unix seconds. Lifecycle deadlines use LEZ inclusion-b
 The SDK owns quotes and transaction construction. CLI and QML clients must not copy protocol logic. QML reads indexed data through a backend module API. The Wallet Provider SDK will own account selection, approval, signing and submission. The shared core does not hold user keys. See the [system view](docs/architecture/system.md) and [private-route contract](docs/architecture/private-participation.md).
 
 An accepted internal design is not proof of implementation or external approval. Keep RFP departures and open decisions visible in the [ADR index](docs/adr/README.md). Keep execution coverage, unsupported private routes, clock restrictions and other readiness limits in the [workspace guide](docs/architecture/workspace-guide.md#execution-and-evidence-limits).
+
+The [distribution adapter](docs/adr/0036-graduation-adapter-delivery.md) uses immutable percentage lists for full adapter custody balances. Later permissionless distributions require successful graduation. It supports plain transfers only.

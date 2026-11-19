@@ -4,7 +4,7 @@ Status: Accepted internally; To be reviewed by Logos team
 
 ## Decision
 
-Mint only purchasable curve allocation `D` and the separate creator allocation. Fund `D` into the pool; keep creator allocation in escrow until its release condition. Post-close payouts follow the shared [graduation policy](0020-settlement-and-graduation.md).
+Mint purchasable curve allocation `D`, optional graduation reserve `R` and the separate creator allocation. Check their sum before minting. Fund only `D` into the pool; keep `R` in mint custody and creator allocation in its separate escrow. `R` cannot affect trading or depletion. Post-close payouts follow the shared [graduation policy](0020-settlement-and-graduation.md).
 
 ## Reason and limits
 

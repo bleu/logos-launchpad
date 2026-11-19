@@ -58,9 +58,17 @@ pub struct GraduationRequest {
     pub token_definition_id: AccountId,
     pub collateral_definition_id: AccountId,
     pub intent: GraduationIntent,
+    pub reserve_tokens: u128,
+    pub unsold_tokens: u128,
     pub configuration: Vec<u8>,
 }
 impl GraduationRequest {
+    pub fn validate_amounts(&self) -> Result<(), Error> {
+        if self.reserve_tokens.checked_add(self.unsold_tokens) != Some(self.intent.amounts().0) {
+            return Err(Error::InvalidTerms);
+        }
+        Ok(())
+    }
     pub fn hash(&self) -> [u8; 32] {
         use risc0_zkvm::sha::{Impl, Sha256 as _};
         Impl::hash_bytes(&borsh::to_vec(self).expect("graduation request serializes"))
@@ -96,6 +104,20 @@ pub struct GraduationResult {
     pub request_hash: [u8; 32],
 }
 impl AdapterState {
+    /// Stable idle state view for adapters with their own private storage.
+    pub fn public_view(
+        factory: Actor,
+        accepted_intent: GraduationIntentKind,
+        receipt: Option<GraduationRequest>,
+    ) -> Self {
+        Self {
+            factory,
+            accepted_intent,
+            receipt,
+            pending: None,
+        }
+    }
+
     pub fn decode(bytes: &[u8]) -> Result<Self, Error> {
         borsh::from_slice(bytes).map_err(|_| Error::InvalidState)
     }
@@ -320,6 +342,7 @@ fn validate_request(
     request: &GraduationRequest,
     receiver: Actor,
 ) -> Result<(), Error> {
+    request.validate_amounts()?;
     if receiver.account_id
         != compute_graduation_pda(receiver.program_account_id, state.factory.account_id)
         || state.factory

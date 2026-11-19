@@ -1,6 +1,11 @@
 {
   "encoding": "borsh",
   "events": {
+    "distribution_adapter::DistributionEvent": {
+      "name": "distribution_adapter::DistributionV1",
+      "payload": "distribution_adapter::DistributionEvent",
+      "selector": "4ea9de7d9d1e2e6d"
+    },
     "events::SaleEventV1": {
       "name": "launchpad::SaleEventV1",
       "payload": "events::SaleEventV1",
@@ -24,6 +29,9 @@
       "events",
       "pool",
       "sale_policy"
+    ],
+    "distribution_adapter": [
+      "factory"
     ],
     "eligibility_policy": [],
     "events": [
@@ -533,6 +541,313 @@
         ]
       }
     },
+    "distribution_adapter": {
+      "Configuration": {
+        "fields": [
+          {
+            "name": "version",
+            "type": "u8"
+          },
+          {
+            "name": "launch_rules",
+            "type": "Vec<Rule>"
+          },
+          {
+            "name": "collateral_rules",
+            "type": "Vec<Rule>"
+          }
+        ]
+      },
+      "Credit": {
+        "fields": [
+          {
+            "name": "payout",
+            "type": "Payout"
+          },
+          {
+            "name": "before",
+            "type": "u128"
+          }
+        ]
+      },
+      "DistributionEvent": {
+        "fields": [
+          {
+            "name": "version",
+            "type": "u8"
+          },
+          {
+            "name": "factory",
+            "type": "Actor"
+          },
+          {
+            "name": "namespace",
+            "type": "AccountId"
+          },
+          {
+            "name": "launch_salt",
+            "type": "[u8;32]"
+          },
+          {
+            "name": "definitions",
+            "type": "[AccountId;2]"
+          },
+          {
+            "name": "sequence",
+            "type": "u64"
+          },
+          {
+            "name": "graduation",
+            "type": "bool"
+          },
+          {
+            "name": "amounts",
+            "type": "[u128;2]"
+          }
+        ]
+      },
+      "Message": {
+        "variants": [
+          {
+            "fields": [
+              {
+                "name": "factory_program_id",
+                "type": "AccountId"
+              },
+              {
+                "name": "namespace",
+                "type": "AccountId"
+              },
+              {
+                "name": "launch_salt",
+                "type": "[u8;32]"
+              },
+              {
+                "name": "accepted_intent",
+                "type": "GraduationIntentKind"
+              }
+            ],
+            "name": "Initialize",
+            "tag": 0
+          },
+          {
+            "fields": [],
+            "name": "ReadState",
+            "tag": 1
+          },
+          {
+            "fields": [
+              {
+                "name": "request",
+                "type": "GraduationRequest"
+              }
+            ],
+            "name": "Graduate",
+            "tag": 2
+          },
+          {
+            "fields": [],
+            "name": "DistributeRemaining",
+            "tag": 3
+          },
+          {
+            "fields": [],
+            "name": "ReadDistributionState",
+            "tag": 4
+          }
+        ]
+      },
+      "Payout": {
+        "fields": [
+          {
+            "name": "asset",
+            "type": "u8"
+          },
+          {
+            "name": "destination",
+            "type": "AccountId"
+          },
+          {
+            "name": "amount",
+            "type": "u128"
+          }
+        ]
+      },
+      "Pending": {
+        "fields": [
+          {
+            "name": "request",
+            "type": "Option<GraduationRequest>"
+          },
+          {
+            "name": "phase",
+            "type": "Phase"
+          },
+          {
+            "name": "balances",
+            "type": "[u128;2]"
+          },
+          {
+            "name": "payouts",
+            "type": "Vec<Payout>"
+          },
+          {
+            "name": "credits",
+            "type": "Vec<Credit>"
+          }
+        ]
+      },
+      "Phase": {
+        "variants": [
+          {
+            "fields": [
+              {
+                "name": "0",
+                "type": "u8"
+              }
+            ],
+            "name": "Definition",
+            "tag": 0
+          },
+          {
+            "fields": [
+              {
+                "name": "0",
+                "type": "u8"
+              }
+            ],
+            "name": "Custody",
+            "tag": 1
+          },
+          {
+            "fields": [
+              {
+                "name": "0",
+                "type": "u8"
+              }
+            ],
+            "name": "RecipientBefore",
+            "tag": 2
+          },
+          {
+            "fields": [
+              {
+                "name": "0",
+                "type": "u8"
+              }
+            ],
+            "name": "CustodyAfter",
+            "tag": 3
+          },
+          {
+            "fields": [
+              {
+                "name": "0",
+                "type": "u8"
+              }
+            ],
+            "name": "RecipientAfter",
+            "tag": 4
+          }
+        ]
+      },
+      "Rule": {
+        "fields": [
+          {
+            "name": "destination",
+            "type": "AccountId"
+          },
+          {
+            "name": "bps",
+            "type": "u16"
+          }
+        ]
+      },
+      "State": {
+        "fields": [
+          {
+            "name": "factory",
+            "type": "Actor"
+          },
+          {
+            "name": "namespace",
+            "type": "AccountId"
+          },
+          {
+            "name": "launch_salt",
+            "type": "[u8;32]"
+          },
+          {
+            "name": "accepted_intent",
+            "type": "GraduationIntentKind"
+          },
+          {
+            "name": "definitions",
+            "type": "[AccountId;2]"
+          },
+          {
+            "name": "configuration",
+            "type": "Configuration"
+          },
+          {
+            "name": "configuration_hash",
+            "type": "[u8;32]"
+          },
+          {
+            "name": "receipt",
+            "type": "Option<GraduationRequest>"
+          },
+          {
+            "name": "graduation_amounts",
+            "type": "[u128;2]"
+          },
+          {
+            "name": "distribution_count",
+            "type": "u64"
+          },
+          {
+            "name": "pending",
+            "type": "Option<Pending>"
+          }
+        ]
+      },
+      "Stored": {
+        "variants": [
+          {
+            "fields": [
+              {
+                "name": "factory",
+                "type": "Actor"
+              },
+              {
+                "name": "namespace",
+                "type": "AccountId"
+              },
+              {
+                "name": "launch_salt",
+                "type": "[u8;32]"
+              },
+              {
+                "name": "kind",
+                "type": "GraduationIntentKind"
+              }
+            ],
+            "name": "Initializing",
+            "tag": 0
+          },
+          {
+            "fields": [
+              {
+                "name": "0",
+                "type": "Box<State>"
+              }
+            ],
+            "name": "Ready",
+            "tag": 1
+          }
+        ]
+      }
+    },
     "eligibility_policy": {
       "AllowlistPolicy": {
         "fields": [
@@ -716,6 +1031,11 @@
             "fields": [],
             "name": "AdapterCollateral",
             "tag": 4
+          },
+          {
+            "fields": [],
+            "name": "GraduationReserve",
+            "tag": 5
           }
         ]
       },
@@ -760,6 +1080,10 @@
               },
               {
                 "name": "sale_inventory",
+                "type": "u128"
+              },
+              {
+                "name": "graduation_reserve",
                 "type": "u128"
               },
               {
@@ -1235,6 +1559,10 @@
             "type": "u128"
           },
           {
+            "name": "graduation_reserve",
+            "type": "u128"
+          },
+          {
             "name": "graduation_policy",
             "type": "GraduationPolicy"
           },
@@ -1350,6 +1678,10 @@
               },
               {
                 "name": "sale_reserve",
+                "type": "u128"
+              },
+              {
+                "name": "graduation_reserve",
                 "type": "u128"
               },
               {
@@ -1812,6 +2144,14 @@
           {
             "name": "intent",
             "type": "GraduationIntent"
+          },
+          {
+            "name": "reserve_tokens",
+            "type": "u128"
+          },
+          {
+            "name": "unsold_tokens",
+            "type": "u128"
           },
           {
             "name": "configuration",
@@ -2584,6 +2924,10 @@
             "type": "u128"
           },
           {
+            "name": "graduation_reserve",
+            "type": "u128"
+          },
+          {
             "name": "creator_allocation",
             "type": "u128"
           },
@@ -2737,6 +3081,10 @@
           },
           {
             "name": "sale_inventory",
+            "type": "u128"
+          },
+          {
+            "name": "graduation_reserve",
             "type": "u128"
           },
           {
@@ -2962,6 +3310,10 @@
           },
           {
             "name": "sale_inventory",
+            "type": "u128"
+          },
+          {
+            "name": "graduation_reserve",
             "type": "u128"
           },
           {

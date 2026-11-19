@@ -98,3 +98,34 @@ Each replacement must switch client/program interfaces together, remove supersed
 - [ ] <a id="upstream-wallet"></a> Integrate compatible wallet/provider and module interfaces under [ADR 0029](../adr/0029-wallet-integration.md). Use platform network-fee handling; missing support is a platform dependency, not grounds for a replacement wallet or fee mechanism. Finish package loading and backend smoke checks without replacing the existing shells.
 - [ ] <a id="release-check"></a> Compare the official v0.4 release with the selected revision. Update dependency pins and generated artifacts together, then repeat affected checks.
 - [ ] <a id="deferred-evidence"></a> Complete deferred service integration, real proofs, live verification and focused guest gaps listed above. Use host tests for routine work; do not require a full network. Full private-route completion remains separate work under [ADR 0018](../adr/0018-private-participation.md).
+
+## Distribution adapter checks
+
+The handler is in `crates/distribution-adapter/`. The guest is `methods/guest/src/bin/distribution_adapter.rs`. It registers as `DISTRIBUTION_ADAPTER_ELF` in the methods crate. `distribution_fault_adapter` and `distribution_fault_token` are test fixtures; do not deploy them. The SDK owns configuration validation, previews and transaction account declarations.
+
+After selecting the emergency-authority fixture above, run:
+
+```sh
+cargo +1.98.1 test -p distribution-adapter --locked
+cargo +1.98.1 test -p launchpad-client --test distribution --locked
+RISC0_BUILD_LOCKED=1 LAUNCHPAD_MOCK_CLOCK=1 cargo +1.98.1 test --manifest-path methods/Cargo.toml --locked --features actor-execution-tests --test actor_sale distribution
+bash verify/check-idl.sh
+```
+
+On 2026-11-18, the five focused distribution guest tests passed. They cover all three sale types, full balances, direct deposits, zero requests, repeated recipients, both eight-rule lists, later calls, preparation failure, intermediate credit failure, callback failure, full-state rollback and repaired retry. Adapter host tests, factory and shared settlement host tests, client/CLI tests, adapter lint checks, schema drift comparison, wire fixtures, source schema tests, formatting and static dependency pins passed. The broader ignored client guest suite and the full release script were not run.
+
+The focused guest tests use real factory, pool, authority, token and distribution guests. Weighted fixtures use the explicit mock clock. Tests replace named programs only to inject and repair faults in disposable state. This is not a live adapter replacement path. Local execution does not prove real proofs, service integration, package loading, production tool compatibility or deployment readiness.
+
+The CLI accepts `distribution encode --file rules.json` and `distribution preview --file rules.json --launch-balance 101 --collateral-balance 11` without a wallet or namespace. These commands check structure and percentages only. JSON uses `version: 1` and the two rule lists; each rule has `destination` as a base58 string and `bps` as an integer. Preview balances are explicit inputs and are estimates until execution.
+
+For distribution sale creation, use `create-sale --distribution-configuration rules.json` with `--graduation-hook-program-id` and both graduation percentages. This option replaces `--graduation-hook-configuration`. Before it opens the wallet or submits creation, the CLI checks the recipients against custody for the selected namespace, factory deployment, adapter deployment and launch salt. SDK callers use `distribution::hook` and place its result in the typed sale inputs. Raw opaque configuration does not perform this sale-specific check.
+
+Use `distribution initialize` with the adapter deployment, factory deployment, launch salt, sale kind and fee payer in the selected namespace. It reads configuration from the factory. Use `graduate --distribution` to admit saved recipient accounts for curve graduation. Use `distribution remaining` with the same identity after graduation. Run `--help` for exact flags. The SDK supports all three sale kinds; complete fixed-price and weighted CLI journeys remain outside this change.
+
+## Graduation reserve checks
+
+Creation accepts `graduation_reserve` for each sale type. Curve CLI creation uses `--graduation-reserve`, with zero as the default. Status output includes the saved reserve. The reserve remains in the existing mint custody after allocation. It does not enter the pool or change prices. ADR 0020 owns the [reserve rules](../adr/0020-settlement-and-graduation.md#graduation-reserve).
+
+Run the distribution guest command above to include reserve setup, sellout, manual payouts, surplus, pricing isolation and callback rollback checks. Rebuild all guests and SDK clients after the changed creation, factory-state, event and request encoding. The LBP launch-state format is version 5. Existing local state must be recreated; no deployed-state migration is required.
+
+On 2026-11-18, all ten focused distribution and reserve guest tests passed with locked guest builds. The reserve cases cover all three engines, manual payouts to a transferred creator role, no-buyer settlement, zero adapter percentages, fixed-price sellout, unchanged trading state, escrow surplus, insufficient reserve custody and repaired retries. Existing transfer and callback fault cases also run with positive `R` and check full-state rollback. The development gate, client/CLI tests, IDL and wire checks, formatting, static pins and strict host and execution-test lints passed. Weighted execution uses the explicit local mock clock. The broader guest suite, full release gate, real proofs and service integration were not run for this change.

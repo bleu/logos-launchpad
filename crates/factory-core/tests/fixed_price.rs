@@ -26,6 +26,7 @@ fn inputs() -> FixedPriceInputs {
         launch_salt: [3; 32],
         name: "Launch".into(),
         uri: "https://example.test/launch.json".into(),
+        graduation_reserve: 0,
         sale_inventory: 800,
         creator_allocation: 200,
         price: FixedPrice {
@@ -1175,6 +1176,7 @@ fn inventory_payout_keeps_the_allocation_inclusion_bound_until_expiry() {
 fn zero_and_after_setup_allocations_never_emit_a_second_token_payout() {
     let (input, mut state) = completed();
     state.creator_allocation = 0;
+    state.total_supply = state.sale_inventory + state.graduation_reserve;
     let pool = active_pool(&state, input.receiver);
     let response = claim_allocation(&input, &state, &pool, 200, 0).unwrap();
     assert!(
@@ -1187,6 +1189,7 @@ fn zero_and_after_setup_allocations_never_emit_a_second_token_payout() {
     assert_eq!(response.validity.timestamps.start(), Some(200_000));
     assert_eq!(response.validity.timestamps.end(), None);
     state.creator_allocation = 200;
+    state.total_supply = state.sale_inventory + state.graduation_reserve + state.creator_allocation;
     state.allocation_release = CreatorAllocationRelease::AfterSetup;
     state.creator_allocation_released = true;
     let pool = active_pool(&state, input.receiver);
@@ -1791,7 +1794,7 @@ fn fixed_price_rejects_malformed_saved_terms_and_the_old_record_version() {
         + 8;
     assert_eq!(
         &bytes[version_offset..version_offset + 2],
-        &4_u16.to_le_bytes()
+        &5_u16.to_le_bytes()
     );
     bytes[version_offset..version_offset + 2].copy_from_slice(&2_u16.to_le_bytes());
     assert_eq!(
@@ -2649,6 +2652,7 @@ fn fixed_created_event_names_the_launch_and_saved_terms_once() {
                 creator_role: *state.creator_role_id.value(),
                 token_definition: *state.token_definition_id.value(),
                 collateral_definition: *state.collateral_definition_id.value(),
+                graduation_reserve: state.graduation_reserve,
                 sale_inventory: 800,
                 creator_allocation: 200,
                 graduation_policy: state.graduation_policy,

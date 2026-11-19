@@ -1425,6 +1425,7 @@ fn curve_factory_locks_allowlist_before_setup_and_buys_with_the_same_policy() {
                 launch_salt: salt,
                 name: "Curve".into(),
                 uri: "https://example.test/curve".into(),
+                graduation_reserve: 0,
                 sale_reserve: 4_000,
                 graduation_policy: factory_core::GraduationPolicy::default(),
                 creator_allocation: 0,
@@ -1812,6 +1813,7 @@ fn fixed_factory_env_with_sell_fee(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn fixed_factory_env_with_sell_fee_and_policy(
     end: Option<u64>,
     release: factory_core::CreatorAllocationRelease,
@@ -1821,6 +1823,31 @@ fn fixed_factory_env_with_sell_fee_and_policy(
     trade_mode: lbp_core::TradeMode,
     sell_fee_bps: u16,
     graduation_policy: factory_core::GraduationPolicy,
+) -> FixedFactoryEnv {
+    fixed_factory_env_with_reserve(
+        end,
+        release,
+        pause_policy,
+        ending_policy,
+        graduation_hook,
+        trade_mode,
+        sell_fee_bps,
+        graduation_policy,
+        0,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn fixed_factory_env_with_reserve(
+    end: Option<u64>,
+    release: factory_core::CreatorAllocationRelease,
+    pause_policy: curve_core::PausePolicy,
+    ending_policy: lbp_core::EndingPolicy,
+    graduation_hook: Option<factory_core::GraduationHook>,
+    trade_mode: lbp_core::TradeMode,
+    sell_fee_bps: u16,
+    graduation_policy: factory_core::GraduationPolicy,
+    graduation_reserve: u128,
 ) -> FixedFactoryEnv {
     const FACTORY: AccountId = AccountId::new([17; 32]);
     let key = PrivateKey::try_new([23; 32]).unwrap();
@@ -1939,6 +1966,7 @@ fn fixed_factory_env_with_sell_fee_and_policy(
                 launch_salt: salt,
                 name: "Fixed".into(),
                 uri: "https://example.test/fixed".into(),
+                graduation_reserve,
                 sale_inventory: 800,
                 creator_allocation: 200,
                 price: lbp_core::FixedPrice {
@@ -2400,6 +2428,7 @@ fn weighted_factory_executes_all_stages_and_rolls_back_failed_funding() {
                 launch_salt: salt,
                 name: "Weighted".into(),
                 uri: "https://example.test/weighted".into(),
+                graduation_reserve: 0,
                 sale_inventory: 800,
                 creator_allocation: 200,
                 collateral_seed: 100,
@@ -2771,6 +2800,33 @@ fn weighted_factory_env_with_sell_fee_and_policy(
     Vec<Actor>, // actors for factory transactions
     [u8; 32],   // salt
 ) {
+    weighted_factory_env_with_reserve(
+        execute_buy,
+        graduation_hook,
+        trade_mode,
+        sell_fee_bps,
+        graduation_policy,
+        0,
+    )
+}
+
+fn weighted_factory_env_with_reserve(
+    execute_buy: bool,
+    graduation_hook: Option<factory_core::GraduationHook>,
+    trade_mode: lbp_core::TradeMode,
+    sell_fee_bps: u16,
+    graduation_policy: factory_core::GraduationPolicy,
+    graduation_reserve: u128,
+) -> (
+    V03State,
+    AccountId, // factory
+    AccountId, // pool
+    AccountId, // launch (token definition)
+    AccountId, // escrow
+    PrivateKey,
+    Vec<Actor>, // actors for factory transactions
+    [u8; 32],   // salt
+) {
     use factory_core::{CreatorAllocationRelease, LbpCreationStage, WeightedInputs};
     const FACTORY: AccountId = AccountId::new([17; 32]);
     let key = PrivateKey::try_new([23; 32]).unwrap();
@@ -2929,6 +2985,7 @@ fn weighted_factory_env_with_sell_fee_and_policy(
                 launch_salt: salt,
                 name: "Weighted".into(),
                 uri: "https://example.test/weighted".into(),
+                graduation_reserve,
                 sale_inventory: 800,
                 creator_allocation: 200,
                 collateral_seed: 100,
@@ -3714,7 +3771,8 @@ fn weighted_stale_clock_at_inclusion_boundary_preserves_state() {
     let transaction = fixed_transaction(&state, pool, &key, buy);
 
     // Inclusion time before start must be rejected
-    for timestamp in [149_999u64] {
+    {
+        let timestamp = 149_999u64;
         let mut rejected = state.clone();
         let before = rejected.clone();
         let nonce = rejected.get_account_by_id(creator).nonce;
@@ -4863,6 +4921,7 @@ fn factory_creation_rejects_invalid_ending_matrix_without_state_changes() {
                     launch_salt: salt,
                     name: "Curve".into(),
                     uri: "https://example.test/curve".into(),
+                    graduation_reserve: 0,
                     sale_reserve: 800,
                     graduation_policy: factory_core::GraduationPolicy::default(),
                     creator_allocation: 200,
@@ -4895,6 +4954,7 @@ fn factory_creation_rejects_invalid_ending_matrix_without_state_changes() {
                         launch_salt: salt,
                         name: "Fixed".into(),
                         uri: "https://example.test/fixed".into(),
+                        graduation_reserve: 0,
                         sale_inventory: 800,
                         creator_allocation: 200,
                         price: lbp_core::FixedPrice {
@@ -4926,6 +4986,7 @@ fn factory_creation_rejects_invalid_ending_matrix_without_state_changes() {
                         launch_salt: salt,
                         name: "Weighted".into(),
                         uri: "https://example.test/weighted".into(),
+                        graduation_reserve: 0,
                         sale_inventory: 800,
                         creator_allocation: 200,
                         collateral_seed: 100,
@@ -5388,6 +5449,30 @@ fn curve_factory_env(
     configuration: Vec<u8>,
     policy_terms: factory_core::GraduationPolicy,
 ) -> FixedFactoryEnv {
+    curve_factory_env_with_adapter(
+        hook,
+        configuration,
+        policy_terms,
+        launchpad_methods::GRADUATION_FAULT_ADAPTER_ELF,
+    )
+}
+
+fn curve_factory_env_with_adapter(
+    hook: bool,
+    configuration: Vec<u8>,
+    policy_terms: factory_core::GraduationPolicy,
+    adapter_elf: &'static [u8],
+) -> FixedFactoryEnv {
+    curve_factory_env_with_reserve(hook, configuration, policy_terms, adapter_elf, 0)
+}
+
+fn curve_factory_env_with_reserve(
+    hook: bool,
+    configuration: Vec<u8>,
+    policy_terms: factory_core::GraduationPolicy,
+    adapter_elf: &'static [u8],
+    graduation_reserve: u128,
+) -> FixedFactoryEnv {
     const FACTORY: AccountId = AccountId::new([17; 32]);
     let key = PrivateKey::try_new([23; 32]).unwrap();
     let creator = AccountId::from(&PublicKey::new_from_private_key(&key));
@@ -5510,6 +5595,7 @@ fn curve_factory_env(
             launch_salt: salt,
             name: "Curve".into(),
             uri: "https://example.test/curve".into(),
+            graduation_reserve,
             sale_reserve: 4_000,
             graduation_policy: policy_terms,
             creator_allocation: 200,
@@ -5546,10 +5632,7 @@ fn curve_factory_env(
     state = clock_state(state, 100_000)
         .with_named_programs([(
             LBP_HOOK_PROGRAM,
-            Program::new(Cow::Borrowed(
-                launchpad_methods::GRADUATION_FAULT_ADAPTER_ELF,
-            ))
-            .unwrap(),
+            Program::new(Cow::Borrowed(adapter_elf)).unwrap(),
         )])
         .with_public_accounts([
             token_holding(TREASURY, COLLATERAL, 0),
@@ -5650,18 +5733,57 @@ fn lbp_graduation_env_with_policy(
     accepted_intent: factory_core::GraduationIntentKind,
     graduation_policy: factory_core::GraduationPolicy,
 ) -> FixedFactoryEnv {
+    lbp_graduation_env_with_adapter(
+        weighted,
+        buy,
+        configuration,
+        accepted_intent,
+        graduation_policy,
+        launchpad_methods::GRADUATION_FAULT_ADAPTER_ELF,
+    )
+}
+
+fn lbp_graduation_env_with_adapter(
+    weighted: bool,
+    buy: bool,
+    configuration: Vec<u8>,
+    accepted_intent: factory_core::GraduationIntentKind,
+    graduation_policy: factory_core::GraduationPolicy,
+    adapter_elf: &'static [u8],
+) -> FixedFactoryEnv {
+    lbp_graduation_env_with_reserve(
+        weighted,
+        buy,
+        configuration,
+        accepted_intent,
+        graduation_policy,
+        adapter_elf,
+        0,
+    )
+}
+
+fn lbp_graduation_env_with_reserve(
+    weighted: bool,
+    buy: bool,
+    configuration: Vec<u8>,
+    accepted_intent: factory_core::GraduationIntentKind,
+    graduation_policy: factory_core::GraduationPolicy,
+    adapter_elf: &'static [u8],
+    graduation_reserve: u128,
+) -> FixedFactoryEnv {
     let hook = Some(factory_core::GraduationHook {
         program_id: LBP_HOOK_PROGRAM,
         configuration,
     });
     let mut env = if weighted {
         let (state, factory, pool, launch, escrow, key, actors, salt) =
-            weighted_factory_env_with_sell_fee_and_policy(
+            weighted_factory_env_with_reserve(
                 buy,
                 hook,
                 lbp_core::TradeMode::BuyOnly,
                 0,
                 graduation_policy,
+                graduation_reserve,
             );
         let creator = AccountId::from(&PublicKey::new_from_private_key(&key));
         let (_, path) = allowlist_for(pool, creator);
@@ -5677,7 +5799,7 @@ fn lbp_graduation_env_with_policy(
             path,
         }
     } else {
-        let mut env = fixed_factory_env_with_sell_fee_and_policy(
+        let mut env = fixed_factory_env_with_reserve(
             Some(300),
             factory_core::CreatorAllocationRelease::AfterEnd,
             curve_core::PausePolicy::AuthorityControlled,
@@ -5686,6 +5808,7 @@ fn lbp_graduation_env_with_policy(
             lbp_core::TradeMode::BuyOnly,
             0,
             graduation_policy,
+            graduation_reserve,
         );
         if buy {
             env.buy(100, 156);
@@ -5694,10 +5817,7 @@ fn lbp_graduation_env_with_policy(
     };
     env.state = env.state.with_named_programs([(
         LBP_HOOK_PROGRAM,
-        Program::new(Cow::Borrowed(
-            launchpad_methods::GRADUATION_FAULT_ADAPTER_ELF,
-        ))
-        .unwrap(),
+        Program::new(Cow::Borrowed(adapter_elf)).unwrap(),
     )]);
     initialize_lbp_adapter(&mut env, accepted_intent);
     let saved = lbp_launch(&env);
@@ -5827,6 +5947,8 @@ fn assert_lbp_graduated(
                     collateral: collateral_share,
                 }
             },
+            reserve_tokens: 0,
+            unsold_tokens: launch_share,
             configuration: saved.graduation_hook.unwrap().configuration,
         }
     );
@@ -9110,3 +9232,6 @@ fn signed_wrong_kind_adapter_initialization_rolls_back_then_correct_kind_succeed
         reject_lbp_adapter_reinitialization(&mut env, lbp_kind(weighted));
     }
 }
+
+#[path = "actor_sale/distribution.rs"]
+mod distribution;

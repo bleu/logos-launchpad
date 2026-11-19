@@ -22,6 +22,8 @@ pub use types::{
 #[cfg(test)]
 mod tests;
 
+pub mod distribution;
+
 use borsh::BorshSerialize;
 use common::HashType;
 use curve_core::{Config, Message as CurveInstruction, compute_config_pda, compute_pool_pda};
@@ -75,6 +77,7 @@ pub struct CreateSaleRequest {
     pub name: String,
     pub uri: String,
     pub sale_reserve: u128,
+    pub graduation_reserve: u128,
     pub graduation_policy: GraduationPolicy,
     pub creator_allocation: u128,
     pub virtual_token_reserve: u128,
@@ -83,6 +86,17 @@ pub struct CreateSaleRequest {
     pub end_timestamp: Option<u64>,
     /// Clock lower bound in Unix seconds, preserved as supplied, including zero.
     pub now: u64,
+}
+
+impl CreateSaleRequest {
+    pub fn total_supply(&self) -> Result<u128> {
+        factory_core::total_supply(
+            self.sale_reserve,
+            self.graduation_reserve,
+            self.creator_allocation,
+        )
+        .map_err(Into::into)
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -469,6 +483,7 @@ pub fn build_create_sale_invocation(
     creator: AccountId,
     request: CreateSaleRequest,
 ) -> Result<PublicInvocation<FactoryInstruction>> {
+    request.total_supply()?;
     factory_core::validate_curve_parameters(
         request.sale_reserve,
         request.virtual_token_reserve,
@@ -502,6 +517,7 @@ pub fn build_create_sale_invocation(
                 name: request.name,
                 uri: request.uri,
                 sale_reserve: request.sale_reserve,
+                graduation_reserve: request.graduation_reserve,
                 graduation_policy: request.graduation_policy,
                 creator_allocation: request.creator_allocation,
                 virtual_token_reserve: request.virtual_token_reserve,

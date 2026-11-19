@@ -29,6 +29,7 @@ fn creation() -> ReceiveInput {
             launch_salt: [3; 32],
             name: "Launch".into(),
             uri: "uri".into(),
+            graduation_reserve: 0,
             sale_reserve: 800,
             graduation_policy: GraduationPolicy {
                 launch_bps: 0,
@@ -996,9 +997,12 @@ fn traded_pool_settlement_checks_immutable_k_instead_of_initial_virtual_reserves
 }
 #[test]
 fn public_supply_and_address_rules_preserve_the_original_factory_contract() {
-    assert_eq!(total_supply(800, 100), Ok(900));
-    assert_eq!(total_supply(0, 100), Err(CreateError::SaleReserveZero));
-    assert_eq!(total_supply(u128::MAX, 1), Err(CreateError::SupplyOverflow));
+    assert_eq!(total_supply(800, 0, 100), Ok(900));
+    assert_eq!(total_supply(0, 0, 100), Err(CreateError::SaleReserveZero));
+    assert_eq!(
+        total_supply(u128::MAX, 0, 1),
+        Err(CreateError::SupplyOverflow)
+    );
     assert_eq!(
         validate_curve_parameters(800, 800, 100),
         Err(CreateError::VirtualTokenReserveNotAboveSaleReserve)
@@ -2111,6 +2115,7 @@ fn curve_created_event_names_the_launch_and_immutable_terms_once() {
                 creator_role: *state.creator_role_id.value(),
                 token_definition: *state.token_definition_id.value(),
                 collateral_definition: *state.collateral_definition_id.value(),
+                graduation_reserve: state.graduation_reserve,
                 sale_inventory: 800,
                 creator_allocation: 100,
                 graduation_policy: GraduationPolicy {
@@ -2141,6 +2146,8 @@ fn curve_allocation_read_emits_only_actual_allocation_payment() {
         let (mut input, active) = active();
         let mut state = FactoryState::decode(active.post_state.as_ref().unwrap()).unwrap();
         state.creator_allocation = amount;
+        state.total_supply =
+            total_supply(state.sale_reserve, state.graduation_reserve, amount).unwrap();
         let pool = pool_state(&state, input.receiver, true);
         let creator = if self_recipient {
             state.creator_escrow_id
@@ -2712,4 +2719,41 @@ fn curve_payouts_use_the_withdrawal_snapshot_for_no_buyers_partial_sale_and_depl
             );
         }
     }
+}
+
+#[test]
+fn graduation_reserve_is_in_initial_supply_but_not_curve_pricing() {
+    for reserve in [0, 120, u128::MAX] {
+        let mut input = creation();
+        let mut command: Message = borsh::from_slice(&input.message).unwrap();
+        if let Message::CreateFactoryPool {
+            graduation_reserve, ..
+        } = &mut command
+        {
+            *graduation_reserve = reserve;
+        }
+        input.message = borsh::to_vec(&command).unwrap();
+        let response = handle(&input);
+        if reserve == u128::MAX {
+            assert_eq!(response.err(), Some(Error::InvalidTerms));
+        } else {
+            let state =
+                FactoryState::decode(response.unwrap().post_state.as_ref().unwrap()).unwrap();
+            assert_eq!(state.graduation_reserve, reserve);
+            assert_eq!(state.total_supply, 900 + reserve);
+            assert_eq!(
+                (
+                    state.sale_reserve,
+                    state.virtual_token_reserve,
+                    state.virtual_collateral_reserve
+                ),
+                (800, 1000, 100)
+            );
+        }
+    }
+    assert_eq!(total_supply(1, u128::MAX - 2, 1), Ok(u128::MAX));
+    assert_eq!(
+        total_supply(1, u128::MAX - 2, 2),
+        Err(CreateError::SupplyOverflow)
+    );
 }

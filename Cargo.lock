@@ -1843,6 +1843,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "distribution-adapter"
+version = "0.1.0"
+dependencies = [
+ "borsh",
+ "curve-core",
+ "factory-core",
+ "integer-math",
+ "lbp-core",
+ "lee_core",
+ "lez-compat-core",
+ "risc0-zkvm",
+ "serde",
+]
+
+[[package]]
 name = "dlopen2"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3696,6 +3711,7 @@ dependencies = [
  "clock_core",
  "common",
  "curve-core",
+ "distribution-adapter",
  "factory-core",
  "hex",
  "lbp-core",

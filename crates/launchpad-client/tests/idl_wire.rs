@@ -556,6 +556,7 @@ fn factory_creation_keeps_creator_namespace_and_saved_hook_terms_on_wire() {
             launch_salt: [5; 32],
             name: "N".into(),
             uri: "U".into(),
+            graduation_reserve: 0,
             sale_reserve: 6,
             graduation_policy: launchpad_client::GraduationPolicy {
                 launch_bps: 2500,
@@ -579,6 +580,7 @@ fn factory_creation_keeps_creator_namespace_and_saved_hook_terms_on_wire() {
             "010000004e",
             "0100000055",
             "06000000000000000000000000000000",
+            "00000000000000000000000000000000",
             "c4094c1d",
             "08000000000000000000000000000000",
             "09000000000000000000000000000000",
@@ -603,7 +605,7 @@ fn factory_creation_keeps_creator_namespace_and_saved_hook_terms_on_wire() {
                 {"name":"graduation_hook_configuration","type":"Vec<u8>"},
                 {"name":"namespace","type":"AccountId"},{"name":"launch_salt","type":"[u8;32]"},
                 {"name":"name","type":"String"},{"name":"uri","type":"String"},
-                {"name":"sale_reserve","type":"u128"},{"name":"graduation_policy","type":"GraduationPolicy"},
+                {"name":"sale_reserve","type":"u128"},{"name":"graduation_reserve","type":"u128"},{"name":"graduation_policy","type":"GraduationPolicy"},
                 {"name":"creator_allocation","type":"u128"},{"name":"virtual_token_reserve","type":"u128"},
                 {"name":"virtual_collateral_reserve","type":"u128"},{"name":"end_timestamp","type":"Option<u64>"},
                 {"name":"curve_program_id","type":"AccountId"},{"name":"collateral_definition_id","type":"AccountId"},
@@ -802,6 +804,8 @@ fn graduation_callback_has_a_typed_request_without_an_account_extension() {
                 launch_tokens: 6,
                 collateral: 7,
             },
+            reserve_tokens: 0,
+            unsold_tokens: 6,
             configuration: vec![8, 9],
         },
     };
@@ -815,6 +819,8 @@ fn graduation_callback_has_a_typed_request_without_an_account_extension() {
         "00",
         "06000000000000000000000000000000",
         "07000000000000000000000000000000",
+        "00000000000000000000000000000000",
+        "06000000000000000000000000000000",
         "020000000809"
     ))
     .unwrap();
@@ -833,6 +839,7 @@ fn graduation_callback_has_a_typed_request_without_an_account_extension() {
             {"name":"factory_program_id","type":"AccountId"},{"name":"namespace","type":"AccountId"},
             {"name":"launch_salt","type":"[u8;32]"},{"name":"token_definition_id","type":"AccountId"},
             {"name":"collateral_definition_id","type":"AccountId"},{"name":"intent","type":"GraduationIntent"},
+            {"name":"reserve_tokens","type":"u128"},{"name":"unsold_tokens","type":"u128"},
             {"name":"configuration","type":"Vec<u8>"}
         ])
     );
@@ -1247,6 +1254,7 @@ fn weighted_factory_messages_keep_distinct_tags_and_normalized_weights() {
         launch_salt: [6; 32],
         name: "W".into(),
         uri: "u".into(),
+        graduation_reserve: 0,
         sale_inventory: 800,
         creator_allocation: 200,
         collateral_seed: 100,
@@ -1269,6 +1277,7 @@ fn weighted_factory_messages_keep_distinct_tags_and_normalized_weights() {
     expected.extend_from_slice(&[1, 0, 0, 0, b'W', 1, 0, 0, 0, b'u']);
     for value in [
         800u128,
+        0,
         200,
         100,
         inputs.token_weight_start,
@@ -1706,10 +1715,12 @@ fn graduation_result_binds_the_factory_to_the_exact_typed_request_hash() {
             launch_tokens: 6,
             collateral: 7,
         },
+        reserve_tokens: 0,
+        unsold_tokens: 6,
         configuration: vec![8, 9],
     };
     let expected_hash =
-        hex::decode("154a4a4c35602367cfa46ffc49fdd70e390cb54e3bcfdad0704610ad655a34ff").unwrap();
+        hex::decode("a07afd3311c8822717e2622333cf21955f9596ee412620f1ee27c2b20180e92a").unwrap();
     assert_eq!(request.hash().as_slice(), expected_hash);
     let result = factory_core::GraduationResult {
         factory: AccountId::new([6; 32]),
@@ -2029,6 +2040,7 @@ fn event_kinds_keep_creation_trade_and_settlement_amounts_distinct_on_wire() {
                 creator_role: [2; 32],
                 token_definition: [3; 32],
                 collateral_definition: [4; 32],
+                graduation_reserve: 0,
                 sale_inventory: 5,
                 creator_allocation: 6,
                 graduation_policy: launchpad_client::GraduationPolicy {
@@ -2043,8 +2055,9 @@ fn event_kinds_keep_creation_trade_and_settlement_amounts_distinct_on_wire() {
             0,
             "Created",
             format!(
-                "{a}{b}{c}{d}{}{}{}{}0001090000000000000001010403",
+                "{a}{b}{c}{d}{}{}{}{}{}0001090000000000000001010403",
                 n(5),
+                n(0),
                 n(6),
                 "c4094c1d",
                 n(8)
@@ -2289,6 +2302,7 @@ fn generated_event_metadata_binds_selectors_to_concrete_payload_types() {
     assert_eq!(
         schema()["events"],
         json!({
+            "distribution_adapter::DistributionEvent": {"name":"distribution_adapter::DistributionV1","selector":"4ea9de7d9d1e2e6d","payload":"distribution_adapter::DistributionEvent"},
             "events::SaleEventV1": {"name":"launchpad::SaleEventV1","selector":"e1961d35ac82206c","payload":"events::SaleEventV1"},
             "events::WeightedCheckpoint": {"name":"lbp::WeightedCheckpoint","selector":"ae2f6d457fb379cf","payload":"events::WeightedCheckpoint"},
             "events::WeightedPauseChanged": {"name":"lbp::WeightedPauseChanged","selector":"6d8c1803e82b3a9d","payload":"events::WeightedPauseChanged"}
