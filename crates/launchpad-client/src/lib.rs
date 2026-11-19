@@ -491,6 +491,7 @@ pub fn build_create_sale_invocation(
         request.virtual_collateral_reserve,
     )?;
     factory_core::validate_curve_policies(request.ending_policy, request.end_timestamp)?;
+    factory_core::validate_curve_duration(request.end_timestamp, request.now)?;
     curve_core::SellFeeRate::new(request.sell_fee_bps)
         .map_err(|_| ClientError::FactoryPolicy(factory_core::Error::InvalidTerms))?;
     request

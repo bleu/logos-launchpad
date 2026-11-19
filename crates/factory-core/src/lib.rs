@@ -1625,7 +1625,70 @@ fn curve_resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
         }
     })())
 }
+/// Operational floor for configured curve expiry. Private-path fairness still needs measurements.
+pub const MIN_CURVE_SALE_DURATION_SECONDS: u64 = 60;
+
+pub fn validate_curve_duration(end: Option<u64>, now: u64) -> Result<(), Error> {
+    if end.is_some_and(|end| {
+        end.checked_sub(now)
+            .is_none_or(|duration| duration < MIN_CURVE_SALE_DURATION_SECONDS)
+    }) {
+        return Err(Error::InvalidTerms);
+    }
+    Ok(())
+}
+
 pub fn handle(input: &ReceiveInput) -> Result<Response, Error> {
+    let saved = FactoryState::decode(&input.pre_state).ok();
+    let command = saved
+        .as_ref()
+        .and_then(|state| {
+            state
+                .pending
+                .as_ref()
+                .map(|pending| pending.command.clone())
+        })
+        .or_else(|| borsh::from_slice::<Message>(&input.message).ok());
+    let expiry = match command {
+        Some(Message::CreateFactoryPool {
+            end_timestamp, now, ..
+        }) => {
+            validate_curve_duration(end_timestamp, now)?;
+            end_timestamp
+        }
+        Some(Message::ContinueCreation { now, .. }) => {
+            let end = saved.as_ref().ok_or(Error::InvalidState)?.end_timestamp;
+            validate_curve_duration(end, now)?;
+            end
+        }
+        _ => None,
+    };
+    let mut response = handle_inner(input)?;
+    if let Some(end) = expiry {
+        // Inclusion time, not the caller's hint, limits every setup callback and activation.
+        let latest = end
+            .checked_sub(MIN_CURVE_SALE_DURATION_SECONDS)
+            .ok_or(Error::InvalidTerms)?;
+        let upper = curve_core::timestamp_millis(latest)
+            .map_err(|_| Error::InvalidTerms)?
+            .checked_add(1)
+            .ok_or(Error::InvalidTerms)?;
+        let upper = response
+            .validity
+            .timestamps
+            .end()
+            .map_or(upper, |existing| existing.min(upper));
+        response = match response.validity.timestamps.start() {
+            Some(start) => response
+                .try_timestamp_window(start..upper)
+                .map_err(|_| Error::InvalidTerms)?,
+            None => response.timestamp_window(..upper),
+        };
+    }
+    Ok(response)
+}
+
+fn handle_inner(input: &ReceiveInput) -> Result<Response, Error> {
     if let Some(result) = lez_compat_core::clock::resume(input) {
         return result.map_err(|error| match error {
             lez_compat_core::Error::Unauthorized => Error::Unauthorized,

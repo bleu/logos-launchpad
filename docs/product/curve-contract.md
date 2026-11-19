@@ -25,3 +25,5 @@ The [generated actor schema](../../idl/launchpad.json) defines the public wire i
 The workspace guide is the current evidence record. Host tests alone do not prove child-call rollback; development receipts are not secure production proofs. Private routes remain unsupported, and live DEX integration remains unverified. See [verification boundaries](../adr/0022-verification-boundaries.md).
 
 See [ADR 0036](../adr/0036-graduation-adapter-delivery.md) for the plain-transfer distribution adapter and later deposits.
+
+Configured expiry requires at least 60 seconds remaining through factory setup and activation. Inclusion bounds enforce this rule. This operational minimum is not a verified private-path latency guarantee. See [ending policy](../adr/0025-sale-closing.md).
