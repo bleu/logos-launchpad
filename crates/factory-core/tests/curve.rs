@@ -2768,7 +2768,7 @@ fn curve_creation_rejects_retained_sell_fees_before_side_effects() {
             *sell_fee_bps = rate;
         }
         input.message = borsh::to_vec(&command).unwrap();
-        assert_eq!(handle(&input), Err(Error::InvalidTerms));
+        assert_eq!(handle(&input).err(), Some(Error::InvalidTerms));
         let mut state = FactoryState::decode(active().1.post_state.as_ref().unwrap()).unwrap();
         state.sell_fee_bps = rate;
         assert!(state.validate(input.receiver).is_err());
