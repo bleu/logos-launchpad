@@ -22,7 +22,7 @@ Weighted seed-inclusive accounting follows [ADR 0030](0030-lbp-pricing-collatera
 
 ### Retained sell fees
 
-Creation fixes creator-selected `sell_fee_bps` in `0..=9_999`, defaulting to zero. For each sell, calculate namespace fee and retained fee independently as `ceil(gross_output * rate / 10_000)`. Do not round their combined rate. Pay gross output minus both fees.
+Factory curve sales require `sell_fee_bps == 0` to preserve the [fixed curve invariant](0009-curve-arithmetic.md). Other engines and direct internal pools fix creator-selected `sell_fee_bps` in `0..=9_999`, defaulting to zero. For each sell, calculate namespace fee and retained fee independently as `ceil(gross_output * rate / 10_000)`. Do not round their combined rate. Pay gross output minus both fees.
 
 Before each sell, require the live namespace rate plus saved `sell_fee_bps` to be below `10_000`. Reject rounding that leaves no net output. This combined check does not apply to buys. Debit reserves or recorded collateral by `gross_output - retained_fee`. Retained collateral stays in reserves or recorded proceeds. It is not collectible debt and grants no early creator payout. Fixed-price pricing and settlement timing stay unchanged.
 

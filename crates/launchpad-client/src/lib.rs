@@ -491,8 +491,11 @@ pub fn build_create_sale_invocation(
         request.virtual_collateral_reserve,
     )?;
     factory_core::validate_curve_policies(request.ending_policy, request.end_timestamp)?;
-    curve_core::SellFeeRate::new(request.sell_fee_bps)
-        .map_err(|_| ClientError::FactoryPolicy(factory_core::Error::InvalidTerms))?;
+    if request.sell_fee_bps != 0 {
+        return Err(ClientError::FactoryPolicy(
+            factory_core::Error::InvalidTerms,
+        ));
+    }
     request
         .graduation_policy
         .validate(request.graduation_hook.is_some())
@@ -1386,8 +1389,9 @@ pub(crate) fn validate_factory_pool(
     Ok(())
 }
 pub(crate) fn validate_factory_state(sale: FactorySale, state: &FactoryState) -> Result<()> {
-    curve_core::SellFeeRate::new(state.sell_fee_bps)
-        .map_err(|_| ClientError::FactorySaleMismatch)?;
+    if state.sell_fee_bps != 0 {
+        return Err(ClientError::FactorySaleMismatch);
+    }
     factory_core::validate_curve_policies(state.ending_policy, state.end_timestamp)
         .map_err(|_| ClientError::FactorySaleMismatch)?;
     let a = factory_pool_addresses(sale);

@@ -2222,10 +2222,10 @@ fn curve_manual_self_recipient_reports_discharged_claim_without_token_movement()
 }
 
 #[test]
-fn retained_curve_invariant_binds_original_product_and_allows_checked_growth() {
+fn curve_invariant_stays_fixed_through_buys_sells_and_settlement() {
     let (input, mut active) = active();
     let mut state = FactoryState::decode(active.post_state.as_ref().unwrap()).unwrap();
-    state.sell_fee_bps = 125;
+    state.sell_fee_bps = 0;
     state.trade_mode = TradeMode::BuyAndSell;
     active.post_state = Some(borsh::to_vec(&state).unwrap().into());
     let mut saved = pool_state(&state, input.receiver, true);
@@ -2245,7 +2245,7 @@ fn retained_curve_invariant_binds_original_product_and_allows_checked_growth() {
             })
             .unwrap();
     }
-    assert!(saved.pool.k > saved.pool.initial_k);
+    assert_eq!(saved.pool.k, saved.pool.initial_k);
     for hook in [false, true] {
         let mut routed = active.clone();
         let mut terms = state.clone();
@@ -2272,7 +2272,8 @@ fn retained_curve_invariant_binds_original_product_and_allows_checked_growth() {
             2 => forged.pool.k = forged.pool.initial_k - 1,
             3 => forged.pool.virtual_reserve1 = 1,
             _ => {
-                forged.pool.sell_fee_bps = 0;
+                forged.pool.k += 1;
+                forged.pool.virtual_reserve1 += 1;
             }
         }
         for command in [
@@ -2338,7 +2339,7 @@ fn retained_curve_invariant_binds_original_product_and_allows_checked_growth() {
 
 #[test]
 fn curve_retained_fee_forwarding_keeps_prefunding_exact() {
-    for rate in [0, 125, 9999] {
+    for rate in [0] {
         let mut input = creation();
         let mut command: Message = borsh::from_slice(&input.message).unwrap();
         if let Message::CreateFactoryPool { sell_fee_bps, .. } = &mut command {
@@ -2756,4 +2757,20 @@ fn graduation_reserve_is_in_initial_supply_but_not_curve_pricing() {
         total_supply(1, u128::MAX - 2, 2),
         Err(CreateError::SupplyOverflow)
     );
+}
+
+#[test]
+fn curve_creation_rejects_retained_sell_fees_before_side_effects() {
+    for rate in [1, 125, 9999, 10000, u16::MAX] {
+        let mut input = creation();
+        let mut command: Message = borsh::from_slice(&input.message).unwrap();
+        if let Message::CreateFactoryPool { sell_fee_bps, .. } = &mut command {
+            *sell_fee_bps = rate;
+        }
+        input.message = borsh::to_vec(&command).unwrap();
+        assert_eq!(handle(&input), Err(Error::InvalidTerms));
+        let mut state = FactoryState::decode(active().1.post_state.as_ref().unwrap()).unwrap();
+        state.sell_fee_bps = rate;
+        assert!(state.validate(input.receiver).is_err());
+    }
 }

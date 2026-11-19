@@ -2453,54 +2453,12 @@ fn lbp_sell_builders_keep_participant_authority_reverse_holdings_and_clock() {
 }
 
 #[test]
-fn retained_sell_fee_is_forwarded_and_immutable_at_each_creation_stage() {
-    let mut request = creation();
-    request.sell_fee_bps = 250;
-    let call =
-        build_create_sale_invocation(sale(), AccountId::new([9; 32]), request.clone()).unwrap();
-    assert!(matches!(
-        call.instruction,
-        factory_core::Message::CreateFactoryPool {
-            sell_fee_bps: 250,
-            ..
-        }
-    ));
-    for stage in [
-        CreationStage::Minted,
-        CreationStage::Allocated,
-        CreationStage::PoolPrepared,
-        CreationStage::Active,
-    ] {
-        let mut state = valid_factory_state(sale());
-        state.creation_stage = stage;
-        state.sell_fee_bps = 250;
-        assert!(
-            super::next_creation_invocation(
-                sale(),
-                AccountId::new([9; 32]),
-                request.clone(),
-                Some(&state)
-            )
-            .is_ok()
-        );
-        for replacement in [0, 251] {
-            let mut changed = request.clone();
-            changed.sell_fee_bps = replacement;
-            assert!(matches!(
-                super::next_creation_invocation(
-                    sale(),
-                    AccountId::new([9; 32]),
-                    changed,
-                    Some(&state)
-                ),
-                Err(ClientError::LaunchParametersMismatch)
-            ));
-        }
-    }
-    for rate in [10_000, u16::MAX] {
+fn curve_creation_rejects_nonzero_retained_sell_fee() {
+    for rate in [1, 250, 9999, 10000, u16::MAX] {
+        let mut request = creation();
         request.sell_fee_bps = rate;
         assert!(matches!(
-            build_create_sale_invocation(sale(), AccountId::new([9; 32]), request.clone()),
+            build_create_sale_invocation(sale(), AccountId::new([9; 32]), request),
             Err(ClientError::FactoryPolicy(
                 factory_core::Error::InvalidTerms
             ))
@@ -2515,9 +2473,9 @@ fn retained_sell_fee_is_forwarded_and_immutable_at_each_creation_stage() {
 }
 
 #[test]
-fn factory_pool_binds_initial_k_and_accepts_current_k_after_retained_sell() {
+fn factory_pool_binds_fixed_k_after_sell() {
     let mut state = valid_factory_state(sale());
-    state.sell_fee_bps = 1_000;
+    state.sell_fee_bps = 0;
     let mut pool = matching_factory_pool(&state);
     let initial = pool.pool.initial_k;
     let quote = pool
@@ -2531,8 +2489,8 @@ fn factory_pool_binds_initial_k_and_accepts_current_k_after_retained_sell() {
             now: 1,
         })
         .unwrap();
-    assert!(quote.retained_fee > 0);
-    assert!(pool.pool.k > initial);
+    assert_eq!(quote.retained_fee, 0);
+    assert_eq!(pool.pool.k, initial);
     assert_eq!(pool.pool.initial_k, initial);
     super::validate_factory_pool(sale(), &state, &pool).unwrap();
     let mut changed = pool.clone();
