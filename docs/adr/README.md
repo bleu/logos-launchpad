@@ -23,7 +23,7 @@ Read [CONTEXT.md](../../CONTEXT.md) for terms. See the [workspace guide](../arch
 | [0017](0017-quotes-and-slippage.md) | Quotes and slippage | Accepted |
 | [0018](0018-private-participation.md) | Atomic private route and recovery | Accepted design; private execution pending |
 | [0019](0019-product-packages.md) | Two QML apps and shared core | Accepted design; packaging unverified |
-| [0020](0020-settlement-and-graduation.md) | Settlement routes and graduation | Implemented; live DEX deferred |
+| [0020](0020-settlement-and-graduation.md) | Shared payouts and adapter initialization | Implemented; live DEX deferred |
 | [0021](0021-modes-and-open-limits.md) | Trade modes, allowlists and allocation ceiling | Public admission implemented; wallet/private route pending; ceiling deferral needs Logos review |
 | [0022](0022-verification-boundaries.md) | Verification boundaries | Accepted |
 | [0025](0025-sale-closing.md) | Ending and payout eligibility | Implemented; RFP-015 expiry departure needs Logos review |
@@ -36,6 +36,7 @@ Read [CONTEXT.md](../../CONTEXT.md) for terms. See the [workspace guide](../arch
 | [0032](0032-fixed-price-lbp-setup.md) | Fixed-price setup and funding | Implemented; local execution evidence |
 | [0033](0033-fixed-price-lbp-recorded-collateral.md) | Fixed-price recorded collateral invariant | Accepted; implemented |
 | [0034](0034-lez-v04-migration.md) | Actor target and temporary compatibility | Accepted; readiness gaps remain |
+| [0036](0036-graduation-adapter-delivery.md) | Plain-transfer distribution adapter; liquidity deferred | Implemented; local guest evidence; liquidity deferred |
 
 ## Editing decisions
 

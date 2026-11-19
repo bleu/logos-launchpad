@@ -29,8 +29,9 @@ sequenceDiagram
     else AfterEnd creator allocation
         Factory->>Factory: Retain allocation escrow
     end
+    Note over Factory: Keep R in mint custody outside pool inventory
 ```
 
 Each stage is atomic, but the four-transaction workflow is not. Authority, saved terms and custody are rechecked. Final setup can fund before a scheduled start. [ADR 0032](../../adr/0032-fixed-price-lbp-setup.md) owns immediate-start and trusted-clock rules.
 
-Fixed-price setup records zero collateral; donations remain surplus under [ADR 0033](../../adr/0033-fixed-price-lbp-recorded-collateral.md). Weighted setup must transfer the full creator seed; a prior donation cannot replace it. Neither engine has curve `R` custody. `AfterEnd` payout and settlement are implemented, subject to the selected [ending policy](../../adr/0025-sale-closing.md), authority and duplicate-payout protection.
+Fixed-price setup records zero collateral; donations remain surplus under [ADR 0033](../../adr/0033-fixed-price-lbp-recorded-collateral.md). Weighted setup must transfer the full creator seed; a prior donation cannot replace it. `AfterEnd` payout and settlement are implemented, subject to the selected [ending policy](../../adr/0025-sale-closing.md), authority and duplicate-payout protection.

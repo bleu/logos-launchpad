@@ -1,30 +1,52 @@
-# ADR 0020: Manual settlement and an optional adapter hook
+# ADR 0020: Shared settlement payouts and adapter initialization
 
 Status: Accepted and implemented for all three sale types; production-readiness limits remain; live DEX integration deferred
 
 ## Reason
 
-A post-close callback permits adapter integration without choosing a DEX or promising a liquidity result.
+A shared payout policy permits adapter integration without choosing a DEX or promising a liquidity result.
 
 ## Decision
 
-Keep creator-authorized manual settlement and add an optional adapter program and opaque configuration saved at creation. Configuration requires an adapter program. Neither can change or be overridden at execution. The adapter interprets its settings and checks its result.
+Creation saves immutable `graduation_policy { launch_bps, collateral_bps }`, an optional adapter program and opaque configuration. Each share is an integer in `0..=10_000`. Configuration requires an adapter; nonzero shares without one are invalid. Saved terms cannot change or be overridden at execution.
 
-After creation completes and the sale closes, anyone can submit the separate hook transaction. Closure does not call it. Hook execution is public only. Private manual settlement is unsupported on the selected actor revision because the temporary token implementation has no private holdings. Automation and payer policy are deferred.
+Eligible balances are accounted unsold launch inventory and recorded collateral, including the weighted seed. For each asset, the adapter receives `floor(eligible_balance * asset_bps / 10_000)` and the current creator receives the remainder. Checked arithmetic must support the full balance range without intermediate overflow. Assign each eligible unit once. The separate graduation reserve `R` follows the rules below. There is no unsold burn or separate seed refund. The seed remains a funding, pricing and sell-budget protection term. [Accrued fees](0015-fee-accounting.md) go to the current treasury; surplus stays in custody. Separate creator allocation is excluded from the split and keeps its release rule.
 
-Both routes share custody preparation, [fee collection](0015-fee-accounting.md) and [unsold-`D` burn](0025-sale-closing.md). Preparation is idempotent. The adapter must first initialize and claim its canonical custody PDA, derived under its program from the saved sale identity. The factory rejects missing or wrongly owned custody before preparing its ATAs. It cannot claim custody for the adapter.
+Without an adapter, creator-authorized manual settlement pays all eligible balances to the current creator. With an adapter, every manual payout entry point rejects bypass, including zero shares and completed retries. Fee collection and separate allocation claims remain independent. Shared route and completion rules in `crates/sale-policy` prevent competing and duplicate payouts, including zero-amount completion.
 
-The curve hook transfers full `R` and recorded real collateral to those ATAs. Fixed-price hooks transfer only recorded net proceeds. Weighted hooks return the outstanding saved seed to the current creator and transfer only net buyer proceeds to the adapter. Fixed-price and weighted hooks send zero launch tokens; neither has an `R` reserve. Unsold inventory burns once on either route. Fees go to the current treasury; surplus stays in custody, and separate creator allocation keeps its existing release rule. A saved seed-return marker prevents a second seed payment or subtraction.
+After setup completes and the [ending policy](0025-sale-closing.md) permits settlement, anyone can submit the separate public hook transaction. Closure does not call it. Selected depletion can leave no launch inventory to split. Payout preserves the unsold snapshot and cannot create depletion evidence. Private manual settlement is unsupported because the temporary token implementation has no private holdings. Automation and payer policy remain deferred.
 
-Each request carries a typed asset intent. Permissionless initialization may leave an adapter unready. Anyone may then activate it once by selecting one accepted intent kind; that choice cannot be cleared or changed. The callback binds the factory to the hash of the full request. The factory forwards no arbitrary remaining accounts and grants no factory PDA seed to the adapter. Transaction signer permissions remain available under runtime rules. The adapter must verify its caller and authorize its own PDAs. See the [handler](../../crates/factory-core/src/hook.rs) for the message contract.
+Adapter setup uses one external `Initialize` call with required kind `Curve`, `FixedPrice` or `Weighted`. It is permissionless, with no unready state, activation or reinitialization. An authenticated read of saved factory state verifies the sale kind and selected adapter program before initialization commits. The factory must exist but need not be active. The adapter claims its canonical custody PDA derived from the saved sale identity. The factory rejects missing or wrongly owned custody before preparing canonical ATAs; it cannot claim custody for the adapter. Preparation is idempotent.
 
-All three engines use shared route and completion rules from `crates/sale-policy`. A route-specific payout or completed manual settlement blocks competing and duplicate payouts. Manual completion is final even with zero assets. Graduation chosen first may also send zero assets. Fees, burns, creator-allocation claims and weighted seed recovery do not select a route. Curve custody stages project into this shared progress; LBP pools store it directly and acknowledge matching progress to the factory.
+Each kind-tagged request carries both asset amounts. Its launch-token total is the checked sum of `reserve_tokens` and `unsold_tokens`; the latter is the adapter share of unsold sale inventory. The full request hash binds both components. The adapter verifies its kind and caller and authorizes its own PDAs. The callback binds the factory to the full request hash. The factory forwards no arbitrary remaining accounts and grants no factory PDA seed to the adapter. Runtime transaction signer permissions still apply. See the [handler](../../crates/factory-core/src/hook.rs) for the message contract.
 
-The final transfers, callback and `Graduated` marker must succeed or roll back together. LBP graduation also includes final fees, unsold burn and outstanding seed return in that transaction. Pending replies bind the saved pool, factory, adapter and receipt hash before progress is committed. The factory resolves the current creator through the role-authority module; a caller hint only admits the expected holding and grants no rights. Earlier completed stages remain complete. A failure permits retry or creator-authorized manual recovery until a payout selects a route. `Graduated` proves callback success, not a DEX liquidity result. See the [local execution evidence](../architecture/workspace-guide.md#execution-and-evidence-limits) for checks and limits.
+The factory resolves the current creator through role-authority `Resolve`. A caller hint admits expected accounts; the verified reply determines the recipient and grants no caller authority. Pending replies bind the saved pool, factory, adapter and request receipt before progress commits. Final adapter and creator transfers, callback and `Graduated` marker succeed or roll back together. Earlier completed preparation stays complete. Failed hooks permit retry only, with no manual override or adapter replacement. `Graduated` proves callback success, not DEX liquidity.
 
 ## Consequences
 
-Settlement is atomic per transaction, not across the whole workflow. An immutable adapter cannot be replaced to repair a bad choice. The hook preserves existing manual payouts and allocation rights. See the [workspace guide](../architecture/workspace-guide.md#execution-and-evidence-limits) for compatibility limits and [verification boundaries](0022-verification-boundaries.md) for required evidence.
+Settlement is atomic per transaction, not across the workflow. A broken immutable adapter can lock payouts; retry cannot repair it. See [execution limits](../architecture/workspace-guide.md#execution-and-evidence-limits) and [verification boundaries](0022-verification-boundaries.md) for evidence requirements.
+
+## Graduation reserve
+
+All three sale types support an immutable protected launch-token reserve `R`. This replaces the no-reserve allocation decision from the shared-payout change. Keep it separate from purchasable inventory. `R` is a general graduation reserve. The selected adapter defines its use, which can include liquidity, distribution or burning. The reserve does not promise DEX liquidity.
+
+If an adapter is configured, send all of `R` to that adapter through the required graduation route. The launch-token adapter percentage does not reduce `R`. If no adapter is configured, pay all of `R` to the current creator through manual settlement. Keep the existing percentage split for unsold sale tokens separate from `R`.
+
+`R` is optional and can be zero, including when an adapter is configured. An adapter can require a positive reserve when its operation needs one.
+
+Creation takes separate amounts for purchasable sale inventory, `R` and creator allocation. Derive the exact initial token supply as their sum. Do not take a separate total-supply input. Reject arithmetic overflow before minting or funding. This keeps the entered sale inventory unchanged when the creator adds `R`.
+
+Use the existing ending rules to permit reserve settlement. Do not add a minimum fundraising target. A sale with no buyers can still send `R` through its configured adapter after ending. The adapter checks whether the available assets meet its needs. A rejection blocks settlement and permits retry; it does not permit manual fallback or return `R` to the creator while an adapter is configured.
+
+The authenticated graduation request must distinguish `R` from the adapter share of unsold sale tokens. Report both components and their combined launch-token amount. An adapter can apply different rules to each component or treat them alike. This distinction does not require separate token transfers.
+
+Hold `R` in factory-controlled mint custody outside the trading pool. Setup transfers only sale inventory and creator allocation out of that custody and keeps the exact reserve backed through activation. Exclude it from pricing, purchasable inventory, sell-output backing and depletion checks. Two sales with identical trading inputs and different `R` amounts must have identical trading behavior.
+
+Pay only the saved `R` amount from reserve escrow. Extra direct deposits are surplus and do not increase `R` or its settlement entitlement. Preserve the existing factory surplus policy; do not add surplus recovery as part of reserve restoration.
+
+The existing distribution adapter combines `R` with its share of unsold sale tokens and applies the saved `launch_rules` to the combined launch-token balance. Keep its full-custody balance rule, including direct deposits, and do not add a separate reserve recipient list. Preserve the request breakdown so other adapters can apply different rules to the two components.
+
+Reserve payment uses the same final settlement transaction as the other payouts and adapter callback. Completion prevents a second reserve payment. Failures roll back the current transaction, including reserve transfers. Keep creator-allocation claims separate. The creation fields, factory state, event payload and graduation request change their wire encoding; rebuild clients and guests together. See the [workspace guide](../architecture/workspace-guide.md#graduation-reserve-checks) for local checks and limits.
 
 ## Sources
 

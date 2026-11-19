@@ -12,7 +12,7 @@ Keep local tests with each package. Put cross-package build, pin, IDL and integr
 
 Repair stale E2E commands before execution and use disposable state. Report ignored, unavailable and opt-in checks. Verify each mechanism's qualified math limits, rounding and trade guards, plus namespace isolation, custody, clock, events, administration, freeze authority, private-route failure behavior and Basecamp packaging.
 
-For [curve settlement](0020-settlement-and-graduation.md), use handler tests for account guards, stages and emitted calls. Real guest tests must check payout balances, callback execution, rollback, retry and manual recovery. Record zero-amount and replay coverage at the tested layer; every host guard need not be repeated in guest tests. Emitted calls alone do not prove rollback. Current results and limits belong in the [curve evidence record](../product/curve-contract.md#acceptance-evidence).
+For [curve settlement](0020-settlement-and-graduation.md), use handler tests for account guards, stages and emitted calls. Real guest tests must check payout balances, callback execution, rollback, retry and rejection of adapter-configured manual bypass. Record zero-amount and replay coverage at the tested layer; every host guard need not be repeated in guest tests. Emitted calls alone do not prove rollback. Current results and limits belong in the [curve evidence record](../product/curve-contract.md#acceptance-evidence).
 
 ### Milestone and interface boundary
 

@@ -6,6 +6,7 @@ members = [
     "crates/curve-math",
     "crates/eligibility-policy",
     "crates/factory-core",
+    "crates/distribution-adapter",
     "crates/integer-math",
     "crates/lbp-core",
     "crates/launchpad-client",
@@ -19,6 +20,7 @@ default-members = [
     "crates/curve-math",
     "crates/eligibility-policy",
     "crates/factory-core",
+    "crates/distribution-adapter",
     "crates/integer-math",
     "crates/lbp-core",
     "crates/pool",
@@ -57,6 +59,7 @@ weighted-math-core = { path = "packages/weighted-math/crates/weighted-math-core"
 pool = { path = "crates/pool" }
 curve-core = { path = "crates/curve-core" }
 factory-core = { path = "crates/factory-core" }
+distribution-adapter = { path = "crates/distribution-adapter" }
 lbp-core = { path = "crates/lbp-core" }
 launchpad-client = { path = "crates/launchpad-client" }
 private-flow-core = { path = "crates/private-flow-core" }

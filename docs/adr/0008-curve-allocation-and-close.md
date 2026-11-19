@@ -4,11 +4,11 @@ Status: Accepted internally; To be reviewed by Logos team
 
 ## Decision
 
-Keep purchasable curve allocation `D`, owner-reserved DEX-seed allocation `R` and the separate creator allocation distinct. Trading cannot spend `R`; it remains untouched until close.
+Mint purchasable curve allocation `D`, optional graduation reserve `R` and the separate creator allocation. Check their sum before minting. Fund only `D` into the pool; keep `R` in mint custody and creator allocation in its separate escrow. `R` cannot affect trading or depletion. Post-close payouts follow the shared [graduation policy](0020-settlement-and-graduation.md).
 
 ## Reason and limits
 
-Factory allocation policy protects settlement inventory without adding launch terms to the neutral curve pool. [Ending rules](0025-sale-closing.md) govern unsold `D`. [Settlement](0020-settlement-and-graduation.md) governs payouts, including manual recovery of `R` when it is not used for graduation. These rules do not define fixed-price or weighted allocations. External Logos review remains pending.
+Factory allocation policy keeps launch terms outside the neutral curve pool. [Ending rules](0025-sale-closing.md) govern payout eligibility. These rules do not define fixed-price or weighted allocations. External Logos review remains pending.
 
 ## Sources
 

@@ -16,7 +16,9 @@ This page explains technical terms. [CONTEXT.md](../CONTEXT.md) defines the doma
 | Collateral | The token used to buy the sale token and pay protocol fees. |
 | Real reserve / virtual reserve | Real reserves are tokens that can fund swap output. Virtual reserves are pricing-only values. |
 | Invariant / `k` | A value or relation that must hold under the pricing rules. For the curve's reserve product, see [ADR 0009](adr/0009-curve-arithmetic.md). |
-| `D` / `R` | `D` is the purchasable curve allocation. `R` is the curve allocation reserved for possible DEX seeding after close. |
+| `D` | Purchasable curve allocation, separate from `R` and creator allocation. |
+| `R` | Graduation reserve of launch tokens kept outside trading. It goes to the selected adapter, or to the current creator when no adapter is configured. See [reserve rules](adr/0020-settlement-and-graduation.md#graduation-reserve). |
+| Graduation policy | Immutable adapter shares of unsold inventory and recorded collateral. See [ADR 0020](adr/0020-settlement-and-graduation.md). |
 | Allocation / supply | Tokens assigned to a purpose in a sale, or the total tokens available for that purpose. |
 | Fixed-price sale | A sale with a fixed positive price, expressed in collateral and launch-token smallest units. Token decimals affect display only. |
 | Weighted sale | A sale priced from token balances and weights that change on a schedule. |
@@ -144,3 +146,7 @@ This page explains technical terms. [CONTEXT.md](../CONTEXT.md) defines the doma
 | Smoke check / integration check | A small check that a build or package can start or be called; and a check that components work together. |
 | Build, install and package evidence | Proof that planned artifacts can be produced, installed and used. It does not by itself prove production readiness. |
 | Status labels | Terms such as `Accepted`, `To be reviewed by Logos team`, `unaudited`, and `unverified` that state decision and evidence limits. |
+
+## Distribution adapter
+
+A graduation adapter that transfers full custody balances of the two sale assets by saved percentage lists. Later deposits can be distributed after graduation. See [ADR 0036](adr/0036-graduation-adapter-delivery.md).

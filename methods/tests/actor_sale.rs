@@ -17,6 +17,17 @@ const LBP: AccountId = AccountId::new([14; 32]);
 const TREASURY: AccountId = AccountId::new([15; 32]);
 const NEXT_TREASURY: AccountId = AccountId::new([16; 32]);
 
+fn test_graduation_policy(adapter: bool) -> factory_core::GraduationPolicy {
+    if adapter {
+        factory_core::GraduationPolicy {
+            launch_bps: 2_500,
+            collateral_bps: 6_000,
+        }
+    } else {
+        factory_core::GraduationPolicy::default()
+    }
+}
+
 fn holding(owner: AccountId, definition: AccountId) -> Actor {
     Actor::new(
         token::holding_address(TOKEN_PROGRAM_ACCOUNT_ID, owner, definition),
@@ -239,6 +250,7 @@ fn fixed_state(buyer: AccountId, end: Option<u64>) -> (V03State, AccountId) {
             lbp_core::TradeMode::BuyOnly,
             0u16,
             None::<Actor>,
+            factory_core::GraduationPolicy::default(),
             lbp_core::PoolMode::FixedPrice,
             true,
             false,
@@ -264,7 +276,6 @@ fn fixed_state(buyer: AccountId, end: Option<u64>) -> (V03State, AccountId) {
             0u128,
             0u128,
             lbp_core::SettlementProgress::Unselected,
-            true,
             None::<(bool, u8)>,
         ),
     ))
@@ -338,7 +349,6 @@ fn weighted_state(buyer: AccountId) -> (V03State, AccountId) {
         token_units: 0,
     };
     sale.recorded_collateral = 100;
-    sale.seed_returned = false;
     let state = state.with_public_accounts([
         account(Actor::new(pool, LBP), borsh::to_vec(&sale).unwrap()),
         account(
@@ -1411,8 +1421,9 @@ fn curve_factory_locks_allowlist_before_setup_and_buys_with_the_same_policy() {
                 launch_salt: salt,
                 name: "Curve".into(),
                 uri: "https://example.test/curve".into(),
+                graduation_reserve: 0,
                 sale_reserve: 4_000,
-                dex_seed_reserve: 0,
+                graduation_policy: factory_core::GraduationPolicy::default(),
                 creator_allocation: 0,
                 virtual_token_reserve: 10_000,
                 virtual_collateral_reserve: 1_000,
@@ -1785,6 +1796,55 @@ fn fixed_factory_env_with_sell_fee(
     trade_mode: lbp_core::TradeMode,
     sell_fee_bps: u16,
 ) -> FixedFactoryEnv {
+    let policy = test_graduation_policy(graduation_hook.is_some());
+    fixed_factory_env_with_sell_fee_and_policy(
+        end,
+        release,
+        pause_policy,
+        ending_policy,
+        graduation_hook,
+        trade_mode,
+        sell_fee_bps,
+        policy,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn fixed_factory_env_with_sell_fee_and_policy(
+    end: Option<u64>,
+    release: factory_core::CreatorAllocationRelease,
+    pause_policy: curve_core::PausePolicy,
+    ending_policy: lbp_core::EndingPolicy,
+    graduation_hook: Option<factory_core::GraduationHook>,
+    trade_mode: lbp_core::TradeMode,
+    sell_fee_bps: u16,
+    graduation_policy: factory_core::GraduationPolicy,
+) -> FixedFactoryEnv {
+    fixed_factory_env_with_reserve(
+        end,
+        release,
+        pause_policy,
+        ending_policy,
+        graduation_hook,
+        trade_mode,
+        sell_fee_bps,
+        graduation_policy,
+        0,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn fixed_factory_env_with_reserve(
+    end: Option<u64>,
+    release: factory_core::CreatorAllocationRelease,
+    pause_policy: curve_core::PausePolicy,
+    ending_policy: lbp_core::EndingPolicy,
+    graduation_hook: Option<factory_core::GraduationHook>,
+    trade_mode: lbp_core::TradeMode,
+    sell_fee_bps: u16,
+    graduation_policy: factory_core::GraduationPolicy,
+    graduation_reserve: u128,
+) -> FixedFactoryEnv {
     const FACTORY: AccountId = AccountId::new([17; 32]);
     let key = PrivateKey::try_new([23; 32]).unwrap();
     let creator = AccountId::from(&PublicKey::new_from_private_key(&key));
@@ -1900,11 +1960,13 @@ fn fixed_factory_env_with_sell_fee(
                 ending_policy,
                 trade_mode,
                 sell_fee_bps,
+                graduation_policy,
                 graduation_hook,
                 namespace: NAMESPACE,
                 launch_salt: salt,
                 name: "Fixed".into(),
                 uri: "https://example.test/fixed".into(),
+                graduation_reserve,
                 sale_inventory: 800,
                 creator_allocation: 200,
                 price: lbp_core::FixedPrice {
@@ -2360,11 +2422,13 @@ fn weighted_factory_executes_all_stages_and_rolls_back_failed_funding() {
                 ending_policy,
                 trade_mode: lbp_core::TradeMode::BuyOnly,
                 sell_fee_bps: 0,
+                graduation_policy: factory_core::GraduationPolicy::default(),
                 graduation_hook: None,
                 namespace: NAMESPACE,
                 launch_salt: salt,
                 name: "Weighted".into(),
                 uri: "https://example.test/weighted".into(),
+                graduation_reserve: 0,
                 sale_inventory: 800,
                 creator_allocation: 200,
                 collateral_seed: 100,
@@ -2736,6 +2800,59 @@ fn weighted_factory_env_with_sell_fee(
     Vec<Actor>, // actors for factory transactions
     [u8; 32],   // salt
 ) {
+    let policy = test_graduation_policy(graduation_hook.is_some());
+    weighted_factory_env_with_sell_fee_and_policy(
+        execute_buy,
+        graduation_hook,
+        trade_mode,
+        sell_fee_bps,
+        policy,
+    )
+}
+
+fn weighted_factory_env_with_sell_fee_and_policy(
+    execute_buy: bool,
+    graduation_hook: Option<factory_core::GraduationHook>,
+    trade_mode: lbp_core::TradeMode,
+    sell_fee_bps: u16,
+    graduation_policy: factory_core::GraduationPolicy,
+) -> (
+    V03State,
+    AccountId, // factory
+    AccountId, // pool
+    AccountId, // launch (token definition)
+    AccountId, // escrow
+    PrivateKey,
+    Vec<Actor>, // actors for factory transactions
+    [u8; 32],   // salt
+) {
+    weighted_factory_env_with_reserve(
+        execute_buy,
+        graduation_hook,
+        trade_mode,
+        sell_fee_bps,
+        graduation_policy,
+        0,
+    )
+}
+
+fn weighted_factory_env_with_reserve(
+    execute_buy: bool,
+    graduation_hook: Option<factory_core::GraduationHook>,
+    trade_mode: lbp_core::TradeMode,
+    sell_fee_bps: u16,
+    graduation_policy: factory_core::GraduationPolicy,
+    graduation_reserve: u128,
+) -> (
+    V03State,
+    AccountId, // factory
+    AccountId, // pool
+    AccountId, // launch (token definition)
+    AccountId, // escrow
+    PrivateKey,
+    Vec<Actor>, // actors for factory transactions
+    [u8; 32],   // salt
+) {
     use factory_core::{CreatorAllocationRelease, LbpCreationStage, WeightedInputs};
     const FACTORY: AccountId = AccountId::new([17; 32]);
     let key = PrivateKey::try_new([23; 32]).unwrap();
@@ -2886,11 +3003,13 @@ fn weighted_factory_env_with_sell_fee(
                 ending_policy: lbp_core::EndingPolicy::Scheduled,
                 trade_mode,
                 sell_fee_bps,
+                graduation_policy,
                 graduation_hook,
                 namespace: NAMESPACE,
                 launch_salt: salt,
                 name: "Weighted".into(),
                 uri: "https://example.test/weighted".into(),
+                graduation_reserve,
                 sale_inventory: 800,
                 creator_allocation: 200,
                 collateral_seed: 100,
@@ -3020,8 +3139,16 @@ fn factory_execute_events_at(
             seed: factory_core::compute_factory_seed(NAMESPACE, salt),
         },
         lee::PublicAccountEvidence::Pda {
-            program: LBP,
-            seed: lbp_core::compute_pool_pda_seed(NAMESPACE, launch, COLLATERAL, factory),
+            program: if actors.contains(&Actor::new(pool, CURVE)) {
+                CURVE
+            } else {
+                LBP
+            },
+            seed: if actors.contains(&Actor::new(pool, CURVE)) {
+                curve_core::compute_pool_pda_seed(NAMESPACE, launch, COLLATERAL, factory)
+            } else {
+                lbp_core::compute_pool_pda_seed(NAMESPACE, launch, COLLATERAL, factory)
+            },
         },
     ];
     let mint = factory_core::compute_mint_pda(NAMESPACE, FACTORY_PROGRAM, salt);
@@ -3150,6 +3277,8 @@ fn weighted_factory_controls_and_settlement_full_flow() {
     state = clock_state(state, 300_000);
 
     let creator_collateral_before = balance(&state, creator, COLLATERAL);
+    let creator_tokens_before = balance(&state, creator, launch);
+    let supply_before = token_supply(&state, launch);
     let pool_token_before = balance(&state, pool, launch);
     let sale_before = fixed_pool(&state, pool);
     let recorded = sale_before.recorded_collateral;
@@ -3188,6 +3317,12 @@ fn weighted_factory_controls_and_settlement_full_flow() {
 
     let pool_token_after = balance(&state, pool, launch);
     assert_eq!(pool_token_after, pool_token_before - unsold);
+
+    assert_eq!(
+        balance(&state, creator, launch),
+        creator_tokens_before + unsold
+    );
+    assert_eq!(token_supply(&state, launch), supply_before);
 
     let before_retry = state.clone();
     factory_execute_at(
@@ -3455,12 +3590,10 @@ fn weighted_settlement_failures_roll_back_all_effects_and_retry_once() {
     let mut expected = sale.clone();
     expected.closure_observed = true;
     expected.recorded_collateral = 0;
-    expected.seed_returned = true;
     expected.accrued_fees = 0;
     expected.settlement_progress = lbp_core::SettlementProgress::ManualComplete;
     assert!(sale.accrued_fees > 0);
     assert!(sale.remaining_inventory > 0);
-    let definition_actor = Actor::new(launch, TOKEN_PROGRAM_ACCOUNT_ID);
     let definition_bytes = state
         .get_account_by_id(launch)
         .data
@@ -3471,38 +3604,28 @@ fn weighted_settlement_failures_roll_back_all_effects_and_retry_once() {
         panic!("expected definition")
     };
 
-    // Fail the first transfer, the burn after fee payment, or the final credit
-    // after fee payment and burn. Each failure must restore the entire runtime.
-    for fault in ["fee", "burn", "proceeds"] {
-        let (actor, original, broken, reason) = if fault == "burn" {
-            let mut broken = definition.clone();
-            let TokenState::Definition { supply, .. } = &mut broken else {
-                unreachable!()
-            };
-            *supply = 0;
-            (
-                definition_actor,
-                definition_bytes.clone(),
-                borsh::to_vec(&broken).unwrap(),
-                "InsufficientBalance",
-            )
+    // Each failed credit must restore the complete transaction.
+    for fault in ["fee", "launch", "proceeds"] {
+        let owner = if fault == "fee" { TREASURY } else { creator };
+        let asset = if fault == "launch" {
+            launch
         } else {
-            let owner = if fault == "fee" { TREASURY } else { creator };
-            let actor = holding(owner, COLLATERAL);
-            let original = state
-                .get_account_by_id(actor.account_id)
-                .data
-                .actor_state(TOKEN_PROGRAM_ACCOUNT_ID)
-                .to_vec();
-            let broken = borsh::to_vec(&TokenState::Holding {
-                owner,
-                definition: COLLATERAL,
-                kind: TokenKind::Fungible,
-                balance: u128::MAX,
-            })
-            .unwrap();
-            (actor, original, broken, "Overflow")
+            COLLATERAL
         };
+        let actor = holding(owner, asset);
+        let original = state
+            .get_account_by_id(actor.account_id)
+            .data
+            .actor_state(TOKEN_PROGRAM_ACCOUNT_ID)
+            .to_vec();
+        let broken = borsh::to_vec(&TokenState::Holding {
+            owner,
+            definition: asset,
+            kind: TokenKind::Fungible,
+            balance: u128::MAX,
+        })
+        .unwrap();
+        let reason = "Overflow";
         let mut rejected = state.clone().with_public_accounts([account(actor, broken)]);
         let before = rejected.clone();
         let nonce = rejected.get_account_by_id(creator).nonce;
@@ -3584,7 +3707,7 @@ fn weighted_settlement_failures_roll_back_all_effects_and_retry_once() {
             else {
                 panic!("expected definition")
             };
-            assert_eq!(current_supply, supply - sale.remaining_inventory);
+            assert_eq!(current_supply, supply);
             assert_eq!(balance(&repaired, escrow, launch), sale.creator_allocation);
         }
     }
@@ -4059,14 +4182,14 @@ fn fixed_expiry_settlement_and_allocation_in_both_orders_keep_surplus_while_froz
             );
             assert_eq!(
                 balance(&env.state, creator, env.launch),
-                creator_tokens + 200
+                creator_tokens + 900
             );
             assert_eq!(balance(&env.state, env.escrow, env.launch), 0);
             assert_eq!(balance(&env.state, NEXT_TREASURY, COLLATERAL), 6);
             assert_eq!(balance(&env.state, TREASURY, COLLATERAL), 0);
             assert_eq!(balance(&env.state, env.pool, COLLATERAL), 41);
             assert_eq!(balance(&env.state, env.pool, env.launch), 7);
-            assert_eq!(token_supply(&env.state, env.launch), supply - 700);
+            assert_eq!(token_supply(&env.state, env.launch), supply);
             let settled = fixed_pool(&env.state, env.pool);
             assert_eq!(
                 settled.settlement_progress,
@@ -4074,7 +4197,7 @@ fn fixed_expiry_settlement_and_allocation_in_both_orders_keep_surplus_while_froz
             );
             assert_eq!(
                 settled.remaining_inventory, 700,
-                "burn must not become sellout evidence"
+                "payout must not become sellout evidence"
             );
             assert_eq!((settled.recorded_collateral, settled.accrued_fees), (0, 0));
             env.execute(settle.clone(), 200_000).unwrap();
@@ -4169,10 +4292,10 @@ fn fixed_settlement_token_faults_restore_full_runtime_then_repair_and_pay_once()
     expected.accrued_fees = 0;
     expected.settlement_progress = lbp_core::SettlementProgress::ManualComplete;
     let supply = token_supply(&env.state, env.launch);
-    for fault in ["fee", "burn", "proceeds", "allocation"] {
+    for fault in ["fee", "launch", "proceeds", "allocation"] {
         let actor = match fault {
             "fee" => holding(TREASURY, COLLATERAL),
-            "burn" => Actor::new(env.launch, TOKEN_PROGRAM_ACCOUNT_ID),
+            "launch" => holding(creator, env.launch),
             "proceeds" => holding(creator, COLLATERAL),
             _ => holding(creator, env.launch),
         };
@@ -4209,11 +4332,7 @@ fn fixed_settlement_token_faults_restore_full_runtime_then_repair_and_pay_once()
             operation.clone(),
             200_000,
         );
-        let reason = if fault == "burn" {
-            "InsufficientBalance"
-        } else {
-            "Overflow"
-        };
+        let reason = "Overflow";
         assert!(
             matches!(&result, Err(lee::error::LeeError::ProgramExecutionFailed(error)) if error.contains(reason)),
             "{fault}: {result:?}"
@@ -4279,10 +4398,7 @@ fn fixed_settlement_token_faults_restore_full_runtime_then_repair_and_pay_once()
                 assert_eq!(balance(&state, TREASURY, COLLATERAL), sale.accrued_fees);
                 assert_eq!(balance(&state, env.pool, env.launch), 7);
                 assert_eq!(balance(&state, env.pool, COLLATERAL), 41);
-                assert_eq!(
-                    token_supply(&state, env.launch),
-                    supply - sale.remaining_inventory
-                );
+                assert_eq!(token_supply(&state, env.launch), supply);
                 assert_eq!(balance(&state, env.escrow, env.launch), 200);
                 let settled = fixed_pool(&state, env.pool);
                 assert_eq!(
@@ -4947,8 +5063,9 @@ fn factory_creation_rejects_invalid_ending_matrix_without_state_changes() {
                     launch_salt: salt,
                     name: "Curve".into(),
                     uri: "https://example.test/curve".into(),
+                    graduation_reserve: 0,
                     sale_reserve: 800,
-                    dex_seed_reserve: 0,
+                    graduation_policy: factory_core::GraduationPolicy::default(),
                     creator_allocation: 200,
                     virtual_token_reserve: 10_000,
                     virtual_collateral_reserve: 1_000,
@@ -4973,11 +5090,13 @@ fn factory_creation_rejects_invalid_ending_matrix_without_state_changes() {
                         ending_policy,
                         trade_mode: lbp_core::TradeMode::BuyOnly,
                         sell_fee_bps: 0,
+                        graduation_policy: factory_core::GraduationPolicy::default(),
                         graduation_hook: None,
                         namespace: NAMESPACE,
                         launch_salt: salt,
                         name: "Fixed".into(),
                         uri: "https://example.test/fixed".into(),
+                        graduation_reserve: 0,
                         sale_inventory: 800,
                         creator_allocation: 200,
                         price: lbp_core::FixedPrice {
@@ -5003,11 +5122,13 @@ fn factory_creation_rejects_invalid_ending_matrix_without_state_changes() {
                         ending_policy,
                         trade_mode: lbp_core::TradeMode::BuyOnly,
                         sell_fee_bps: 0,
+                        graduation_policy: factory_core::GraduationPolicy::default(),
                         graduation_hook: None,
                         namespace: NAMESPACE,
                         launch_salt: salt,
                         name: "Weighted".into(),
                         uri: "https://example.test/weighted".into(),
+                        graduation_reserve: 0,
                         sale_inventory: 800,
                         creator_allocation: 200,
                         collateral_seed: 100,
@@ -5242,7 +5363,7 @@ fn weighted_buys_reject_unbacked_claims_and_mismatched_pricing_records() {
 }
 
 #[test]
-fn fixed_zero_proceeds_settlement_burns_once_and_keeps_manual_completion_on_authenticated_retry() {
+fn fixed_zero_collateral_settlement_pays_unsold_once_and_authenticates_retry() {
     let mut env = fixed_factory_env(Some(200), factory_core::CreatorAllocationRelease::AfterEnd);
     let creator = env.creator();
     let initial = fixed_pool(&env.state, env.pool);
@@ -5269,10 +5390,7 @@ fn fixed_zero_proceeds_settlement_burns_once_and_keeps_manual_completion_on_auth
         assert_eq!(balance(&env.state, env.pool, env.launch), 0);
         assert_eq!(balance(&env.state, TREASURY, COLLATERAL), 0);
         assert_eq!(balance(&env.state, env.escrow, env.launch), 200);
-        assert_eq!(
-            token_supply(&env.state, env.launch),
-            supply - initial.remaining_inventory
-        );
+        assert_eq!(token_supply(&env.state, env.launch), supply);
     }
     reject_payout_roles(
         env.state,
@@ -5305,7 +5423,6 @@ fn weighted_seed_only_settlement_completes_manual_route_and_retries_keep_the_end
     let mut expected = initial.clone();
     expected.closure_observed = true;
     expected.recorded_collateral = 0;
-    expected.seed_returned = true;
     expected.settlement_progress = lbp_core::SettlementProgress::ManualComplete;
     state = clock_state(state, 300_000);
     for _ in 0..2 {
@@ -5352,10 +5469,7 @@ fn weighted_seed_only_settlement_completes_manual_route_and_retries_keep_the_end
         assert_eq!(balance(&state, pool, launch), 0);
         assert_eq!(balance(&state, TREASURY, COLLATERAL), 0);
         assert_eq!(balance(&state, escrow, launch), 200);
-        assert_eq!(
-            token_supply(&state, launch),
-            supply - initial.remaining_inventory
-        );
+        assert_eq!(token_supply(&state, launch), supply);
     }
     reject_payout_roles(state, factory, pool, launch, &actors, salt, true);
 }
@@ -5392,9 +5506,9 @@ fn lbp_adapter_state(env: &FixedFactoryEnv) -> factory_core::AdapterState {
 
 fn lbp_kind(weighted: bool) -> factory_core::GraduationIntentKind {
     if weighted {
-        factory_core::GraduationIntentKind::WeightedBuyerProceeds
+        factory_core::GraduationIntentKind::Weighted
     } else {
-        factory_core::GraduationIntentKind::FixedPriceProceeds
+        factory_core::GraduationIntentKind::FixedPrice
     }
 }
 
@@ -5444,7 +5558,7 @@ fn lbp_signed_call(
 
 fn initialize_lbp_adapter(
     env: &mut FixedFactoryEnv,
-    accepted_intent: Option<factory_core::GraduationIntentKind>,
+    accepted_intent: factory_core::GraduationIntentKind,
 ) {
     let adapter = lbp_adapter(env);
     env.actors.extend([
@@ -5472,11 +5586,336 @@ fn initialize_lbp_adapter(
     lbp_signed_call(env, adapter, instruction, &[&key], evidence).unwrap();
 }
 
+fn curve_factory_env(
+    hook: bool,
+    configuration: Vec<u8>,
+    policy_terms: factory_core::GraduationPolicy,
+) -> FixedFactoryEnv {
+    curve_factory_env_with_adapter(
+        hook,
+        configuration,
+        policy_terms,
+        launchpad_methods::GRADUATION_FAULT_ADAPTER_ELF,
+    )
+}
+
+fn curve_factory_env_with_adapter(
+    hook: bool,
+    configuration: Vec<u8>,
+    policy_terms: factory_core::GraduationPolicy,
+    adapter_elf: &'static [u8],
+) -> FixedFactoryEnv {
+    curve_factory_env_with_reserve(hook, configuration, policy_terms, adapter_elf, 0)
+}
+
+fn curve_factory_env_with_reserve(
+    hook: bool,
+    configuration: Vec<u8>,
+    policy_terms: factory_core::GraduationPolicy,
+    adapter_elf: &'static [u8],
+    graduation_reserve: u128,
+) -> FixedFactoryEnv {
+    const FACTORY: AccountId = AccountId::new([17; 32]);
+    let key = PrivateKey::try_new([23; 32]).unwrap();
+    let creator = AccountId::from(&PublicKey::new_from_private_key(&key));
+    let salt = [24; 32];
+    let factory = factory_core::compute_factory_pda(NAMESPACE, FACTORY, salt);
+    let launch = factory_core::compute_definition_pda(NAMESPACE, FACTORY, salt);
+    let mint = factory_core::compute_mint_pda(NAMESPACE, FACTORY, salt);
+    let escrow = factory_core::compute_escrow_pda(NAMESPACE, FACTORY, salt);
+    let role = factory_core::compute_curve_creator_role_pda(NAMESPACE, FACTORY, salt);
+    let pool = curve_core::compute_pool_pda(NAMESPACE, CURVE, launch, COLLATERAL, factory);
+    let (policy, path) = allowlist_for(pool, creator);
+    let mut state = fixed_config(
+        V03State::new()
+            .with_programs_at(
+                ([
+                    (
+                        FACTORY,
+                        Program::new(Cow::Borrowed(launchpad_methods::FACTORY_ELF)).unwrap(),
+                    ),
+                    (
+                        CURVE,
+                        Program::new(Cow::Borrowed(launchpad_methods::CURVE_ELF)).unwrap(),
+                    ),
+                    (
+                        TOKEN_PROGRAM_ACCOUNT_ID,
+                        Program::new(Cow::Borrowed(lez_compat_methods::COMPAT_TOKEN_ELF)).unwrap(),
+                    ),
+                    (
+                        factory_core::AUTHORITY_PROGRAM_ACCOUNT_ID,
+                        Program::new(Cow::Borrowed(lez_compat_methods::COMPAT_AUTHORITY_ELF))
+                            .unwrap(),
+                    ),
+                ])
+                .map(|(address, program)| (address, program, true)),
+            )
+            .with_public_accounts([
+                account(
+                    Actor::new(COLLATERAL, TOKEN_PROGRAM_ACCOUNT_ID),
+                    borsh::to_vec(&TokenState::Definition {
+                        name: "Collateral".into(),
+                        kind: TokenKind::Fungible,
+                        supply: 10_000,
+                        metadata: None,
+                    })
+                    .unwrap(),
+                ),
+                account(
+                    holding(creator, COLLATERAL),
+                    borsh::to_vec(&TokenState::Holding {
+                        owner: creator,
+                        definition: COLLATERAL,
+                        kind: TokenKind::Fungible,
+                        balance: 1_000,
+                    })
+                    .unwrap(),
+                ),
+            ]),
+        0,
+        TREASURY,
+        false,
+    );
+    let mut actors = vec![
+        Actor::new(factory, FACTORY),
+        Actor::new(pool, CURVE),
+        Actor::new(role, factory_core::AUTHORITY_PROGRAM_ACCOUNT_ID),
+        Actor::new(creator, factory_core::AUTHORITY_PROGRAM_ACCOUNT_ID),
+        Actor::new(curve_core::compute_config_pda(NAMESPACE, CURVE), CURVE),
+        Actor::new(launch, TOKEN_PROGRAM_ACCOUNT_ID),
+        Actor::new(COLLATERAL, TOKEN_PROGRAM_ACCOUNT_ID),
+    ];
+    for owner in [factory, mint, escrow, pool, creator, role, launch] {
+        actors.extend([
+            Actor::new(owner, FACTORY),
+            Actor::new(owner, CURVE),
+            Actor::new(owner, TOKEN_PROGRAM_ACCOUNT_ID),
+            holding(owner, launch),
+            holding(owner, COLLATERAL),
+        ]);
+    }
+    let execute = |state: &mut V03State, instruction: factory_core::Message| {
+        let mut message = Message::try_new(
+            Actor::new(factory, FACTORY),
+            actors.clone(),
+            BTreeMap::from([(creator, state.get_account_by_id(creator).nonce)]),
+            instruction,
+        )
+        .unwrap();
+        message.admission_evidence = vec![
+            lee::PublicAccountEvidence::Pda {
+                program: FACTORY,
+                seed: factory_core::compute_factory_seed(NAMESPACE, salt),
+            },
+            lee::PublicAccountEvidence::Pda {
+                program: CURVE,
+                seed: curve_core::compute_pool_pda_seed(NAMESPACE, launch, COLLATERAL, factory),
+            },
+        ];
+        for owner in [factory, mint, escrow, pool, creator] {
+            for definition in [launch, COLLATERAL] {
+                message
+                    .admission_evidence
+                    .push(lee::PublicAccountEvidence::Pda {
+                        program: TOKEN_PROGRAM_ACCOUNT_ID,
+                        seed: token::holding_seed(owner, definition),
+                    });
+            }
+        }
+        let witnesses = WitnessSet::for_message(&message, &[&key]);
+        state
+            .transition_from_public_transaction(&PublicTransaction::new(message, witnesses), 1, 0)
+            .unwrap();
+    };
+    execute(
+        &mut state,
+        factory_core::Message::CreateFactoryPool {
+            buy_policy: policy.clone(),
+            pause_policy: curve_core::PausePolicy::Disabled,
+            ending_policy: curve_core::EndingPolicy::Scheduled,
+            trade_mode: 0,
+            sell_fee_bps: 0,
+            graduation_hook_program_id: hook.then_some(LBP_HOOK_PROGRAM),
+            graduation_hook_configuration: configuration,
+            namespace: NAMESPACE,
+            launch_salt: salt,
+            name: "Curve".into(),
+            uri: "https://example.test/curve".into(),
+            graduation_reserve,
+            sale_reserve: 4_000,
+            graduation_policy: policy_terms,
+            creator_allocation: 200,
+            virtual_token_reserve: 10_000,
+            virtual_collateral_reserve: 1_000,
+            end_timestamp: Some(300),
+            curve_program_id: CURVE,
+            collateral_definition_id: COLLATERAL,
+            creator,
+            now: 1,
+        },
+    );
+    for _ in 0..3 {
+        let stored = factory_core::FactoryState::decode(
+            state.get_account_by_id(factory).data.actor_state(FACTORY),
+        )
+        .unwrap();
+        assert_eq!(stored.buy_policy, policy);
+        assert_eq!(stored.ending_policy, curve_core::EndingPolicy::Scheduled);
+        assert_eq!(stored.sell_fee_bps, 0u16);
+        execute(
+            &mut state,
+            factory_core::Message::ContinueCreation { creator, now: 1 },
+        );
+    }
+    actors.extend([
+        clock_core::clock_actor(),
+        holding(TREASURY, COLLATERAL),
+        holding(NEXT_TREASURY, COLLATERAL),
+    ]);
+    state = clock_state(state, 100_000)
+        .with_programs_at(
+            ([(
+                LBP_HOOK_PROGRAM,
+                Program::new(Cow::Borrowed(adapter_elf)).unwrap(),
+            )])
+            .map(|(address, program)| (address, program, true)),
+        )
+        .with_public_accounts([
+            token_holding(TREASURY, COLLATERAL, 0),
+            token_holding(NEXT_TREASURY, COLLATERAL, 0),
+        ]);
+    let mut env = FixedFactoryEnv {
+        state,
+        factory,
+        pool,
+        launch,
+        escrow,
+        key,
+        actors,
+        salt,
+        path,
+    };
+    if hook {
+        initialize_lbp_adapter(&mut env, factory_core::GraduationIntentKind::Curve);
+    }
+    let creator = env.creator();
+    let mut message = Message::try_new(
+        Actor::new(creator, CURVE),
+        env.actors.clone(),
+        BTreeMap::from([(creator, env.state.get_account_by_id(creator).nonce)]),
+        CurveMessage::Execute {
+            pool,
+            instruction: Box::new(CurveMessage::SwapExactOutput {
+                membership: Some(env.path.clone()),
+                amount_out: 1_000,
+                max_amount_in: 112,
+                token_in: COLLATERAL,
+                now: 100,
+            }),
+        },
+    )
+    .unwrap();
+    message
+        .admission_evidence
+        .push(lee::PublicAccountEvidence::Pda {
+            program: TOKEN_PROGRAM_ACCOUNT_ID,
+            seed: token::holding_seed(creator, launch),
+        });
+    let witnesses = WitnessSet::for_message(&message, &[&env.key]);
+    env.state
+        .transition_from_public_transaction(&PublicTransaction::new(message, witnesses), 1, 100_000)
+        .unwrap();
+    env.state = clock_state(env.state, 300_000);
+    env
+}
+
+fn lbp_manual_env(weighted: bool, buy: bool) -> FixedFactoryEnv {
+    if weighted {
+        let (state, factory, pool, launch, escrow, key, actors, salt) =
+            weighted_factory_env_with_buy(buy);
+        let creator = AccountId::from(&PublicKey::new_from_private_key(&key));
+        let (_, path) = allowlist_for(pool, creator);
+        FixedFactoryEnv {
+            state: clock_state(state, 300_000),
+            factory,
+            pool,
+            launch,
+            escrow,
+            key,
+            actors,
+            salt,
+            path,
+        }
+    } else {
+        let mut env =
+            fixed_factory_env(Some(300), factory_core::CreatorAllocationRelease::AfterEnd);
+        if buy {
+            env.buy(100, 156);
+        }
+        env.state = clock_state(env.state, 300_000);
+        env
+    }
+}
+
 fn lbp_graduation_env(
     weighted: bool,
     buy: bool,
     configuration: Vec<u8>,
-    accepted_intent: Option<factory_core::GraduationIntentKind>,
+    accepted_intent: factory_core::GraduationIntentKind,
+) -> FixedFactoryEnv {
+    lbp_graduation_env_with_policy(
+        weighted,
+        buy,
+        configuration,
+        accepted_intent,
+        test_graduation_policy(true),
+    )
+}
+
+fn lbp_graduation_env_with_policy(
+    weighted: bool,
+    buy: bool,
+    configuration: Vec<u8>,
+    accepted_intent: factory_core::GraduationIntentKind,
+    graduation_policy: factory_core::GraduationPolicy,
+) -> FixedFactoryEnv {
+    lbp_graduation_env_with_adapter(
+        weighted,
+        buy,
+        configuration,
+        accepted_intent,
+        graduation_policy,
+        launchpad_methods::GRADUATION_FAULT_ADAPTER_ELF,
+    )
+}
+
+fn lbp_graduation_env_with_adapter(
+    weighted: bool,
+    buy: bool,
+    configuration: Vec<u8>,
+    accepted_intent: factory_core::GraduationIntentKind,
+    graduation_policy: factory_core::GraduationPolicy,
+    adapter_elf: &'static [u8],
+) -> FixedFactoryEnv {
+    lbp_graduation_env_with_reserve(
+        weighted,
+        buy,
+        configuration,
+        accepted_intent,
+        graduation_policy,
+        adapter_elf,
+        0,
+    )
+}
+
+fn lbp_graduation_env_with_reserve(
+    weighted: bool,
+    buy: bool,
+    configuration: Vec<u8>,
+    accepted_intent: factory_core::GraduationIntentKind,
+    graduation_policy: factory_core::GraduationPolicy,
+    adapter_elf: &'static [u8],
+    graduation_reserve: u128,
 ) -> FixedFactoryEnv {
     let hook = Some(factory_core::GraduationHook {
         program_id: LBP_HOOK_PROGRAM,
@@ -5484,7 +5923,14 @@ fn lbp_graduation_env(
     });
     let mut env = if weighted {
         let (state, factory, pool, launch, escrow, key, actors, salt) =
-            weighted_factory_env_with_hook(buy, hook);
+            weighted_factory_env_with_reserve(
+                buy,
+                hook,
+                lbp_core::TradeMode::BuyOnly,
+                0,
+                graduation_policy,
+                graduation_reserve,
+            );
         let creator = AccountId::from(&PublicKey::new_from_private_key(&key));
         let (_, path) = allowlist_for(pool, creator);
         FixedFactoryEnv {
@@ -5499,11 +5945,16 @@ fn lbp_graduation_env(
             path,
         }
     } else {
-        let mut env = fixed_factory_env_with_hook(
+        let mut env = fixed_factory_env_with_reserve(
             Some(300),
             factory_core::CreatorAllocationRelease::AfterEnd,
             curve_core::PausePolicy::AuthorityControlled,
+            lbp_core::EndingPolicy::Either,
             hook,
+            lbp_core::TradeMode::BuyOnly,
+            0,
+            graduation_policy,
+            graduation_reserve,
         );
         if buy {
             env.buy(100, 156);
@@ -5511,13 +5962,10 @@ fn lbp_graduation_env(
         env
     };
     env.state = env.state.with_programs_at(
-        [(
+        ([(
             LBP_HOOK_PROGRAM,
-            Program::new(Cow::Borrowed(
-                launchpad_methods::GRADUATION_FAULT_ADAPTER_ELF,
-            ))
-            .unwrap(),
-        )]
+            Program::new(Cow::Borrowed(adapter_elf)).unwrap(),
+        )])
         .map(|(address, program)| (address, program, true)),
     );
     initialize_lbp_adapter(&mut env, accepted_intent);
@@ -5532,7 +5980,6 @@ fn lbp_graduation_env(
     );
     let pool = fixed_pool(&env.state, env.pool);
     assert_eq!(pool.graduation_adapter, Some(lbp_adapter(&env)));
-    assert_eq!(pool.seed_returned, !weighted);
     env.state = clock_state(env.state, 300_000);
     env
 }
@@ -5589,17 +6036,14 @@ fn assert_lbp_graduated(
 ) {
     let creator = env.creator();
     let adapter = lbp_adapter(env).account_id;
-    let seed = if weighted && !initial.seed_returned {
-        100
-    } else {
-        0
-    };
-    let proceeds = initial.recorded_collateral - seed;
+    let launch_share =
+        initial.remaining_inventory * u128::from(initial.graduation_policy.launch_bps) / 10_000;
+    let collateral_share =
+        initial.recorded_collateral * u128::from(initial.graduation_policy.collateral_bps) / 10_000;
     let mut expected = initial.clone();
     expected.closure_observed = true;
     expected.recorded_collateral = 0;
     expected.accrued_fees = 0;
-    expected.seed_returned = true;
     expected.settlement_progress = lbp_core::SettlementProgress::Graduated;
     assert_eq!(fixed_pool(&env.state, env.pool), expected);
     let saved = lbp_launch(env);
@@ -5610,10 +6054,10 @@ fn assert_lbp_graduated(
     assert_eq!(saved.creator_allocation_released, allocation_claimed);
     assert_eq!(
         balance(&env.state, creator, COLLATERAL),
-        creator_collateral + seed
+        creator_collateral + initial.recorded_collateral - collateral_share
     );
-    assert_eq!(balance(&env.state, adapter, COLLATERAL), proceeds);
-    assert_eq!(balance(&env.state, adapter, env.launch), 0);
+    assert_eq!(balance(&env.state, adapter, COLLATERAL), collateral_share);
+    assert_eq!(balance(&env.state, adapter, env.launch), launch_share);
     assert_eq!(
         balance(&env.state, NEXT_TREASURY, COLLATERAL),
         initial.accrued_fees
@@ -5631,10 +6075,7 @@ fn assert_lbp_graduated(
         balance(&env.state, env.escrow, env.launch),
         if allocation_claimed { 0 } else { 200 }
     );
-    assert_eq!(
-        token_supply(&env.state, env.launch),
-        supply - initial.remaining_inventory
-    );
+    assert_eq!(token_supply(&env.state, env.launch), supply);
     let receipt = lbp_adapter_state(env).receipt.unwrap();
     assert_eq!(
         receipt,
@@ -5645,30 +6086,34 @@ fn assert_lbp_graduated(
             token_definition_id: env.launch,
             collateral_definition_id: COLLATERAL,
             intent: if weighted {
-                factory_core::GraduationIntent::WeightedBuyerProceeds {
-                    collateral: proceeds,
+                factory_core::GraduationIntent::Weighted {
+                    launch_tokens: launch_share,
+                    collateral: collateral_share,
                 }
             } else {
-                factory_core::GraduationIntent::FixedPriceProceeds {
-                    collateral: proceeds,
+                factory_core::GraduationIntent::FixedPrice {
+                    launch_tokens: launch_share,
+                    collateral: collateral_share,
                 }
             },
+            reserve_tokens: 0,
+            unsold_tokens: launch_share,
             configuration: saved.graduation_hook.unwrap().configuration,
         }
     );
-    assert_eq!(receipt.intent.amounts(), (0, proceeds));
+    assert_eq!(receipt.intent.amounts(), (launch_share, collateral_share));
     assert_eq!(receipt.intent.kind(), lbp_kind(weighted));
 }
 
 #[test]
-fn lbp_graduation_uses_only_buyer_proceeds_with_both_allocation_orders_while_paused_and_frozen() {
+fn lbp_graduation_splits_both_assets_with_both_allocation_orders_while_paused_and_frozen() {
     for weighted in [false, true] {
         for allocation_first in [false, true] {
             let mut env = lbp_graduation_env(
                 weighted,
                 true,
                 b"saved-lbp-route".to_vec(),
-                Some(lbp_kind(weighted)),
+                lbp_kind(weighted),
             );
             donate_lbp_surplus(&mut env);
             let creator = env.creator();
@@ -5719,15 +6164,22 @@ fn lbp_graduation_uses_only_buyer_proceeds_with_both_allocation_orders_while_pau
             env.execute(lbp_allocation_message(weighted, creator), 300_000)
                 .unwrap();
             assert_lbp_graduated(&env, weighted, &initial, collateral, supply, true, true);
-            assert_eq!(balance(&env.state, creator, env.launch), tokens + 200);
+            assert_eq!(
+                balance(&env.state, creator, env.launch),
+                tokens + 200 + initial.remaining_inventory - initial.remaining_inventory / 4
+            );
             reject_lbp_factory(
                 &mut env,
                 lbp_hook_message(creator),
                 300_000,
                 "AlreadySettled",
             );
-            env.execute(lbp_manual_message(weighted, creator), 300_000)
-                .unwrap();
+            reject_lbp_factory(
+                &mut env,
+                lbp_manual_message(weighted, creator),
+                300_000,
+                "InvalidTerms",
+            );
             assert_lbp_graduated(&env, weighted, &initial, collateral, supply, true, true);
         }
     }
@@ -5736,7 +6188,7 @@ fn lbp_graduation_uses_only_buyer_proceeds_with_both_allocation_orders_while_pau
 #[test]
 fn lbp_graduation_requires_the_inclusive_scheduled_end_before_any_effect() {
     for weighted in [false, true] {
-        let mut env = lbp_graduation_env(weighted, true, vec![], Some(lbp_kind(weighted)));
+        let mut env = lbp_graduation_env(weighted, true, vec![], lbp_kind(weighted));
         let creator = env.creator();
         let before = env.state.clone();
         let nonce = env.state.get_account_by_id(creator).nonce;
@@ -5756,138 +6208,117 @@ fn lbp_graduation_requires_the_inclusive_scheduled_end_before_any_effect() {
 }
 
 #[test]
-fn weighted_graduation_returns_seed_to_the_current_creator_after_consented_role_transfer() {
-    use lez_compat_core::authority;
-    let mut env = lbp_graduation_env(true, true, vec![], Some(lbp_kind(true)));
-    let old_creator = env.creator();
-    let old_key = PrivateKey::try_new([23; 32]).unwrap();
-    let next_key = PrivateKey::try_new([95; 32]).unwrap();
-    let next_creator = AccountId::from(&PublicKey::new_from_private_key(&next_key));
-    let role = lbp_launch(&env).creator_role_id;
-    env.actors.extend([
-        Actor::new(next_creator, factory_core::AUTHORITY_PROGRAM_ACCOUNT_ID),
-        Actor::new(next_creator, TOKEN_PROGRAM_ACCOUNT_ID),
-        holding(next_creator, COLLATERAL),
-        holding(next_creator, env.launch),
-    ]);
-    lbp_signed_call(
-        &mut env,
-        Actor::new(old_creator, factory_core::AUTHORITY_PROGRAM_ACCOUNT_ID),
-        authority::Message::Transfer {
-            role,
-            successor: next_creator,
-        },
-        &[&old_key, &next_key],
-        vec![],
-    )
-    .unwrap();
-    let old_collateral = balance(&env.state, old_creator, COLLATERAL);
-    reject_lbp_factory(
-        &mut env,
-        lbp_hook_message(old_creator),
-        300_000,
-        "Unauthorized",
-    );
-    reject_lbp_factory(
-        &mut env,
-        lbp_manual_message(true, old_creator),
-        300_000,
-        "Unauthorized",
-    );
-    env.key = next_key;
-    env.state = fixed_config(env.state, 100, NEXT_TREASURY, true);
-    let initial = fixed_pool(&env.state, env.pool);
-    let supply = token_supply(&env.state, env.launch);
-    let caller = PrivateKey::try_new([96; 32]).unwrap();
-    let events = factory_execute_events_at(
-        &mut env.state,
-        env.factory,
-        &env.actors,
-        &caller,
-        env.salt,
-        env.launch,
-        env.pool,
-        lbp_hook_message(next_creator),
-        300_000,
-    )
-    .unwrap();
-    assert_lbp_settlement_events(
-        &events,
-        env.pool,
-        &initial,
-        next_creator,
-        NEXT_TREASURY,
-        Some(lbp_adapter(&env).account_id),
-    );
-    assert_lbp_graduated_event(&events, &env, true, initial.recorded_collateral - 100);
-    assert_lbp_graduated(&env, true, &initial, 0, supply, false, false);
-    assert_eq!(balance(&env.state, old_creator, COLLATERAL), old_collateral);
-    assert_eq!(balance(&env.state, next_creator, COLLATERAL), 100);
-    reject_lbp_factory(
-        &mut env,
-        lbp_manual_message(true, old_creator),
-        300_000,
-        "Unauthorized",
-    );
-}
-
-#[test]
-fn lbp_empty_manual_completion_blocks_hooks_without_second_burn_or_seed_payment() {
+fn lbp_graduation_pays_both_remainders_to_the_current_creator_after_role_transfer() {
     for weighted in [false, true] {
-        let mut env = lbp_graduation_env(weighted, false, vec![], Some(lbp_kind(weighted)));
-        env.state = fixed_config(env.state, 100, NEXT_TREASURY, true);
-        let creator = env.creator();
-        let collateral = balance(&env.state, creator, COLLATERAL);
-        let supply = token_supply(&env.state, env.launch);
-        env.execute(lbp_manual_message(weighted, creator), 300_000)
-            .unwrap();
-        let settled = fixed_pool(&env.state, env.pool);
-        assert_eq!(
-            settled.settlement_progress,
-            lbp_core::SettlementProgress::ManualComplete
-        );
-        assert_eq!(
-            lbp_launch(&env).settlement_progress,
-            lbp_core::SettlementProgress::ManualComplete
-        );
-        assert!(settled.seed_returned);
-        assert_eq!(
-            balance(&env.state, creator, COLLATERAL),
-            collateral + if weighted { 100 } else { 0 }
-        );
-        assert_eq!(token_supply(&env.state, env.launch), supply - 800);
+        use lez_compat_core::authority;
+        let mut env = lbp_graduation_env(weighted, true, vec![], lbp_kind(weighted));
+        let old_creator = env.creator();
+        let old_key = PrivateKey::try_new([23; 32]).unwrap();
+        let next_key = PrivateKey::try_new([95; 32]).unwrap();
+        let next_creator = AccountId::from(&PublicKey::new_from_private_key(&next_key));
+        let role = lbp_launch(&env).creator_role_id;
+        env.actors.extend([
+            Actor::new(next_creator, factory_core::AUTHORITY_PROGRAM_ACCOUNT_ID),
+            Actor::new(next_creator, TOKEN_PROGRAM_ACCOUNT_ID),
+            holding(next_creator, COLLATERAL),
+            holding(next_creator, env.launch),
+        ]);
+        lbp_signed_call(
+            &mut env,
+            Actor::new(old_creator, factory_core::AUTHORITY_PROGRAM_ACCOUNT_ID),
+            authority::Message::Transfer {
+                role,
+                successor: next_creator,
+            },
+            &[&old_key, &next_key],
+            vec![],
+        )
+        .unwrap();
+        let old_tokens = balance(&env.state, old_creator, env.launch);
+        let old_collateral = balance(&env.state, old_creator, COLLATERAL);
         reject_lbp_factory(
             &mut env,
-            lbp_hook_message(creator),
+            lbp_hook_message(old_creator),
             300_000,
-            "ManualPayoutStarted",
+            "Unauthorized",
         );
-        assert!(lbp_adapter_state(&env).receipt.is_none());
-        env.execute(lbp_manual_message(weighted, creator), 300_000)
-            .unwrap();
-        assert_eq!(fixed_pool(&env.state, env.pool), settled);
-        assert_eq!(
-            balance(&env.state, creator, COLLATERAL),
-            collateral + if weighted { 100 } else { 0 }
+        reject_lbp_factory(
+            &mut env,
+            lbp_manual_message(weighted, old_creator),
+            300_000,
+            "InvalidTerms",
         );
-        assert_eq!(token_supply(&env.state, env.launch), supply - 800);
-        assert_eq!(balance(&env.state, env.escrow, env.launch), 200);
-        reject_payout_roles(
-            env.state,
+        env.key = next_key;
+        env.state = fixed_config(env.state, 100, NEXT_TREASURY, true);
+        let initial = fixed_pool(&env.state, env.pool);
+        let supply = token_supply(&env.state, env.launch);
+        let caller = PrivateKey::try_new([96; 32]).unwrap();
+        let events = factory_execute_events_at(
+            &mut env.state,
             env.factory,
-            env.pool,
-            env.launch,
             &env.actors,
+            &caller,
             env.salt,
-            weighted,
+            env.launch,
+            env.pool,
+            lbp_hook_message(next_creator),
+            300_000,
+        )
+        .unwrap();
+        assert_lbp_settlement_events(
+            &events,
+            env.pool,
+            &initial,
+            next_creator,
+            NEXT_TREASURY,
+            Some(lbp_adapter(&env).account_id),
+        );
+        assert_lbp_graduated_event(&events, &env, weighted, &initial);
+        assert_lbp_graduated(&env, weighted, &initial, 0, supply, false, false);
+        assert_eq!(balance(&env.state, old_creator, COLLATERAL), old_collateral);
+        assert_eq!(
+            balance(&env.state, next_creator, COLLATERAL),
+            initial.recorded_collateral - initial.recorded_collateral * 6 / 10
+        );
+        reject_lbp_factory(
+            &mut env,
+            lbp_manual_message(weighted, old_creator),
+            300_000,
+            "InvalidTerms",
+        );
+        assert_eq!(balance(&env.state, old_creator, env.launch), old_tokens);
+        assert_eq!(
+            balance(&env.state, next_creator, env.launch),
+            initial.remaining_inventory - initial.remaining_inventory / 4
         );
     }
 }
 
 #[test]
-fn lbp_zero_first_graduation_burns_once_and_returns_only_the_weighted_seed() {
+fn lbp_configured_adapter_rejects_manual_settlement_before_and_after_graduation() {
     for weighted in [false, true] {
-        let mut env = lbp_graduation_env(weighted, false, vec![], Some(lbp_kind(weighted)));
+        let mut env = lbp_graduation_env(weighted, false, vec![], lbp_kind(weighted));
+        let creator = env.creator();
+        reject_lbp_factory(
+            &mut env,
+            lbp_manual_message(weighted, creator),
+            300_000,
+            "InvalidTerms",
+        );
+        env.execute(lbp_hook_message(creator), 300_000).unwrap();
+        reject_lbp_factory(
+            &mut env,
+            lbp_manual_message(weighted, creator),
+            300_000,
+            "InvalidTerms",
+        );
+    }
+}
+
+#[test]
+fn lbp_no_buyers_graduation_splits_inventory_and_weighted_seed_without_burning() {
+    for weighted in [false, true] {
+        let mut env = lbp_graduation_env(weighted, false, vec![], lbp_kind(weighted));
         env.state = fixed_config(env.state, 100, NEXT_TREASURY, true);
         let creator = env.creator();
         let initial = fixed_pool(&env.state, env.pool);
@@ -5904,7 +6335,20 @@ fn lbp_zero_first_graduation_burns_once_and_returns_only_the_weighted_seed() {
             NEXT_TREASURY,
             Some(lbp_adapter(&env).account_id),
         );
-        assert_lbp_graduated_event(&events, &env, weighted, 0);
+        assert_lbp_graduated_event(&events, &env, weighted, &initial);
+        assert_eq!(
+            balance(&env.state, lbp_adapter(&env).account_id, env.launch),
+            200
+        );
+        assert_eq!(balance(&env.state, creator, env.launch), 600);
+        assert_eq!(
+            balance(&env.state, lbp_adapter(&env).account_id, COLLATERAL),
+            if weighted { 60 } else { 0 }
+        );
+        assert_eq!(
+            balance(&env.state, creator, COLLATERAL),
+            collateral + if weighted { 40 } else { 0 }
+        );
         assert_lbp_graduated(&env, weighted, &initial, collateral, supply, false, false);
         reject_lbp_factory(
             &mut env,
@@ -5912,10 +6356,11 @@ fn lbp_zero_first_graduation_burns_once_and_returns_only_the_weighted_seed() {
             300_000,
             "AlreadySettled",
         );
-        assert!(
-            env.execute_events(lbp_manual_message(weighted, creator), 300_000)
-                .unwrap()
-                .is_empty()
+        reject_lbp_factory(
+            &mut env,
+            lbp_manual_message(weighted, creator),
+            300_000,
+            "InvalidTerms",
         );
         assert_lbp_graduated(&env, weighted, &initial, collateral, supply, false, false);
     }
@@ -5923,7 +6368,7 @@ fn lbp_zero_first_graduation_burns_once_and_returns_only_the_weighted_seed() {
 
 fn reject_lbp_adapter_reinitialization(
     env: &mut FixedFactoryEnv,
-    accepted_intent: Option<factory_core::GraduationIntentKind>,
+    accepted_intent: factory_core::GraduationIntentKind,
 ) {
     let before = env.state.clone();
     let adapter = lbp_adapter(env);
@@ -5951,82 +6396,53 @@ fn reject_lbp_adapter_reinitialization(
 }
 
 #[test]
-fn lbp_graduation_allows_permissionless_adapter_activation_once_and_preserves_receipts() {
+fn lbp_adapter_initialization_is_immutable_before_and_after_graduation() {
     for weighted in [false, true] {
-        let mut env = lbp_graduation_env(weighted, true, vec![], None);
+        let mut env = lbp_graduation_env(weighted, true, vec![], lbp_kind(weighted));
+        assert_eq!(lbp_adapter_state(&env).accepted_intent, lbp_kind(weighted));
+        for accepted in [
+            lbp_kind(weighted),
+            lbp_kind(!weighted),
+            factory_core::GraduationIntentKind::Curve,
+        ] {
+            reject_lbp_adapter_reinitialization(&mut env, accepted);
+        }
         let creator = env.creator();
-        reject_lbp_factory(
-            &mut env,
-            lbp_hook_message(creator),
-            300_000,
-            "AdapterNotReady",
-        );
-        reject_lbp_adapter_reinitialization(&mut env, None);
-        let mut expected = lbp_adapter_state(&env);
-        expected.accepted_intent = Some(lbp_kind(weighted));
-        let adapter = lbp_adapter(&env);
-        let salt = env.salt;
-        lbp_signed_call(
-            &mut env,
-            adapter,
-            factory_core::AdapterMessage::Initialize {
-                factory_program_id: LBP_FACTORY_PROGRAM,
-                namespace: NAMESPACE,
-                launch_salt: salt,
-                accepted_intent: Some(lbp_kind(weighted)),
-            },
-            &[],
-            vec![],
-        )
-        .unwrap();
-        assert_eq!(lbp_adapter_state(&env), expected);
-        for accepted in [
-            None,
-            Some(lbp_kind(weighted)),
-            Some(lbp_kind(!weighted)),
-            Some(factory_core::GraduationIntentKind::CurveReserves),
-        ] {
-            reject_lbp_adapter_reinitialization(&mut env, accepted);
-        }
-        env.state = fixed_config(
-            env.state,
-            if weighted { 100 } else { 333 },
-            NEXT_TREASURY,
-            false,
-        );
-        let initial = fixed_pool(&env.state, env.pool);
-        let collateral = balance(&env.state, creator, COLLATERAL);
-        let supply = token_supply(&env.state, env.launch);
         env.execute(lbp_hook_message(creator), 300_000).unwrap();
-        assert_lbp_graduated(&env, weighted, &initial, collateral, supply, false, false);
+        let receipt = lbp_adapter_state(&env).receipt.unwrap();
         for accepted in [
-            None,
-            Some(lbp_kind(weighted)),
-            Some(lbp_kind(!weighted)),
-            Some(factory_core::GraduationIntentKind::CurveReserves),
+            lbp_kind(weighted),
+            lbp_kind(!weighted),
+            factory_core::GraduationIntentKind::Curve,
         ] {
             reject_lbp_adapter_reinitialization(&mut env, accepted);
         }
-        assert_lbp_graduated(&env, weighted, &initial, collateral, supply, false, false);
+        assert_eq!(lbp_adapter_state(&env).receipt, Some(receipt));
     }
 }
 
 #[test]
-fn lbp_graduation_rejects_wrong_kind_adapters_and_cannot_change_their_intent() {
+fn lbp_graduation_rejects_malicious_wrong_kind_adapter_state_and_cannot_change_its_intent() {
     for weighted in [false, true] {
         for accepted in [
-            Some(lbp_kind(!weighted)),
-            Some(factory_core::GraduationIntentKind::CurveReserves),
+            lbp_kind(!weighted),
+            factory_core::GraduationIntentKind::Curve,
         ] {
-            let mut env = lbp_graduation_env(weighted, true, vec![], accepted);
+            let mut env = lbp_graduation_env(weighted, true, vec![], lbp_kind(weighted));
+            let adapter = lbp_adapter(&env);
+            let mut malicious = lbp_adapter_state(&env);
+            malicious.accepted_intent = accepted;
+            env.state = env
+                .state
+                .with_public_accounts([account(adapter, borsh::to_vec(&malicious).unwrap())]);
             let creator = env.creator();
             reject_lbp_factory(
                 &mut env,
                 lbp_hook_message(creator),
                 300_000,
-                "AdapterNotReady",
+                "AdapterIntentMismatch",
             );
-            for replacement in [None, accepted, Some(lbp_kind(weighted))] {
+            for replacement in [accepted, lbp_kind(weighted)] {
                 reject_lbp_adapter_reinitialization(&mut env, replacement);
             }
             assert_eq!(lbp_adapter_state(&env).accepted_intent, accepted);
@@ -6037,7 +6453,7 @@ fn lbp_graduation_rejects_wrong_kind_adapters_and_cannot_change_their_intent() {
 #[test]
 fn lbp_graduation_rejects_missing_or_wrong_creator_hints_including_unrelated_roles() {
     for weighted in [false, true] {
-        let mut env = lbp_graduation_env(weighted, true, vec![], Some(lbp_kind(weighted)));
+        let mut env = lbp_graduation_env(weighted, true, vec![], lbp_kind(weighted));
         for hint in [None, Some(AccountId::default())] {
             reject_lbp_factory(
                 &mut env,
@@ -6084,20 +6500,23 @@ fn lbp_graduation_rejects_saved_adapter_and_pool_custody_mismatches_without_effe
             "kind",
             "factory",
             "progress",
+            "policy",
         ] {
-            let mut env = lbp_graduation_env(weighted, true, vec![], Some(lbp_kind(weighted)));
+            let mut env = lbp_graduation_env(weighted, true, vec![], lbp_kind(weighted));
             let creator = env.creator();
             let adapter = lbp_adapter(&env);
             let reason;
-            if fault == "adapter" || fault == "progress" {
+            if matches!(fault, "adapter" | "progress" | "policy") {
                 let mut pool = fixed_pool(&env.state, env.pool);
                 if fault == "adapter" {
                     pool.graduation_adapter =
                         Some(Actor::new(adapter.account_id, AccountId::new([93; 32])));
                     reason = "InvalidCustody";
+                } else if fault == "policy" {
+                    pool.graduation_policy.launch_bps += 1;
+                    reason = "InvalidCustody";
                 } else {
                     pool.settlement_progress = lbp_core::SettlementProgress::ManualComplete;
-                    pool.seed_returned = true;
                     pool.recorded_collateral = 0;
                     pool.accrued_fees = 0;
                     reason = "InvalidState";
@@ -6149,25 +6568,22 @@ fn lbp_graduation_late_faults_roll_back_every_effect_and_repaired_retry_pays_onc
     for weighted in [false, true] {
         for fault in [
             "fee",
-            "burn",
-            "seed",
+            "creator_launch",
+            "creator_collateral",
+            "adapter_launch",
             "adapter",
             "callback",
             "ack",
             "hash",
             "completed",
         ] {
-            if fault == "seed" && !weighted {
-                continue;
-            }
             let configuration = match fault {
                 "callback" => b"reject-callback".to_vec(),
                 "ack" => b"corrupt-final-ack".to_vec(),
                 "hash" => b"corrupt-request-hash".to_vec(),
                 _ => vec![],
             };
-            let mut env =
-                lbp_graduation_env(weighted, true, configuration, Some(lbp_kind(weighted)));
+            let mut env = lbp_graduation_env(weighted, true, configuration, lbp_kind(weighted));
             donate_lbp_surplus(&mut env);
             env.state = fixed_config(env.state, 100, NEXT_TREASURY, true);
             let creator = env.creator();
@@ -6176,17 +6592,22 @@ fn lbp_graduation_late_faults_roll_back_every_effect_and_repaired_retry_pays_onc
             let supply = token_supply(&env.state, env.launch);
             let mut repair = None;
             let reason = match fault {
-                "fee" | "seed" | "adapter" => {
+                "fee" | "creator_collateral" | "creator_launch" | "adapter_launch" | "adapter" => {
                     let owner = match fault {
                         "fee" => NEXT_TREASURY,
-                        "seed" => creator,
+                        "creator_collateral" | "creator_launch" => creator,
                         _ => lbp_adapter(&env).account_id,
                     };
-                    let actor = holding(owner, COLLATERAL);
-                    let original = if fault == "adapter" {
+                    let asset = if matches!(fault, "creator_launch" | "adapter_launch") {
+                        env.launch
+                    } else {
+                        COLLATERAL
+                    };
+                    let actor = holding(owner, asset);
+                    let original = if matches!(fault, "adapter" | "adapter_launch") {
                         borsh::to_vec(&TokenState::Holding {
                             owner,
-                            definition: COLLATERAL,
+                            definition: asset,
                             kind: TokenKind::Fungible,
                             balance: 0,
                         })
@@ -6199,31 +6620,10 @@ fn lbp_graduation_late_faults_roll_back_every_effect_and_repaired_retry_pays_onc
                             .to_vec()
                     };
                     repair = Some((actor, original));
-                    env.state = env.state.with_public_accounts([token_holding(
-                        owner,
-                        COLLATERAL,
-                        u128::MAX,
-                    )]);
+                    env.state =
+                        env.state
+                            .with_public_accounts([token_holding(owner, asset, u128::MAX)]);
                     "Overflow"
-                }
-                "burn" => {
-                    let actor = Actor::new(env.launch, TOKEN_PROGRAM_ACCOUNT_ID);
-                    let original = env
-                        .state
-                        .get_account_by_id(env.launch)
-                        .data
-                        .actor_state(TOKEN_PROGRAM_ACCOUNT_ID)
-                        .to_vec();
-                    let mut broken = TokenState::decode(&original).unwrap();
-                    let TokenState::Definition { supply, .. } = &mut broken else {
-                        unreachable!()
-                    };
-                    *supply = 0;
-                    repair = Some((actor, original));
-                    env.state = env
-                        .state
-                        .with_public_accounts([account(actor, borsh::to_vec(&broken).unwrap())]);
-                    "InsufficientBalance"
                 }
                 "completed" => {
                     env.state = env.state.with_programs_at(
@@ -6282,12 +6682,7 @@ fn lbp_graduation_late_faults_roll_back_every_effect_and_repaired_retry_pays_onc
                 NEXT_TREASURY,
                 Some(lbp_adapter(&env).account_id),
             );
-            assert_lbp_graduated_event(
-                &events,
-                &env,
-                weighted,
-                initial.recorded_collateral - if weighted { 100 } else { 0 },
-            );
+            assert_lbp_graduated_event(&events, &env, weighted, &initial);
             assert_lbp_graduated(&env, weighted, &initial, collateral, supply, true, false);
             reject_lbp_factory(
                 &mut env,
@@ -6301,63 +6696,55 @@ fn lbp_graduation_late_faults_roll_back_every_effect_and_repaired_retry_pays_onc
 }
 
 #[test]
-fn lbp_callback_failure_keeps_creator_authorized_manual_recovery_available() {
+fn lbp_callback_failure_rolls_back_both_destinations_and_forbids_manual_escape_until_adapter_repair()
+ {
     for weighted in [false, true] {
         let mut env = lbp_graduation_env(
             weighted,
             true,
             b"reject-callback".to_vec(),
-            Some(lbp_kind(weighted)),
+            lbp_kind(weighted),
         );
         env.state = fixed_config(env.state, 100, NEXT_TREASURY, true);
         let creator = env.creator();
         let initial = fixed_pool(&env.state, env.pool);
         let collateral = balance(&env.state, creator, COLLATERAL);
+        let tokens = balance(&env.state, creator, env.launch);
         let supply = token_supply(&env.state, env.launch);
+        assert!(initial.remaining_inventory > 0 && initial.recorded_collateral > 0);
         reject_lbp_factory(
             &mut env,
             lbp_hook_message(creator),
             300_000,
             "callback rejected",
         );
-        env.execute(lbp_manual_message(weighted, creator), 300_000)
-            .unwrap();
-        let settled = fixed_pool(&env.state, env.pool);
-        assert_eq!(
-            settled.settlement_progress,
-            lbp_core::SettlementProgress::ManualComplete
-        );
-        assert!(settled.seed_returned);
-        assert_eq!(
-            lbp_launch(&env).settlement_progress,
-            lbp_core::SettlementProgress::ManualComplete
-        );
-        assert_eq!(
-            balance(&env.state, creator, COLLATERAL),
-            collateral + initial.recorded_collateral
-        );
-        assert_eq!(
-            balance(&env.state, NEXT_TREASURY, COLLATERAL),
-            initial.accrued_fees
-        );
-        assert_eq!(
-            token_supply(&env.state, env.launch),
-            supply - initial.remaining_inventory
-        );
-        assert_eq!(balance(&env.state, env.escrow, env.launch), 200);
-        assert!(lbp_adapter_state(&env).receipt.is_none());
         reject_lbp_factory(
             &mut env,
-            lbp_hook_message(creator),
+            lbp_manual_message(weighted, creator),
             300_000,
-            "ManualPayoutStarted",
+            "InvalidTerms",
         );
-        env.execute(lbp_manual_message(weighted, creator), 300_000)
-            .unwrap();
-        assert_eq!(fixed_pool(&env.state, env.pool), settled);
+        assert_eq!(balance(&env.state, creator, COLLATERAL), collateral);
+        assert_eq!(balance(&env.state, creator, env.launch), tokens);
+        assert!(lbp_adapter_state(&env).receipt.is_none());
+        env.state = env.state.with_programs_at(
+            ([(
+                LBP_HOOK_PROGRAM,
+                Program::new(Cow::Borrowed(launchpad_methods::GRADUATION_ADAPTER_ELF)).unwrap(),
+            )])
+            .map(|(address, program)| (address, program, true)),
+        );
+        env.execute(lbp_hook_message(creator), 300_000).unwrap();
+        assert_lbp_graduated(&env, weighted, &initial, collateral, supply, false, false);
         assert_eq!(
-            balance(&env.state, creator, COLLATERAL),
-            collateral + initial.recorded_collateral
+            balance(&env.state, creator, env.launch),
+            tokens + initial.remaining_inventory - initial.remaining_inventory / 4
+        );
+        reject_lbp_factory(
+            &mut env,
+            lbp_manual_message(weighted, creator),
+            300_000,
+            "InvalidTerms",
         );
     }
 }
@@ -6429,11 +6816,11 @@ fn lbp_nested_adapter_calls_cannot_reenter_pending_factory_or_pool_and_retry_pay
                             factory_core::compute_graduation_pda(LBP_HOOK_PROGRAM, factory),
                             LBP_HOOK_PROGRAM,
                         )),
-                        amounts: lbp_core::SettlementAmounts {
+                        eligible: lbp_core::SettlementAmounts {
                             launch_tokens: 0,
                             collateral: 0,
                         },
-                        seed_payment: 0,
+                        payouts: factory_core::SettlementPayouts::default(),
                         progress: lbp_core::SettlementProgress::Graduated,
                     },
                 },
@@ -6459,12 +6846,8 @@ fn lbp_nested_adapter_calls_cannot_reenter_pending_factory_or_pool_and_retry_pay
             ));
         }
         for (configuration, reason) in attempts {
-            let mut env = lbp_graduation_env(
-                weighted,
-                true,
-                configuration.clone(),
-                Some(lbp_kind(weighted)),
-            );
+            let mut env =
+                lbp_graduation_env(weighted, true, configuration.clone(), lbp_kind(weighted));
             env.state = fixed_config(env.state, 100, NEXT_TREASURY, true);
             let initial = fixed_pool(&env.state, env.pool);
             let collateral = balance(&env.state, creator, COLLATERAL);
@@ -6534,7 +6917,7 @@ fn lbp_graduation_without_a_saved_hook_rejects_before_any_custody_change() {
 #[test]
 fn lbp_public_callers_cannot_select_a_route_or_forge_pool_finalization() {
     for weighted in [false, true] {
-        let mut env = lbp_graduation_env(weighted, true, vec![], Some(lbp_kind(weighted)));
+        let mut env = lbp_graduation_env(weighted, true, vec![], lbp_kind(weighted));
         let creator = env.creator();
         for (instruction, expected) in [
             (
@@ -6687,55 +7070,53 @@ fn expected_lbp_settlement_events(
             },
         });
     }
-    if initial.remaining_inventory != 0 {
-        events.push(SaleEventKindV1::Settlement {
-            step: SettlementStepV1::UnsoldBurned,
-            route: None,
-            effects: vec![SettlementEffectV1::Burn {
-                definition: *initial.token_definition_id.value(),
-                amount: initial.remaining_inventory,
-            }],
-        });
-    }
-    let seed = if initial.seed_returned {
-        0
-    } else {
-        let lbp_core::PoolMode::Weighted {
-            collateral_seed, ..
-        } = initial.mode
-        else {
-            panic!("fixed seed was not returned")
-        };
-        collateral_seed
-    };
-    let buyer_proceeds = initial.recorded_collateral - seed;
     let route = if adapter.is_some() {
         SettlementRouteV1::Graduation
     } else {
         SettlementRouteV1::Manual
     };
-    for (amount, recipient, purpose, step, step_route) in [
+    let adapter_launch = if adapter.is_some() {
+        initial.remaining_inventory * u128::from(initial.graduation_policy.launch_bps) / 10_000
+    } else {
+        0
+    };
+    let adapter_collateral = if adapter.is_some() {
+        initial.recorded_collateral * u128::from(initial.graduation_policy.collateral_bps) / 10_000
+    } else {
+        0
+    };
+    for (definition, amount, recipient, purpose) in [
         (
-            seed,
+            initial.token_definition_id,
+            initial.remaining_inventory - adapter_launch,
             creator,
-            PayoutPurposeV1::CreatorSeed,
-            SettlementStepV1::SeedReturned,
-            None,
+            PayoutPurposeV1::CreatorLaunch,
         ),
         (
-            buyer_proceeds,
-            adapter.unwrap_or(creator),
+            COLLATERAL,
+            initial.recorded_collateral - adapter_collateral,
+            creator,
             PayoutPurposeV1::CreatorProceeds,
-            SettlementStepV1::Payout,
-            Some(route),
+        ),
+        (
+            initial.token_definition_id,
+            adapter_launch,
+            adapter.unwrap_or(creator),
+            PayoutPurposeV1::AdapterLaunch,
+        ),
+        (
+            COLLATERAL,
+            adapter_collateral,
+            adapter.unwrap_or(creator),
+            PayoutPurposeV1::AdapterCollateral,
         ),
     ] {
         if amount != 0 {
             events.push(SaleEventKindV1::Settlement {
-                step,
-                route: step_route,
+                step: SettlementStepV1::Payout,
+                route: Some(route),
                 effects: vec![SettlementEffectV1::Payout {
-                    definition: *COLLATERAL.value(),
+                    definition: *definition.value(),
                     recipient: *recipient.value(),
                     purpose,
                     liability_discharged: amount,
@@ -6780,8 +7161,12 @@ fn assert_lbp_graduated_event(
     events: &[TransactionEvent],
     env: &FixedFactoryEnv,
     weighted: bool,
-    collateral: u128,
+    initial: &lbp_core::PoolAccount,
 ) {
+    let launch_tokens =
+        initial.remaining_inventory * u128::from(initial.graduation_policy.launch_bps) / 10_000;
+    let collateral =
+        initial.recorded_collateral * u128::from(initial.graduation_policy.collateral_bps) / 10_000;
     let decoded = sale_events(
         events,
         LBP_FACTORY_PROGRAM,
@@ -6801,7 +7186,7 @@ fn assert_lbp_graduated_event(
         vec![SaleEventKindV1::Graduated {
             adapter_program: *LBP_HOOK_PROGRAM.value(),
             adapter_custody: *lbp_adapter(env).account_id.value(),
-            launch_tokens: 0,
+            launch_tokens,
             collateral,
         }]
     );
@@ -7200,7 +7585,7 @@ fn signed_pause_events_report_changed_controls_and_omit_authenticated_noops() {
         }
     }
     for weighted in [false, true] {
-        let mut env = lbp_graduation_env(weighted, true, vec![], Some(lbp_kind(weighted)));
+        let mut env = lbp_graduation_env(weighted, true, vec![], lbp_kind(weighted));
         env.state = clock_state(env.state, 299_000);
         let creator = env.creator();
         for (paused, changed) in [(true, true), (true, false), (false, true), (false, false)] {
@@ -7368,7 +7753,11 @@ fn signed_fee_events_report_nonzero_discharge_and_actual_transfers_then_silence_
 fn signed_allocation_read_emits_no_closure_and_settlement_emits_one_bound_closure_before_effects() {
     for weighted in [false, true] {
         for graduation in [false, true] {
-            let mut env = lbp_graduation_env(weighted, true, vec![], Some(lbp_kind(weighted)));
+            let mut env = if graduation {
+                lbp_graduation_env(weighted, true, vec![], lbp_kind(weighted))
+            } else {
+                lbp_manual_env(weighted, true)
+            };
             env.state = fixed_config(env.state, 100, NEXT_TREASURY, true);
             let creator = env.creator();
             let events = env
@@ -7420,12 +7809,7 @@ fn signed_allocation_read_emits_no_closure_and_settlement_emits_one_bound_closur
                 adapter,
             );
             if graduation {
-                assert_lbp_graduated_event(
-                    &events,
-                    &env,
-                    weighted,
-                    initial.recorded_collateral - if weighted { 100 } else { 0 },
-                );
+                assert_lbp_graduated_event(&events, &env, weighted, &initial);
             } else {
                 assert!(
                     sale_events(
@@ -7437,11 +7821,20 @@ fn signed_allocation_read_emits_no_closure_and_settlement_emits_one_bound_closur
                 );
             }
             assert!(fixed_pool(&env.state, env.pool).closure_observed);
-            assert!(
-                env.execute_events(lbp_manual_message(weighted, creator), 300_000)
-                    .unwrap()
-                    .is_empty()
-            );
+            if graduation {
+                reject_lbp_factory(
+                    &mut env,
+                    lbp_manual_message(weighted, creator),
+                    300_000,
+                    "InvalidTerms",
+                );
+            } else {
+                assert!(
+                    env.execute_events(lbp_manual_message(weighted, creator), 300_000)
+                        .unwrap()
+                        .is_empty()
+                );
+            }
         }
     }
 }
@@ -7449,7 +7842,7 @@ fn signed_allocation_read_emits_no_closure_and_settlement_emits_one_bound_closur
 #[test]
 fn signed_empty_manual_events_are_final_and_retries_do_not_repeat_effects() {
     for weighted in [false, true] {
-        let mut env = lbp_graduation_env(weighted, false, vec![], Some(lbp_kind(weighted)));
+        let mut env = lbp_manual_env(weighted, false);
         env.state = fixed_config(env.state, 100, NEXT_TREASURY, true);
         let creator = env.creator();
         let initial = fixed_pool(&env.state, env.pool);
@@ -7472,15 +7865,14 @@ fn signed_empty_manual_events_are_final_and_retries_do_not_repeat_effects() {
             &mut env,
             lbp_hook_message(creator),
             300_000,
-            "ManualPayoutStarted",
+            "HookNotConfigured",
         );
-        assert!(lbp_adapter_state(&env).receipt.is_none());
     }
 }
 
 #[test]
 fn signed_fixed_sellout_buy_is_the_only_closure_event_before_allocation_and_settlement() {
-    let mut env = lbp_graduation_env(false, false, vec![], Some(lbp_kind(false)));
+    let mut env = lbp_manual_env(false, false);
     let creator = env.creator();
     env.state = clock_state(
         env.state
@@ -8046,7 +8438,6 @@ fn signed_common_sells_weighted_seed_fee_surplus_isolation() {
     );
     assert_eq!(balance(&state, pool, COLLATERAL), 41);
     assert_eq!(balance(&state, pool, launch), 0);
-    assert!(fixed_pool(&state, pool).seed_returned);
 }
 
 #[test]
@@ -8674,3 +9065,343 @@ fn signed_retained_sells_curve_grows_k_without_consuming_rounding_slack() {
     assert_eq!(balance(&state, pool, LAUNCH), 0);
     assert_eq!(read(&state).pool.initial_k, initial.pool.initial_k);
 }
+
+fn saved_curve_factory(env: &FixedFactoryEnv) -> factory_core::FactoryState {
+    factory_core::FactoryState::decode(
+        env.state
+            .get_account_by_id(env.factory)
+            .data
+            .actor_state(LBP_FACTORY_PROGRAM),
+    )
+    .unwrap()
+}
+
+#[test]
+fn signed_curve_graduation_splits_unsold_and_collateral_without_minting_a_reserve_or_burning() {
+    let mut env = curve_factory_env(true, vec![], test_graduation_policy(true));
+    donate_lbp_surplus(&mut env);
+    let creator = env.creator();
+    let key = PrivateKey::try_new([23; 32]).unwrap();
+    let factory = env.factory;
+    for (definition, amount) in [(env.launch, 3), (COLLATERAL, 5)] {
+        lbp_signed_call(
+            &mut env,
+            Actor::new(creator, TOKEN_PROGRAM_ACCOUNT_ID),
+            token::Message::Transfer {
+                definition,
+                recipient: factory,
+                amount,
+            },
+            &[&key],
+            vec![lee::PublicAccountEvidence::Pda {
+                program: TOKEN_PROGRAM_ACCOUNT_ID,
+                seed: token::holding_seed(factory, definition),
+            }],
+        )
+        .unwrap();
+    }
+    let tokens = balance(&env.state, creator, env.launch);
+    let collateral = balance(&env.state, creator, COLLATERAL);
+    assert_eq!(token_supply(&env.state, env.launch), 4_200);
+    assert_eq!(
+        saved_curve_factory(&env).graduation_policy,
+        test_graduation_policy(true)
+    );
+    reject_lbp_factory(
+        &mut env,
+        lbp_manual_message(false, creator),
+        300_000,
+        "InvalidTerms",
+    );
+    for _ in 0..4 {
+        env.execute(lbp_hook_message(creator), 300_000).unwrap();
+    }
+    assert_eq!(
+        saved_curve_factory(&env).settlement_stage,
+        factory_core::SettlementStage::Graduated
+    );
+    let adapter = lbp_adapter(&env).account_id;
+    assert_eq!(balance(&env.state, adapter, env.launch), 750);
+    assert_eq!(balance(&env.state, adapter, COLLATERAL), 67);
+    assert_eq!(balance(&env.state, creator, env.launch), tokens + 2_250);
+    assert_eq!(balance(&env.state, creator, COLLATERAL), collateral + 45);
+    assert_eq!(token_supply(&env.state, env.launch), 4_200);
+    assert_eq!(balance(&env.state, env.escrow, env.launch), 200);
+    assert_eq!(balance(&env.state, env.pool, env.launch), 7);
+    assert_eq!(balance(&env.state, env.pool, COLLATERAL), 41);
+    assert_eq!(balance(&env.state, env.factory, env.launch), 3);
+    assert_eq!(balance(&env.state, env.factory, COLLATERAL), 5);
+    assert_eq!(
+        lbp_adapter_state(&env).receipt.unwrap().intent,
+        factory_core::GraduationIntent::Curve {
+            launch_tokens: 750,
+            collateral: 67
+        }
+    );
+    reject_lbp_factory(
+        &mut env,
+        lbp_manual_message(false, creator),
+        300_000,
+        "InvalidTerms",
+    );
+    reject_lbp_factory(
+        &mut env,
+        lbp_hook_message(creator),
+        300_000,
+        "AlreadySettled",
+    );
+}
+
+#[test]
+fn signed_curve_manual_settlement_pays_both_assets_and_keeps_the_unsold_snapshot() {
+    let mut env = curve_factory_env(false, vec![], factory_core::GraduationPolicy::default());
+    let creator = env.creator();
+    let tokens = balance(&env.state, creator, env.launch);
+    let collateral = balance(&env.state, creator, COLLATERAL);
+    for _ in 0..2 {
+        env.execute(lbp_manual_message(false, creator), 300_000)
+            .unwrap();
+    }
+    assert_eq!(
+        saved_curve_factory(&env).settlement_stage,
+        factory_core::SettlementStage::Withdrawn {
+            unsold: 3_000,
+            collateral_due: 112
+        }
+    );
+    env.execute(lbp_manual_message(false, creator), 300_000)
+        .unwrap();
+    assert_eq!(
+        saved_curve_factory(&env).settlement_stage,
+        factory_core::SettlementStage::Complete
+    );
+    assert_eq!(balance(&env.state, creator, env.launch), tokens + 3_000);
+    assert_eq!(balance(&env.state, creator, COLLATERAL), collateral + 112);
+    assert_eq!(token_supply(&env.state, env.launch), 4_200);
+}
+
+#[test]
+fn signed_curve_failed_callback_restores_both_payouts_and_retry_uses_the_current_creator() {
+    use lez_compat_core::authority;
+    let mut env = curve_factory_env(
+        true,
+        b"reject-callback".to_vec(),
+        test_graduation_policy(true),
+    );
+    let old_creator = env.creator();
+    for _ in 0..3 {
+        env.execute(lbp_hook_message(old_creator), 300_000).unwrap();
+    }
+    assert_eq!(
+        saved_curve_factory(&env).settlement_stage,
+        factory_core::SettlementStage::HookReady {
+            unsold: 3_000,
+            collateral_due: 112
+        }
+    );
+    let old_tokens = balance(&env.state, old_creator, env.launch);
+    let old_collateral = balance(&env.state, old_creator, COLLATERAL);
+    reject_lbp_factory(
+        &mut env,
+        lbp_hook_message(old_creator),
+        300_000,
+        "callback rejected",
+    );
+    reject_lbp_factory(
+        &mut env,
+        lbp_manual_message(false, old_creator),
+        300_000,
+        "InvalidTerms",
+    );
+    let next_key = PrivateKey::try_new([95; 32]).unwrap();
+    let next_creator = AccountId::from(&PublicKey::new_from_private_key(&next_key));
+    let role = saved_curve_factory(&env).creator_role_id;
+    env.actors.extend([
+        Actor::new(next_creator, factory_core::AUTHORITY_PROGRAM_ACCOUNT_ID),
+        Actor::new(next_creator, TOKEN_PROGRAM_ACCOUNT_ID),
+        holding(next_creator, env.launch),
+        holding(next_creator, COLLATERAL),
+    ]);
+    let old_key = PrivateKey::try_new([23; 32]).unwrap();
+    lbp_signed_call(
+        &mut env,
+        Actor::new(old_creator, factory_core::AUTHORITY_PROGRAM_ACCOUNT_ID),
+        authority::Message::Transfer {
+            role,
+            successor: next_creator,
+        },
+        &[&old_key, &next_key],
+        vec![],
+    )
+    .unwrap();
+    reject_lbp_factory(
+        &mut env,
+        lbp_hook_message(old_creator),
+        300_000,
+        "Unauthorized",
+    );
+    for creator_hint in [None, Some(AccountId::default())] {
+        reject_lbp_factory(
+            &mut env,
+            factory_core::Message::ExecuteGraduationHook { creator_hint },
+            300_000,
+            "Unauthorized",
+        );
+    }
+    env.state = env.state.with_programs_at(
+        ([(
+            LBP_HOOK_PROGRAM,
+            Program::new(Cow::Borrowed(launchpad_methods::GRADUATION_ADAPTER_ELF)).unwrap(),
+        )])
+        .map(|(address, program)| (address, program, true)),
+    );
+    env.key = next_key;
+    env.execute(lbp_hook_message(next_creator), 300_000)
+        .unwrap();
+    assert_eq!(balance(&env.state, next_creator, env.launch), 2_250);
+    assert_eq!(balance(&env.state, next_creator, COLLATERAL), 45);
+    assert_eq!(balance(&env.state, old_creator, env.launch), old_tokens);
+    assert_eq!(balance(&env.state, old_creator, COLLATERAL), old_collateral);
+    assert_eq!(
+        balance(&env.state, lbp_adapter(&env).account_id, env.launch),
+        750
+    );
+    assert_eq!(
+        balance(&env.state, lbp_adapter(&env).account_id, COLLATERAL),
+        67
+    );
+    assert_eq!(token_supply(&env.state, env.launch), 4_200);
+}
+
+#[test]
+fn signed_lbp_independent_zero_and_single_asset_policies_still_require_the_adapter() {
+    for weighted in [false, true] {
+        for (launch_bps, collateral_bps) in [(0, 0), (10_000, 0), (0, 10_000), (10_000, 10_000)] {
+            let policy = factory_core::GraduationPolicy {
+                launch_bps,
+                collateral_bps,
+            };
+            let mut env =
+                lbp_graduation_env_with_policy(weighted, false, vec![], lbp_kind(weighted), policy);
+            let creator = env.creator();
+            let collateral = balance(&env.state, creator, COLLATERAL);
+            let initial = fixed_pool(&env.state, env.pool);
+            assert_eq!(initial.graduation_policy, policy);
+            assert_eq!(lbp_launch(&env).graduation_policy, policy);
+            reject_lbp_factory(
+                &mut env,
+                lbp_manual_message(weighted, creator),
+                300_000,
+                "InvalidTerms",
+            );
+            env.state = fixed_config(env.state, 100, NEXT_TREASURY, true);
+            env.execute(lbp_hook_message(creator), 300_000).unwrap();
+            assert_lbp_graduated(&env, weighted, &initial, collateral, 1_000, false, false);
+            assert_eq!(
+                balance(&env.state, creator, env.launch),
+                if launch_bps == 0 { 800 } else { 0 }
+            );
+            reject_lbp_factory(
+                &mut env,
+                lbp_manual_message(weighted, creator),
+                300_000,
+                "InvalidTerms",
+            );
+        }
+    }
+}
+
+#[test]
+fn signed_fixed_depletion_graduates_zero_unsold_with_a_full_launch_share() {
+    let mut env = lbp_graduation_env_with_policy(
+        false,
+        false,
+        vec![],
+        lbp_kind(false),
+        factory_core::GraduationPolicy {
+            launch_bps: 10_000,
+            collateral_bps: 2_500,
+        },
+    );
+    let creator = env.creator();
+    env.state = clock_state(
+        env.state
+            .with_public_accounts([token_holding(creator, COLLATERAL, 2_000)]),
+        100_000,
+    );
+    env.buy(800, 2_000);
+    let tokens = balance(&env.state, creator, env.launch);
+    let collateral = balance(&env.state, creator, COLLATERAL);
+    assert_eq!(fixed_pool(&env.state, env.pool).remaining_inventory, 0);
+    env.execute(lbp_hook_message(creator), 100_000).unwrap();
+    assert_eq!(
+        balance(&env.state, lbp_adapter(&env).account_id, env.launch),
+        0
+    );
+    assert_eq!(
+        balance(&env.state, lbp_adapter(&env).account_id, COLLATERAL),
+        300
+    );
+    assert_eq!(balance(&env.state, creator, env.launch), tokens);
+    assert_eq!(balance(&env.state, creator, COLLATERAL), collateral + 900);
+    assert_eq!(token_supply(&env.state, env.launch), 1_000);
+    assert_eq!(
+        lbp_launch(&env).settlement_progress,
+        lbp_core::SettlementProgress::Graduated
+    );
+}
+
+#[test]
+fn signed_wrong_kind_adapter_initialization_rolls_back_then_correct_kind_succeeds() {
+    for weighted in [false, true] {
+        let mut env = lbp_graduation_env(weighted, false, vec![], lbp_kind(weighted));
+        let adapter = lbp_adapter(&env);
+        env.state = env
+            .state
+            .with_public_accounts([(adapter.account_id, Account::default())]);
+        let salt = env.salt;
+        let evidence = vec![lee::PublicAccountEvidence::Pda {
+            program: LBP_HOOK_PROGRAM,
+            seed: factory_core::compute_graduation_seed(env.factory),
+        }];
+        let before = env.state.clone();
+        let result = lbp_signed_call(
+            &mut env,
+            adapter,
+            factory_core::AdapterMessage::Initialize {
+                factory_program_id: LBP_FACTORY_PROGRAM,
+                namespace: NAMESPACE,
+                launch_salt: salt,
+                accepted_intent: lbp_kind(!weighted),
+            },
+            &[],
+            evidence.clone(),
+        );
+        assert!(
+            matches!(&result, Err(lee::error::LeeError::ProgramExecutionFailed(reason)) if reason.contains("AdapterIntentMismatch")),
+            "{result:?}"
+        );
+        assert!(
+            env.state == before,
+            "wrong-kind initialization changed runtime state"
+        );
+        lbp_signed_call(
+            &mut env,
+            adapter,
+            factory_core::AdapterMessage::Initialize {
+                factory_program_id: LBP_FACTORY_PROGRAM,
+                namespace: NAMESPACE,
+                launch_salt: salt,
+                accepted_intent: lbp_kind(weighted),
+            },
+            &[],
+            evidence,
+        )
+        .unwrap();
+        assert_eq!(lbp_adapter_state(&env).accepted_intent, lbp_kind(weighted));
+        reject_lbp_adapter_reinitialization(&mut env, lbp_kind(weighted));
+    }
+}
+
+#[path = "actor_sale/distribution.rs"]
+mod distribution;

@@ -116,45 +116,40 @@ pub(super) fn custody_events(
         response = response.event(event);
     }
     let route = Some(settlement_route(plan.progress));
-    if plan.burn != 0 {
-        response = response.event(state.event(
-            receiver,
-            SaleEventKindV1::Settlement {
-                step: SettlementStepV1::UnsoldBurned,
-                route: None,
-                effects: vec![SettlementEffectV1::Burn {
-                    definition: *state.token_definition_id.value(),
-                    amount: plan.burn,
-                }],
-            },
-        ));
-    }
-    for (amount, recipient, purpose, step) in [
+    for (amount, definition, recipient, purpose) in [
         (
-            plan.seed,
+            plan.payouts.creator.launch_tokens,
+            state.token_definition_id,
             creator,
-            PayoutPurposeV1::CreatorSeed,
-            SettlementStepV1::SeedReturned,
+            PayoutPurposeV1::CreatorLaunch,
         ),
         (
-            plan.amounts.collateral,
-            adapter.map_or(creator, |a| a.account_id),
+            plan.payouts.creator.collateral,
+            state.collateral_definition_id,
+            creator,
             PayoutPurposeV1::CreatorProceeds,
-            SettlementStepV1::Payout,
+        ),
+        (
+            plan.payouts.adapter.launch_tokens,
+            state.token_definition_id,
+            adapter.map_or(creator, |a| a.account_id),
+            PayoutPurposeV1::AdapterLaunch,
+        ),
+        (
+            plan.payouts.adapter.collateral,
+            state.collateral_definition_id,
+            adapter.map_or(creator, |a| a.account_id),
+            PayoutPurposeV1::AdapterCollateral,
         ),
     ] {
         if amount != 0 {
             response = response.event(state.event(
                 receiver,
                 SaleEventKindV1::Settlement {
-                    step,
-                    route: if step == SettlementStepV1::SeedReturned {
-                        None
-                    } else {
-                        route
-                    },
+                    step: SettlementStepV1::Payout,
+                    route,
                     effects: vec![SettlementEffectV1::Payout {
-                        definition: *state.collateral_definition_id.value(),
+                        definition: *definition.value(),
                         recipient: *recipient.value(),
                         purpose,
                         liability_discharged: amount,

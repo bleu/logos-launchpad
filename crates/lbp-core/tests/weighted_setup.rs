@@ -20,6 +20,7 @@ fn weighted_inputs() -> WeightedPoolInputs {
         trade_mode: lbp_core::TradeMode::BuyOnly,
         sell_fee_bps: 0,
         graduation_adapter: None,
+        graduation_policy: sale_policy::GraduationPolicy::default(),
         namespace: id(40),
         namespace_program_id: id(6),
         factory_program_id: id(7),
@@ -456,7 +457,6 @@ fn weighted_policy_survives_every_prepare_and_activation_callback() {
             assert_eq!(saved.buy_policy, policy);
             assert_eq!(saved.trade_mode, lbp_core::TradeMode::BuyAndSell);
             assert_eq!(saved.sell_fee_bps, 250);
-            assert!(!saved.seed_returned);
             assert_eq!(saved.graduation_adapter, Some(Actor::new(id(70), id(71))));
             assert_eq!(
                 saved.settlement_progress,
@@ -683,5 +683,51 @@ fn weighted_rejects_invalid_stored_sell_fee() {
         })
         .unwrap();
         assert_eq!(handle(&input).err(), Some(lbp_core::Error::InvalidTerms));
+    }
+}
+
+#[test]
+fn weighted_pool_preparation_validates_saved_graduation_percentages() {
+    for has_adapter in [false, true] {
+        for policy in [
+            lbp_core::GraduationPolicy::default(),
+            lbp_core::GraduationPolicy {
+                launch_bps: 10_000,
+                collateral_bps: 0,
+            },
+            lbp_core::GraduationPolicy {
+                launch_bps: 0,
+                collateral_bps: 10_000,
+            },
+            lbp_core::GraduationPolicy {
+                launch_bps: 10_001,
+                collateral_bps: 0,
+            },
+            lbp_core::GraduationPolicy {
+                launch_bps: 0,
+                collateral_bps: 10_001,
+            },
+        ] {
+            let mut input = prepare();
+            let Message::PrepareWeighted { mut inputs } =
+                borsh::from_slice(&input.message).unwrap()
+            else {
+                unreachable!()
+            };
+            inputs.graduation_adapter = has_adapter.then(|| Actor::new(id(70), id(71)));
+            inputs.graduation_policy = policy;
+            input.message = borsh::to_vec(&Message::PrepareWeighted { inputs }).unwrap();
+            let result = handle(&input);
+            if policy.validate(has_adapter).is_err() {
+                assert_eq!(result.err(), Some(lbp_core::Error::InvalidTerms));
+            } else {
+                assert_eq!(
+                    lbp_core::PoolAccount::decode(result.unwrap().post_state.as_ref().unwrap())
+                        .unwrap()
+                        .graduation_policy,
+                    policy
+                );
+            }
+        }
     }
 }

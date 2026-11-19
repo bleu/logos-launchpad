@@ -4,9 +4,9 @@ Fixed-price and weighted sales use four-stage setup on the actor interface. They
 
 ## Fixed-price sale
 
-The creator supplies inventory, a positive exact price in smallest units and an optional creator allocation. Setup binds the sale to its namespace and initializes a separate creator role. It funds inventory and releases an `AfterSetup` allocation in the final stage; an `AfterEnd` allocation stays in escrow. Recorded collateral starts at zero. Donations remain surplus. See [setup](../adr/0032-fixed-price-lbp-setup.md), [recorded collateral](../adr/0033-fixed-price-lbp-recorded-collateral.md) and the [setup sequence](../architecture/sequence-diagrams/create-lbp-pool.md).
+The creator supplies inventory, a positive exact price in smallest units and an optional creator allocation. All three sale types also support a protected [graduation reserve `R`](../adr/0020-settlement-and-graduation.md#graduation-reserve). Setup binds the sale to its namespace and initializes a separate creator role. It funds inventory and releases an `AfterSetup` allocation in the final stage; an `AfterEnd` allocation stays in escrow. Recorded collateral starts at zero. Donations remain surplus. See [setup](../adr/0032-fixed-price-lbp-setup.md), [recorded collateral](../adr/0033-fixed-price-lbp-recorded-collateral.md) and the [setup sequence](../architecture/sequence-diagrams/create-lbp-pool.md).
 
-The selected ending policy controls settlement and the separate `AfterEnd` claim. Manual settlement pays recorded net proceeds, collects remaining namespace fees and burns unsold inventory. Completed payouts and burns cannot repeat. See [ADR 0025](../adr/0025-sale-closing.md).
+The selected ending policy controls settlement and the separate `AfterEnd` claim. Unsold inventory and recorded collateral follow the shared [payout route](../adr/0020-settlement-and-graduation.md). Manual settlement requires no configured adapter. See [ADR 0025](../adr/0025-sale-closing.md) for ending rules.
 
 ## Weighted sale
 
@@ -19,3 +19,5 @@ Each weighted trade and `poke` read one saved previous-block timestamp from the 
 Trade modes and sells follow [ADR 0021](../adr/0021-modes-and-open-limits.md); quotes and slippage follow [ADR 0017](../adr/0017-quotes-and-slippage.md). [ADR 0015](../adr/0015-fee-accounting.md) defines live namespace fees, retained sell fees and anytime collection. Fixed-price and weighted-sale RFP departures are accepted internally but remain `To be reviewed by Logos team` externally.
 
 Public buy allowlists have [signed local execution evidence](../architecture/allowlist-proof.md#public-execution-evidence). Wallet allowlist flows and complete private routes remain pending. Private helpers are explicitly unsupported. The weighted-math kernel is unaudited; its qualification does not prove sale custody, clock support or deployment readiness. See the workspace guide for the full evidence limits.
+
+See [ADR 0036](../adr/0036-graduation-adapter-delivery.md) for the plain-transfer distribution adapter and later deposits.

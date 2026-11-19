@@ -12,8 +12,8 @@ pub struct SettlementReceipt {
     pub route: SettlementRoute,
     pub creator: AccountId,
     pub adapter: Option<Actor>,
-    pub amounts: SettlementAmounts,
-    pub seed_payment: u128,
+    pub eligible: SettlementAmounts,
+    pub payouts: SettlementPayouts,
     pub progress: SettlementProgress,
 }
 
@@ -51,52 +51,31 @@ struct AwaitFactoryFinalize {
     expiry: Option<u64>,
 }
 
-impl PoolAccount {
-    pub fn outstanding_seed(&self) -> Result<u128, Error> {
-        match self.mode {
-            PoolMode::FixedPrice if !self.seed_returned => Err(Error::InvalidState),
-            PoolMode::FixedPrice => Ok(0),
-            PoolMode::Weighted {
-                collateral_seed, ..
-            } => Ok(if self.seed_returned {
-                0
-            } else {
-                collateral_seed
-            }),
-        }
-    }
-
-    pub fn buyer_proceeds(&self) -> Result<u128, Error> {
-        self.recorded_collateral
-            .checked_sub(self.outstanding_seed()?)
-            .ok_or(Error::InvalidState)
-    }
-}
-
 pub(super) struct CustodyPlan {
     pub fees: u128,
-    pub burn: u128,
-    pub seed: u128,
-    pub amounts: SettlementAmounts,
+    pub eligible: SettlementAmounts,
+    pub payouts: SettlementPayouts,
     pub progress: SettlementProgress,
 }
 
 pub(super) fn plan(state: &PoolAccount, route: SettlementRoute) -> Result<CustodyPlan, Error> {
+    let eligible = SettlementAmounts {
+        launch_tokens: state.remaining_inventory,
+        collateral: state.recorded_collateral,
+    };
+    let payouts = state
+        .graduation_policy
+        .payouts(eligible, route, state.graduation_adapter.is_some())
+        .map_err(|_| Error::InvalidTerms)?;
     state
         .settlement_progress
         .ensure_available(route)
         .map_err(|_| Error::InvalidState)?;
-    let seed = state.outstanding_seed()?;
-    let collateral = state.buyer_proceeds()?;
-    let amounts = SettlementAmounts {
-        launch_tokens: 0,
-        collateral,
-    };
     let mut progress = state.settlement_progress;
     match route {
         SettlementRoute::Manual => {
             progress
-                .record_manual_payout(amounts)
+                .record_manual_payout(eligible)
                 .map_err(|_| Error::InvalidState)?;
             progress.finish_manual().map_err(|_| Error::InvalidState)?;
         }
@@ -106,11 +85,21 @@ pub(super) fn plan(state: &PoolAccount, route: SettlementRoute) -> Result<Custod
     }
     Ok(CustodyPlan {
         fees: state.accrued_fees,
-        burn: state.remaining_inventory,
-        seed,
-        amounts,
+        eligible,
+        payouts,
         progress,
     })
+}
+
+pub(super) fn validate_saved_route(
+    state: &PoolAccount,
+    route: SettlementRoute,
+) -> Result<(), Error> {
+    state
+        .graduation_policy
+        .validate_route(route, state.graduation_adapter.is_some())
+        .map(|_| ())
+        .map_err(|_| Error::InvalidTerms)
 }
 
 pub(super) fn validate_route(
@@ -119,6 +108,7 @@ pub(super) fn validate_route(
     creator: AccountId,
     adapter: Option<Actor>,
 ) -> Result<(), Error> {
+    validate_saved_route(state, route)?;
     if creator == AccountId::default() {
         return Err(Error::Unauthorized);
     }
@@ -156,7 +146,7 @@ pub(super) fn apply(
         .recorded_collateral
         .checked_add(plan.fees)
         .ok_or(Error::Arithmetic)?;
-    if balances[0] < liability || balances[1] < plan.burn {
+    if balances[0] < liability || balances[1] < plan.eligible.launch_tokens {
         return Err(Error::Underfunded);
     }
     if adapter.is_some_and(|a| a.account_id == receiver.account_id)
@@ -171,14 +161,11 @@ pub(super) fn apply(
         route,
         creator,
         adapter,
-        amounts: plan.amounts,
-        seed_payment: plan.seed,
+        eligible: plan.eligible,
+        payouts: plan.payouts,
         progress: plan.progress,
     };
     let closure_event = state.observe_closure(receiver)?;
-    state.recorded_collateral = 0;
-    state.accrued_fees = 0;
-    state.seed_returned = true;
     let pending = AwaitFactoryFinalize {
         tag: *b"LZLBFINL",
         state,
@@ -243,31 +230,17 @@ pub(super) fn resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
             pending.receipt.creator,
             pending.receipt.adapter,
         )?;
-        if state.recorded_collateral != 0
-            || state.accrued_fees != 0
-            || !state.seed_returned
-            || pending.receipt.amounts.launch_tokens != 0
+        let expected = plan(&state, pending.receipt.route)?;
+        if pending.receipt.eligible != expected.eligible
+            || pending.receipt.payouts != expected.payouts
+            || pending.receipt.progress != expected.progress
             || pending.expiry != state.close_time_bound()?
         {
             return Err(Error::InvalidState);
         }
-        let mut expected_progress = state.settlement_progress;
-        match pending.receipt.route {
-            SettlementRoute::Manual => {
-                expected_progress
-                    .record_manual_payout(pending.receipt.amounts)
-                    .map_err(|_| Error::InvalidState)?;
-                expected_progress
-                    .finish_manual()
-                    .map_err(|_| Error::InvalidState)?;
-            }
-            SettlementRoute::Graduation => expected_progress
-                .finish_graduation()
-                .map_err(|_| Error::InvalidState)?,
-        }
-        if pending.receipt.progress != expected_progress {
-            return Err(Error::InvalidState);
-        }
+        let expected_progress = expected.progress;
+        state.recorded_collateral = 0;
+        state.accrued_fees = 0;
         state.settlement_progress = expected_progress;
         curve_core::with_time_bounds(state.response(), pending.expiry, None)
             .map_err(|_| Error::InvalidTerms)
@@ -312,6 +285,7 @@ mod tests {
             trade_mode: crate::TradeMode::BuyOnly,
             sell_fee_bps: 0,
             graduation_adapter: Some(Actor::new(id(70), id(71))),
+            graduation_policy: sale_policy::GraduationPolicy::default(),
             mode: if weighted {
                 PoolMode::Weighted {
                     token_weight_start: crate::WEIGHT_TOTAL / 2,
@@ -346,7 +320,6 @@ mod tests {
             recorded_collateral: if weighted { 149 } else { 49 },
             accrued_fees: 2,
             settlement_progress: SettlementProgress::Unselected,
-            seed_returned: !weighted,
             pending: None,
         };
         let receiver = Actor::new(
@@ -391,97 +364,102 @@ mod tests {
     }
 
     #[test]
-    fn both_routes_split_seed_and_proceeds_without_spending_surplus() {
+    fn both_assets_split_including_seed_and_excluding_fees_and_surplus() {
         for weighted in [false, true] {
             for route in [SettlementRoute::Manual, SettlementRoute::Graduation] {
-                let (state, receiver) = fixture(weighted);
-                let adapter = if route == SettlementRoute::Graduation {
-                    state.graduation_adapter
-                } else {
-                    None
-                };
-                let response = apply(
-                    state.clone(),
-                    receiver,
-                    (route, id(50), adapter),
-                    id(43),
-                    [1000, 900, 0],
-                    Some(200),
-                )
-                .unwrap();
-                let receipt = applied(&response);
-                assert_eq!(
-                    receipt.amounts,
-                    SettlementAmounts {
-                        launch_tokens: 0,
-                        collateral: 49
+                for policy in [
+                    GraduationPolicy::default(),
+                    GraduationPolicy {
+                        launch_bps: 2500,
+                        collateral_bps: 6000,
+                    },
+                    GraduationPolicy {
+                        launch_bps: 10_000,
+                        collateral_bps: 10_000,
+                    },
+                ] {
+                    if route == SettlementRoute::Manual && policy != GraduationPolicy::default() {
+                        continue;
                     }
-                );
-                assert_eq!(receipt.seed_payment, if weighted { 100 } else { 0 });
-                assert_eq!(
-                    receipt.progress,
-                    if route == SettlementRoute::Manual {
-                        SettlementProgress::ManualComplete
+                    let (mut state, receiver) = fixture(weighted);
+                    state.graduation_adapter = if route == SettlementRoute::Graduation {
+                        state.graduation_adapter
                     } else {
-                        SettlementProgress::Graduated
-                    }
-                );
-                let mut expected = vec![
-                    token::Message::Transfer {
+                        None
+                    };
+                    state.graduation_policy = policy;
+                    let eligible = SettlementAmounts {
+                        launch_tokens: 790,
+                        collateral: state.recorded_collateral,
+                    };
+                    let payouts = policy
+                        .payouts(eligible, route, state.graduation_adapter.is_some())
+                        .unwrap();
+                    let response = apply(
+                        state.clone(),
+                        receiver,
+                        (route, id(50), state.graduation_adapter),
+                        id(43),
+                        [1000, 900, 0],
+                        Some(200),
+                    )
+                    .unwrap();
+                    let receipt = applied(&response);
+                    assert_eq!(receipt.eligible, eligible);
+                    assert_eq!(receipt.payouts, payouts);
+                    let mut expected = vec![token::Message::Transfer {
                         definition: id(42),
                         recipient: id(43),
                         amount: 2,
-                    },
-                    token::Message::Burn {
-                        definition: id(41),
-                        amount: 790,
-                    },
-                ];
-                if let Some(adapter) = adapter {
-                    if weighted {
-                        expected.push(token::Message::Transfer {
-                            definition: id(42),
-                            recipient: id(50),
-                            amount: 100,
-                        });
+                    }];
+                    for (recipient, amounts) in [
+                        (id(50), payouts.creator),
+                        (
+                            state.graduation_adapter.map_or(id(50), |a| a.account_id),
+                            payouts.adapter,
+                        ),
+                    ] {
+                        for (definition, amount) in [
+                            (id(41), amounts.launch_tokens),
+                            (id(42), amounts.collateral),
+                        ] {
+                            if amount != 0 {
+                                expected.push(token::Message::Transfer {
+                                    definition,
+                                    recipient,
+                                    amount,
+                                });
+                            }
+                        }
                     }
-                    expected.push(token::Message::Transfer {
-                        definition: id(42),
-                        recipient: adapter.account_id,
-                        amount: 49,
-                    });
-                } else {
-                    expected.push(token::Message::Transfer {
-                        definition: id(42),
-                        recipient: id(50),
-                        amount: state.recorded_collateral,
-                    });
+                    assert_eq!(token_calls(&response), expected);
+                    let pending: AwaitFactoryFinalize =
+                        borsh::from_slice(response.post_state.as_ref().unwrap()).unwrap();
+                    assert_eq!(
+                        pending.state.settlement_progress,
+                        SettlementProgress::Unselected
+                    );
+                    let done = crate::handle(&finalize(&response, receiver, &receipt)).unwrap();
+                    let final_state =
+                        PoolAccount::decode(done.post_state.as_ref().unwrap()).unwrap();
+                    assert_eq!(final_state.remaining_inventory, 790);
+                    assert_eq!(final_state.recorded_collateral, 0);
+                    assert_eq!(final_state.accrued_fees, 0);
+                    assert_eq!(final_state.settlement_progress, receipt.progress);
+                    assert_eq!(done.validity.timestamps.start(), Some(200_000));
+                    assert!(plan(&final_state, route).is_err());
                 }
-                assert_eq!(token_calls(&response), expected);
-                let pending: AwaitFactoryFinalize =
-                    borsh::from_slice(response.post_state.as_ref().unwrap()).unwrap();
-                assert_eq!(
-                    pending.state.settlement_progress,
-                    SettlementProgress::Unselected
-                );
-                assert_eq!(pending.state.remaining_inventory, 790);
-                assert!(pending.state.seed_returned);
-                let done = crate::handle(&finalize(&response, receiver, &receipt)).unwrap();
-                let final_state = PoolAccount::decode(done.post_state.as_ref().unwrap()).unwrap();
-                assert_eq!(final_state.settlement_progress, receipt.progress);
-                assert_eq!(final_state.recorded_collateral, 0);
-                assert_eq!(done.validity.timestamps.start(), Some(200_000));
-                assert!(
-                    matches!(borsh::from_slice::<SettlementReply>(&done.sync_messages[0].message).unwrap(), SettlementReply::Completed { receipt_hash, progress } if receipt_hash == receipt.hash() && progress == receipt.progress)
-                );
-                assert!(!response.events.is_empty());
             }
         }
     }
 
     #[test]
-    fn guard_rejects_public_reentry_wrong_actor_and_wrong_hash() {
-        let (state, receiver) = fixture(true);
+    fn finalizer_binds_context_totals_each_share_and_progress() {
+        let (mut state, receiver) = fixture(true);
+        state.graduation_policy = GraduationPolicy {
+            launch_bps: 2500,
+            collateral_bps: 6000,
+        };
         let response = apply(
             state.clone(),
             receiver,
@@ -496,223 +474,196 @@ mod tests {
         )
         .unwrap();
         let receipt = applied(&response);
-        let mut input = finalize(&response, receiver, &receipt);
-        for from in [
-            None,
-            Some(Actor::new(state.factory_owner, id(99))),
-            state.graduation_adapter,
-        ] {
-            input.from = from;
-            assert_eq!(crate::handle(&input).err(), Some(Error::Unauthorized));
-        }
-        input.from = Some(receipt.factory);
-        for message in [
-            Message::ReadState,
-            Message::CollectFees,
-            Message::SetPaused { paused: false },
-            Message::Settle {
-                route: SettlementRoute::Manual,
-                creator: id(50),
-                adapter: None,
-            },
-        ] {
-            input.message = borsh::to_vec(&message).unwrap();
-            assert_eq!(crate::handle(&input).err(), Some(Error::InvalidMessage));
-        }
-        input.message = borsh::to_vec(&Message::FinalizeSettlement {
-            receipt_hash: [0; 32],
-        })
-        .unwrap();
-        assert_eq!(crate::handle(&input).err(), Some(Error::InvalidState));
-    }
-
-    #[test]
-    fn finalize_rejects_receipt_binding_and_progress_forgery() {
-        let (state, receiver) = fixture(false);
-        let response = apply(
-            state,
-            receiver,
-            (SettlementRoute::Manual, id(50), None),
-            id(43),
-            [1000, 900, 0],
-            Some(200),
-        )
-        .unwrap();
-        let receipt = applied(&response);
-        for case in 0..4 {
+        for case in 0..9 {
             let mut pending: AwaitFactoryFinalize =
                 borsh::from_slice(response.post_state.as_ref().unwrap()).unwrap();
             match case {
-                0 => pending.receipt.pool = Actor::new(id(99), receiver.program_account_id),
-                1 => pending.receipt.factory = Actor::new(id(99), id(8)),
-                2 => pending.receipt.progress = SettlementProgress::Graduated,
-                _ => pending.receipt.amounts.launch_tokens = 1,
+                0 => pending.receipt.pool.account_id = id(99),
+                1 => pending.receipt.factory.account_id = id(99),
+                2 => pending.receipt.progress = SettlementProgress::ManualComplete,
+                3 => pending.receipt.eligible.launch_tokens += 1,
+                4 => pending.receipt.eligible.collateral += 1,
+                5 => pending.receipt.payouts.creator.launch_tokens += 1,
+                6 => pending.receipt.payouts.creator.collateral += 1,
+                7 => pending.receipt.payouts.adapter.launch_tokens += 1,
+                _ => pending.receipt.payouts.adapter.collateral += 1,
             }
             pending.receipt_hash = pending.receipt.hash();
-            let mut input = finalize(&response, receiver, &receipt);
-            input.message = borsh::to_vec(&Message::FinalizeSettlement {
-                receipt_hash: pending.receipt_hash,
-            })
-            .unwrap();
+            let mut input = finalize(&response, receiver, &pending.receipt);
             input.pre_state = borsh::to_vec(&pending).unwrap().into();
-            assert_eq!(crate::handle(&input).err(), Some(Error::InvalidState));
+            assert_eq!(
+                crate::handle(&input).err(),
+                Some(if case == 1 {
+                    Error::Unauthorized
+                } else {
+                    Error::InvalidState
+                }),
+                "case {case}"
+            );
+        }
+        for from in [
+            None,
+            state.graduation_adapter,
+            Some(Actor::new(state.factory_owner, id(99))),
+        ] {
+            let mut input = finalize(&response, receiver, &receipt);
+            input.from = from;
+            assert_eq!(crate::handle(&input).err(), Some(Error::Unauthorized));
         }
     }
 
     #[test]
-    fn zero_proceeds_complete_the_chosen_route_and_block_both_routes() {
+    fn zero_balances_complete_once_and_manual_cannot_bypass_saved_adapter() {
         for weighted in [false, true] {
-            for route in [SettlementRoute::Manual, SettlementRoute::Graduation] {
-                let (mut state, receiver) = fixture(weighted);
-                state.accrued_fees = 0;
-                state.recorded_collateral = if weighted { 100 } else { 0 };
-                let adapter = if route == SettlementRoute::Graduation {
-                    state.graduation_adapter
-                } else {
-                    None
-                };
-                let response = apply(
-                    state,
-                    receiver,
-                    (route, id(50), adapter),
-                    id(43),
-                    [1000, 900, 0],
-                    Some(200),
-                )
-                .unwrap();
-                let receipt = applied(&response);
-                assert_eq!(
-                    receipt.progress,
-                    if route == SettlementRoute::Manual {
-                        SettlementProgress::ManualComplete
-                    } else {
-                        SettlementProgress::Graduated
-                    }
-                );
-                assert_eq!(receipt.amounts.collateral, 0);
-                assert_eq!(receipt.seed_payment, if weighted { 100 } else { 0 });
-                let mut expected = vec![token::Message::Burn {
-                    definition: id(41),
-                    amount: 790,
-                }];
-                if weighted {
-                    expected.push(token::Message::Transfer {
-                        definition: id(42),
-                        recipient: id(50),
-                        amount: 100,
-                    });
+            let (mut state, receiver) = fixture(weighted);
+            state.remaining_inventory = 0;
+            state.recorded_collateral = 0;
+            state.accrued_fees = 0;
+            let response = apply(
+                state.clone(),
+                receiver,
+                (
+                    SettlementRoute::Graduation,
+                    id(50),
+                    state.graduation_adapter,
+                ),
+                id(43),
+                [0, 0, 0],
+                state.close_time_bound().unwrap(),
+            )
+            .unwrap();
+            assert!(token_calls(&response).is_empty());
+            let receipt = applied(&response);
+            let done = crate::handle(&finalize(&response, receiver, &receipt)).unwrap();
+            let state = PoolAccount::decode(done.post_state.as_ref().unwrap()).unwrap();
+            assert_eq!(state.settlement_progress, SettlementProgress::Graduated);
+            assert_eq!(
+                plan(&state, SettlementRoute::Graduation).err(),
+                Some(Error::InvalidState)
+            );
+            assert_eq!(
+                plan(&state, SettlementRoute::Manual).err(),
+                Some(Error::InvalidTerms)
+            );
+            let mut input = ReceiveInput {
+                receiver,
+                from: Some(receipt.factory),
+                is_authorized: false,
+                pre_state: done.post_state.unwrap(),
+                message: vec![],
+            };
+            for message in [
+                Message::SettleFixedPrice {
+                    creator: id(50),
+                    now: 200,
+                },
+                Message::SettleWeighted { creator: id(50) },
+                Message::Settle {
+                    route: SettlementRoute::Manual,
+                    creator: id(50),
+                    adapter: None,
+                },
+            ] {
+                if (weighted && matches!(message, Message::SettleFixedPrice { .. }))
+                    || (!weighted && matches!(message, Message::SettleWeighted { .. }))
+                {
+                    continue;
                 }
-                assert_eq!(token_calls(&response), expected);
-                let done = crate::handle(&finalize(&response, receiver, &receipt)).unwrap();
-                let state = PoolAccount::decode(done.post_state.as_ref().unwrap()).unwrap();
-                assert_eq!(state.settlement_progress, receipt.progress);
-                assert!(state.seed_returned);
-                for retry in [SettlementRoute::Manual, SettlementRoute::Graduation] {
-                    assert_eq!(plan(&state, retry).err(), Some(Error::InvalidState));
-                }
+                input.message = borsh::to_vec(&message).unwrap();
+                assert_eq!(crate::handle(&input).err(), Some(Error::InvalidTerms));
             }
         }
     }
 
     #[test]
-    fn seed_shortfall_fails_despite_surplus() {
-        let (mut state, receiver) = fixture(true);
-        state.recorded_collateral = 99;
-        assert_eq!(
-            apply(
-                state.clone(),
-                receiver,
-                (SettlementRoute::Manual, id(50), None),
-                id(43),
-                [1000, 900, 0],
-                Some(200)
-            )
-            .err(),
-            Some(Error::InvalidState)
-        );
-    }
-
-    #[test]
-    fn new_settle_authenticates_factory_and_binds_immutable_adapter() {
-        let (state, receiver) = fixture(false);
-        let mut input = ReceiveInput {
-            receiver,
-            from: None,
-            is_authorized: true,
-            pre_state: borsh::to_vec(&state).unwrap().into(),
-            message: borsh::to_vec(&Message::Settle {
-                route: SettlementRoute::Graduation,
-                creator: id(50),
-                adapter: state.graduation_adapter,
-            })
-            .unwrap(),
-        };
-        assert_eq!(crate::handle(&input).err(), Some(Error::Unauthorized));
-        input.from = Some(Actor::new(state.factory_owner, state.factory_program_id));
+    fn underfunding_and_wrong_adapter_fail_before_payouts() {
+        let (state, receiver) = fixture(true);
+        for balances in [[150, 900, 0], [1000, 789, 0]] {
+            assert_eq!(
+                apply(
+                    state.clone(),
+                    receiver,
+                    (
+                        SettlementRoute::Graduation,
+                        id(50),
+                        state.graduation_adapter
+                    ),
+                    id(43),
+                    balances,
+                    Some(200)
+                )
+                .err(),
+                Some(Error::Underfunded)
+            );
+        }
         for adapter in [
             None,
-            Some(Actor::new(id(70), id(99))),
             Some(Actor::new(id(99), id(71))),
+            Some(Actor::new(id(70), id(99))),
         ] {
-            input.message = borsh::to_vec(&Message::Settle {
-                route: SettlementRoute::Graduation,
-                creator: id(50),
-                adapter,
-            })
-            .unwrap();
-            assert_eq!(crate::handle(&input).err(), Some(Error::InvalidTerms));
+            assert_eq!(
+                apply(
+                    state.clone(),
+                    receiver,
+                    (SettlementRoute::Graduation, id(50), adapter),
+                    id(43),
+                    [1000, 900, 0],
+                    Some(200)
+                )
+                .err(),
+                Some(Error::InvalidTerms)
+            );
         }
-        input.message = borsh::to_vec(&Message::Settle {
-            route: SettlementRoute::Manual,
-            creator: id(50),
-            adapter: state.graduation_adapter,
-        })
-        .unwrap();
-        assert_eq!(crate::handle(&input).err(), Some(Error::InvalidTerms));
     }
-
     #[test]
-    fn receipt_hash_is_sha256_of_exact_borsh_bytes() {
-        use risc0_zkvm::sha::{Impl, Sha256 as _};
-        let (state, receiver) = fixture(false);
-        let response = apply(
-            state,
-            receiver,
-            (SettlementRoute::Manual, id(50), None),
-            id(43),
-            [1000, 900, 0],
-            Some(200),
-        )
-        .unwrap();
-        let receipt = applied(&response);
-        assert_eq!(
-            receipt.hash().as_slice(),
-            Impl::hash_bytes(&borsh::to_vec(&receipt).unwrap()).as_bytes()
-        );
-        let mut changed = receipt.clone();
-        changed.seed_payment += 1;
-        assert_ne!(receipt.hash(), changed.hash());
-    }
-
-    #[test]
-    fn graduated_legacy_retry_remains_authenticated_and_scheduled() {
-        let (mut state, receiver) = fixture(true);
-        state.remaining_inventory = 0;
-        state.recorded_collateral = 0;
-        state.accrued_fees = 0;
-        state.seed_returned = true;
-        state.settlement_progress = SettlementProgress::Graduated;
-        let mut input = ReceiveInput {
-            receiver,
-            from: Some(Actor::new(state.factory_owner, state.factory_program_id)),
-            is_authorized: false,
-            pre_state: borsh::to_vec(&state).unwrap().into(),
-            message: borsh::to_vec(&Message::SettleWeighted { creator: id(50) }).unwrap(),
-        };
-        let response = crate::handle(&input).unwrap();
-        assert!(response.sync_messages.is_empty());
-        assert_eq!(response.validity.timestamps.start(), Some(200_000));
-        input.from = state.graduation_adapter;
-        assert_eq!(crate::handle(&input).err(), Some(Error::Unauthorized));
+    fn saved_adapter_blocks_every_manual_entry_before_queries_or_completed_noops() {
+        for weighted in [false, true] {
+            for progress in [
+                SettlementProgress::Unselected,
+                SettlementProgress::ManualComplete,
+                SettlementProgress::Graduated,
+            ] {
+                for policy in [
+                    GraduationPolicy::default(),
+                    GraduationPolicy {
+                        launch_bps: 10_000,
+                        collateral_bps: 10_000,
+                    },
+                ] {
+                    let (mut state, receiver) = fixture(weighted);
+                    state.settlement_progress = progress;
+                    state.graduation_policy = policy;
+                    let legacy = if weighted {
+                        Message::SettleWeighted { creator: id(50) }
+                    } else {
+                        Message::SettleFixedPrice {
+                            creator: id(50),
+                            now: 200,
+                        }
+                    };
+                    for message in [
+                        legacy,
+                        Message::Settle {
+                            route: SettlementRoute::Manual,
+                            creator: id(50),
+                            adapter: None,
+                        },
+                    ] {
+                        let input = ReceiveInput {
+                            receiver,
+                            from: Some(Actor::new(state.factory_owner, state.factory_program_id)),
+                            is_authorized: false,
+                            pre_state: borsh::to_vec(&state).unwrap().into(),
+                            message: borsh::to_vec(&message).unwrap(),
+                        };
+                        assert_eq!(crate::handle(&input).err(), Some(Error::InvalidTerms));
+                    }
+                    assert_eq!(
+                        plan(&state, SettlementRoute::Manual).err(),
+                        Some(Error::InvalidTerms)
+                    );
+                }
+            }
+        }
     }
 }

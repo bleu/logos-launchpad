@@ -23,14 +23,18 @@ fn creation() -> ReceiveInput {
             ending_policy: factory_core::EndingPolicy::Either,
             trade_mode: 0,
             sell_fee_bps: 0,
-            graduation_hook_program_id: Some(id(9)),
-            graduation_hook_configuration: b"route".to_vec(),
+            graduation_hook_program_id: None,
+            graduation_hook_configuration: vec![],
             namespace: id(40),
             launch_salt: [3; 32],
             name: "Launch".into(),
             uri: "uri".into(),
+            graduation_reserve: 0,
             sale_reserve: 800,
-            dex_seed_reserve: 100,
+            graduation_policy: GraduationPolicy {
+                launch_bps: 0,
+                collateral_bps: 0,
+            },
             creator_allocation: 100,
             virtual_token_reserve: 1000,
             virtual_collateral_reserve: 100,
@@ -114,14 +118,52 @@ fn proof(input: &ReceiveInput, response: &Response, creator: AccountId) -> Recei
         .unwrap(),
     }
 }
+fn resolved(input: &ReceiveInput, response: &Response, creator: AccountId) -> ReceiveInput {
+    let role = compute_curve_creator_role_pda(id(40), id(7), [3; 32]);
+    let call = response.sync_messages.last().unwrap();
+    assert_eq!(call.to, Actor::new(role, AUTHORITY_PROGRAM_ACCOUNT_ID));
+    assert_eq!(
+        borsh::from_slice::<authority::Message>(&call.message).unwrap(),
+        authority::Message::Resolve
+    );
+    ReceiveInput {
+        receiver: input.receiver,
+        from: Some(call.to),
+        is_authorized: false,
+        pre_state: response.post_state.clone().unwrap(),
+        message: borsh::to_vec(&authority::CurrentAuthority {
+            role,
+            authority: creator,
+        })
+        .unwrap(),
+    }
+}
 fn minted() -> (ReceiveInput, Response) {
     minted_with_policy(curve_core::BuyPolicy::Open)
 }
 fn minted_with_policy(policy: curve_core::BuyPolicy) -> (ReceiveInput, Response) {
+    minted_with_terms(policy, false)
+}
+fn minted_with_terms(policy: curve_core::BuyPolicy, hook: bool) -> (ReceiveInput, Response) {
     let mut input = creation();
     let mut message: Message = borsh::from_slice(&input.message).unwrap();
-    if let Message::CreateFactoryPool { buy_policy, .. } = &mut message {
+    if let Message::CreateFactoryPool {
+        buy_policy,
+        graduation_hook_program_id,
+        graduation_hook_configuration,
+        graduation_policy,
+        ..
+    } = &mut message
+    {
         *buy_policy = policy;
+        if hook {
+            *graduation_hook_program_id = Some(id(9));
+            *graduation_hook_configuration = b"route".to_vec();
+            *graduation_policy = GraduationPolicy {
+                launch_bps: 2500,
+                collateral_bps: 3333,
+            };
+        }
     }
     input.message = borsh::to_vec(&message).unwrap();
     let mut response = handle(&input).unwrap();
@@ -192,9 +234,9 @@ fn continued(
     (input, response)
 }
 #[test]
-fn curve_allocation_reserves_d_plus_r_and_locks_creator_tokens() {
+fn curve_allocation_funds_only_sale_inventory_and_locks_creator_tokens() {
     let (input, mint) = minted();
-    let (input, response) = continued(&input, &mint, 1000, 0, 0);
+    let (input, response) = continued(&input, &mint, 900, 0, 0);
     let state = FactoryState::decode(response.post_state.as_ref().unwrap()).unwrap();
     assert_eq!(state.creation_stage, CreationStage::Allocated);
     let transfers: Vec<_> = response
@@ -209,7 +251,7 @@ fn curve_allocation_reserves_d_plus_r_and_locks_creator_tokens() {
             token::Message::Transfer {
                 definition: state.token_definition_id,
                 recipient: input.receiver.account_id,
-                amount: 900
+                amount: 800
             },
             token::Message::Transfer {
                 definition: state.token_definition_id,
@@ -222,8 +264,8 @@ fn curve_allocation_reserves_d_plus_r_and_locks_creator_tokens() {
 #[test]
 fn curve_preparation_uses_neutral_restriction_and_defers_funding() {
     let (input, mint) = minted();
-    let (input, allocated) = continued(&input, &mint, 1000, 0, 0);
-    let (input, response) = continued(&input, &allocated, 0, 900, 100);
+    let (input, allocated) = continued(&input, &mint, 900, 0, 0);
+    let (input, response) = continued(&input, &allocated, 0, 800, 100);
     let state = FactoryState::decode(response.post_state.as_ref().unwrap()).unwrap();
     assert_eq!(state.creation_stage, CreationStage::PoolPrepared);
     let call = response
@@ -310,9 +352,9 @@ fn allowlist_policy() -> curve_core::BuyPolicy {
 fn curve_activation_rejects_a_replaced_or_downgraded_pool_policy() {
     let policy = allowlist_policy();
     let (input, mint) = minted_with_policy(policy.clone());
-    let (input, allocated) = continued(&input, &mint, 1000, 0, 0);
-    let (input, prepared) = continued(&input, &allocated, 0, 900, 100);
-    let (input, response) = continued(&input, &prepared, 0, 900, 100);
+    let (input, allocated) = continued(&input, &mint, 900, 0, 0);
+    let (input, prepared) = continued(&input, &allocated, 0, 800, 100);
+    let (input, response) = continued(&input, &prepared, 0, 800, 100);
     let state = FactoryState::decode(response.post_state.as_ref().unwrap()).unwrap();
     let curve_core::BuyPolicy::Allowlist(mut replacement) = policy else {
         unreachable!()
@@ -345,14 +387,14 @@ fn curve_allowlist_policy_is_unchanged_through_all_creation_stages() {
             .buy_policy,
         policy
     );
-    let (input, allocated) = continued(&input, &mint, 1000, 0, 0);
+    let (input, allocated) = continued(&input, &mint, 900, 0, 0);
     assert_eq!(
         FactoryState::decode(allocated.post_state.as_ref().unwrap())
             .unwrap()
             .buy_policy,
         policy
     );
-    let (input, prepared) = continued(&input, &allocated, 0, 900, 100);
+    let (input, prepared) = continued(&input, &allocated, 0, 800, 100);
     assert_eq!(
         FactoryState::decode(prepared.post_state.as_ref().unwrap())
             .unwrap()
@@ -367,7 +409,7 @@ fn curve_allowlist_policy_is_unchanged_through_all_creation_stages() {
     assert!(
         matches!(create, curve_core::Message::CreatePool { buy_policy, .. } if buy_policy == policy)
     );
-    let (mut input, mut response) = continued(&input, &prepared, 0, 900, 100);
+    let (mut input, mut response) = continued(&input, &prepared, 0, 800, 100);
     let state = FactoryState::decode(response.post_state.as_ref().unwrap()).unwrap();
     for bytes in [
         borsh::to_vec(&pool_state(&state, input.receiver, false)).unwrap(),
@@ -383,10 +425,13 @@ fn curve_allowlist_policy_is_unchanged_through_all_creation_stages() {
 }
 
 fn active() -> (ReceiveInput, Response) {
-    let (input, mint) = minted();
-    let (input, allocated) = continued(&input, &mint, 1000, 0, 0);
-    let (input, prepared) = continued(&input, &allocated, 0, 900, 100);
-    let (mut input, mut response) = continued(&input, &prepared, 0, 900, 100);
+    active_for_route(false)
+}
+fn active_for_route(hook: bool) -> (ReceiveInput, Response) {
+    let (input, mint) = minted_with_terms(curve_core::BuyPolicy::Open, hook);
+    let (input, allocated) = continued(&input, &mint, 900, 0, 0);
+    let (input, prepared) = continued(&input, &allocated, 0, 800, 100);
+    let (mut input, mut response) = continued(&input, &prepared, 0, 800, 100);
     let state = FactoryState::decode(response.post_state.as_ref().unwrap()).unwrap();
     for bytes in [
         borsh::to_vec(&pool_state(&state, input.receiver, false)).unwrap(),
@@ -431,24 +476,36 @@ fn settlement(
     collateral: u128,
     hook: bool,
 ) -> (ReceiveInput, Response) {
+    settlement_as(input, previous, pool, tokens, collateral, hook, id(42))
+}
+fn settlement_as(
+    input: &ReceiveInput,
+    previous: &Response,
+    pool: curve_core::PoolAccount,
+    tokens: u128,
+    collateral: u128,
+    hook: bool,
+    creator: AccountId,
+) -> (ReceiveInput, Response) {
     let state = FactoryState::decode(previous.post_state.as_ref().unwrap()).unwrap();
     let mut input = input.clone();
     input.pre_state = previous.post_state.clone().unwrap();
     input.from = None;
     input.message = borsh::to_vec(&if hook {
-        Message::ExecuteGraduationHook { creator_hint: None }
-    } else {
-        Message::WithdrawFactoryProceeds {
-            creator: id(42),
-            now: 200,
+        Message::ExecuteGraduationHook {
+            creator_hint: Some(creator),
         }
+    } else {
+        Message::WithdrawFactoryProceeds { creator, now: 200 }
     })
     .unwrap();
     let mut response = handle(&input).unwrap();
-    if !hook {
-        input = proof(&input, &response, id(42));
-        response = handle(&input).unwrap()
-    }
+    input = if hook {
+        resolved(&input, &response, creator)
+    } else {
+        proof(&input, &response, creator)
+    };
+    response = handle(&input).unwrap();
     for bytes in [
         borsh::to_vec(&pool).unwrap(),
         holding(input.receiver.account_id, state.token_definition_id, tokens),
@@ -470,7 +527,7 @@ fn settlement_and_graduation_use_expiry_only_for_a_saved_open_pool() {
             (pool::PoolLifecycle::Open, Some(200_000)),
             (pool::PoolLifecycle::Closed, None),
         ] {
-            let (input, active) = active();
+            let (input, active) = active_for_route(hook);
             let state = FactoryState::decode(active.post_state.as_ref().unwrap()).unwrap();
             let mut saved = pool_state(&state, input.receiver, true);
             saved.pool.lifecycle = lifecycle;
@@ -511,16 +568,40 @@ fn compute_pool_address(state: &FactoryState, actor: Actor) -> AccountId {
         actor.account_id,
     )
 }
-fn withdrawn() -> (ReceiveInput, Response, curve_core::PoolAccount) {
-    let (input, active) = active();
+fn withdrawn_for_route(
+    hook: bool,
+    collateral: u128,
+) -> (ReceiveInput, Response, curve_core::PoolAccount) {
+    let (input, active) = active_for_route(hook);
     let state = FactoryState::decode(active.post_state.as_ref().unwrap()).unwrap();
-    let saved = pool_state(&state, input.receiver, true);
-    let (input, ready) = settlement(&input, &active, saved.clone(), 100, 0, false);
-    let (input, response) = settlement(&input, &ready, saved.clone(), 100, 0, false);
+    let mut saved = pool_state(&state, input.receiver, true);
+    saved.pool.real_reserve1 = collateral;
+    let (input, ready) = settlement(&input, &active, saved.clone(), 17, 19, hook);
+    let (input, response) = settlement(&input, &ready, saved.clone(), 17, 19, hook);
     (input, response, saved)
 }
+fn withdrawn() -> (ReceiveInput, Response, curve_core::PoolAccount) {
+    withdrawn_for_route(false, 0)
+}
+fn payout_ready(collateral: u128) -> (ReceiveInput, Response, curve_core::PoolAccount) {
+    let (input, response, mut saved) = withdrawn_for_route(false, collateral);
+    saved.pool.real_reserve0 = 0;
+    saved.pool.real_reserve1 = 0;
+    (input, response, saved)
+}
+fn token_calls(response: &Response) -> Vec<token::Message> {
+    response
+        .sync_messages
+        .iter()
+        .filter_map(|call| {
+            (call.to.program_account_id == TOKEN_PROGRAM_ACCOUNT_ID)
+                .then(|| borsh::from_slice(&call.message).ok())
+                .flatten()
+        })
+        .collect()
+}
 #[test]
-fn reserve_withdrawal_records_unsold_d_and_recorded_collateral_then_uses_atomic_curve_withdrawal() {
+fn reserve_withdrawal_records_unsold_inventory_and_recorded_collateral() {
     let (input, response, _) = withdrawn();
     let state = FactoryState::decode(response.post_state.as_ref().unwrap()).unwrap();
     assert_eq!(
@@ -539,7 +620,6 @@ fn reserve_withdrawal_records_unsold_d_and_recorded_collateral_then_uses_atomic_
         borsh::from_slice::<curve_core::Message>(&call.message).unwrap(),
         curve_core::Message::WithdrawReserves { now: 200 }
     );
-    assert_eq!(state.dex_seed_reserve, 100);
     assert_eq!(state.creator_allocation, 100);
     assert_eq!(
         input.receiver.account_id,
@@ -547,96 +627,35 @@ fn reserve_withdrawal_records_unsold_d_and_recorded_collateral_then_uses_atomic_
     );
 }
 #[test]
-fn expiry_burns_unsold_d_once_without_burning_r_or_creator_allocation() {
-    let (input, withdrawn, mut saved) = withdrawn();
-    saved.pool.real_reserve0 = 0;
-    saved.pool.real_reserve1 = 0;
-    let (_, response) = settlement(&input, &withdrawn, saved, 900, 17, false);
-    let state = FactoryState::decode(response.post_state.as_ref().unwrap()).unwrap();
-    assert_eq!(
-        state.settlement_stage,
-        SettlementStage::Burned { collateral_due: 0 }
-    );
-    let burn = response
-        .sync_messages
-        .iter()
-        .find(|m| m.to == Actor::new(input.receiver.account_id, TOKEN_PROGRAM_ACCOUNT_ID))
-        .unwrap();
-    assert_eq!(
-        borsh::from_slice::<token::Message>(&burn.message).unwrap(),
-        token::Message::Burn {
-            definition: state.token_definition_id,
-            amount: 800
-        }
-    );
-    assert_eq!(state.dex_seed_reserve, 100);
-    assert!(!state.creator_allocation_claimed);
-}
-fn burned(collateral: u128) -> (ReceiveInput, Response, curve_core::PoolAccount) {
-    let (input, active) = active();
-    let state = FactoryState::decode(active.post_state.as_ref().unwrap()).unwrap();
-    let mut saved = pool_state(&state, input.receiver, true);
-    saved.pool.real_reserve1 = collateral;
-    let (input, ready) = settlement(&input, &active, saved.clone(), 100, 0, false);
-    let (input, withdrawn) = settlement(&input, &ready, saved.clone(), 100, 0, false);
-    saved.pool.real_reserve0 = 0;
-    saved.pool.real_reserve1 = 0;
-    let (input, response) = settlement(
-        &input,
-        &withdrawn,
-        saved.clone(),
-        900,
-        collateral + 17,
-        false,
-    );
-    (input, response, saved)
-}
-#[test]
-fn manual_settlement_pays_only_r_then_recorded_collateral_and_rejects_replay() {
-    let (input, burned, saved) = burned(50);
-    let (input, paid) = settlement(&input, &burned, saved.clone(), 100, 67, false);
-    let state = FactoryState::decode(paid.post_state.as_ref().unwrap()).unwrap();
-    assert_eq!(
-        state.settlement_stage,
-        SettlementStage::TokenPaid { collateral_due: 50 }
-    );
-    let payout = paid
-        .sync_messages
-        .iter()
-        .find(|m| m.to == Actor::new(input.receiver.account_id, TOKEN_PROGRAM_ACCOUNT_ID))
-        .unwrap();
-    assert_eq!(
-        borsh::from_slice::<token::Message>(&payout.message).unwrap(),
-        token::Message::Transfer {
-            definition: state.token_definition_id,
-            recipient: id(42),
-            amount: 100
-        }
-    );
-    let (input, complete) = settlement(&input, &paid, saved.clone(), 0, 67, false);
+fn manual_settlement_pays_both_assets_without_burning_or_paying_surplus() {
+    let (input, withdrawn, saved) = payout_ready(50);
+    let (mut input, complete) = settlement(&input, &withdrawn, saved, 817, 67, false);
     let state = FactoryState::decode(complete.post_state.as_ref().unwrap()).unwrap();
     assert_eq!(state.settlement_stage, SettlementStage::Complete);
-    let payout = complete
-        .sync_messages
-        .iter()
-        .find(|m| m.to == Actor::new(input.receiver.account_id, TOKEN_PROGRAM_ACCOUNT_ID))
-        .unwrap();
+    assert!(!state.creator_allocation_claimed);
     assert_eq!(
-        borsh::from_slice::<token::Message>(&payout.message).unwrap(),
-        token::Message::Transfer {
-            definition: state.collateral_definition_id,
-            recipient: id(42),
-            amount: 50
-        }
+        token_calls(&complete),
+        vec![
+            token::Message::Transfer {
+                definition: state.token_definition_id,
+                recipient: id(42),
+                amount: 800
+            },
+            token::Message::Transfer {
+                definition: state.collateral_definition_id,
+                recipient: id(42),
+                amount: 50
+            },
+        ]
     );
-    let mut input = input.clone();
     input.pre_state = complete.post_state.unwrap();
+    input.from = None;
     input.message = borsh::to_vec(&Message::WithdrawFactoryProceeds {
         creator: id(42),
         now: 200,
     })
     .unwrap();
-    assert!(matches!(handle(&input), Err(Error::AlreadySettled)));
+    assert_eq!(handle(&input).err(), Some(Error::AlreadySettled));
 }
 #[test]
 fn allocation_uses_saved_closure_instead_of_a_future_client_time() {
@@ -719,8 +738,8 @@ fn creator_allocation_follows_the_role_to_its_current_holder_after_closure() {
     .unwrap();
     assert!(matches!(handle(&input), Err(Error::AlreadyClaimed)));
 }
-fn adapter_state(factory: Actor, ready: bool) -> Vec<u8> {
-    handle_adapter(&ReceiveInput {
+fn adapter_state(factory: Actor, factory_state: &[u8]) -> Vec<u8> {
+    let input = ReceiveInput {
         receiver: Actor::new(compute_graduation_pda(id(9), factory.account_id), id(9)),
         from: None,
         is_authorized: false,
@@ -729,115 +748,186 @@ fn adapter_state(factory: Actor, ready: bool) -> Vec<u8> {
             factory_program_id: id(7),
             namespace: id(40),
             launch_salt: [3; 32],
-            accepted_intent: ready.then_some(GraduationIntentKind::CurveReserves),
+            accepted_intent: GraduationIntentKind::Curve,
         })
         .unwrap(),
-    })
-    .unwrap()
-    .post_state
-    .unwrap()
-    .to_vec()
+    };
+    let response = handle_adapter(&input).unwrap();
+    let call = response.sync_messages.last().unwrap();
+    assert_eq!(call.to, factory);
+    assert_eq!(
+        borsh::from_slice::<Message>(&call.message).unwrap(),
+        Message::ReadState
+    );
+    let input = reply(&input, &response, factory_state.to_vec());
+    handle_adapter(&input).unwrap().post_state.unwrap().to_vec()
 }
 fn hook_ready() -> (ReceiveInput, Response, curve_core::PoolAccount) {
-    let (input, burned, saved) = burned(50);
-    let (mut input, mut response) = settlement(&input, &burned, saved.clone(), 100, 67, true);
-    input = reply(&input, &response, adapter_state(input.receiver, true));
-    response = handle(&input).unwrap();
+    let (input, withdrawn, mut saved) = withdrawn_for_route(true, 53);
+    saved.pool.real_reserve0 = 0;
+    saved.pool.real_reserve1 = 0;
+    let (mut input, response) = settlement(&input, &withdrawn, saved.clone(), 817, 70, true);
+    input = reply(
+        &input,
+        &response,
+        adapter_state(input.receiver, response.post_state.as_ref().unwrap()),
+    );
+    let response = handle(&input).unwrap();
     (input, response, saved)
 }
 #[test]
-fn hook_preparation_requires_saved_adapter_custody_and_keeps_manual_recovery() {
-    let (input, response, saved) = hook_ready();
-    assert!(
-        matches!(&launch_events(&response)[..], [SaleEventV1 { kind: SaleEventKindV1::Settlement { step: SettlementStepV1::Prepared, route: None, effects }, .. }] if effects.is_empty())
-    );
+fn hook_preparation_saves_both_liabilities_and_forbids_manual_override() {
+    let (mut input, response, _) = hook_ready();
     let state = FactoryState::decode(response.post_state.as_ref().unwrap()).unwrap();
     assert_eq!(
         state.settlement_stage,
-        SettlementStage::HookReady { collateral_due: 50 }
+        SettlementStage::HookReady {
+            unsold: 800,
+            collateral_due: 53
+        }
     );
-    let (_, manual) = settlement(&input, &response, saved, 100, 67, false);
-    assert_eq!(
-        FactoryState::decode(manual.post_state.as_ref().unwrap())
-            .unwrap()
-            .settlement_stage,
-        SettlementStage::TokenPaid { collateral_due: 50 }
+    assert!(
+        token_calls(&response)
+            .iter()
+            .all(|call| matches!(call, token::Message::Initialize { .. }))
     );
+    input.pre_state = response.post_state.unwrap();
+    input.from = None;
+    input.message = borsh::to_vec(&Message::WithdrawFactoryProceeds {
+        creator: id(42),
+        now: 200,
+    })
+    .unwrap();
+    assert_eq!(handle(&input).err(), Some(Error::InvalidTerms));
 }
 #[test]
-fn hook_finalization_pays_custody_without_factory_grant_and_waits_for_authenticated_success() {
+fn hook_finalization_conserves_both_assets_and_binds_the_callback_hash() {
     let (input, ready, saved) = hook_ready();
-    let (mut input, mut response) = settlement(&input, &ready, saved, 100, 67, true);
-    input = reply(&input, &response, adapter_state(input.receiver, true));
-    response = handle(&input).unwrap();
+    let (mut input, response) = settlement(&input, &ready, saved, 817, 70, true);
+    input = reply(
+        &input,
+        &response,
+        adapter_state(input.receiver, response.post_state.as_ref().unwrap()),
+    );
+    let response = handle(&input).unwrap();
     let state = FactoryState::decode(response.post_state.as_ref().unwrap()).unwrap();
     assert_eq!(
         state.settlement_stage,
-        SettlementStage::HookReady { collateral_due: 50 }
-    );
-    assert!(
-        matches!(&launch_events(&response)[..], [SaleEventV1 { kind: SaleEventKindV1::Settlement { step: SettlementStepV1::Payout, route: Some(SettlementRouteV1::Graduation), effects }, .. }] if matches!(&effects[..], [SettlementEffectV1::Payout { purpose: PayoutPurposeV1::CurveReserve, liability_discharged: 100, tokens_transferred: 100, .. }, SettlementEffectV1::Payout { purpose: PayoutPurposeV1::CreatorProceeds, liability_discharged: 50, tokens_transferred: 50, .. }]))
+        SettlementStage::HookReady {
+            unsold: 800,
+            collateral_due: 53
+        }
     );
     let custody = compute_graduation_pda(id(9), input.receiver.account_id);
+    let calls = token_calls(&response);
+    for (definition, adapter, creator, eligible) in [
+        (state.token_definition_id, 200, 600, 800),
+        (state.collateral_definition_id, 17, 36, 53),
+    ] {
+        assert!(calls.contains(&token::Message::Transfer {
+            definition,
+            recipient: custody,
+            amount: adapter
+        }));
+        assert!(calls.contains(&token::Message::Transfer {
+            definition,
+            recipient: id(42),
+            amount: creator
+        }));
+        assert_eq!(adapter + creator, eligible);
+    }
+    assert_eq!(calls.len(), 4);
+    assert!(
+        response
+            .sync_messages
+            .iter()
+            .filter(|m| m.to.program_account_id == TOKEN_PROGRAM_ACCOUNT_ID)
+            .all(|m| m.pda_seeds.contains(&compute_factory_seed(id(40), [3; 32])))
+    );
+    let effects: Vec<_> = launch_events(&response)
+        .into_iter()
+        .flat_map(|event| match event.kind {
+            SaleEventKindV1::Settlement { effects, .. } => effects,
+            _ => vec![],
+        })
+        .collect();
+    for (definition, expected) in [
+        (state.token_definition_id, 800),
+        (state.collateral_definition_id, 53),
+    ] {
+        let total: u128 = effects
+            .iter()
+            .filter_map(|effect| match effect {
+                SettlementEffectV1::Payout {
+                    definition: actual,
+                    liability_discharged,
+                    tokens_transferred,
+                    ..
+                } if actual == definition.value() => {
+                    assert_eq!(liability_discharged, tokens_transferred);
+                    Some(*tokens_transferred)
+                }
+                _ => None,
+            })
+            .sum();
+        assert_eq!(total, expected);
+    }
     let callback = response.sync_messages.last().unwrap();
     assert_eq!(callback.to, Actor::new(custody, id(9)));
     assert!(callback.pda_seeds.is_empty());
+    let AdapterMessage::Graduate { request } = borsh::from_slice(&callback.message).unwrap() else {
+        panic!("graduate")
+    };
     assert_eq!(
-        borsh::from_slice::<AdapterMessage>(&callback.message).unwrap(),
-        AdapterMessage::Graduate {
-            request: GraduationRequest {
-                factory_program_id: id(7),
-                namespace: id(40),
-                launch_salt: [3; 32],
-                token_definition_id: state.token_definition_id,
-                collateral_definition_id: state.collateral_definition_id,
-                intent: GraduationIntent::CurveReserves {
-                    launch_tokens: 100,
-                    collateral: 50
-                },
-                configuration: b"route".to_vec()
-            }
+        request.intent,
+        GraduationIntent::Curve {
+            launch_tokens: 200,
+            collateral: 17
         }
     );
-    let payouts: Vec<_> = response
-        .sync_messages
-        .iter()
-        .filter(|m| m.to == Actor::new(input.receiver.account_id, TOKEN_PROGRAM_ACCOUNT_ID))
-        .collect();
-    assert_eq!(payouts.len(), 2);
-    assert!(
-        payouts
-            .iter()
-            .all(|m| m.pda_seeds.contains(&compute_factory_seed(id(40), [3; 32])))
-    );
-    let AdapterMessage::Graduate { request } =
-        borsh::from_slice(&response.sync_messages.last().unwrap().message).unwrap()
-    else {
-        panic!("graduate");
-    };
+    assert_eq!(request.configuration, b"route");
     input.pre_state = response.post_state.unwrap();
-    input.message = borsh::to_vec(&GraduationResult {
+    input.from = Some(Actor::new(custody, id(9)));
+    let valid = borsh::to_vec(&GraduationResult {
         factory: input.receiver.account_id,
         request_hash: request.hash(),
     })
     .unwrap();
+    for intent in [
+        GraduationIntent::Curve {
+            launch_tokens: 201,
+            collateral: 17,
+        },
+        GraduationIntent::Curve {
+            launch_tokens: 200,
+            collateral: 18,
+        },
+    ] {
+        let mut changed = request.clone();
+        changed.intent = intent;
+        input.message = borsh::to_vec(&GraduationResult {
+            factory: input.receiver.account_id,
+            request_hash: changed.hash(),
+        })
+        .unwrap();
+        assert_eq!(handle(&input).err(), Some(Error::InvalidState));
+    }
+    input.message = valid.clone();
     input.from = Some(Actor::new(custody, id(99)));
-    assert!(matches!(handle(&input), Err(Error::Unauthorized)));
+    assert_eq!(handle(&input).err(), Some(Error::Unauthorized));
     input.from = Some(Actor::new(custody, id(9)));
-    let valid = input.message.clone();
-    input.message = borsh::to_vec(&GraduationResult {
-        factory: input.receiver.account_id,
-        request_hash: [0; 32],
-    })
-    .unwrap();
-    assert_eq!(handle(&input).err(), Some(Error::InvalidState));
     input.message = borsh::to_vec(&Message::ReadState).unwrap();
     assert_eq!(handle(&input).err(), Some(Error::InvalidMessage));
     input.message = valid;
     let complete = handle(&input).unwrap();
-    let events = launch_events(&complete);
+    assert_eq!(
+        FactoryState::decode(complete.post_state.as_ref().unwrap())
+            .unwrap()
+            .settlement_stage,
+        SettlementStage::Graduated
+    );
     assert!(matches!(
-        &events[..],
+        &launch_events(&complete)[..],
         [
             SaleEventV1 {
                 kind: SaleEventKindV1::Settlement {
@@ -849,20 +939,14 @@ fn hook_finalization_pays_custody_without_factory_grant_and_waits_for_authentica
             },
             SaleEventV1 {
                 kind: SaleEventKindV1::Graduated {
-                    launch_tokens: 100,
-                    collateral: 50,
+                    launch_tokens: 200,
+                    collateral: 17,
                     ..
                 },
                 ..
             }
         ]
     ));
-    assert_eq!(
-        FactoryState::decode(complete.post_state.as_ref().unwrap())
-            .unwrap()
-            .settlement_stage,
-        SettlementStage::Graduated
-    );
 }
 #[test]
 fn traded_pool_settlement_checks_immutable_k_instead_of_initial_virtual_reserves() {
@@ -912,26 +996,11 @@ fn traded_pool_settlement_checks_immutable_k_instead_of_initial_virtual_reserves
     );
 }
 #[test]
-fn manual_r_payout_with_zero_collateral_is_complete_and_cannot_reopen_the_hook() {
-    let (input, burned, saved) = burned(0);
-    let (input, paid) = settlement(&input, &burned, saved.clone(), 100, 17, false);
-    let (mut input, complete) = settlement(&input, &paid, saved, 0, 17, false);
-    assert_eq!(
-        FactoryState::decode(complete.post_state.as_ref().unwrap())
-            .unwrap()
-            .settlement_stage,
-        SettlementStage::Complete
-    );
-    input.pre_state = complete.post_state.unwrap();
-    input.message = borsh::to_vec(&Message::ExecuteGraduationHook { creator_hint: None }).unwrap();
-    assert!(matches!(handle(&input), Err(Error::ManualPayoutStarted)));
-}
-#[test]
 fn public_supply_and_address_rules_preserve_the_original_factory_contract() {
-    assert_eq!(total_supply(800, 100, 100), Ok(1000));
-    assert_eq!(total_supply(0, 100, 100), Err(CreateError::SaleReserveZero));
+    assert_eq!(total_supply(800, 0, 100), Ok(900));
+    assert_eq!(total_supply(0, 0, 100), Err(CreateError::SaleReserveZero));
     assert_eq!(
-        total_supply(u128::MAX, 1, 0),
+        total_supply(u128::MAX, 0, 1),
         Err(CreateError::SupplyOverflow)
     );
     assert_eq!(
@@ -1006,127 +1075,6 @@ fn expiry_is_proved_separately_from_the_supplied_zero_lower_bound() {
 }
 
 #[test]
-fn zero_manual_completion_blocks_hooks_but_a_zero_hook_can_finish_first() {
-    let mut input = creation();
-    let mut command: Message = borsh::from_slice(&input.message).unwrap();
-    if let Message::CreateFactoryPool {
-        dex_seed_reserve,
-        creator_allocation,
-        ..
-    } = &mut command
-    {
-        *dex_seed_reserve = 0;
-        *creator_allocation = 200
-    }
-    input.message = borsh::to_vec(&command).unwrap();
-    let mut response = handle(&input).unwrap();
-    for bytes in [config(), definition()] {
-        input = reply(&input, &response, bytes);
-        response = handle(&input).unwrap()
-    }
-    let (input, allocated) = continued(&input, &response, 1000, 0, 0);
-    let (input, prepared) = continued(&input, &allocated, 0, 800, 200);
-    let (mut input, mut response) = continued(&input, &prepared, 0, 800, 200);
-    let state = FactoryState::decode(response.post_state.as_ref().unwrap()).unwrap();
-    let mut saved = pool_state(&state, input.receiver, false);
-    for bytes in [
-        borsh::to_vec(&saved).unwrap(),
-        holding(state.pool_id, state.token_definition_id, 0),
-    ] {
-        input = reply(&input, &response, bytes);
-        response = handle(&input).unwrap()
-    }
-    saved.funded = true;
-    let (input, ready) = settlement(&input, &response, saved.clone(), 0, 0, false);
-    let (input, withdrawn) = settlement(&input, &ready, saved.clone(), 0, 0, false);
-    saved.pool.real_reserve0 = 0;
-    let (input, burned) = settlement(&input, &withdrawn, saved.clone(), 800, 0, false);
-    let (mut manual_input, complete) = settlement(&input, &burned, saved.clone(), 0, 0, false);
-    let events = launch_events(&complete);
-    assert!(
-        matches!(&events[..], [SaleEventV1 { kind: SaleEventKindV1::Settlement { step: SettlementStepV1::Completed, route: Some(SettlementRouteV1::Manual), effects }, .. }] if effects.is_empty())
-    );
-    assert_eq!(
-        FactoryState::decode(complete.post_state.as_ref().unwrap())
-            .unwrap()
-            .settlement_stage,
-        SettlementStage::Complete
-    );
-    assert!(complete.sync_messages.is_empty());
-    manual_input.pre_state = complete.post_state.unwrap();
-    manual_input.from = None;
-    manual_input.message =
-        borsh::to_vec(&Message::ExecuteGraduationHook { creator_hint: None }).unwrap();
-    assert!(matches!(
-        handle(&manual_input),
-        Err(Error::ManualPayoutStarted)
-    ));
-    let (mut input, mut response) = settlement(&input, &burned, saved.clone(), 0, 0, true);
-    input = reply(&input, &response, adapter_state(input.receiver, true));
-    response = handle(&input).unwrap();
-    let (mut input, mut response) = settlement(&input, &response, saved, 0, 0, true);
-    input = reply(&input, &response, adapter_state(input.receiver, true));
-    response = handle(&input).unwrap();
-    assert_eq!(response.sync_messages.len(), 1);
-    assert!(matches!(
-        borsh::from_slice::<AdapterMessage>(&response.sync_messages[0].message).unwrap(),
-        AdapterMessage::Graduate {
-            request: GraduationRequest {
-                intent: GraduationIntent::CurveReserves {
-                    launch_tokens: 0,
-                    collateral: 0
-                },
-                ..
-            }
-        }
-    ));
-    let AdapterMessage::Graduate { request } =
-        borsh::from_slice(&response.sync_messages[0].message).unwrap()
-    else {
-        panic!("graduate");
-    };
-    input.pre_state = response.post_state.unwrap();
-    input.from = Some(response.sync_messages[0].to);
-    input.message = borsh::to_vec(&GraduationResult {
-        factory: input.receiver.account_id,
-        request_hash: request.hash(),
-    })
-    .unwrap();
-    let complete = handle(&input).unwrap();
-    let events = launch_events(&complete);
-    assert!(matches!(
-        &events[..],
-        [
-            SaleEventV1 {
-                kind: SaleEventKindV1::Settlement {
-                    step: SettlementStepV1::Completed,
-                    route: Some(SettlementRouteV1::Graduation),
-                    ..
-                },
-                ..
-            },
-            SaleEventV1 {
-                kind: SaleEventKindV1::Graduated {
-                    launch_tokens: 0,
-                    collateral: 0,
-                    ..
-                },
-                ..
-            }
-        ]
-    ));
-    let progress = FactoryState::decode(complete.post_state.as_ref().unwrap())
-        .unwrap()
-        .settlement_stage
-        .progress();
-    assert_eq!(progress, SettlementProgress::Graduated);
-    assert_eq!(progress.route(), Some(SettlementRoute::Graduation));
-    input.pre_state = complete.post_state.unwrap();
-    input.message = borsh::to_vec(&Message::ExecuteGraduationHook { creator_hint: None }).unwrap();
-    assert!(matches!(handle(&input), Err(Error::AlreadySettled)));
-}
-
-#[test]
 fn curve_creation_reads_namespace_before_bootstrapping_its_creator_role() {
     let input = creation();
     let response = handle(&input).unwrap();
@@ -1153,7 +1101,7 @@ fn curve_creation_bootstraps_a_transfer_only_creator_role_with_the_mint() {
     assert_eq!(call.pda_seeds.len(), 1);
     let (_, response) = minted();
     let state = FactoryState::decode(response.post_state.as_ref().unwrap()).unwrap();
-    assert_eq!(state.total_supply, 1000);
+    assert_eq!(state.total_supply, 900);
     let call = response
         .sync_messages
         .iter()
@@ -1165,7 +1113,7 @@ fn curve_creation_bootstraps_a_transfer_only_creator_role_with_the_mint() {
     else {
         panic!("mint")
     };
-    assert_eq!(supply, 1000);
+    assert_eq!(supply, 900);
     assert_eq!(recipient, compute_mint_pda(id(40), id(7), [3; 32]));
 }
 
@@ -1339,7 +1287,10 @@ fn creator_transfer_requires_consent_and_moves_all_remaining_factory_rights() {
         ),
         (
             CreationStage::Active,
-            SettlementStage::Burned { collateral_due: 50 },
+            SettlementStage::Withdrawn {
+                unsold: 100,
+                collateral_due: 50,
+            },
             Message::WithdrawFactoryProceeds {
                 creator: id(99),
                 now: 200,
@@ -1383,11 +1334,10 @@ fn creator_transfer_requires_consent_and_moves_all_remaining_factory_rights() {
         assert_eq!(
             (
                 current.sale_reserve,
-                current.dex_seed_reserve,
                 current.creator_allocation,
                 current.total_supply
             ),
-            (800, 100, 100, 1000)
+            (800, 100, 900)
         );
         assert_eq!(
             (
@@ -1626,14 +1576,14 @@ fn curve_pause_policy_survives_setup_and_checks_policy_instead_of_pause_value() 
             input = reply(&input, &mint, bytes);
             mint = handle(&input).unwrap();
         }
-        let (input, allocated) = continued(&input, &mint, 1000, 0, 0);
+        let (input, allocated) = continued(&input, &mint, 900, 0, 0);
         assert_eq!(
             FactoryState::decode(allocated.post_state.as_ref().unwrap())
                 .unwrap()
                 .pause_policy,
             policy
         );
-        let (input, prepared) = continued(&input, &allocated, 0, 900, 100);
+        let (input, prepared) = continued(&input, &allocated, 0, 800, 100);
         assert_eq!(
             FactoryState::decode(prepared.post_state.as_ref().unwrap())
                 .unwrap()
@@ -1653,7 +1603,7 @@ fn curve_pause_policy_survives_setup_and_checks_policy_instead_of_pause_value() 
             curve_core::TradeControl::Running,
             curve_core::TradeControl::Paused,
         ] {
-            let (mut input, mut response) = continued(&input, &prepared, 0, 900, 100);
+            let (mut input, mut response) = continued(&input, &prepared, 0, 800, 100);
             let state = FactoryState::decode(response.post_state.as_ref().unwrap()).unwrap();
             let mut saved = pool_state(&state, input.receiver, false);
             saved.trade_control = control;
@@ -1810,9 +1760,9 @@ fn curve_rejects_malformed_saved_policies_before_resuming_setup() {
 #[test]
 fn curve_activation_rejects_a_valid_direct_pool_ending_policy() {
     let (input, mint) = minted();
-    let (input, allocated) = continued(&input, &mint, 1000, 0, 0);
-    let (input, prepared) = continued(&input, &allocated, 0, 900, 100);
-    let (mut input, mut response) = continued(&input, &prepared, 0, 900, 100);
+    let (input, allocated) = continued(&input, &mint, 900, 0, 0);
+    let (input, prepared) = continued(&input, &allocated, 0, 800, 100);
+    let (mut input, mut response) = continued(&input, &prepared, 0, 800, 100);
     let state = FactoryState::decode(response.post_state.as_ref().unwrap()).unwrap();
     let mut saved = pool_state(&state, input.receiver, false);
     saved.pool.ending_policy = EndingPolicy::Manual;
@@ -1873,7 +1823,7 @@ fn selected_ending_controls_allocation_proceeds_and_hook_payouts() {
     ] {
         for remaining in [0, 800] {
             for action in 0..3 {
-                let (mut input, active) = active();
+                let (mut input, active) = active_for_route(action == 2);
                 let mut state = FactoryState::decode(active.post_state.as_ref().unwrap()).unwrap();
                 state.ending_policy = ending;
                 state.end_timestamp = if ending == EndingPolicy::Depletion {
@@ -1894,14 +1844,18 @@ fn selected_ending_controls_allocation_proceeds_and_hook_payouts() {
                         creator: id(42),
                         now: 999,
                     },
-                    _ => Message::ExecuteGraduationHook { creator_hint: None },
+                    _ => Message::ExecuteGraduationHook {
+                        creator_hint: Some(id(42)),
+                    },
                 };
                 input.message = borsh::to_vec(&command).unwrap();
                 let mut response = handle(&input).unwrap();
-                if action != 2 {
-                    input = proof(&input, &response, id(42));
-                    response = handle(&input).unwrap();
-                }
+                input = if action == 2 {
+                    resolved(&input, &response, id(42))
+                } else {
+                    proof(&input, &response, id(42))
+                };
+                response = handle(&input).unwrap();
                 let mut values = vec![borsh::to_vec(&saved).unwrap()];
                 if action == 0 {
                     values.push(holding(
@@ -1934,7 +1888,6 @@ fn selected_ending_controls_allocation_proceeds_and_hook_payouts() {
                 assert_eq!(response.validity.timestamps.is_valid_for(199_999), early);
                 assert!(response.validity.timestamps.is_valid_for(200_000));
                 let after = FactoryState::decode(response.post_state.as_ref().unwrap()).unwrap();
-                assert_eq!(after.dex_seed_reserve, 100);
                 assert_eq!(after.creator_allocation, 100);
                 assert_eq!(after.sale_reserve, 800);
             }
@@ -1975,8 +1928,8 @@ fn curve_setup_keeps_each_selected_ending_and_its_depletion_side() {
             response.validity.timestamps.end(),
             end.map(|end| end * 1000)
         );
-        let (input, allocated) = continued(&input, &response, 1000, 0, 0);
-        let (input, prepared) = continued(&input, &allocated, 0, 900, 100);
+        let (input, allocated) = continued(&input, &response, 900, 0, 0);
+        let (input, prepared) = continued(&input, &allocated, 0, 800, 100);
         let message: curve_core::Message =
             borsh::from_slice(&prepared.sync_messages[0].message).unwrap();
         let expected_side = if ending == EndingPolicy::Scheduled {
@@ -1987,7 +1940,7 @@ fn curve_setup_keeps_each_selected_ending_and_its_depletion_side() {
         assert!(matches!(message, curve_core::Message::CreatePool {
             ending_policy, close_timestamp, close_on_depletion, token0_amount: 800, token1_amount: 0, ..
         } if ending_policy == ending && close_timestamp == end && close_on_depletion == expected_side));
-        let (mut input, mut response) = continued(&input, &prepared, 0, 900, 100);
+        let (mut input, mut response) = continued(&input, &prepared, 0, 800, 100);
         let state = FactoryState::decode(response.post_state.as_ref().unwrap()).unwrap();
         for bytes in [
             borsh::to_vec(&pool_state(&state, input.receiver, false)).unwrap(),
@@ -2000,13 +1953,12 @@ fn curve_setup_keeps_each_selected_ending_and_its_depletion_side() {
         assert_eq!(active.creation_stage, CreationStage::Active);
         assert_eq!(active.ending_policy, ending);
         assert_eq!(active.end_timestamp, end);
-        assert_eq!(active.dex_seed_reserve, 100);
         assert_eq!(active.creator_allocation, 100);
     }
 }
 
 #[test]
-fn curve_settlement_progress_projects_existing_stages_without_changing_wire_tags() {
+fn curve_settlement_progress_and_wire_tags_match_the_payout_stages() {
     for (stage, progress, tag, payload) in [
         (
             SettlementStage::Unstarted,
@@ -2030,33 +1982,24 @@ fn curve_settlement_progress_projects_existing_stages_without_changing_wire_tags
             vec![17_u128, 29],
         ),
         (
-            SettlementStage::Burned { collateral_due: 29 },
+            SettlementStage::HookReady {
+                unsold: 17,
+                collateral_due: 29,
+            },
             SettlementProgress::Unselected,
             3,
-            vec![29],
-        ),
-        (
-            SettlementStage::TokenPaid { collateral_due: 29 },
-            SettlementProgress::ManualStarted,
-            4,
-            vec![29],
+            vec![17, 29],
         ),
         (
             SettlementStage::Complete,
             SettlementProgress::ManualComplete,
-            5,
+            4,
             vec![],
-        ),
-        (
-            SettlementStage::HookReady { collateral_due: 29 },
-            SettlementProgress::Unselected,
-            6,
-            vec![29],
         ),
         (
             SettlementStage::Graduated,
             SettlementProgress::Graduated,
-            7,
+            5,
             vec![],
         ),
     ] {
@@ -2076,140 +2019,66 @@ fn curve_settlement_progress_projects_existing_stages_without_changing_wire_tags
         );
     }
 }
-
 #[test]
-fn curve_settlement_entrypoints_keep_route_errors_and_hook_configuration_precedence() {
-    let (input, active) = active();
-    let original = FactoryState::decode(active.post_state.as_ref().unwrap()).unwrap();
-    for (stage, manual_error, hook_error) in [
-        (SettlementStage::Unstarted, None, None),
-        (SettlementStage::Ready, None, None),
-        (
-            SettlementStage::Withdrawn {
-                unsold: 17,
-                collateral_due: 29,
-            },
-            None,
-            None,
-        ),
-        (SettlementStage::Burned { collateral_due: 29 }, None, None),
-        (
-            SettlementStage::HookReady { collateral_due: 29 },
-            None,
-            None,
-        ),
-        (
-            SettlementStage::TokenPaid { collateral_due: 29 },
-            None,
-            Some(Error::ManualPayoutStarted),
-        ),
-        (
-            SettlementStage::Complete,
-            Some(Error::AlreadySettled),
-            Some(Error::ManualPayoutStarted),
-        ),
-        (
-            SettlementStage::Graduated,
-            Some(Error::AlreadySettled),
-            Some(Error::AlreadySettled),
-        ),
+fn configured_adapter_blocks_manual_settlement_at_every_stage_even_with_zero_shares() {
+    for stage in [
+        SettlementStage::Unstarted,
+        SettlementStage::Ready,
+        SettlementStage::Withdrawn {
+            unsold: 0,
+            collateral_due: 0,
+        },
+        SettlementStage::HookReady {
+            unsold: 0,
+            collateral_due: 0,
+        },
+        SettlementStage::Complete,
+        SettlementStage::Graduated,
     ] {
-        for hook in [false, true] {
-            let mut state = original.clone();
-            state.settlement_stage = stage;
-            let mut request = input.clone();
-            request.pre_state = borsh::to_vec(&state).unwrap().into();
-            request.from = None;
-            request.message = borsh::to_vec(&if hook {
-                Message::ExecuteGraduationHook { creator_hint: None }
-            } else {
-                Message::WithdrawFactoryProceeds {
-                    creator: id(42),
-                    now: 200,
-                }
-            })
-            .unwrap();
-            let result = handle(&request);
-            if let Some(error) = if hook { hook_error } else { manual_error } {
-                assert_eq!(result.err(), Some(error));
-            } else {
-                let response = result.unwrap();
-                assert_eq!(
-                    FactoryState::decode(response.post_state.as_ref().unwrap())
-                        .unwrap()
-                        .settlement_stage,
-                    stage
-                );
-                if !hook {
-                    assert_eq!(
-                        response.sync_messages.last().unwrap().to,
-                        Actor::new(id(42), AUTHORITY_PROGRAM_ACCOUNT_ID)
-                    );
-                }
-            }
-            if hook {
-                state.graduation_hook = None;
-                request.pre_state = borsh::to_vec(&state).unwrap().into();
-                assert_eq!(handle(&request).err(), Some(Error::HookNotConfigured));
-            }
-        }
-    }
-}
-
-#[test]
-fn curve_preparation_leaves_both_routes_available_until_a_manual_asset_payout() {
-    let (input, active) = active();
-    let state = FactoryState::decode(active.post_state.as_ref().unwrap()).unwrap();
-    let mut pool = pool_state(&state, input.receiver, true);
-    pool.pool.real_reserve1 = 50;
-    let (input, ready) = settlement(&input, &active, pool.clone(), 100, 0, false);
-    let (input, withdrawn) = settlement(&input, &ready, pool.clone(), 100, 0, false);
-    pool.pool.real_reserve0 = 0;
-    pool.pool.real_reserve1 = 0;
-    let (input, burned) = settlement(&input, &withdrawn, pool.clone(), 900, 50, false);
-    for response in [&active, &ready, &withdrawn, &burned] {
-        let progress = FactoryState::decode(response.post_state.as_ref().unwrap())
-            .unwrap()
-            .settlement_stage
-            .progress();
-        assert_eq!(progress, SettlementProgress::Unselected);
-        assert_eq!(progress.route(), None);
-        assert!(progress.ensure_available(SettlementRoute::Manual).is_ok());
-        assert!(
-            progress
-                .ensure_available(SettlementRoute::Graduation)
-                .is_ok()
+        let (mut input, active) = active_for_route(true);
+        let mut state = FactoryState::decode(active.post_state.as_ref().unwrap()).unwrap();
+        state.settlement_stage = stage;
+        state.graduation_policy = GraduationPolicy {
+            launch_bps: 0,
+            collateral_bps: 0,
+        };
+        input.pre_state = borsh::to_vec(&state).unwrap().into();
+        input.from = None;
+        input.message = borsh::to_vec(&Message::WithdrawFactoryProceeds {
+            creator: id(42),
+            now: 200,
+        })
+        .unwrap();
+        assert_eq!(
+            handle(&input).err(),
+            Some(Error::InvalidTerms),
+            "stage {stage:?}"
         );
     }
-    let (mut input, mut response) = settlement(&input, &burned, pool.clone(), 100, 50, true);
-    input = reply(&input, &response, adapter_state(input.receiver, true));
-    response = handle(&input).unwrap();
-    let state = FactoryState::decode(response.post_state.as_ref().unwrap()).unwrap();
-    assert_eq!(
-        state.settlement_stage,
-        SettlementStage::HookReady { collateral_due: 50 }
-    );
-    assert_eq!(
-        state.settlement_stage.progress(),
-        SettlementProgress::Unselected
-    );
-    let (input, paid) = settlement(&input, &response, pool.clone(), 100, 50, false);
-    let state = FactoryState::decode(paid.post_state.as_ref().unwrap()).unwrap();
-    assert_eq!(
-        state.settlement_stage.progress(),
-        SettlementProgress::ManualStarted
-    );
-    assert_eq!(
-        state.settlement_stage.progress().route(),
-        Some(SettlementRoute::Manual)
-    );
-    let (_, complete) = settlement(&input, &paid, pool, 0, 50, false);
-    let state = FactoryState::decode(complete.post_state.as_ref().unwrap()).unwrap();
-    assert_eq!(
-        state.settlement_stage.progress(),
-        SettlementProgress::ManualComplete
-    );
-    assert!(state.settlement_stage.is_manual_settlement_complete());
+}
+#[test]
+fn hook_requires_a_saved_adapter_and_manual_completion_cannot_reopen_it() {
+    for stage in [
+        SettlementStage::Unstarted,
+        SettlementStage::Ready,
+        SettlementStage::Withdrawn {
+            unsold: 0,
+            collateral_due: 0,
+        },
+        SettlementStage::Complete,
+        SettlementStage::Graduated,
+    ] {
+        let (mut input, active) = active();
+        let mut state = FactoryState::decode(active.post_state.as_ref().unwrap()).unwrap();
+        state.settlement_stage = stage;
+        input.pre_state = borsh::to_vec(&state).unwrap().into();
+        input.from = None;
+        input.message = borsh::to_vec(&Message::ExecuteGraduationHook {
+            creator_hint: Some(id(42)),
+        })
+        .unwrap();
+        assert_eq!(handle(&input).err(), Some(Error::HookNotConfigured));
+    }
 }
 
 fn launch_events(response: &Response) -> Vec<SaleEventV1> {
@@ -2246,9 +2115,13 @@ fn curve_created_event_names_the_launch_and_immutable_terms_once() {
                 creator_role: *state.creator_role_id.value(),
                 token_definition: *state.token_definition_id.value(),
                 collateral_definition: *state.collateral_definition_id.value(),
+                graduation_reserve: state.graduation_reserve,
                 sale_inventory: 800,
                 creator_allocation: 100,
-                curve_reserve: 100,
+                graduation_policy: GraduationPolicy {
+                    launch_bps: 0,
+                    collateral_bps: 0
+                },
                 collateral_seed: 0,
                 start_timestamp: None,
                 end_timestamp: Some(200),
@@ -2268,32 +2141,13 @@ fn curve_created_event_names_the_launch_and_immutable_terms_once() {
 }
 
 #[test]
-fn curve_settlement_events_report_factory_burn_payouts_and_final_route() {
-    let (input, burned, pool) = burned(50);
-    let events = launch_events(&burned);
-    assert!(
-        matches!(&events[..], [SaleEventV1 { kind: SaleEventKindV1::Settlement { step: SettlementStepV1::UnsoldBurned, route: None, effects }, .. }] if effects == &vec![SettlementEffectV1::Burn { definition: *FactoryState::decode(burned.post_state.as_ref().unwrap()).unwrap().token_definition_id.value(), amount: 800 }])
-    );
-    let (input, paid) = settlement(&input, &burned, pool.clone(), 100, 67, false);
-    let events = launch_events(&paid);
-    assert!(
-        matches!(&events[..], [SaleEventV1 { kind: SaleEventKindV1::Settlement { step: SettlementStepV1::Payout, route: Some(SettlementRouteV1::Manual), effects }, .. }] if matches!(&effects[..], [SettlementEffectV1::Payout { purpose: PayoutPurposeV1::CurveReserve, liability_discharged: 100, tokens_transferred: 100, .. }]))
-    );
-    let (_, complete) = settlement(&input, &paid, pool, 0, 67, false);
-    let events = launch_events(&complete);
-    assert!(
-        matches!(&events[..], [SaleEventV1 { kind: SaleEventKindV1::Settlement { step: SettlementStepV1::Payout, route: Some(SettlementRouteV1::Manual), effects }, .. }, SaleEventV1 { kind: SaleEventKindV1::Settlement { step: SettlementStepV1::Completed, route: Some(SettlementRouteV1::Manual), effects: completed }, .. }] if matches!(&effects[..], [SettlementEffectV1::Payout { purpose: PayoutPurposeV1::CreatorProceeds, liability_discharged: 50, tokens_transferred: 50, .. }]) && completed.is_empty())
-    );
-    let (_, withdrawn, _) = withdrawn();
-    assert!(withdrawn.events.is_empty());
-}
-
-#[test]
 fn curve_allocation_read_emits_only_actual_allocation_payment() {
     for (amount, self_recipient) in [(0, false), (100, false), (100, true)] {
         let (mut input, active) = active();
         let mut state = FactoryState::decode(active.post_state.as_ref().unwrap()).unwrap();
         state.creator_allocation = amount;
+        state.total_supply =
+            total_supply(state.sale_reserve, state.graduation_reserve, amount).unwrap();
         let pool = pool_state(&state, input.receiver, true);
         let creator = if self_recipient {
             state.creator_escrow_id
@@ -2341,9 +2195,9 @@ fn curve_allocation_read_emits_only_actual_allocation_payment() {
 
 #[test]
 fn curve_manual_self_recipient_reports_discharged_claim_without_token_movement() {
-    let (mut input, burned, pool) = burned(0);
-    let state = FactoryState::decode(burned.post_state.as_ref().unwrap()).unwrap();
-    input.pre_state = burned.post_state.unwrap();
+    let (mut input, withdrawn, pool) = payout_ready(0);
+    let state = FactoryState::decode(withdrawn.post_state.as_ref().unwrap()).unwrap();
+    input.pre_state = withdrawn.post_state.unwrap();
     input.from = None;
     input.message = borsh::to_vec(&Message::WithdrawFactoryProceeds {
         creator: input.receiver.account_id,
@@ -2355,7 +2209,7 @@ fn curve_manual_self_recipient_reports_discharged_claim_without_token_movement()
     let mut response = handle(&input).unwrap();
     for bytes in [
         borsh::to_vec(&pool).unwrap(),
-        holding(input.receiver.account_id, state.token_definition_id, 100),
+        holding(input.receiver.account_id, state.token_definition_id, 800),
         holding(input.receiver.account_id, state.collateral_definition_id, 0),
     ] {
         input = reply(&input, &response, bytes);
@@ -2363,7 +2217,7 @@ fn curve_manual_self_recipient_reports_discharged_claim_without_token_movement()
     }
     let events = launch_events(&response);
     assert!(
-        matches!(&events[..], [SaleEventV1 { kind: SaleEventKindV1::Settlement { effects, .. }, .. }] if matches!(&effects[..], [SettlementEffectV1::Payout { liability_discharged: 100, tokens_transferred: 0, .. }]))
+        matches!(&events[..], [SaleEventV1 { kind: SaleEventKindV1::Settlement { effects, .. }, .. }, SaleEventV1 { kind: SaleEventKindV1::Settlement { step: SettlementStepV1::Completed, .. }, .. }] if matches!(&effects[..], [SettlementEffectV1::Payout { liability_discharged: 800, tokens_transferred: 0, .. }]))
     );
 }
 
@@ -2393,7 +2247,16 @@ fn retained_curve_invariant_binds_original_product_and_allows_checked_growth() {
     }
     assert!(saved.pool.k > saved.pool.initial_k);
     for hook in [false, true] {
-        let (_, ready) = settlement(&input, &active, saved.clone(), 100, 0, hook);
+        let mut routed = active.clone();
+        let mut terms = state.clone();
+        if hook {
+            terms.graduation_hook = Some(GraduationHook {
+                program_id: id(9),
+                configuration: b"route".to_vec(),
+            });
+        }
+        routed.post_state = Some(borsh::to_vec(&terms).unwrap().into());
+        let (_, ready) = settlement(&input, &routed, saved.clone(), 100, 0, hook);
         assert_eq!(
             FactoryState::decode(ready.post_state.as_ref().unwrap())
                 .unwrap()
@@ -2421,19 +2284,30 @@ fn retained_curve_invariant_binds_original_product_and_allows_checked_growth() {
                 creator: id(42),
                 now: 200,
             },
-            Message::ExecuteGraduationHook { creator_hint: None },
+            Message::ExecuteGraduationHook {
+                creator_hint: Some(id(42)),
+            },
         ] {
             let allocation = matches!(command, Message::ClaimCreatorAllocation { .. });
             let hook = matches!(command, Message::ExecuteGraduationHook { .. });
             let mut request = input.clone();
             request.from = None;
-            request.pre_state = active.post_state.clone().unwrap();
-            request.message = borsh::to_vec(&command).unwrap();
-            let mut response = handle(&request).unwrap();
-            if !hook {
-                request = proof(&request, &response, id(42));
-                response = handle(&request).unwrap();
+            let mut terms = state.clone();
+            if hook {
+                terms.graduation_hook = Some(GraduationHook {
+                    program_id: id(9),
+                    configuration: b"route".to_vec(),
+                });
             }
+            request.pre_state = borsh::to_vec(&terms).unwrap().into();
+            request.message = borsh::to_vec(&command).unwrap();
+            let response = handle(&request).unwrap();
+            request = if hook {
+                resolved(&request, &response, id(42))
+            } else {
+                proof(&request, &response, id(42))
+            };
+            let mut response = handle(&request).unwrap();
             request = reply(&request, &response, borsh::to_vec(&forged).unwrap());
             if allocation {
                 response = handle(&request).unwrap();
@@ -2482,8 +2356,8 @@ fn curve_retained_fee_forwarding_keeps_prefunding_exact() {
                 rate
             );
         }
-        let (input, allocated) = continued(&input, &mint, 1000, 0, 0);
-        let (input, prepared) = continued(&input, &allocated, 0, 900, 100);
+        let (input, allocated) = continued(&input, &mint, 900, 0, 0);
+        let (input, prepared) = continued(&input, &allocated, 0, 800, 100);
         let state = FactoryState::decode(prepared.post_state.as_ref().unwrap()).unwrap();
         assert_eq!(state.sell_fee_bps, rate);
         let prepare = prepared
@@ -2495,7 +2369,7 @@ fn curve_retained_fee_forwarding_keeps_prefunding_exact() {
             matches!(borsh::from_slice::<curve_core::Message>(&prepare.message).unwrap(), curve_core::Message::CreatePool { sell_fee_bps, .. } if sell_fee_bps == rate)
         );
         for case in 0..4 {
-            let (mut request, response) = continued(&input, &prepared, 0, 900, 100);
+            let (mut request, response) = continued(&input, &prepared, 0, 800, 100);
             let mut saved = pool_state(&state, input.receiver, false);
             match case {
                 0 => {}
@@ -2526,4 +2400,360 @@ fn curve_retained_fee_forwarding_keeps_prefunding_exact() {
             }
         }
     }
+}
+
+#[test]
+fn graduation_resolves_and_binds_the_current_creator_hint_before_custody_reads() {
+    let (input, ready, saved) = hook_ready();
+    let mut request = input.clone();
+    request.pre_state = ready.post_state.clone().unwrap();
+    request.from = None;
+    for hint in [None, Some(AccountId::default())] {
+        request.message =
+            borsh::to_vec(&Message::ExecuteGraduationHook { creator_hint: hint }).unwrap();
+        assert_eq!(handle(&request).err(), Some(Error::Unauthorized));
+    }
+    request.message = borsh::to_vec(&Message::ExecuteGraduationHook {
+        creator_hint: Some(id(99)),
+    })
+    .unwrap();
+    let resolving = handle(&request).unwrap();
+    let valid = resolved(&request, &resolving, id(99));
+    for (sender, role, creator) in [
+        (
+            Actor::new(id(99), AUTHORITY_PROGRAM_ACCOUNT_ID),
+            compute_curve_creator_role_pda(id(40), id(7), [3; 32]),
+            id(99),
+        ),
+        (
+            Actor::new(
+                compute_curve_creator_role_pda(id(40), id(7), [3; 32]),
+                id(99),
+            ),
+            compute_curve_creator_role_pda(id(40), id(7), [3; 32]),
+            id(99),
+        ),
+        (
+            Actor::new(
+                compute_curve_creator_role_pda(id(40), id(7), [3; 32]),
+                AUTHORITY_PROGRAM_ACCOUNT_ID,
+            ),
+            id(99),
+            id(99),
+        ),
+        (
+            Actor::new(
+                compute_curve_creator_role_pda(id(40), id(7), [3; 32]),
+                AUTHORITY_PROGRAM_ACCOUNT_ID,
+            ),
+            compute_curve_creator_role_pda(id(40), id(7), [3; 32]),
+            id(42),
+        ),
+    ] {
+        let mut forged = valid.clone();
+        forged.from = Some(sender);
+        forged.message = borsh::to_vec(&authority::CurrentAuthority {
+            role,
+            authority: creator,
+        })
+        .unwrap();
+        assert_eq!(handle(&forged).err(), Some(Error::Unauthorized));
+    }
+    let (mut input, response) = settlement_as(&input, &ready, saved, 817, 70, true, id(99));
+    input = reply(
+        &input,
+        &response,
+        adapter_state(input.receiver, response.post_state.as_ref().unwrap()),
+    );
+    let response = handle(&input).unwrap();
+    let state = FactoryState::decode(response.post_state.as_ref().unwrap()).unwrap();
+    let transfers = token_calls(&response);
+    assert!(transfers.contains(&token::Message::Transfer {
+        definition: state.token_definition_id,
+        recipient: id(99),
+        amount: 600
+    }));
+    assert!(transfers.contains(&token::Message::Transfer {
+        definition: state.collateral_definition_id,
+        recipient: id(99),
+        amount: 36
+    }));
+    assert!(!transfers.iter().any(
+        |call| matches!(call, token::Message::Transfer { recipient, .. } if *recipient == id(42))
+    ));
+}
+
+#[test]
+fn curve_creation_rejects_invalid_shares_and_shares_without_an_adapter() {
+    for (hook, launch_bps, collateral_bps) in [
+        (false, 1, 0),
+        (false, 0, 1),
+        (true, 10001, 0),
+        (true, 0, 10001),
+    ] {
+        let mut input = creation();
+        let mut command: Message = borsh::from_slice(&input.message).unwrap();
+        if let Message::CreateFactoryPool {
+            graduation_hook_program_id,
+            graduation_policy,
+            ..
+        } = &mut command
+        {
+            *graduation_hook_program_id = hook.then_some(id(9));
+            *graduation_policy = GraduationPolicy {
+                launch_bps,
+                collateral_bps,
+            };
+        }
+        input.message = borsh::to_vec(&command).unwrap();
+        assert_eq!(handle(&input).err(), Some(Error::InvalidTerms));
+    }
+}
+
+#[test]
+fn curve_zero_balances_finalize_once_on_the_configured_route() {
+    for hook in [false, true] {
+        let (input, active) = active_for_route(hook);
+        let mut state = FactoryState::decode(active.post_state.as_ref().unwrap()).unwrap();
+        state.settlement_stage = SettlementStage::Withdrawn {
+            unsold: 0,
+            collateral_due: 0,
+        };
+        let mut previous = active;
+        previous.post_state = Some(borsh::to_vec(&state).unwrap().into());
+        let mut saved = pool_state(&state, input.receiver, true);
+        saved.pool.real_reserve0 = 0;
+        saved.pool.real_reserve1 = 0;
+        let (mut input, mut response) = settlement(&input, &previous, saved.clone(), 17, 19, hook);
+        if hook {
+            input = reply(
+                &input,
+                &response,
+                adapter_state(input.receiver, response.post_state.as_ref().unwrap()),
+            );
+            response = handle(&input).unwrap();
+            let (next, pending) = settlement(&input, &response, saved, 17, 19, true);
+            input = reply(
+                &next,
+                &pending,
+                adapter_state(next.receiver, pending.post_state.as_ref().unwrap()),
+            );
+            response = handle(&input).unwrap();
+            assert!(token_calls(&response).is_empty());
+            let callback = response.sync_messages.last().unwrap();
+            let AdapterMessage::Graduate { request } =
+                borsh::from_slice(&callback.message).unwrap()
+            else {
+                panic!("graduate")
+            };
+            assert_eq!(
+                request.intent,
+                GraduationIntent::Curve {
+                    launch_tokens: 0,
+                    collateral: 0
+                }
+            );
+            input.from = Some(callback.to);
+            input.message = borsh::to_vec(&GraduationResult {
+                factory: input.receiver.account_id,
+                request_hash: request.hash(),
+            })
+            .unwrap();
+            input.pre_state = response.post_state.unwrap();
+            response = handle(&input).unwrap();
+        }
+        assert!(token_calls(&response).is_empty());
+        let stage = FactoryState::decode(response.post_state.as_ref().unwrap())
+            .unwrap()
+            .settlement_stage;
+        assert_eq!(
+            stage,
+            if hook {
+                SettlementStage::Graduated
+            } else {
+                SettlementStage::Complete
+            }
+        );
+        input.pre_state = response.post_state.unwrap();
+        input.from = None;
+        input.message = borsh::to_vec(&if hook {
+            Message::ExecuteGraduationHook {
+                creator_hint: Some(id(42)),
+            }
+        } else {
+            Message::WithdrawFactoryProceeds {
+                creator: id(42),
+                now: 200,
+            }
+        })
+        .unwrap();
+        assert_eq!(handle(&input).err(), Some(Error::AlreadySettled));
+    }
+}
+
+#[test]
+fn one_step_adapter_initialization_selects_curve_and_rejects_reinitialization() {
+    let (input, response) = active_for_route(true);
+    let factory = input.receiver;
+    let state = adapter_state(factory, response.post_state.as_ref().unwrap());
+    let decoded = AdapterState::decode(&state).unwrap();
+    assert_eq!(decoded.accepted_intent, GraduationIntentKind::Curve);
+    assert_eq!(decoded.factory, factory);
+    assert!(decoded.receipt.is_none());
+    let input = ReceiveInput {
+        receiver: Actor::new(compute_graduation_pda(id(9), factory.account_id), id(9)),
+        from: None,
+        is_authorized: false,
+        pre_state: state.into(),
+        message: borsh::to_vec(&AdapterMessage::Initialize {
+            factory_program_id: id(7),
+            namespace: id(40),
+            launch_salt: [3; 32],
+            accepted_intent: GraduationIntentKind::FixedPrice,
+        })
+        .unwrap(),
+    };
+    assert_eq!(
+        handle_adapter(&input).err(),
+        Some(Error::AlreadyInitialized)
+    );
+}
+
+#[test]
+fn curve_payouts_use_the_withdrawal_snapshot_for_no_buyers_partial_sale_and_depletion() {
+    for hook in [false, true] {
+        for scenario in 0..3 {
+            let (input, active) = active_for_route(hook);
+            let state = FactoryState::decode(active.post_state.as_ref().unwrap()).unwrap();
+            let mut saved = pool_state(&state, input.receiver, true);
+            if scenario != 0 {
+                saved
+                    .pool
+                    .swap_exact_input(pool::ExactInputSwap {
+                        token_in: pool::TokenSide::Token1,
+                        amount_in: 100,
+                        min_amount_out: 1,
+                        pool_fee_bps: 0,
+                        protocol_fee_bps: 100,
+                        now: 100,
+                    })
+                    .unwrap();
+                assert!(saved.pool.fees_accrued > 0);
+            }
+            if scenario == 2 {
+                saved.pool.real_reserve0 = 0;
+            }
+            let unsold = saved.pool.real_reserve0;
+            let collateral = saved.pool.real_reserve1;
+            let fees = saved.pool.fees_accrued;
+            let (input, ready) = settlement(&input, &active, saved.clone(), 17, 19, hook);
+            let (input, withdrawn) = settlement(&input, &ready, saved.clone(), 17, 19, hook);
+            assert_eq!(
+                FactoryState::decode(withdrawn.post_state.as_ref().unwrap())
+                    .unwrap()
+                    .settlement_stage,
+                SettlementStage::Withdrawn {
+                    unsold,
+                    collateral_due: collateral
+                }
+            );
+            saved.pool.real_reserve0 = 0;
+            saved.pool.real_reserve1 = 0;
+            let (mut input, mut response) = settlement(
+                &input,
+                &withdrawn,
+                saved.clone(),
+                unsold + 17,
+                collateral + fees + 19,
+                hook,
+            );
+            if hook {
+                input = reply(
+                    &input,
+                    &response,
+                    adapter_state(input.receiver, response.post_state.as_ref().unwrap()),
+                );
+                response = handle(&input).unwrap();
+                let (next, pending) = settlement(
+                    &input,
+                    &response,
+                    saved,
+                    unsold + 17,
+                    collateral + fees + 19,
+                    true,
+                );
+                input = reply(
+                    &next,
+                    &pending,
+                    adapter_state(next.receiver, pending.post_state.as_ref().unwrap()),
+                );
+                response = handle(&input).unwrap();
+            }
+            let calls = token_calls(&response);
+            for (definition, eligible) in [
+                (state.token_definition_id, unsold),
+                (state.collateral_definition_id, collateral),
+            ] {
+                let paid: u128 = calls
+                    .iter()
+                    .filter_map(|call| match call {
+                        token::Message::Transfer {
+                            definition: actual,
+                            amount,
+                            ..
+                        } if *actual == definition => Some(*amount),
+                        _ => None,
+                    })
+                    .sum();
+                assert_eq!(paid, eligible, "hook {hook}, scenario {scenario}");
+            }
+            assert!(
+                calls
+                    .iter()
+                    .all(|call| matches!(call, token::Message::Transfer { .. }))
+            );
+            assert!(
+                !FactoryState::decode(response.post_state.as_ref().unwrap())
+                    .unwrap()
+                    .creator_allocation_claimed
+            );
+        }
+    }
+}
+
+#[test]
+fn graduation_reserve_is_in_initial_supply_but_not_curve_pricing() {
+    for reserve in [0, 120, u128::MAX] {
+        let mut input = creation();
+        let mut command: Message = borsh::from_slice(&input.message).unwrap();
+        if let Message::CreateFactoryPool {
+            graduation_reserve, ..
+        } = &mut command
+        {
+            *graduation_reserve = reserve;
+        }
+        input.message = borsh::to_vec(&command).unwrap();
+        let response = handle(&input);
+        if reserve == u128::MAX {
+            assert_eq!(response.err(), Some(Error::InvalidTerms));
+        } else {
+            let state =
+                FactoryState::decode(response.unwrap().post_state.as_ref().unwrap()).unwrap();
+            assert_eq!(state.graduation_reserve, reserve);
+            assert_eq!(state.total_supply, 900 + reserve);
+            assert_eq!(
+                (
+                    state.sale_reserve,
+                    state.virtual_token_reserve,
+                    state.virtual_collateral_reserve
+                ),
+                (800, 1000, 100)
+            );
+        }
+    }
+    assert_eq!(total_supply(1, u128::MAX - 2, 1), Ok(u128::MAX));
+    assert_eq!(
+        total_supply(1, u128::MAX - 2, 2),
+        Err(CreateError::SupplyOverflow)
+    );
 }

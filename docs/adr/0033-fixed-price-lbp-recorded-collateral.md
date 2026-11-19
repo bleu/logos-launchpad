@@ -10,7 +10,7 @@ Record net buy collateral as creator proceeds and namespace fees separately unde
 
 Unsolicited transfers are surplus. They cannot increase recorded sale inventory, pricing collateral, accrued fees or creator proceeds. Update recorded amounts only with corresponding custody transfers; require sufficient backing for recorded collateral and accrued fees. Collection reduces vault and fee liability together, not creator proceeds.
 
-[Ending](0025-sale-closing.md) controls payout eligibility. Empty inventory blocks buys but is not an early payout right under `Scheduled`. Selected trading depletion is final; settlement burns cannot create depletion evidence. [Settlement](0020-settlement-and-graduation.md) pays recorded obligations once and preserves surplus.
+[Ending](0025-sale-closing.md) controls payout eligibility. Empty inventory blocks buys but is not an early payout right under `Scheduled`. Selected trading depletion is final; settlement payouts cannot create depletion evidence. [Settlement](0020-settlement-and-graduation.md) pays recorded obligations once and preserves surplus.
 
 ## Reason and limits
 

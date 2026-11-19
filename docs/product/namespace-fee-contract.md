@@ -11,7 +11,7 @@ Anyone can create a namespace with an administrator, fee rate and treasury. Each
 | Change fee or treasury in separate operations | Current namespace administrator |
 | Transfer administration | Current administrator and accepting successor |
 | Renounce administration permanently | Current administrator |
-| Create a sale or authorize manual payouts | Sale creator role |
+| Create a sale or authorize manual payouts without an adapter | Sale creator role |
 | Execute a configured graduation hook | Anyone, after the selected ending condition |
 | Collect namespace fees | Anyone; payment goes to the current treasury |
 
@@ -29,7 +29,7 @@ Namespace fees use collateral buy input or sell output. Buys price net collatera
 
 The fee rate and treasury are live namespace settings. Fixed-price and weighted-sale fee departures are accepted internally but remain `To be reviewed by Logos team` externally. Local execution does not establish external approval.
 
-The selected ending policy controls creator payouts and `AfterEnd` allocations. Fee collection does not wait for settlement. A failed settlement transaction must roll back its effects; earlier completed stages stay complete. Recorded payouts and burns make retries safe. See [ending rules](../adr/0025-sale-closing.md) and [settlement](../adr/0020-settlement-and-graduation.md).
+The selected ending policy controls creator payouts and `AfterEnd` allocations. Fee collection does not wait for settlement. A failed settlement transaction must roll back its effects; earlier completed stages stay complete. Recorded completion prevents duplicate payouts. See [ending rules](../adr/0025-sale-closing.md) and [settlement](../adr/0020-settlement-and-graduation.md).
 
 ## Events and errors
 

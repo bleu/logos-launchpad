@@ -23,10 +23,12 @@ fn inputs() -> WeightedInputs {
         trade_mode: factory_core::TradeMode::BuyOnly,
         sell_fee_bps: 0,
         graduation_hook: None,
+        graduation_policy: factory_core::GraduationPolicy::default(),
         namespace: id(40),
         launch_salt: [3; 32],
         name: "Weighted".into(),
         uri: "https://example.test/weighted".into(),
+        graduation_reserve: 0,
         sale_inventory: 800,
         creator_allocation: 200,
         collateral_seed: 100,
@@ -764,9 +766,10 @@ fn scheduled_weighted_allocation_keeps_deadline_and_settlement_delegates_to_pool
     assert_eq!(response.validity.timestamps.start(), Some(300_000));
     assert!(!response.validity.timestamps.is_valid_for(299_999));
     assert!(response.validity.timestamps.is_valid_for(300_000));
-    assert_eq!(response.sync_messages.len(), 2);
+    assert_eq!(response.sync_messages.len(), 3);
     assert_eq!(
-        borsh::from_slice::<lbp_core::Message>(&response.sync_messages[1].message).unwrap(),
+        borsh::from_slice::<lbp_core::Message>(&response.sync_messages.last().unwrap().message)
+            .unwrap(),
         lbp_core::Message::Settle {
             route: factory_core::SettlementRoute::Manual,
             creator: id(42),
@@ -818,16 +821,20 @@ fn weighted_callback<T: borsh::BorshSerialize>(
 }
 
 #[test]
-fn weighted_hook_saves_adapter_binding_and_keeps_seed_outside_the_intent() {
+fn weighted_hook_binds_both_assets_and_includes_seed_in_the_split() {
     use factory_core::{
         AdapterMessage, GraduationIntent, GraduationIntentKind, GraduationResult,
-        SettlementAmounts, SettlementProgress, SettlementReceipt, SettlementReply, SettlementRoute,
+        SettlementProgress, SettlementReceipt, SettlementReply, SettlementRoute,
     };
     let mut terms = inputs();
     terms.graduation_hook = Some(factory_core::GraduationHook {
         program_id: id(9),
         configuration: b"weighted".to_vec(),
     });
+    terms.graduation_policy = factory_core::GraduationPolicy {
+        launch_bps: 2500,
+        collateral_bps: 6000,
+    };
     let (mut input, prepared, bytes) = prepared_with_terms(terms.clone());
     let mut state = LbpLaunchState::decode(prepared.post_state.as_ref().unwrap()).unwrap();
     assert_eq!(state.graduation_hook, terms.graduation_hook);
@@ -855,7 +862,7 @@ fn weighted_hook_saves_adapter_binding_and_keeps_seed_outside_the_intent() {
     );
     state.creation_stage = LbpCreationStage::Complete;
     pool.funded = true;
-    pool.remaining_inventory = 0;
+    pool.remaining_inventory = 790;
     pool.recorded_collateral = 125;
     pool.accrued_fees = 3;
     input.pre_state = borsh::to_vec(&state).unwrap().into();
@@ -867,7 +874,7 @@ fn weighted_hook_saves_adapter_binding_and_keeps_seed_outside_the_intent() {
     let response = handle(&input).unwrap();
     input = reply(&input, &response, borsh::to_vec(&pool).unwrap());
     let response = handle(&input).unwrap();
-    let adapter_state = factory_core::handle_adapter(&ReceiveInput {
+    let initialized = factory_core::handle_adapter(&ReceiveInput {
         receiver: adapter,
         from: None,
         is_authorized: false,
@@ -876,7 +883,18 @@ fn weighted_hook_saves_adapter_binding_and_keeps_seed_outside_the_intent() {
             factory_program_id: id(7),
             namespace: state.namespace,
             launch_salt: state.launch_salt,
-            accepted_intent: Some(GraduationIntentKind::WeightedBuyerProceeds),
+            accepted_intent: GraduationIntentKind::Weighted,
+        })
+        .unwrap(),
+    })
+    .unwrap();
+    let adapter_state = factory_core::handle_adapter(&ReceiveInput {
+        receiver: adapter,
+        from: Some(input.receiver),
+        is_authorized: false,
+        pre_state: initialized.post_state.unwrap(),
+        message: borsh::to_vec(&lee_core::program::StateReply {
+            state: borsh::to_vec(&state).unwrap().into(),
         })
         .unwrap(),
     })
@@ -927,19 +945,29 @@ fn weighted_hook_saves_adapter_binding_and_keeps_seed_outside_the_intent() {
         route: SettlementRoute::Graduation,
         creator: id(99),
         adapter: Some(adapter),
-        amounts: SettlementAmounts {
-            launch_tokens: 0,
-            collateral: 25,
+        eligible: factory_core::SettlementAmounts {
+            launch_tokens: pool.remaining_inventory,
+            collateral: pool.recorded_collateral,
         },
-        seed_payment: 100,
+        payouts: state
+            .graduation_policy
+            .payouts(
+                factory_core::SettlementAmounts {
+                    launch_tokens: pool.remaining_inventory,
+                    collateral: pool.recorded_collateral,
+                },
+                factory_core::SettlementRoute::Graduation,
+                state.graduation_hook.is_some(),
+            )
+            .unwrap(),
         progress: SettlementProgress::Graduated,
     };
     for case in 0..3 {
         let mut changed = receipt.clone();
         match case {
-            0 => changed.seed_payment = 0,
-            1 => changed.amounts.collateral = 125,
-            _ => changed.amounts.launch_tokens = 1,
+            0 => changed.payouts.creator.collateral += 1,
+            1 => changed.eligible.collateral += 1,
+            _ => changed.eligible.launch_tokens = 1,
         }
         let bad = weighted_callback(
             &input,
@@ -966,7 +994,10 @@ fn weighted_hook_saves_adapter_binding_and_keeps_seed_outside_the_intent() {
     };
     assert_eq!(
         request.intent,
-        GraduationIntent::WeightedBuyerProceeds { collateral: 25 }
+        GraduationIntent::Weighted {
+            launch_tokens: 197,
+            collateral: 75
+        }
     );
     assert_eq!(
         LbpLaunchState::decode(callback.post_state.as_ref().unwrap())
@@ -1011,8 +1042,8 @@ fn weighted_hook_saves_adapter_binding_and_keeps_seed_outside_the_intent() {
             SaleEventKindV1::Graduated {
                 adapter_program: *adapter.program_account_id.value(),
                 adapter_custody: *adapter.account_id.value(),
-                launch_tokens: 0,
-                collateral: 25
+                launch_tokens: 197,
+                collateral: 75
             }
         )]
     );
@@ -1025,10 +1056,8 @@ fn weighted_hook_saves_adapter_binding_and_keeps_seed_outside_the_intent() {
 }
 
 #[test]
-fn weighted_seed_only_manual_completion_is_final_and_acknowledged_once() {
-    use factory_core::{
-        SettlementAmounts, SettlementProgress, SettlementReceipt, SettlementReply, SettlementRoute,
-    };
+fn weighted_no_buyer_manual_completion_pays_inventory_and_seed_once() {
+    use factory_core::{SettlementProgress, SettlementReceipt, SettlementReply, SettlementRoute};
     let (mut input, prepared, bytes) = prepared(CreatorAllocationRelease::AfterEnd);
     let mut state = LbpLaunchState::decode(prepared.post_state.as_ref().unwrap()).unwrap();
     state.creation_stage = LbpCreationStage::Complete;
@@ -1050,11 +1079,21 @@ fn weighted_seed_only_manual_completion_is_final_and_acknowledged_once() {
         route: SettlementRoute::Manual,
         creator: id(42),
         adapter: None,
-        amounts: SettlementAmounts {
-            launch_tokens: 0,
-            collateral: 0,
+        eligible: factory_core::SettlementAmounts {
+            launch_tokens: pool.remaining_inventory,
+            collateral: pool.recorded_collateral,
         },
-        seed_payment: 100,
+        payouts: state
+            .graduation_policy
+            .payouts(
+                factory_core::SettlementAmounts {
+                    launch_tokens: pool.remaining_inventory,
+                    collateral: pool.recorded_collateral,
+                },
+                factory_core::SettlementRoute::Manual,
+                state.graduation_hook.is_some(),
+            )
+            .unwrap(),
         progress: SettlementProgress::ManualComplete,
     };
     input = weighted_callback(
@@ -1088,7 +1127,6 @@ fn weighted_seed_only_manual_completion_is_final_and_acknowledged_once() {
         SettlementProgress::ManualComplete
     );
     pool.settlement_progress = state.settlement_progress;
-    pool.seed_returned = true;
     pool.recorded_collateral = 0;
     input.pre_state = completed.post_state.unwrap();
     input.from = None;
@@ -1224,9 +1262,10 @@ fn weighted_created_event_names_the_launch_and_original_seed_once() {
                 creator_role: *state.creator_role_id.value(),
                 token_definition: *state.token_definition_id.value(),
                 collateral_definition: *state.collateral_definition_id.value(),
+                graduation_reserve: state.graduation_reserve,
                 sale_inventory: 800,
                 creator_allocation: 200,
-                curve_reserve: 0,
+                graduation_policy: state.graduation_policy,
                 collateral_seed: 100,
                 start_timestamp: Some(150),
                 end_timestamp: Some(300),
@@ -1312,6 +1351,10 @@ fn weighted_payouts_and_hook_reject_a_substituted_trade_mode() {
         request.from = None;
         request.pre_state = borsh::to_vec(&state).unwrap().into();
         request.message = borsh::to_vec(&command).unwrap();
+        if matches!(command, Message::WithdrawWeightedProceeds { .. }) {
+            assert_eq!(handle(&request).err(), Some(Error::InvalidTerms));
+            continue;
+        }
         let mut response = handle(&request).unwrap();
         if !hook {
             request = weighted_authorized(&request, &response);
@@ -1391,6 +1434,10 @@ fn weighted_payouts_and_hook_reject_a_substituted_sell_fee() {
         request.from = None;
         request.pre_state = borsh::to_vec(&state).unwrap().into();
         request.message = borsh::to_vec(&command).unwrap();
+        if matches!(command, Message::WithdrawWeightedProceeds { .. }) {
+            assert_eq!(handle(&request).err(), Some(Error::InvalidTerms));
+            continue;
+        }
         let mut response = handle(&request).unwrap();
         if !hook {
             request = weighted_authorized(&request, &response);
@@ -1406,5 +1453,109 @@ fn weighted_payouts_and_hook_reject_a_substituted_sell_fee() {
             );
         }
         assert_eq!(handle(&request).err(), Some(Error::InvalidCustody));
+    }
+}
+
+#[test]
+fn weighted_graduation_policy_validates_creation_and_forbids_manual_even_after_completion() {
+    use factory_core::{GraduationHook, GraduationPolicy, SettlementProgress};
+    for hook in [
+        None,
+        Some(GraduationHook {
+            program_id: id(9),
+            configuration: vec![],
+        }),
+    ] {
+        for policy in [
+            GraduationPolicy::default(),
+            GraduationPolicy {
+                launch_bps: 10_000,
+                collateral_bps: 0,
+            },
+            GraduationPolicy {
+                launch_bps: 0,
+                collateral_bps: 1,
+            },
+            GraduationPolicy {
+                launch_bps: 10_001,
+                collateral_bps: 0,
+            },
+            GraduationPolicy {
+                launch_bps: 0,
+                collateral_bps: 10_001,
+            },
+        ] {
+            let mut terms = inputs();
+            terms.graduation_hook = hook.clone();
+            terms.graduation_policy = policy;
+            let result = handle(&creation(terms));
+            if policy.validate(hook.is_some()).is_err() {
+                assert_eq!(result.err(), Some(Error::InvalidTerms));
+            } else {
+                assert_eq!(
+                    LbpLaunchState::decode(result.unwrap().post_state.as_ref().unwrap())
+                        .unwrap()
+                        .graduation_policy,
+                    policy
+                );
+            }
+        }
+    }
+    let (mut input, prepared, _) = prepared(CreatorAllocationRelease::AfterEnd);
+    let mut state = LbpLaunchState::decode(prepared.post_state.as_ref().unwrap()).unwrap();
+    state.creation_stage = LbpCreationStage::Complete;
+    state.graduation_hook = Some(GraduationHook {
+        program_id: id(9),
+        configuration: vec![],
+    });
+    for progress in [
+        SettlementProgress::Unselected,
+        SettlementProgress::ManualComplete,
+        SettlementProgress::Graduated,
+    ] {
+        state.settlement_progress = progress;
+        input.pre_state = borsh::to_vec(&state).unwrap().into();
+        input.message =
+            borsh::to_vec(&Message::WithdrawWeightedProceeds { creator: id(42) }).unwrap();
+        assert_eq!(handle(&input).err(), Some(Error::InvalidTerms));
+    }
+}
+
+#[test]
+fn weighted_funding_rejects_either_substituted_graduation_percentage() {
+    let mut terms = inputs();
+    terms.graduation_hook = Some(factory_core::GraduationHook {
+        program_id: id(9),
+        configuration: vec![],
+    });
+    terms.graduation_policy = factory_core::GraduationPolicy {
+        launch_bps: 2500,
+        collateral_bps: 6000,
+    };
+    let (input, prepared, bytes) = prepared_with_terms(terms.clone());
+    let state = LbpLaunchState::decode(prepared.post_state.as_ref().unwrap()).unwrap();
+    let pool = lbp_core::PoolAccount::decode(&bytes).unwrap();
+    assert_eq!(pool.graduation_policy, terms.graduation_policy);
+    for launch in [true, false] {
+        let mut changed = pool.clone();
+        if launch {
+            changed.graduation_policy.launch_bps += 1;
+        } else {
+            changed.graduation_policy.collateral_bps += 1;
+        }
+        assert_eq!(
+            advance(
+                &input,
+                &prepared,
+                vec![
+                    borsh::to_vec(&changed).unwrap(),
+                    holding(state.pool_id, state.token_definition_id, 0),
+                    holding(state.pool_id, state.collateral_definition_id, 0),
+                    holding(id(42), state.collateral_definition_id, 100)
+                ]
+            )
+            .err(),
+            Some(Error::InvalidCustody)
+        );
     }
 }

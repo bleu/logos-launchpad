@@ -21,10 +21,12 @@ fn inputs() -> FixedPriceInputs {
         trade_mode: factory_core::TradeMode::BuyOnly,
         sell_fee_bps: 0,
         graduation_hook: None,
+        graduation_policy: factory_core::GraduationPolicy::default(),
         namespace: id(40),
         launch_salt: [3; 32],
         name: "Launch".into(),
         uri: "https://example.test/launch.json".into(),
+        graduation_reserve: 0,
         sale_inventory: 800,
         creator_allocation: 200,
         price: FixedPrice {
@@ -399,6 +401,7 @@ fn prepared_pool(state: &factory_core::FixedPriceLaunchState, factory: Actor) ->
         ending_policy: state.ending_policy,
         trade_mode: state.trade_mode,
         sell_fee_bps: state.sell_fee_bps,
+        graduation_policy: state.graduation_policy,
         graduation_adapter: state.graduation_hook.as_ref().map(|hook| {
             Actor::new(
                 factory_core::compute_graduation_pda(hook.program_id, factory.account_id),
@@ -1154,7 +1157,7 @@ fn allocation_stays_locked_before_close_and_requires_escrow_coverage() {
 }
 
 #[test]
-fn expiry_burn_keeps_the_allocation_inclusion_bound_until_expiry() {
+fn inventory_payout_keeps_the_allocation_inclusion_bound_until_expiry() {
     let (input, state) = completed();
     let mut pool = active_pool(&state, input.receiver);
     pool.settlement_progress = lbp_core::SettlementProgress::ManualComplete;
@@ -1173,6 +1176,7 @@ fn expiry_burn_keeps_the_allocation_inclusion_bound_until_expiry() {
 fn zero_and_after_setup_allocations_never_emit_a_second_token_payout() {
     let (input, mut state) = completed();
     state.creator_allocation = 0;
+    state.total_supply = state.sale_inventory + state.graduation_reserve;
     let pool = active_pool(&state, input.receiver);
     let response = claim_allocation(&input, &state, &pool, 200, 0).unwrap();
     assert!(
@@ -1185,6 +1189,7 @@ fn zero_and_after_setup_allocations_never_emit_a_second_token_payout() {
     assert_eq!(response.validity.timestamps.start(), Some(200_000));
     assert_eq!(response.validity.timestamps.end(), None);
     state.creator_allocation = 200;
+    state.total_supply = state.sale_inventory + state.graduation_reserve + state.creator_allocation;
     state.allocation_release = CreatorAllocationRelease::AfterSetup;
     state.creator_allocation_released = true;
     let pool = active_pool(&state, input.receiver);
@@ -1782,13 +1787,14 @@ fn fixed_price_rejects_malformed_saved_terms_and_the_old_record_version() {
         state.trade_mode,
         state.sell_fee_bps,
         state.graduation_hook,
+        state.graduation_policy,
     ))
     .unwrap()
     .len()
         + 8;
     assert_eq!(
         &bytes[version_offset..version_offset + 2],
-        &4_u16.to_le_bytes()
+        &5_u16.to_le_bytes()
     );
     bytes[version_offset..version_offset + 2].copy_from_slice(&2_u16.to_le_bytes());
     assert_eq!(
@@ -1875,7 +1881,7 @@ fn manual_pending(
     lee_core::program::Response,
     factory_core::SettlementReceipt,
 ) {
-    use factory_core::{SettlementAmounts, SettlementProgress, SettlementReceipt, SettlementRoute};
+    use factory_core::{SettlementProgress, SettlementReceipt, SettlementRoute};
     let (mut input, state) = completed();
     let mut pool = active_pool(&state, input.receiver);
     pool.recorded_collateral = pool_proceeds;
@@ -1897,11 +1903,21 @@ fn manual_pending(
         route: SettlementRoute::Manual,
         creator: id(42),
         adapter: None,
-        amounts: SettlementAmounts {
-            launch_tokens: 0,
-            collateral: pool_proceeds,
+        eligible: factory_core::SettlementAmounts {
+            launch_tokens: pool.remaining_inventory,
+            collateral: pool.recorded_collateral,
         },
-        seed_payment: 0,
+        payouts: state
+            .graduation_policy
+            .payouts(
+                factory_core::SettlementAmounts {
+                    launch_tokens: pool.remaining_inventory,
+                    collateral: pool.recorded_collateral,
+                },
+                factory_core::SettlementRoute::Manual,
+                state.graduation_hook.is_some(),
+            )
+            .unwrap(),
         progress: SettlementProgress::ManualComplete,
     };
     (input, response, receipt)
@@ -2005,9 +2021,9 @@ fn manual_applied_rejects_every_changed_receipt_binding_and_reentry() {
             2 => changed.route = SettlementRoute::Graduation,
             3 => changed.creator = id(99),
             4 => changed.adapter = Some(Actor::new(id(99), id(9))),
-            5 => changed.amounts.launch_tokens = 1,
-            6 => changed.amounts.collateral += 1,
-            7 => changed.seed_payment = 1,
+            5 => changed.eligible.launch_tokens = 1,
+            6 => changed.eligible.collateral += 1,
+            7 => changed.payouts.creator.launch_tokens += 1,
             8 => changed.progress = SettlementProgress::Graduated,
             _ => changed.pool.program_account_id = id(99),
         }
@@ -2045,6 +2061,10 @@ fn fixed_hook_resolve(
         program_id: id(9),
         configuration: b"fixed".to_vec(),
     });
+    state.graduation_policy = factory_core::GraduationPolicy {
+        launch_bps: 2500,
+        collateral_bps: 6000,
+    };
     state.settlement_progress = progress;
     let mut pool = active_pool(&state, input.receiver);
     pool.recorded_collateral = proceeds;
@@ -2062,7 +2082,7 @@ fn fixed_hook_resolve(
         factory_core::compute_graduation_pda(id(9), input.receiver.account_id),
         id(9),
     );
-    let adapter_state = factory_core::handle_adapter(&ReceiveInput {
+    let initialized = factory_core::handle_adapter(&ReceiveInput {
         receiver: adapter,
         from: None,
         is_authorized: false,
@@ -2071,7 +2091,18 @@ fn fixed_hook_resolve(
             factory_program_id: id(7),
             namespace: state.namespace,
             launch_salt: state.launch_salt,
-            accepted_intent: Some(GraduationIntentKind::FixedPriceProceeds),
+            accepted_intent: GraduationIntentKind::FixedPrice,
+        })
+        .unwrap(),
+    })
+    .unwrap();
+    let adapter_state = factory_core::handle_adapter(&ReceiveInput {
+        receiver: adapter,
+        from: Some(input.receiver),
+        is_authorized: false,
+        pre_state: initialized.post_state.unwrap(),
+        message: borsh::to_vec(&lee_core::program::StateReply {
+            state: borsh::to_vec(&state).unwrap().into(),
         })
         .unwrap(),
     })
@@ -2079,11 +2110,7 @@ fn fixed_hook_resolve(
     .post_state
     .unwrap();
     input = reply(&input, &response, adapter_state.to_vec());
-    for accepted_intent in [
-        None,
-        Some(GraduationIntentKind::CurveReserves),
-        Some(GraduationIntentKind::WeightedBuyerProceeds),
-    ] {
+    for accepted_intent in [GraduationIntentKind::Curve, GraduationIntentKind::Weighted] {
         let mut changed = factory_core::AdapterState::decode(&adapter_state).unwrap();
         changed.accepted_intent = accepted_intent;
         let mut rejected = input.clone();
@@ -2091,7 +2118,7 @@ fn fixed_hook_resolve(
             state: borsh::to_vec(&changed).unwrap().into(),
         })
         .unwrap();
-        assert_eq!(handle(&rejected).err(), Some(Error::AdapterNotReady));
+        assert_eq!(handle(&rejected).err(), Some(Error::AdapterIntentMismatch));
     }
     let mut response = handle(&input).unwrap();
     assert_eq!(response.sync_messages.len(), 3);
@@ -2150,7 +2177,7 @@ fn fixed_hook_resolves_current_creator_then_guards_both_completion_hashes() {
         factory_core::AUTHORITY_PROGRAM_ACCOUNT_ID,
     ));
     let pending = handle(&resolved).unwrap();
-    assert_eq!(pending.sync_messages.len(), 2);
+    assert_eq!(pending.sync_messages.len(), 3);
     assert_eq!(
         borsh::from_slice::<lez_compat_core::token::Message>(&pending.sync_messages[0].message)
             .unwrap(),
@@ -2168,11 +2195,21 @@ fn fixed_hook_resolves_current_creator_then_guards_both_completion_hashes() {
         route: SettlementRoute::Graduation,
         creator: id(99),
         adapter: pool.graduation_adapter,
-        amounts: factory_core::SettlementAmounts {
-            launch_tokens: 0,
-            collateral: 4,
+        eligible: factory_core::SettlementAmounts {
+            launch_tokens: pool.remaining_inventory,
+            collateral: pool.recorded_collateral,
         },
-        seed_payment: 0,
+        payouts: state
+            .graduation_policy
+            .payouts(
+                factory_core::SettlementAmounts {
+                    launch_tokens: pool.remaining_inventory,
+                    collateral: pool.recorded_collateral,
+                },
+                factory_core::SettlementRoute::Graduation,
+                state.graduation_hook.is_some(),
+            )
+            .unwrap(),
         progress: SettlementProgress::Graduated,
     };
     let applied = settlement_callback(
@@ -2193,7 +2230,10 @@ fn fixed_hook_resolves_current_creator_then_guards_both_completion_hashes() {
     };
     assert_eq!(
         request.intent,
-        GraduationIntent::FixedPriceProceeds { collateral: 4 }
+        GraduationIntent::FixedPrice {
+            launch_tokens: 199,
+            collateral: 2
+        }
     );
     let mut result = settlement_callback(
         &input,
@@ -2241,8 +2281,8 @@ fn fixed_hook_resolves_current_creator_then_guards_both_completion_hashes() {
             SaleEventKindV1::Graduated {
                 adapter_program: *id(9).value(),
                 adapter_custody: *pool.graduation_adapter.unwrap().account_id.value(),
-                launch_tokens: 0,
-                collateral: 4
+                launch_tokens: 199,
+                collateral: 2
             }
         )]
     );
@@ -2330,11 +2370,21 @@ fn fixed_zero_manual_completion_is_final_but_zero_first_graduation_is_available(
         route: factory_core::SettlementRoute::Graduation,
         creator: id(99),
         adapter: pool.graduation_adapter,
-        amounts: factory_core::SettlementAmounts {
-            launch_tokens: 0,
-            collateral: 0,
+        eligible: factory_core::SettlementAmounts {
+            launch_tokens: pool.remaining_inventory,
+            collateral: pool.recorded_collateral,
         },
-        seed_payment: 0,
+        payouts: state
+            .graduation_policy
+            .payouts(
+                factory_core::SettlementAmounts {
+                    launch_tokens: pool.remaining_inventory,
+                    collateral: pool.recorded_collateral,
+                },
+                factory_core::SettlementRoute::Graduation,
+                state.graduation_hook.is_some(),
+            )
+            .unwrap(),
         progress: SettlementProgress::Graduated,
     };
     let applied = settlement_callback(
@@ -2374,7 +2424,7 @@ fn fixed_zero_manual_completion_is_final_but_zero_first_graduation_is_available(
         &launch_events(&response)[..],
         [SaleEventV1 {
             kind: SaleEventKindV1::Graduated {
-                launch_tokens: 0,
+                launch_tokens: 199,
                 collateral: 0,
                 ..
             },
@@ -2404,13 +2454,10 @@ fn fixed_settlement_rejects_stale_progress_adapter_and_immutable_pool_terms() {
         }
         input.pre_state = borsh::to_vec(&state).unwrap().into();
         input.from = None;
-        input.message = borsh::to_vec(&Message::WithdrawFactoryProceeds {
-            creator: id(42),
-            now: 0,
+        input.message = borsh::to_vec(&Message::ExecuteGraduationHook {
+            creator_hint: Some(id(42)),
         })
         .unwrap();
-        let response = handle(&input).unwrap();
-        input = authorized(&input, &response, id(42));
         let response = handle(&input).unwrap();
         input = reply(&input, &response, borsh::to_vec(&pool).unwrap());
         assert_eq!(
@@ -2605,9 +2652,10 @@ fn fixed_created_event_names_the_launch_and_saved_terms_once() {
                 creator_role: *state.creator_role_id.value(),
                 token_definition: *state.token_definition_id.value(),
                 collateral_definition: *state.collateral_definition_id.value(),
+                graduation_reserve: state.graduation_reserve,
                 sale_inventory: 800,
                 creator_allocation: 200,
-                curve_reserve: 0,
+                graduation_policy: state.graduation_policy,
                 collateral_seed: 0,
                 start_timestamp: Some(0),
                 end_timestamp: Some(200),
@@ -2817,5 +2865,155 @@ fn fixed_price_sell_fee_survives_every_setup_stage_and_rejects_substitution() {
                 }
             }
         }
+    }
+}
+
+#[test]
+fn fixed_graduation_policy_validates_creation_and_blocks_manual_before_any_noop() {
+    use factory_core::{GraduationHook, GraduationPolicy, SettlementProgress};
+    for hook in [
+        None,
+        Some(GraduationHook {
+            program_id: id(9),
+            configuration: vec![],
+        }),
+    ] {
+        for policy in [
+            GraduationPolicy::default(),
+            GraduationPolicy {
+                launch_bps: 1,
+                collateral_bps: 0,
+            },
+            GraduationPolicy {
+                launch_bps: 0,
+                collateral_bps: 10_000,
+            },
+            GraduationPolicy {
+                launch_bps: 10_001,
+                collateral_bps: 0,
+            },
+            GraduationPolicy {
+                launch_bps: 0,
+                collateral_bps: 10_001,
+            },
+        ] {
+            let mut terms = inputs();
+            terms.graduation_hook = hook.clone();
+            terms.graduation_policy = policy;
+            let mut input = creation();
+            input.message = borsh::to_vec(&Message::CreateFixedPriceLbp { inputs: terms }).unwrap();
+            let result = handle(&input);
+            if policy.validate(hook.is_some()).is_err() {
+                assert_eq!(result.err(), Some(Error::InvalidTerms));
+            } else {
+                assert_eq!(
+                    factory_core::LbpLaunchState::decode(
+                        result.unwrap().post_state.as_ref().unwrap()
+                    )
+                    .unwrap()
+                    .graduation_policy,
+                    policy
+                );
+            }
+        }
+    }
+    for progress in [
+        SettlementProgress::Unselected,
+        SettlementProgress::ManualComplete,
+        SettlementProgress::Graduated,
+    ] {
+        let (mut input, mut state) = completed();
+        state.graduation_hook = Some(GraduationHook {
+            program_id: id(9),
+            configuration: vec![],
+        });
+        state.settlement_progress = progress;
+        input.pre_state = borsh::to_vec(&state).unwrap().into();
+        input.message = borsh::to_vec(&Message::WithdrawFactoryProceeds {
+            creator: id(42),
+            now: 0,
+        })
+        .unwrap();
+        assert_eq!(handle(&input).err(), Some(Error::InvalidTerms));
+    }
+}
+
+#[test]
+fn fixed_payout_and_allocation_bind_each_saved_graduation_percentage() {
+    let (input, resolve, state, pool) =
+        fixed_hook_resolve(factory_core::SettlementProgress::Unselected, 49);
+    let resolved = settlement_callback(
+        &input,
+        &resolve,
+        &lez_compat_core::authority::CurrentAuthority {
+            role: state.creator_role_id,
+            authority: id(99),
+        },
+    );
+    let pending = handle(&resolved).unwrap();
+    let receipt = factory_core::SettlementReceipt {
+        factory: input.receiver,
+        pool: Actor::new(state.pool_id, state.lbp_program_id),
+        route: factory_core::SettlementRoute::Graduation,
+        creator: id(99),
+        adapter: pool.graduation_adapter,
+        eligible: factory_core::SettlementAmounts {
+            launch_tokens: pool.remaining_inventory,
+            collateral: pool.recorded_collateral,
+        },
+        payouts: state
+            .graduation_policy
+            .payouts(
+                factory_core::SettlementAmounts {
+                    launch_tokens: pool.remaining_inventory,
+                    collateral: pool.recorded_collateral,
+                },
+                factory_core::SettlementRoute::Graduation,
+                true,
+            )
+            .unwrap(),
+        progress: factory_core::SettlementProgress::Graduated,
+    };
+    for case in 0..6 {
+        let mut changed = receipt.clone();
+        match case {
+            0 => changed.eligible.launch_tokens += 1,
+            1 => changed.eligible.collateral += 1,
+            2 => changed.payouts.creator.launch_tokens += 1,
+            3 => changed.payouts.creator.collateral += 1,
+            4 => changed.payouts.adapter.launch_tokens += 1,
+            _ => changed.payouts.adapter.collateral += 1,
+        }
+        assert_eq!(
+            handle(&settlement_callback(
+                &input,
+                &pending,
+                &factory_core::SettlementReply::Applied { receipt: changed }
+            ))
+            .err(),
+            Some(Error::InvalidState)
+        );
+    }
+    for launch in [true, false] {
+        let mut changed = pool.clone();
+        if launch {
+            changed.graduation_policy.launch_bps += 1;
+        } else {
+            changed.graduation_policy.collateral_bps += 1;
+        }
+        assert_eq!(
+            claim_allocation(&input, &state, &changed, 200, 200).err(),
+            Some(Error::InvalidCustody)
+        );
+        let mut request = input.clone();
+        request.from = None;
+        request.pre_state = borsh::to_vec(&state).unwrap().into();
+        request.message = borsh::to_vec(&Message::ExecuteGraduationHook {
+            creator_hint: Some(id(99)),
+        })
+        .unwrap();
+        let response = handle(&request).unwrap();
+        request = reply(&request, &response, borsh::to_vec(&changed).unwrap());
+        assert_eq!(handle(&request).err(), Some(Error::InvalidCustody));
     }
 }

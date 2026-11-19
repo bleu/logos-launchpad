@@ -18,6 +18,7 @@ fn prepare() -> ReceiveInput {
         trade_mode: lbp_core::TradeMode::BuyOnly,
         sell_fee_bps: 0,
         graduation_adapter: None,
+        graduation_policy: sale_policy::GraduationPolicy::default(),
         namespace: id(40),
         namespace_program_id: id(6),
         factory_program_id: id(7),
@@ -1236,30 +1237,31 @@ fn expiry_settlement_requires_inclusion_at_the_inclusive_end() {
 }
 
 #[test]
-fn expiry_burns_only_unsold_sale_inventory_and_leaves_donations_outside_payouts() {
+fn expiry_pays_unsold_inventory_to_creator_and_excludes_donations() {
     let (input, mut state) = funded();
     state.remaining_inventory = 797;
     state.recorded_collateral = 4;
     state.accrued_fees = 1;
     let response = settle(&input, &state, 200, config(100, id(43), false), [22, 814]).unwrap();
     assert_eq!(response.sync_messages.len(), 3);
-    let burn = &response.sync_messages[1];
+    let launch_payout = &response.sync_messages[1];
     assert_eq!(
-        burn.to,
+        launch_payout.to,
         Actor::new(
             input.receiver.account_id,
             curve_core::TOKEN_PROGRAM_ACCOUNT_ID
         )
     );
     assert_eq!(
-        borsh::from_slice::<lez_compat_core::token::Message>(&burn.message).unwrap(),
-        lez_compat_core::token::Message::Burn {
+        borsh::from_slice::<lez_compat_core::token::Message>(&launch_payout.message).unwrap(),
+        lez_compat_core::token::Message::Transfer {
             definition: id(41),
+            recipient: id(60),
             amount: 797
         }
     );
     assert_eq!(
-        burn.pda_seeds,
+        launch_payout.pda_seeds,
         [lbp_core::compute_pool_pda_seed(
             state.namespace,
             id(41),
@@ -1282,7 +1284,7 @@ fn expiry_burns_only_unsold_sale_inventory_and_leaves_donations_outside_payouts(
 }
 
 #[test]
-fn settlement_retry_cannot_burn_or_pay_again_even_with_empty_vaults() {
+fn settlement_retry_cannot_pay_again_even_with_empty_vaults() {
     let (input, mut state) = funded();
     state.remaining_inventory = 797;
     state.recorded_collateral = 4;
@@ -1852,7 +1854,6 @@ fn fixed_price_policy_survives_every_prepare_and_activation_callback() {
             assert_eq!(saved.buy_policy, policy);
             assert_eq!(saved.trade_mode, lbp_core::TradeMode::BuyAndSell);
             assert_eq!(saved.sell_fee_bps, 250);
-            assert!(saved.seed_returned);
             assert_eq!(saved.graduation_adapter, Some(Actor::new(id(70), id(71))));
             assert_eq!(
                 saved.settlement_progress,
@@ -2305,7 +2306,7 @@ fn fixed_exact_time_edges_apply_to_both_buy_forms() {
 }
 
 #[test]
-fn fixed_unsold_burn_keeps_expiry_evidence_after_settlement() {
+fn fixed_inventory_payout_keeps_expiry_evidence_after_settlement() {
     let (input, state) = funded();
     let response = settle(&input, &state, 0, config(100, id(43), true), [0, 817]).unwrap();
     let next = state_of(&response);
@@ -2369,7 +2370,7 @@ fn fixed_selected_ending_separates_empty_inventory_from_scheduled_close() {
 }
 
 #[test]
-fn fixed_atomic_settlement_records_only_route_specific_proceeds() {
+fn fixed_atomic_settlement_records_accounted_balances_once() {
     use lbp_core::SettlementProgress;
     use lez_compat_core::token::Message as TokenMessage;
     let (input, original) = funded();
@@ -2410,8 +2411,9 @@ fn fixed_atomic_settlement_records_only_route_specific_proceeds() {
             });
         }
         if inventory != 0 {
-            calls.push(TokenMessage::Burn {
+            calls.push(TokenMessage::Transfer {
                 definition: id(41),
+                recipient: id(60),
                 amount: inventory,
             });
         }
@@ -2568,7 +2570,7 @@ fn receipt_settlement_requires_saved_namespace_and_canonical_vault_replies() {
     else {
         panic!("expected receipt")
     };
-    assert_eq!(receipt.amounts.collateral, 49);
+    assert_eq!(receipt.eligible.collateral, 49);
     assert_eq!(receipt.pool, input.receiver);
     assert_eq!(receipt.adapter, state.graduation_adapter);
 }
@@ -2682,7 +2684,7 @@ fn fixed_trade_events_match_both_transfer_forms_and_saved_fee_accounting() {
 }
 
 #[test]
-fn fixed_sellout_events_follow_selected_ending_without_using_burn_as_evidence() {
+fn fixed_sellout_events_follow_selected_ending_without_fabricated_depletion() {
     use curve_core::events::*;
     let (input, original) = funded();
     for ending in [
@@ -2815,11 +2817,14 @@ fn legacy_fixed_settlement_events_preserve_end_bound_and_inventory_record() {
                 tokens_transferred: 2
             },
             SaleEventKindV1::Settlement {
-                step: SettlementStepV1::UnsoldBurned,
-                route: None,
-                effects: vec![SettlementEffectV1::Burn {
+                step: SettlementStepV1::Payout,
+                route: Some(SettlementRouteV1::Manual),
+                effects: vec![SettlementEffectV1::Payout {
                     definition: *id(41).value(),
-                    amount: 800
+                    recipient: *id(60).value(),
+                    purpose: PayoutPurposeV1::CreatorLaunch,
+                    liability_discharged: 800,
+                    tokens_transferred: 800
                 }]
             },
             SaleEventKindV1::Settlement {
@@ -3263,7 +3268,7 @@ fn fixed_retained_collateral_stays_in_proceeds_after_fee_collection() {
     .unwrap();
     let next = state_of(&response);
     assert_eq!((next.recorded_collateral, next.accrued_fees), (73, 4));
-    assert_eq!(next.buyer_proceeds().unwrap(), 73);
+    assert_eq!(next.recorded_collateral, 73);
     let collected = operation(
         &input,
         &next,
@@ -3437,4 +3442,45 @@ fn fixed_rejects_invalid_stored_sell_fee_without_live_rate_combination() {
     input.pre_state = borsh::to_vec(&state).unwrap().into();
     input.message = borsh::to_vec(&Message::ReadState).unwrap();
     assert_eq!(handle(&input).err(), Some(lbp_core::Error::InvalidState));
+}
+
+#[test]
+fn fixed_pool_preparation_validates_saved_graduation_percentages() {
+    for has_adapter in [false, true] {
+        for policy in [
+            lbp_core::GraduationPolicy::default(),
+            lbp_core::GraduationPolicy {
+                launch_bps: 10_000,
+                collateral_bps: 0,
+            },
+            lbp_core::GraduationPolicy {
+                launch_bps: 0,
+                collateral_bps: 10_000,
+            },
+            lbp_core::GraduationPolicy {
+                launch_bps: 10_001,
+                collateral_bps: 0,
+            },
+            lbp_core::GraduationPolicy {
+                launch_bps: 0,
+                collateral_bps: 10_001,
+            },
+        ] {
+            let mut input = prepare();
+            let Message::PrepareFixedPrice { mut inputs } =
+                borsh::from_slice(&input.message).unwrap()
+            else {
+                unreachable!()
+            };
+            inputs.graduation_adapter = has_adapter.then(|| Actor::new(id(70), id(71)));
+            inputs.graduation_policy = policy;
+            input.message = borsh::to_vec(&Message::PrepareFixedPrice { inputs }).unwrap();
+            let result = handle(&input);
+            if policy.validate(has_adapter).is_err() {
+                assert_eq!(result.err(), Some(lbp_core::Error::InvalidTerms));
+            } else {
+                assert_eq!(state_of(&result.unwrap()).graduation_policy, policy);
+            }
+        }
+    }
 }

@@ -6,7 +6,10 @@ mod controls;
 pub mod events;
 mod settlement;
 pub use controls::{PauseError, PausePolicy, TradeControl};
-pub use settlement::{SettlementAmounts, SettlementError, SettlementProgress, SettlementRoute};
+pub use settlement::{
+    GraduationPolicy, SettlementAmounts, SettlementError, SettlementPayouts, SettlementProgress,
+    SettlementRoute,
+};
 mod terms;
 pub use terms::{
     EndingDecision, EndingError, EndingPolicy, EndingReason, InvalidTradeMode, TimeBounds,

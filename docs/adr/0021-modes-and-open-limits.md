@@ -12,7 +12,7 @@ Exact-input fixed-price buys spend the full input and floor output; exact output
 
 Optional [pause](0031-shared-launch-factory.md#policy-contract) belongs to the current creator, including before start. Authenticate repeated calls; unchanged calls emit no event. Pause does not stop weights or move the end. Resume cannot reopen an ended sale or clear freeze. It grants no sale control to namespace administrators.
 
-Allowlist admission gates buys only. A permitted sell can replenish inventory under `Scheduled`; selected depletion is final and rejects later sells. Settlement burns cannot create depletion evidence.
+Allowlist admission gates buys only. A permitted sell can replenish inventory under `Scheduled`; selected depletion is final and rejects later sells. Settlement payouts cannot create depletion evidence.
 
 ## Allowlist rules for all pricing engines
 

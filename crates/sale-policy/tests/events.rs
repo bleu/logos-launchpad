@@ -3,7 +3,7 @@ use sale_policy::events::{
     EventPoliciesV1, EventSubjectV1, EventTimeBoundsV1, PricingEngineV1, SaleEventKindV1,
     SaleEventV1, TradeFormV1, WeightedCheckpoint, WeightedPauseChanged,
 };
-use sale_policy::{EndingPolicy, PausePolicy};
+use sale_policy::{EndingPolicy, GraduationPolicy, PausePolicy};
 
 fn policies() -> EventPoliciesV1 {
     EventPoliciesV1 {
@@ -144,5 +144,91 @@ fn legacy_checkpoint_payload_is_exactly_the_existing_tuple() {
         assert_eq!(bytes, expected);
         assert_eq!(bytes.len(), 24);
         roundtrip(&payload);
+    }
+}
+
+#[test]
+fn created_reports_both_saved_graduation_shares() {
+    let event = SaleEventKindV1::Created {
+        creator: [1; 32],
+        creator_role: [2; 32],
+        token_definition: [3; 32],
+        collateral_definition: [4; 32],
+        graduation_reserve: 0,
+        sale_inventory: 100,
+        creator_allocation: 20,
+        graduation_policy: GraduationPolicy {
+            launch_bps: 2_500,
+            collateral_bps: 7_500,
+        },
+        collateral_seed: 50,
+        start_timestamp: Some(100),
+        end_timestamp: Some(200),
+        policies: policies(),
+    };
+    let mut expected = vec![0];
+    expected.extend(borsh::to_vec(&([1u8; 32], [2u8; 32], [3u8; 32], [4u8; 32])).unwrap());
+    expected.extend(borsh::to_vec(&(100u128, 0u128, 20u128, 2_500u16, 7_500u16, 50u128)).unwrap());
+    expected.extend(borsh::to_vec(&(Some(100u64), Some(200u64), policies())).unwrap());
+    assert_eq!(borsh::to_vec(&event).unwrap(), expected);
+    roundtrip(&event);
+}
+
+#[test]
+fn settlement_reports_creator_and_adapter_payouts_for_both_assets() {
+    use sale_policy::events::{
+        PayoutPurposeV1, SettlementEffectV1, SettlementRouteV1, SettlementStepV1,
+    };
+    let effects = [
+        ([3; 32], [1; 32], PayoutPurposeV1::CreatorLaunch, 75),
+        ([4; 32], [1; 32], PayoutPurposeV1::CreatorProceeds, 25),
+        ([3; 32], [2; 32], PayoutPurposeV1::AdapterLaunch, 25),
+        ([4; 32], [2; 32], PayoutPurposeV1::AdapterCollateral, 75),
+    ]
+    .into_iter()
+    .map(
+        |(definition, recipient, purpose, amount)| SettlementEffectV1::Payout {
+            definition,
+            recipient,
+            purpose,
+            liability_discharged: amount,
+            tokens_transferred: amount,
+        },
+    )
+    .collect();
+    roundtrip(&SaleEventKindV1::Settlement {
+        step: SettlementStepV1::Completed,
+        route: Some(SettlementRouteV1::Graduation),
+        effects,
+    });
+}
+
+#[test]
+fn settlement_steps_and_payout_purposes_have_explicit_wire_tags() {
+    use sale_policy::events::{PayoutPurposeV1, SettlementStepV1};
+    for (tag, step) in [
+        SettlementStepV1::Prepared,
+        SettlementStepV1::ReservesWithdrawn,
+        SettlementStepV1::Payout,
+        SettlementStepV1::Completed,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        assert_eq!(borsh::to_vec(&step).unwrap(), vec![tag as u8]);
+        roundtrip(&step);
+    }
+    for (tag, purpose) in [
+        PayoutPurposeV1::Reserve,
+        PayoutPurposeV1::CreatorProceeds,
+        PayoutPurposeV1::CreatorLaunch,
+        PayoutPurposeV1::AdapterLaunch,
+        PayoutPurposeV1::AdapterCollateral,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        assert_eq!(borsh::to_vec(&purpose).unwrap(), vec![tag as u8]);
+        roundtrip(&purpose);
     }
 }

@@ -18,7 +18,8 @@ sequenceDiagram
     Factory->>Factory: Initialize creator role
     Note over Factory: Stage: Minted
     Creator->>Factory: Continue creation with current creator authority
-    Factory->>Tokens: Split D plus R into factory custody and creator allocation into escrow
+    Factory->>Tokens: Split D into factory custody and creator allocation into escrow
+    Note over Factory,Tokens: R remains in mint custody
     Note over Factory: Stage: Allocated
     Creator->>Factory: Continue creation
     Factory->>Pool: Prepare unfunded pool with saved policies
@@ -26,9 +27,9 @@ sequenceDiagram
     Creator->>Factory: Continue creation
     Factory->>Tokens: Transfer D to pool vault
     Factory->>Pool: Activate after custody checks
-    Note over Factory,Pool: Stage: Active. R stays in factory custody
+    Note over Factory,Pool: Stage: Active
 ```
 
 Each stage is atomic with its child calls. The workflow spans transactions and is not atomic as a whole. A prepared pool cannot trade before funding. Continuations recheck authority and custody. Namespace administration does not grant creator rights, and the administrator does not approve each stage.
 
-The factory retains pool ownership and `R` until permitted post-close settlement. See [settlement and graduation](../../adr/0020-settlement-and-graduation.md) and [ending rules](../../adr/0025-sale-closing.md). Failed-setup recovery remains an [evidence gap](../workspace-guide.md#execution-and-evidence-limits).
+The factory retains pool ownership. Saved graduation terms govern post-close payouts. See [settlement and graduation](../../adr/0020-settlement-and-graduation.md) and [ending rules](../../adr/0025-sale-closing.md). Failed-setup recovery remains an [evidence gap](../workspace-guide.md#execution-and-evidence-limits).
