@@ -23,6 +23,7 @@
     }
   },
   "imports": {
+    "block_allocation": [],
     "controls": [],
     "curve": [
       "eligibility_policy",
@@ -50,6 +51,7 @@
       "factory"
     ],
     "lbp": [
+      "block_allocation",
       "curve",
       "lbp_settlement",
       "sale_policy"
@@ -75,6 +77,24 @@
     "terms": []
   },
   "modules": {
+    "block_allocation": {
+      "BlockAllocation": {
+        "fields": [
+          {
+            "name": "limit",
+            "type": "Option<u128>"
+          },
+          {
+            "name": "observed_block",
+            "type": "Option<u64>"
+          },
+          {
+            "name": "tokens_sold",
+            "type": "u128"
+          }
+        ]
+      }
+    },
     "controls": {
       "PausePolicy": {
         "variants": [
@@ -2206,6 +2226,10 @@
             "type": "u16"
           },
           {
+            "name": "per_block_token_limit",
+            "type": "Option<u128>"
+          },
+          {
             "name": "buy_policy",
             "type": "BuyPolicy"
           },
@@ -2549,6 +2573,10 @@
             "type": "u16"
           },
           {
+            "name": "block_allocation",
+            "type": "BlockAllocation"
+          },
+          {
             "name": "buy_policy",
             "type": "BuyPolicy"
           },
@@ -2706,6 +2734,10 @@
           {
             "name": "protocol_fee_bps",
             "type": "u16"
+          },
+          {
+            "name": "per_block_token_limit",
+            "type": "Option<u128>"
           },
           {
             "name": "buy_policy",
@@ -2888,6 +2920,10 @@
       "FixedPriceInputs": {
         "fields": [
           {
+            "name": "per_block_token_limit",
+            "type": "Option<u128>"
+          },
+          {
             "name": "buy_policy",
             "type": "curve::BuyPolicy"
           },
@@ -3010,6 +3046,10 @@
           {
             "name": "protocol_fee_bps",
             "type": "u16"
+          },
+          {
+            "name": "per_block_token_limit",
+            "type": "Option<u128>"
           },
           {
             "name": "buy_policy",
@@ -3280,6 +3320,10 @@
       },
       "WeightedInputs": {
         "fields": [
+          {
+            "name": "per_block_token_limit",
+            "type": "Option<u128>"
+          },
           {
             "name": "buy_policy",
             "type": "curve::BuyPolicy"

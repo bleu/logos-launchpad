@@ -21,3 +21,5 @@ Trade modes and sells follow [ADR 0021](../adr/0021-modes-and-open-limits.md); q
 Public buy allowlists have [signed local execution evidence](../architecture/allowlist-proof.md#public-execution-evidence). Wallet allowlist flows and complete private routes remain pending. Private helpers are explicitly unsupported. The weighted-math kernel is unaudited; its qualification does not prove sale custody, clock support or deployment readiness. See the workspace guide for the full evidence limits.
 
 See [ADR 0036](../adr/0036-graduation-adapter-delivery.md) for the plain-transfer distribution adapter and later deposits.
+
+Creators can set an optional immutable per-block token ceiling. The pool counts all buy outputs in the inclusion block; splitting buys across accounts does not bypass it. Excess buys fail in full and sells do not restore allowance. This limits accumulation speed, not ownership concentration over the whole sale. See [sale limits](../adr/0021-modes-and-open-limits.md).

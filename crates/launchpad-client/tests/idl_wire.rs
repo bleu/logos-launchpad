@@ -1243,6 +1243,7 @@ fn weighted_factory_messages_keep_distinct_tags_and_normalized_weights() {
         9
     );
     let inputs = factory_core::WeightedInputs {
+        per_block_token_limit: None,
         buy_policy: curve_core::BuyPolicy::Open,
         pause_policy: curve_core::PausePolicy::AuthorityControlled,
         ending_policy: curve_core::EndingPolicy::Scheduled,
@@ -1271,7 +1272,7 @@ fn weighted_factory_messages_keep_distinct_tags_and_normalized_weights() {
     let message = factory_core::Message::CreateWeightedLbp {
         inputs: inputs.clone(),
     };
-    let mut expected = vec![8, 0, 1, 1, 0, 2, 1, 0, 0, 0, 0, 0];
+    let mut expected = vec![8, 0, 0, 1, 1, 0, 2, 1, 0, 0, 0, 0, 0];
     expected.extend_from_slice(creator.value());
     expected.extend_from_slice(&[6; 32]);
     expected.extend_from_slice(&[1, 0, 0, 0, b'W', 1, 0, 0, 0, b'u']);
@@ -1458,6 +1459,7 @@ fn fixed_pool_state_tuple_places_policies_after_trade_control() {
     let account = AccountId::new([5; 32]);
     let mut bytes = borsh::to_vec(&(
         1000u16,
+        (None::<u128>, None::<u64>, 0u128),
         curve_core::BuyPolicy::Open,
         curve_core::TradeControl::Unrestricted,
         lbp_core::EndingPolicy::Either,
@@ -1493,7 +1495,7 @@ fn fixed_pool_state_tuple_places_policies_after_trade_control() {
         pool.settlement_progress,
         lbp_core::SettlementProgress::Unselected
     );
-    assert_eq!(&bytes[2..5], &[0, 0, 3]);
+    assert_eq!(&bytes[20..23], &[0, 0, 3]);
     assert_eq!(borsh::to_vec(&pool).unwrap(), bytes);
 }
 
@@ -1562,6 +1564,7 @@ fn fixed_pool_terminal_states_use_progress_tags_instead_of_boolean_completion() 
     ] {
         let mut bytes = borsh::to_vec(&(
             1000u16,
+            (None::<u128>, None::<u64>, 0u128),
             curve_core::BuyPolicy::Open,
             curve_core::TradeControl::Unrestricted,
             lbp_core::EndingPolicy::Either,
@@ -1864,6 +1867,7 @@ fn weighted_pool_binds_the_split_and_keeps_seed_in_recorded_collateral() {
     let adapter = lee_core::account::Actor::new(AccountId::new([6; 32]), AccountId::new([7; 32]));
     let mut bytes = borsh::to_vec(&(
         1000u16,
+        (None::<u128>, None::<u64>, 0u128),
         curve_core::BuyPolicy::Open,
         curve_core::TradeControl::Unrestricted,
         lbp_core::EndingPolicy::Scheduled,
@@ -1902,7 +1906,7 @@ fn weighted_pool_binds_the_split_and_keeps_seed_in_recorded_collateral() {
     bytes.push(0);
     let pool = lbp_core::PoolAccount::decode(&bytes).unwrap();
     assert!(!pool.closure_observed);
-    assert_eq!(&bytes[2..9], &[0, 0, 1, 0, 0, 0, 1]);
+    assert_eq!(&bytes[20..27], &[0, 0, 1, 0, 0, 0, 1]);
     assert_eq!(pool.graduation_adapter, Some(adapter));
     assert_eq!(pool.recorded_collateral, 140);
     assert_eq!(pool.graduation_policy.collateral_bps, 7500);

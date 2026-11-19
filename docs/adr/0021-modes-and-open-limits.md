@@ -1,6 +1,6 @@
 # ADR 0021: Sale types, trade modes, allowlists and open limits
 
-Status: Accepted internally; public admission implemented; wallet/private execution pending; per-block ceiling deferral: To be reviewed by Logos team.
+Status: Accepted internally; public admission implemented; wallet/private execution pending; optional per-block ceiling implemented; private execution pending.
 
 ## Sale modes
 
@@ -38,7 +38,11 @@ All engines use `crates/eligibility-policy`. [Signed public execution evidence](
 
 ## Limits and open work
 
-Defer the optional per-block token allocation ceiling. This RFP-016 requirement is not implemented or removed from scope; its status is `To be reviewed by Logos team`.
+Fixed-price and weighted creation inputs accept immutable `per_block_token_limit: Option<u128>`. `None` disables the ceiling; a configured limit must be positive. The pool counts actual launch-token output across exact-input and exact-output buys in the same inclusion block, regardless of trader or allowlist membership. Reject the whole buy when the aggregate would exceed the limit. Sells do not refill this allowance. Commit the counter with the trade so a failed transaction cannot consume allocation.
+
+Capped buys read `ReadBlockId { granularity: 1 }` from the canonical upstream clock. LEZ ticks last, so all user transactions in one block observe the preceding block ID. Use that value as the bucket and constrain inclusion to the following block. Reset only when the observed ID advances. Authenticate the reply and reject malformed data and backward IDs. A disabled ceiling adds no clock read; weighted pricing keeps its separate timestamp read.
+
+The ceiling limits accumulation speed across accounts. It does not ensure equal allocation or prevent an ordering winner from taking the full block allowance. Low limits increase retries and can slow a sale. Keep the option disabled when those costs outweigh its value. Fine-grained block reads also constrain private proof validity. Host and local guest checks do not establish production private-route latency.
 
 Wallet batch preparation, private holdings, complete atomic private returns, security review, real proofs and deployment readiness remain open. DistributionX is a research reference. See the [allowlist design](../architecture/allowlist-proof.md) and [participation contract](../architecture/private-participation.md). Public development execution does not establish a complete private route or external approval.
 

@@ -10,6 +10,7 @@ pub enum SaleStart {
 }
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize, Serialize, Deserialize)]
 pub struct FixedPriceInputs {
+    pub per_block_token_limit: Option<u128>,
     pub buy_policy: curve_core::BuyPolicy,
     pub pause_policy: PausePolicy,
     pub ending_policy: EndingPolicy,
@@ -36,6 +37,7 @@ pub struct FixedPriceInputs {
 }
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize, Serialize, Deserialize)]
 pub struct WeightedInputs {
+    pub per_block_token_limit: Option<u128>,
     pub buy_policy: curve_core::BuyPolicy,
     pub pause_policy: PausePolicy,
     pub ending_policy: EndingPolicy,
@@ -103,6 +105,7 @@ pub enum LbpCreationStage {
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct LbpLaunchState {
     pub protocol_fee_bps: u16,
+    pub per_block_token_limit: Option<u128>,
     pub buy_policy: curve_core::BuyPolicy,
     pub pause_policy: PausePolicy,
     pub ending_policy: EndingPolicy,
@@ -164,6 +167,7 @@ enum LbpSettlementPhase {
 }
 
 struct SetupInputs {
+    per_block_token_limit: Option<u128>,
     buy_policy: curve_core::BuyPolicy,
     pause_policy: PausePolicy,
     ending_policy: EndingPolicy,
@@ -198,6 +202,7 @@ pub(super) fn create_fixed(
     create(
         input,
         SetupInputs {
+            per_block_token_limit: inputs.per_block_token_limit,
             buy_policy: inputs.buy_policy,
             pause_policy: inputs.pause_policy,
             ending_policy: inputs.ending_policy,
@@ -240,6 +245,7 @@ pub(super) fn create_weighted(
     create(
         input,
         SetupInputs {
+            per_block_token_limit: inputs.per_block_token_limit,
             buy_policy: inputs.buy_policy,
             pause_policy: inputs.pause_policy,
             ending_policy: inputs.ending_policy,
@@ -332,6 +338,9 @@ fn create(input: &ReceiveInput, inputs: SetupInputs, command: Message) -> Result
         .graduation_policy
         .validate(inputs.graduation_hook.is_some())
         .map_err(|_| Error::InvalidTerms)?;
+    if inputs.per_block_token_limit == Some(0) {
+        return Err(Error::InvalidTerms);
+    }
     SellFeeRate::new(inputs.sell_fee_bps).map_err(|_| Error::InvalidTerms)?;
     validate_lbp_policies(
         inputs.mode,
@@ -352,6 +361,7 @@ fn create(input: &ReceiveInput, inputs: SetupInputs, command: Message) -> Result
         .map_err(|_| Error::InvalidTerms)?;
     let state = LbpLaunchState {
         protocol_fee_bps: 0,
+        per_block_token_limit: inputs.per_block_token_limit,
         buy_policy: inputs.buy_policy,
         pause_policy: inputs.pause_policy,
         ending_policy: inputs.ending_policy,
@@ -363,7 +373,7 @@ fn create(input: &ReceiveInput, inputs: SetupInputs, command: Message) -> Result
             LbpSetupMode::FixedPrice => *b"LZFXLAUN",
             LbpSetupMode::Weighted { .. } => *b"LZWGLAUN",
         },
-        version: 6,
+        version: 7,
         creator_role_id: compute_creator_role_pda(inputs.namespace, program, inputs.launch_salt),
         mode: inputs.mode,
         creation_stage: LbpCreationStage::Minted,
@@ -738,6 +748,7 @@ pub(super) fn resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
                 || pool.ending_policy != state.ending_policy
                 || pool.trade_mode != state.trade_mode
                 || pool.protocol_fee_bps != state.protocol_fee_bps
+                || pool.block_allocation.limit != state.per_block_token_limit
                 || pool.sell_fee_bps != state.sell_fee_bps
             {
                 return Err(Error::InvalidCustody);
@@ -850,6 +861,7 @@ pub(super) fn resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
                     || pool.ending_policy != state.ending_policy
                     || pool.trade_mode != state.trade_mode
                     || pool.protocol_fee_bps != state.protocol_fee_bps
+                    || pool.block_allocation.limit != state.per_block_token_limit
                     || pool.sell_fee_bps != state.sell_fee_bps
                 {
                     return Err(Error::InvalidCustody);
@@ -973,6 +985,7 @@ pub(super) fn resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
                     LbpSetupMode::FixedPrice => lbp_core::Message::PrepareFixedPrice {
                         inputs: lbp_core::FixedPricePoolInputs {
                             protocol_fee_bps: state.protocol_fee_bps,
+                            per_block_token_limit: state.per_block_token_limit,
                             buy_policy: state.buy_policy.clone(),
                             pause_policy: state.pause_policy,
                             ending_policy: state.ending_policy,
@@ -1002,6 +1015,7 @@ pub(super) fn resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
                     } => lbp_core::Message::PrepareWeighted {
                         inputs: lbp_core::WeightedPoolInputs {
                             protocol_fee_bps: state.protocol_fee_bps,
+                            per_block_token_limit: state.per_block_token_limit,
                             buy_policy: state.buy_policy.clone(),
                             pause_policy: state.pause_policy,
                             ending_policy: state.ending_policy,
@@ -1222,6 +1236,9 @@ impl LbpLaunchState {
         self.graduation_policy
             .validate(self.graduation_hook.is_some())
             .map_err(|_| Error::InvalidState)?;
+        if self.per_block_token_limit == Some(0) {
+            return Err(Error::InvalidState);
+        }
         SellFeeRate::new(self.sell_fee_bps).map_err(|_| Error::InvalidState)?;
         validate_lbp_policies(
             self.mode,
@@ -1243,7 +1260,7 @@ impl LbpLaunchState {
         };
         lbp_core::validate_sale_fees(self.trade_mode, self.protocol_fee_bps, self.sell_fee_bps)
             .map_err(|_| Error::InvalidState)?;
-        if self.format != expected || self.version != 6 {
+        if self.format != expected || self.version != 7 {
             return Err(Error::InvalidState);
         }
         Ok(())
@@ -1365,6 +1382,7 @@ impl LbpLaunchState {
             || pool.ending_policy != self.ending_policy
             || pool.trade_mode != self.trade_mode
             || pool.protocol_fee_bps != self.protocol_fee_bps
+            || pool.block_allocation.limit != self.per_block_token_limit
             || pool.sell_fee_bps != self.sell_fee_bps
         {
             return Err(Error::InvalidCustody);

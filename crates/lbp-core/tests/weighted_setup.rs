@@ -15,6 +15,7 @@ fn id(n: u8) -> AccountId {
 fn weighted_inputs() -> WeightedPoolInputs {
     WeightedPoolInputs {
         protocol_fee_bps: 100,
+        per_block_token_limit: None,
         buy_policy: curve_core::BuyPolicy::Open,
         pause_policy: lbp_core::PausePolicy::AuthorityControlled,
         ending_policy: lbp_core::EndingPolicy::Scheduled,

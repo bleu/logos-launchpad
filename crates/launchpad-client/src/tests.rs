@@ -272,6 +272,7 @@ fn fixed_creation() -> factory_core::FixedPriceInputs {
         factory,
     );
     factory_core::FixedPriceInputs {
+        per_block_token_limit: None,
         buy_policy: curve_core::BuyPolicy::Allowlist(curve_core::AllowlistPolicy {
             version: 1,
             namespace: *sale.namespace.value(),
@@ -445,6 +446,7 @@ fn weighted_exact_output_builder_keeps_membership_cap_and_pricing_clock() {
 fn weighted_creation() -> factory_core::WeightedInputs {
     let fixed = fixed_creation();
     factory_core::WeightedInputs {
+        per_block_token_limit: None,
         buy_policy: fixed.buy_policy,
         pause_policy: curve_core::PausePolicy::AuthorityControlled,
         ending_policy: curve_core::EndingPolicy::Scheduled,
@@ -1933,6 +1935,7 @@ fn valid_lbp_factory_state(weighted: bool) -> factory_core::LbpLaunchState {
         };
     }
     field!(1000u16);
+    field!(None::<u128>);
     field!(curve_core::BuyPolicy::Open);
     field!(curve_core::PausePolicy::Disabled);
     field!(if weighted {
@@ -1948,7 +1951,7 @@ fn valid_lbp_factory_state(weighted: bool) -> factory_core::LbpLaunchState {
     }));
     field!(GraduationPolicy::default());
     field!(if weighted { *b"LZWGLAUN" } else { *b"LZFXLAUN" });
-    field!(6u16);
+    field!(7u16);
     field!(factory_core::compute_creator_role_pda(
         sale.namespace,
         sale.factory_program_id,
@@ -2222,6 +2225,7 @@ fn lbp_pool_snapshot(weighted: bool) -> (lbp_core::PoolAccount, curve_core::Conf
     };
     let mut bytes = borsh::to_vec(&(
         1000u16,
+        (None::<u128>, None::<u64>, 0u128),
         curve_core::BuyPolicy::Open,
         curve_core::TradeControl::Unrestricted,
         curve_core::EndingPolicy::Scheduled,

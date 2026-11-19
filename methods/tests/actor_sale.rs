@@ -240,6 +240,7 @@ fn fixed_state(buyer: AccountId, end: Option<u64>) -> (V03State, AccountId) {
     // Seeded funded state does not test the four setup stages.
     let bytes = borsh::to_vec(&(
         333u16,
+        (None::<u128>, None::<u64>, 0u128),
         (
             curve_core::BuyPolicy::Open,
             lbp_core::TradeControl::Unrestricted,
@@ -1956,6 +1957,7 @@ fn fixed_factory_env_with_reserve(
         &mut state,
         factory_core::Message::CreateFixedPriceLbp {
             inputs: factory_core::FixedPriceInputs {
+                per_block_token_limit: None,
                 buy_policy: policy.clone(),
                 pause_policy,
                 ending_policy,
@@ -2418,6 +2420,7 @@ fn weighted_factory_executes_all_stages_and_rolls_back_failed_funding() {
         let execute = |state: &mut V03State, instruction| execute_at(state, instruction, 100_000);
         let creation = factory_core::Message::CreateWeightedLbp {
             inputs: WeightedInputs {
+                per_block_token_limit: None,
                 buy_policy: policy.clone(),
                 pause_policy: curve_core::PausePolicy::AuthorityControlled,
                 ending_policy,
@@ -2999,6 +3002,7 @@ fn weighted_factory_env_with_reserve(
         &mut state,
         factory_core::Message::CreateWeightedLbp {
             inputs: WeightedInputs {
+                per_block_token_limit: None,
                 buy_policy: curve_core::BuyPolicy::Open,
                 pause_policy: curve_core::PausePolicy::AuthorityControlled,
                 ending_policy: lbp_core::EndingPolicy::Scheduled,
@@ -5086,6 +5090,7 @@ fn factory_creation_rejects_invalid_ending_matrix_without_state_changes() {
             ] {
                 commands.push(factory_core::Message::CreateFixedPriceLbp {
                     inputs: factory_core::FixedPriceInputs {
+                        per_block_token_limit: None,
                         buy_policy: curve_core::BuyPolicy::Open,
                         pause_policy: PausePolicy::Disabled,
                         ending_policy,
@@ -5118,6 +5123,7 @@ fn factory_creation_rejects_invalid_ending_matrix_without_state_changes() {
             for ending_policy in [EndingPolicy::Depletion, EndingPolicy::Manual] {
                 commands.push(factory_core::Message::CreateWeightedLbp {
                     inputs: factory_core::WeightedInputs {
+                        per_block_token_limit: None,
                         buy_policy: curve_core::BuyPolicy::Open,
                         pause_policy: PausePolicy::Disabled,
                         ending_policy,
@@ -9402,3 +9408,101 @@ fn signed_wrong_kind_adapter_initialization_rolls_back_then_correct_kind_succeed
 
 #[path = "actor_sale/distribution.rs"]
 mod distribution;
+
+#[test]
+fn block_ceiling_signed_buys_share_allowance_and_failed_transfers_roll_back() {
+    for weighted in [false, true] {
+        let key = PrivateKey::try_new([23; 32]).unwrap();
+        let buyer = AccountId::from(&PublicKey::new_from_private_key(&key));
+        let (mut state, pool) = if weighted {
+            weighted_state(buyer)
+        } else {
+            fixed_state(buyer, Some(200))
+        };
+        let mut sale = fixed_pool(&state, pool);
+        sale.block_allocation = lbp_core::BlockAllocation::new(Some(6)).unwrap();
+        state = state.with_public_accounts([account(
+            Actor::new(pool, LBP),
+            borsh::to_vec(&sale).unwrap(),
+        )]);
+        let message = if weighted {
+            lbp_core::Message::BuyWeightedExactOutput {
+                membership: None,
+                amount_out: 2,
+                max_amount_in: 100,
+            }
+        } else {
+            lbp_core::Message::BuyExactOutput {
+                membership: None,
+                amount_out: 2,
+                max_amount_in: 100,
+                now: 100,
+            }
+        };
+        let mut overflow =
+            state
+                .clone()
+                .with_public_accounts([token_holding(buyer, LAUNCH, u128::MAX)]);
+        let transaction = fixed_transaction(&overflow, pool, &key, message.clone());
+        let before = overflow.clone();
+        assert!(
+            overflow
+                .transition_from_public_transaction(&transaction, 2, 100_000)
+                .is_err()
+        );
+        assert!(overflow == before);
+        for sold in [2, 4, 6] {
+            let transaction = fixed_transaction(&state, pool, &key, message.clone());
+            state
+                .transition_from_public_transaction(&transaction, 2, 100_000)
+                .unwrap();
+            assert_eq!(fixed_pool(&state, pool).block_allocation.tokens_sold, sold);
+        }
+        let excess = if weighted {
+            lbp_core::Message::BuyWeightedExactInput {
+                membership: None,
+                amount_in: 5,
+                min_amount_out: 0,
+            }
+        } else {
+            lbp_core::Message::BuyExactInput {
+                membership: None,
+                amount_in: 5,
+                min_amount_out: 0,
+                now: 100,
+            }
+        };
+        let transaction = fixed_transaction(&state, pool, &key, excess);
+        let before = state.clone();
+        assert!(
+            state
+                .transition_from_public_transaction(&transaction, 2, 100_000)
+                .is_err()
+        );
+        assert!(state == before);
+        state = state.with_public_accounts([account(
+            clock_core::clock_actor(),
+            borsh::to_vec(&clock_core::ClockAccountData {
+                block_id: 2,
+                timestamp: 100_000,
+            })
+            .unwrap(),
+        )]);
+        let transaction = fixed_transaction(&state, pool, &key, message);
+        let mut wrong_block = state.clone();
+        assert!(
+            wrong_block
+                .transition_from_public_transaction(&transaction, 4, 100_000)
+                .is_err()
+        );
+        assert!(wrong_block == state);
+        state
+            .transition_from_public_transaction(&transaction, 3, 100_000)
+            .unwrap();
+        assert_eq!(fixed_pool(&state, pool).block_allocation.tokens_sold, 2);
+        assert_eq!(
+            fixed_pool(&state, pool).block_allocation.observed_block,
+            Some(2)
+        );
+    }
+}
