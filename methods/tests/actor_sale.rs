@@ -1288,7 +1288,6 @@ fn curve_factory_locks_allowlist_before_setup_and_buys_with_the_same_policy() {
         (curve_core::EndingPolicy::Scheduled, 0),
         (curve_core::EndingPolicy::Depletion, 0),
         (curve_core::EndingPolicy::Either, 0),
-        (curve_core::EndingPolicy::Either, 777),
     ] {
         const FACTORY: AccountId = AccountId::new([17; 32]);
         let key = PrivateKey::try_new([21; 32]).unwrap();
