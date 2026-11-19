@@ -1284,10 +1284,23 @@ fn curve_allowlist_signed_buy_checks_actual_trader_and_reuses_membership() {
 
 #[test]
 fn curve_factory_locks_allowlist_before_setup_and_buys_with_the_same_policy() {
-    for (ending_policy, sell_fee_bps) in [
-        (curve_core::EndingPolicy::Scheduled, 0),
-        (curve_core::EndingPolicy::Depletion, 0),
-        (curve_core::EndingPolicy::Either, 0),
+    for (ending_policy, trade_mode) in [
+        (
+            curve_core::EndingPolicy::Scheduled,
+            factory_core::TradeMode::BuyOnly,
+        ),
+        (
+            curve_core::EndingPolicy::Depletion,
+            factory_core::TradeMode::BuyOnly,
+        ),
+        (
+            curve_core::EndingPolicy::Either,
+            factory_core::TradeMode::BuyOnly,
+        ),
+        (
+            curve_core::EndingPolicy::Either,
+            factory_core::TradeMode::BuyAndSell,
+        ),
     ] {
         const FACTORY: AccountId = AccountId::new([17; 32]);
         let key = PrivateKey::try_new([21; 32]).unwrap();
@@ -1412,8 +1425,8 @@ fn curve_factory_locks_allowlist_before_setup_and_buys_with_the_same_policy() {
                 buy_policy: policy.clone(),
                 pause_policy: curve_core::PausePolicy::Disabled,
                 ending_policy,
-                trade_mode: u8::from(sell_fee_bps > 0),
-                sell_fee_bps,
+                trade_mode: u8::from(trade_mode == factory_core::TradeMode::BuyAndSell),
+                sell_fee_bps: 0,
                 graduation_hook_program_id: None,
                 graduation_hook_configuration: vec![],
                 namespace: NAMESPACE,
@@ -1444,7 +1457,8 @@ fn curve_factory_locks_allowlist_before_setup_and_buys_with_the_same_policy() {
             .unwrap();
             assert_eq!(stored.buy_policy, policy);
             assert_eq!(stored.ending_policy, ending_policy);
-            assert_eq!(stored.sell_fee_bps, sell_fee_bps);
+            assert_eq!(stored.trade_mode, trade_mode);
+            assert_eq!(stored.sell_fee_bps, 0);
             execute(
                 &mut state,
                 factory_core::Message::ContinueCreation { creator, now: 1 },
@@ -1455,7 +1469,8 @@ fn curve_factory_locks_allowlist_before_setup_and_buys_with_the_same_policy() {
         assert!(stored.funded);
         assert_eq!(stored.buy_policy, policy);
         assert_eq!(stored.pool.ending_policy, ending_policy);
-        assert_eq!(stored.pool.sell_fee_bps, sell_fee_bps);
+        assert_eq!(stored.pool.sell_fee_bps, 0);
+        assert_eq!(stored.pool.k, stored.pool.initial_k);
         let mut message = Message::try_new(
             Actor::new(creator, CURVE),
             actors,

@@ -2338,67 +2338,66 @@ fn curve_invariant_stays_fixed_through_buys_sells_and_settlement() {
 }
 
 #[test]
-fn curve_retained_fee_forwarding_keeps_prefunding_exact() {
-    for rate in [0] {
-        let mut input = creation();
-        let mut command: Message = borsh::from_slice(&input.message).unwrap();
-        if let Message::CreateFactoryPool { sell_fee_bps, .. } = &mut command {
-            *sell_fee_bps = rate;
-        }
-        input.message = borsh::to_vec(&command).unwrap();
-        let mut mint = handle(&input).unwrap();
-        for bytes in [config(), definition()] {
-            input = reply(&input, &mint, bytes);
-            mint = handle(&input).unwrap();
-            assert_eq!(
-                FactoryState::decode(mint.post_state.as_ref().unwrap())
-                    .unwrap()
-                    .sell_fee_bps,
-                rate
-            );
-        }
-        let (input, allocated) = continued(&input, &mint, 900, 0, 0);
-        let (input, prepared) = continued(&input, &allocated, 0, 800, 100);
-        let state = FactoryState::decode(prepared.post_state.as_ref().unwrap()).unwrap();
-        assert_eq!(state.sell_fee_bps, rate);
-        let prepare = prepared
-            .sync_messages
-            .iter()
-            .find(|call| call.to == Actor::new(input.receiver.account_id, state.curve_program_id))
-            .unwrap();
-        assert!(
-            matches!(borsh::from_slice::<curve_core::Message>(&prepare.message).unwrap(), curve_core::Message::CreatePool { sell_fee_bps, .. } if sell_fee_bps == rate)
+fn curve_setup_forwards_zero_retained_fee_and_rejects_changed_pool_terms() {
+    let rate = 0;
+    let mut input = creation();
+    let mut command: Message = borsh::from_slice(&input.message).unwrap();
+    if let Message::CreateFactoryPool { sell_fee_bps, .. } = &mut command {
+        *sell_fee_bps = rate;
+    }
+    input.message = borsh::to_vec(&command).unwrap();
+    let mut mint = handle(&input).unwrap();
+    for bytes in [config(), definition()] {
+        input = reply(&input, &mint, bytes);
+        mint = handle(&input).unwrap();
+        assert_eq!(
+            FactoryState::decode(mint.post_state.as_ref().unwrap())
+                .unwrap()
+                .sell_fee_bps,
+            rate
         );
-        for case in 0..4 {
-            let (mut request, response) = continued(&input, &prepared, 0, 800, 100);
-            let mut saved = pool_state(&state, input.receiver, false);
-            match case {
-                0 => {}
-                1 => saved.pool.sell_fee_bps = if rate == 0 { 1 } else { 0 },
-                2 => {
-                    saved.pool.k += 1;
-                    saved.pool.virtual_reserve1 += 1;
-                }
-                _ => saved.pool.initial_k -= 1,
+    }
+    let (input, allocated) = continued(&input, &mint, 900, 0, 0);
+    let (input, prepared) = continued(&input, &allocated, 0, 800, 100);
+    let state = FactoryState::decode(prepared.post_state.as_ref().unwrap()).unwrap();
+    assert_eq!(state.sell_fee_bps, rate);
+    let prepare = prepared
+        .sync_messages
+        .iter()
+        .find(|call| call.to == Actor::new(input.receiver.account_id, state.curve_program_id))
+        .unwrap();
+    assert!(
+        matches!(borsh::from_slice::<curve_core::Message>(&prepare.message).unwrap(), curve_core::Message::CreatePool { sell_fee_bps, .. } if sell_fee_bps == rate)
+    );
+    for case in 0..4 {
+        let (mut request, response) = continued(&input, &prepared, 0, 800, 100);
+        let mut saved = pool_state(&state, input.receiver, false);
+        match case {
+            0 => {}
+            1 => saved.pool.sell_fee_bps = 1,
+            2 => {
+                saved.pool.k += 1;
+                saved.pool.virtual_reserve1 += 1;
             }
-            request = reply(&request, &response, borsh::to_vec(&saved).unwrap());
-            let response = handle(&request).unwrap();
-            request = reply(
-                &request,
-                &response,
-                holding(state.pool_id, state.token_definition_id, 0),
+            _ => saved.pool.initial_k -= 1,
+        }
+        request = reply(&request, &response, borsh::to_vec(&saved).unwrap());
+        let response = handle(&request).unwrap();
+        request = reply(
+            &request,
+            &response,
+            holding(state.pool_id, state.token_definition_id, 0),
+        );
+        let result = handle(&request);
+        if case == 0 {
+            assert_eq!(
+                FactoryState::decode(result.unwrap().post_state.as_ref().unwrap())
+                    .unwrap()
+                    .creation_stage,
+                CreationStage::Active
             );
-            let result = handle(&request);
-            if case == 0 {
-                assert_eq!(
-                    FactoryState::decode(result.unwrap().post_state.as_ref().unwrap())
-                        .unwrap()
-                        .creation_stage,
-                    CreationStage::Active
-                );
-            } else {
-                assert!(result.is_err(), "rate {rate}, case {case}");
-            }
+        } else {
+            assert!(result.is_err(), "rate {rate}, case {case}");
         }
     }
 }
