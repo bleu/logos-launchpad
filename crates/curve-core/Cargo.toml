@@ -3,7 +3,7 @@ name = "curve-core"
 version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
-license = "MIT"
+license = "MIT OR Apache-2.0"
 
 # Where `lee_core` enters. The guest at `methods/guest/src/bin/curve.rs` path-depends
 # on this crate from its own workspace, so every dependency here is also compiled for

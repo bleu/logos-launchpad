@@ -40,4 +40,4 @@ Internal decisions can differ from these requests. The [ADR index](docs/adr/READ
 
 ## License
 
-Project code uses the [MIT license](LICENSE). Third-party code keeps its own licenses and notices.
+Project-owned launchpad code is available under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your option. Independent weighted math retains its MIT license. Third-party code keeps its own licenses and notices.
