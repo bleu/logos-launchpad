@@ -1088,9 +1088,12 @@ pub(super) fn resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
         if config.namespace != state.namespace {
             return Err(Error::WrongAccount);
         }
-        if config.protocol_fee_bps >= 10_000 {
-            return Err(Error::InvalidTerms);
-        }
+        lbp_core::validate_sale_fees(
+            state.trade_mode,
+            config.protocol_fee_bps,
+            state.sell_fee_bps,
+        )
+        .map_err(|_| Error::InvalidTerms)?;
         state.protocol_fee_bps = config.protocol_fee_bps;
         if !matches!(
             TokenState::decode(&pending.values[1])?,
@@ -1238,7 +1241,9 @@ impl LbpLaunchState {
             LbpSetupMode::FixedPrice => *b"LZFXLAUN",
             LbpSetupMode::Weighted { .. } => *b"LZWGLAUN",
         };
-        if self.format != expected || self.version != 6 || self.protocol_fee_bps >= 10_000 {
+        lbp_core::validate_sale_fees(self.trade_mode, self.protocol_fee_bps, self.sell_fee_bps)
+            .map_err(|_| Error::InvalidState)?;
+        if self.format != expected || self.version != 6 {
             return Err(Error::InvalidState);
         }
         Ok(())

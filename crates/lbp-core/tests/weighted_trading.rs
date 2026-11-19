@@ -3593,7 +3593,7 @@ fn weighted_retention_preserves_custody_and_remains_creator_proceeds() {
     assert_eq!(pricing_collateral(&next), next.recorded_collateral);
     let collected = operation(
         &input,
-        &with_fee(&next, 8000),
+        &next,
         Message::CollectFees,
         config(8000, id(43), false),
         [1007 - quote.amount_out, 1_100_000, 0],
@@ -3627,6 +3627,11 @@ fn weighted_saved_fee_combines_with_retention_without_changing_buys_or_controls(
     let (mut input, mut state) = funded();
     state.trade_mode = lbp_core::TradeMode::BuyAndSell;
     state.sell_fee_bps = 6000;
+    let buy = Message::BuyWeightedExactOutput {
+        membership: None,
+        amount_out: 1000,
+        max_amount_in: 1_000_000,
+    };
     for namespace_bps in [4000, 5000, 9999] {
         assert_eq!(
             quote_trade(
@@ -3637,8 +3642,23 @@ fn weighted_saved_fee_combines_with_retention_without_changing_buys_or_controls(
                 },
                 1500
             ),
-            Err(Error::InvalidFee)
+            Err(Error::InvalidState)
         );
+        // Saved rates cannot change, so these `BuyAndSell` terms are invalid state.
+        assert_eq!(
+            operation(
+                &input,
+                &with_fee(&state, namespace_bps),
+                buy.clone(),
+                config(namespace_bps, id(43), false),
+                [100, 1_000_000, 1_000_000],
+            )
+            .err(),
+            Some(Error::InvalidState)
+        );
+    }
+    state.trade_mode = lbp_core::TradeMode::BuyOnly;
+    for namespace_bps in [4000, 5000, 9999] {
         let request = QuoteRequest::BuyExactOutput {
             tokens_out: 1000,
             max_collateral_in: 1_000_000,
@@ -3654,11 +3674,7 @@ fn weighted_saved_fee_combines_with_retention_without_changing_buys_or_controls(
         let response = operation(
             &input,
             &with_fee(&state, namespace_bps),
-            Message::BuyWeightedExactOutput {
-                membership: None,
-                amount_out: 1000,
-                max_amount_in: 1_000_000,
-            },
+            buy.clone(),
             config(namespace_bps, id(43), false),
             [100, 1_000_000, 1_000_000],
         )

@@ -3278,7 +3278,7 @@ fn fixed_retained_collateral_stays_in_proceeds_after_fee_collection() {
     assert_eq!(next.recorded_collateral, 73);
     let collected = operation(
         &input,
-        &with_fee(&next, 9900),
+        &next,
         Message::CollectFees,
         config(9900, id(43), false),
         [77, 820, 0],
@@ -3303,6 +3303,33 @@ fn fixed_retained_collateral_stays_in_proceeds_after_fee_collection() {
 }
 
 #[test]
+fn preparation_rejects_saved_sell_fees_that_consume_all_sell_output() {
+    for (trade_mode, protocol_fee_bps, sell_fee_bps, accepted) in [
+        (lbp_core::TradeMode::BuyAndSell, 100, 9_899, true),
+        (lbp_core::TradeMode::BuyAndSell, 100, 9_900, false),
+        (lbp_core::TradeMode::BuyAndSell, 9_999, 1, false),
+        (lbp_core::TradeMode::BuyOnly, 100, 9_999, true),
+        (lbp_core::TradeMode::BuyOnly, 10_000, 0, false),
+    ] {
+        let mut input = prepare();
+        let Message::PrepareFixedPrice { mut inputs } = borsh::from_slice(&input.message).unwrap()
+        else {
+            unreachable!()
+        };
+        inputs.trade_mode = trade_mode;
+        inputs.protocol_fee_bps = protocol_fee_bps;
+        inputs.sell_fee_bps = sell_fee_bps;
+        input.message = borsh::to_vec(&Message::PrepareFixedPrice { inputs }).unwrap();
+        let result = handle(&input);
+        if accepted {
+            assert!(result.is_ok());
+        } else {
+            assert_eq!(result.err(), Some(lbp_core::Error::InvalidFee));
+        }
+    }
+}
+
+#[test]
 fn fixed_saved_rate_only_combines_with_retention_for_sells() {
     use lbp_core::{Error, QuoteRequest, quote_trade};
     let (mut input, mut state) = funded();
@@ -3320,8 +3347,23 @@ fn fixed_saved_rate_only_combines_with_retention_for_sells() {
                 },
                 100
             ),
-            Err(Error::InvalidFee)
+            Err(Error::InvalidState)
         );
+        // Saved rates cannot change, so these `BuyAndSell` terms are invalid state.
+        assert_eq!(
+            operation(
+                &input,
+                &with_fee(&state, namespace_bps),
+                exact_in(5),
+                config(namespace_bps, id(43), false),
+                [100, 800, 100_000],
+            )
+            .err(),
+            Some(Error::InvalidState)
+        );
+    }
+    state.trade_mode = lbp_core::TradeMode::BuyOnly;
+    for namespace_bps in [4000, 5000, 9999] {
         for request in [
             QuoteRequest::BuyExactInput {
                 collateral_in: 100 * (10_000 / u128::from(10_000 - namespace_bps)),

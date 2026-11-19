@@ -1350,6 +1350,39 @@ fn minted() -> (ReceiveInput, lee_core::program::Response) {
     (input, response)
 }
 #[test]
+fn creation_rejects_saved_sell_fees_that_consume_all_sell_output() {
+    for (trade_mode, sell_fee_bps, accepted) in [
+        (factory_core::TradeMode::BuyAndSell, 9_899, true),
+        (factory_core::TradeMode::BuyAndSell, 9_900, false),
+        (factory_core::TradeMode::BuyAndSell, 9_999, false),
+        (factory_core::TradeMode::BuyOnly, 9_999, true),
+    ] {
+        let mut terms = inputs();
+        terms.trade_mode = trade_mode;
+        terms.sell_fee_bps = sell_fee_bps;
+        let mut input = creation();
+        input.message = borsh::to_vec(&Message::CreateFixedPriceLbp { inputs: terms }).unwrap();
+        let response = handle(&input).unwrap();
+        let input = reply(&input, &response, namespace_state());
+        let response = handle(&input).unwrap();
+        let input = reply(&input, &response, collateral());
+        let result = handle(&input);
+        if accepted {
+            let state = factory_core::FixedPriceLaunchState::decode(
+                result.unwrap().post_state.as_ref().unwrap(),
+            )
+            .unwrap();
+            assert_eq!(
+                (state.protocol_fee_bps, state.sell_fee_bps),
+                (100, sell_fee_bps)
+            );
+        } else {
+            assert_eq!(result.err(), Some(factory_core::Error::InvalidTerms));
+        }
+    }
+}
+
+#[test]
 fn creation_mints_exact_supply_with_metadata_and_a_separate_creator_role() {
     let (input, response) = minted();
     let state =

@@ -27,7 +27,7 @@ See [custody and freeze](../adr/0028-token-custody-and-freeze.md), [curve arithm
 
 Namespace fees use collateral buy input or sell output. Buys price net collateral after fees; exact-output buys gross up the required net amount. Retained sell fees stay in reserves or recorded proceeds and are separate from collectible namespace fees. [ADR 0015](../adr/0015-fee-accounting.md) defines rates, rounding, collection and treasury aliases.
 
-Fixed-price and weighted sales use their creation-time rate snapshot. Namespace fee updates affect new sales; freeze and treasury remain live. Curve sales continue to use the current namespace rate. Fixed-price and weighted-sale fee departures are accepted internally but remain `To be reviewed by Logos team` externally. Local execution does not establish external approval.
+Fixed-price and weighted sales use their creation-time rate snapshot. Namespace fee updates affect new sales; freeze and treasury remain live. A `BuyAndSell` sale whose saved namespace and retained sell rates sum to 100% or more is rejected at creation. Curve sales continue to use the current namespace rate. Fixed-price and weighted-sale fee departures are accepted internally but remain `To be reviewed by Logos team` externally. Local execution does not establish external approval.
 
 The selected ending policy controls creator payouts and `AfterEnd` allocations. Fee collection does not wait for settlement. A failed settlement transaction must roll back its effects; earlier completed stages stay complete. Recorded completion prevents duplicate payouts. See [ending rules](../adr/0025-sale-closing.md) and [settlement](../adr/0020-settlement-and-graduation.md).
 

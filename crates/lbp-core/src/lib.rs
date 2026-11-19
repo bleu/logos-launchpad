@@ -310,9 +310,8 @@ impl PoolAccount {
             .map_err(ending_error)
     }
     fn validate_policies(&self) -> Result<(), Error> {
-        if self.protocol_fee_bps >= 10_000 {
-            return Err(Error::InvalidState);
-        }
+        validate_sale_fees(self.trade_mode, self.protocol_fee_bps, self.sell_fee_bps)
+            .map_err(|_| Error::InvalidState)?;
         self.graduation_policy
             .validate(self.graduation_adapter.is_some())
             .map_err(|_| Error::InvalidState)?;
@@ -629,6 +628,19 @@ fn advance_setup_steps(
 // Entry point
 // ---------------------------------------------------------------------------
 
+/// Saved sale rates are fixed, so `BuyAndSell` terms must leave positive sell output.
+pub fn validate_sale_fees(
+    trade_mode: TradeMode,
+    protocol_fee_bps: u16,
+    sell_fee_bps: u16,
+) -> Result<(), Error> {
+    let combined = u32::from(protocol_fee_bps) + u32::from(sell_fee_bps);
+    if protocol_fee_bps >= 10_000 || trade_mode == TradeMode::BuyAndSell && combined >= 10_000 {
+        return Err(Error::InvalidFee);
+    }
+    Ok(())
+}
+
 pub fn handle(input: &ReceiveInput) -> Result<Response, Error> {
     if let Some(result) = lez_compat_core::clock::resume(input) {
         return result.map_err(|error| match error {
@@ -660,9 +672,11 @@ pub fn handle(input: &ReceiveInput) -> Result<Response, Error> {
     let message: Message = borsh::from_slice(&input.message).map_err(|_| Error::InvalidMessage)?;
     match message {
         Message::PrepareFixedPrice { inputs } => {
-            if inputs.protocol_fee_bps >= 10_000 {
-                return Err(Error::InvalidFee);
-            }
+            validate_sale_fees(
+                inputs.trade_mode,
+                inputs.protocol_fee_bps,
+                inputs.sell_fee_bps,
+            )?;
             if !input.pre_state.is_empty() {
                 return Err(Error::AlreadyInitialized);
             }
@@ -794,9 +808,11 @@ pub fn handle(input: &ReceiveInput) -> Result<Response, Error> {
             ))
         }
         Message::PrepareWeighted { inputs } => {
-            if inputs.protocol_fee_bps >= 10_000 {
-                return Err(Error::InvalidFee);
-            }
+            validate_sale_fees(
+                inputs.trade_mode,
+                inputs.protocol_fee_bps,
+                inputs.sell_fee_bps,
+            )?;
             if !input.pre_state.is_empty() {
                 return Err(Error::AlreadyInitialized);
             }
