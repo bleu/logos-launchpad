@@ -6,7 +6,7 @@ exclude = ["methods", "methods/guest", "execution"]
 [workspace.package]
 edition = "2024"
 rust-version = "1.98"
-license = "MIT"
+license = "MIT OR Apache-2.0"
 
 [workspace.dependencies]
 clock_core = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", rev = "cb075d5777cb812ba44216429d4f2837ea8518bd" }

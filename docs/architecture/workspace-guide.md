@@ -78,7 +78,7 @@ For stable release image IDs, the build script requires `/tmp/logos-launchpad-re
 
 ## Licenses
 
-The curve packages use the root [MIT license](../../LICENSE). Weighted math retains its own MIT license and the Balancer comparator notices in `packages/weighted-math/crates/harness/balancer-ref/`. Third-party dependencies keep their own licenses.
+Project-owned launchpad packages use [MIT](../../LICENSE-MIT) or [Apache-2.0](../../LICENSE-APACHE), at the recipient's option. Weighted math retains its own MIT license and the Balancer comparator notices in `packages/weighted-math/crates/harness/balancer-ref/`. Third-party dependencies keep their own licenses.
 
 ## Weighted pricing clock
 
