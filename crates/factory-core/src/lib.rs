@@ -169,7 +169,9 @@ impl FactoryState {
         {
             return Err(Error::InvalidState);
         }
-        SellFeeRate::new(self.sell_fee_bps).map_err(|_| Error::InvalidState)?;
+        if self.sell_fee_bps != 0 {
+            return Err(Error::InvalidState);
+        }
         self.graduation_policy
             .validate(self.graduation_hook.is_some())
             .map_err(|_| Error::InvalidState)?;
@@ -682,7 +684,9 @@ fn create_curve(input: &ReceiveInput, command: Message) -> Result<Response, Erro
     {
         return Err(Error::InvalidTerms);
     }
-    SellFeeRate::new(sell_fee_bps).map_err(|_| Error::InvalidTerms)?;
+    if sell_fee_bps != 0 {
+        return Err(Error::InvalidTerms);
+    }
     validate_curve_policies(ending_policy, end_timestamp)?;
     graduation_policy.validate(graduation_hook_program_id.is_some())?;
     let total_supply = total_supply(sale_reserve, graduation_reserve, creator_allocation)
@@ -793,7 +797,8 @@ fn validate_pool(
     actor: Actor,
     saved: &curve_core::PoolAccount,
 ) -> Result<(), Error> {
-    if saved.pool.ending_policy != state.ending_policy
+    if saved.pool.k != saved.pool.initial_k
+        || saved.pool.ending_policy != state.ending_policy
         || saved.pool.sell_fee_bps != state.sell_fee_bps
     {
         return Err(Error::InvalidCustody);
