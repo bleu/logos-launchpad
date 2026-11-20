@@ -275,6 +275,8 @@ mod tests {
     }
     fn fixture(weighted: bool) -> (PoolAccount, Actor) {
         let state = PoolAccount {
+            protocol_fee_bps: 100,
+            block_allocation: crate::BlockAllocation::default(),
             buy_policy: BuyPolicy::Open,
             trade_control: TradeControl::Unrestricted,
             ending_policy: if weighted {

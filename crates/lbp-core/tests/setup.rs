@@ -12,6 +12,8 @@ fn id(n: u8) -> AccountId {
 fn prepare() -> ReceiveInput {
     let factory = AccountId::for_public_pda(&id(7), &PdaSeed::new([3; 32]));
     let inputs = FixedPricePoolInputs {
+        protocol_fee_bps: 100,
+        per_block_token_limit: None,
         buy_policy: curve_core::BuyPolicy::Open,
         pause_policy: lbp_core::PausePolicy::Disabled,
         ending_policy: lbp_core::EndingPolicy::Either,
@@ -420,6 +422,16 @@ fn operation(
     config: Vec<u8>,
     balances: [u128; 3],
 ) -> Result<lee_core::program::Response, lbp_core::Error> {
+    operation_in_block(input, state, message, config, balances, 42)
+}
+fn operation_in_block(
+    input: &ReceiveInput,
+    state: &lbp_core::PoolAccount,
+    message: Message,
+    config: Vec<u8>,
+    balances: [u128; 3],
+    block: u64,
+) -> Result<lee_core::program::Response, lbp_core::Error> {
     let mut input = input.clone();
     input.pre_state = borsh::to_vec(state).unwrap().into();
     input.message = borsh::to_vec(&message).unwrap();
@@ -450,6 +462,27 @@ fn operation(
         input = reply(&input, &response, source, bytes);
         response = handle(&input)?;
     }
+    if response
+        .sync_messages
+        .last()
+        .is_some_and(|call| call.to == clock_core::clock_actor())
+    {
+        assert_eq!(
+            borsh::from_slice::<clock_core::Message>(
+                &response.sync_messages.last().unwrap().message
+            )
+            .unwrap(),
+            clock_core::Message::ReadBlockId { granularity: 1 }
+        );
+        input = ReceiveInput {
+            receiver: input.receiver,
+            from: Some(clock_core::clock_actor()),
+            is_authorized: false,
+            pre_state: response.post_state.unwrap(),
+            message: borsh::to_vec(&clock_core::Reply::BlockId(block)).unwrap(),
+        };
+        response = handle(&input)?;
+    }
     Ok(response)
 }
 fn exact_in(amount_in: u128) -> Message {
@@ -471,7 +504,7 @@ fn buy_windows_keep_zero_start_no_end_and_reject_overflow() {
     state.ending_policy = lbp_core::EndingPolicy::Depletion;
     let response = operation(
         &input,
-        &state,
+        &with_fee(&state, 100),
         exact_in(5),
         config(100, id(43), false),
         [0, 800, 100],
@@ -483,7 +516,7 @@ fn buy_windows_keep_zero_start_no_end_and_reject_overflow() {
     assert_eq!(
         operation(
             &input,
-            &state,
+            &with_fee(&state, 100),
             exact_in(5),
             config(100, id(43), false),
             [0, 800, 100]
@@ -503,7 +536,7 @@ fn buy_windows_keep_zero_start_no_end_and_reject_overflow() {
     assert_eq!(
         operation(
             &input,
-            &state,
+            &with_fee(&state, 100),
             message,
             config(100, id(43), false),
             [0, 800, 100]
@@ -527,7 +560,7 @@ fn buys_bind_inclusion_to_saved_start_and_end() {
     ] {
         let response = operation(
             &input,
-            &state,
+            &with_fee(&state, 100),
             message,
             config(100, id(43), false),
             [0, 800, 100],
@@ -539,7 +572,7 @@ fn buys_bind_inclusion_to_saved_start_and_end() {
 }
 
 #[test]
-fn buys_deduct_live_fees_before_pricing_and_gross_up_exact_output() {
+fn buys_deduct_saved_fees_before_pricing_and_gross_up_exact_output() {
     let (input, state) = funded();
     for (message, fee, paid, received, accrued) in [
         (exact_in(5), 100, 5, 2, 1),
@@ -573,7 +606,7 @@ fn buys_deduct_live_fees_before_pricing_and_gross_up_exact_output() {
     ] {
         let response = operation(
             &input,
-            &state,
+            &with_fee(&state, fee),
             message,
             config(fee, id(43), false),
             [17, 900, 101],
@@ -651,7 +684,7 @@ fn exact_output_payment_is_minimal_across_prices_and_fee_rates() {
                 };
                 let response = operation(
                     &input,
-                    &state,
+                    &with_fee(&state, rate),
                     message.clone(),
                     config(rate, id(43), false),
                     [17, 800, gross],
@@ -679,7 +712,7 @@ fn exact_output_payment_is_minimal_across_prices_and_fee_rates() {
                 assert_eq!(
                     operation(
                         &input,
-                        &state,
+                        &with_fee(&state, rate),
                         Message::BuyExactOutput {
                             membership: None,
                             amount_out,
@@ -695,7 +728,7 @@ fn exact_output_payment_is_minimal_across_prices_and_fee_rates() {
                 assert_eq!(
                     operation(
                         &input,
-                        &state,
+                        &with_fee(&state, rate),
                         message,
                         config(rate, id(43), false),
                         [17, 800, previous_gross],
@@ -718,7 +751,7 @@ fn exact_input_rejects_fee_consumed_dust_and_prices_only_net_collateral() {
         assert_eq!(
             operation(
                 &input,
-                &state,
+                &with_fee(&state, rate),
                 exact_in(1),
                 config(rate, id(43), false),
                 [0, 800, 1],
@@ -729,7 +762,7 @@ fn exact_input_rejects_fee_consumed_dust_and_prices_only_net_collateral() {
     }
     let response = operation(
         &input,
-        &state,
+        &with_fee(&state, 9_999),
         exact_in(10_000),
         config(9_999, id(43), false),
         [0, 800, 10_000],
@@ -742,7 +775,7 @@ fn exact_input_rejects_fee_consumed_dust_and_prices_only_net_collateral() {
     assert_eq!(
         operation(
             &input,
-            &state,
+            &with_fee(&state, 100),
             Message::BuyExactInput {
                 membership: None,
                 amount_in: 100,
@@ -803,7 +836,7 @@ fn buys_reject_limits_zero_inventory_time_freeze_and_underbacking() {
         assert!(
             operation(
                 &input,
-                &state,
+                &with_fee(&state, 100),
                 message,
                 config(100, id(43), false),
                 [0, 900, 2_000]
@@ -814,7 +847,7 @@ fn buys_reject_limits_zero_inventory_time_freeze_and_underbacking() {
     assert_eq!(
         operation(
             &input,
-            &state,
+            &with_fee(&state, 100),
             exact_in(5),
             config(100, id(43), true),
             [0, 800, 100]
@@ -826,20 +859,20 @@ fn buys_reject_limits_zero_inventory_time_freeze_and_underbacking() {
     assert_eq!(
         operation(
             &input,
-            &state,
+            &with_fee(&state, 10_000),
             exact_in(5),
             config(10_000, id(43), false),
             [0, 800, 100]
         )
         .err()
         .unwrap(),
-        lbp_core::Error::InvalidFee
+        lbp_core::Error::InvalidState
     );
     for balances in [[0, 1, 100], [0, 800, 4]] {
         assert_eq!(
             operation(
                 &input,
-                &state,
+                &with_fee(&state, 100),
                 exact_in(5),
                 config(100, id(43), false),
                 balances
@@ -856,7 +889,7 @@ fn buys_reject_limits_zero_inventory_time_freeze_and_underbacking() {
         assert_eq!(
             operation(
                 &input,
-                &state,
+                &with_fee(&state, 100),
                 message,
                 config(100, id(43), false),
                 [5, 800, 100]
@@ -874,7 +907,7 @@ fn no_end_sellout_donations_and_anytime_collection_keep_separate_accounts() {
     state.ending_policy = lbp_core::EndingPolicy::Depletion;
     let response = operation(
         &input,
-        &state,
+        &with_fee(&state, 100),
         Message::BuyExactOutput {
             membership: None,
             amount_out: 800,
@@ -899,7 +932,7 @@ fn no_end_sellout_donations_and_anytime_collection_keep_separate_accounts() {
     assert_eq!(
         operation(
             &input,
-            &state,
+            &with_fee(&state, 100),
             exact_in(5),
             config(100, id(43), false),
             [1_230, 100, 100]
@@ -911,7 +944,7 @@ fn no_end_sellout_donations_and_anytime_collection_keep_separate_accounts() {
     input.from = None;
     let response = operation(
         &input,
-        &state,
+        &with_fee(&state, 100),
         Message::CollectFees,
         config(100, id(70), true),
         [1_230, 0, 0],
@@ -931,7 +964,7 @@ fn no_end_sellout_donations_and_anytime_collection_keep_separate_accounts() {
     );
     let repeated = operation(
         &input,
-        &state,
+        &with_fee(&state, 100),
         Message::CollectFees,
         config(100, id(70), true),
         [1_217, 0, 0],
@@ -941,7 +974,7 @@ fn no_end_sellout_donations_and_anytime_collection_keep_separate_accounts() {
     state.accrued_fees = 13;
     let response = operation(
         &input,
-        &state,
+        &with_fee(&state, 100),
         Message::CollectFees,
         config(100, input.receiver.account_id, true),
         [1_230, 0, 0],
@@ -1060,7 +1093,7 @@ fn exact_output_rejects_overflow_in_price_or_fee_gross_up() {
         assert_eq!(
             operation(
                 &input,
-                &state,
+                &with_fee(&state, rate),
                 Message::BuyExactOutput {
                     membership: None,
                     amount_out,
@@ -1082,7 +1115,7 @@ fn arithmetic_and_pending_funding_fail_closed() {
     assert_eq!(
         operation(
             &input,
-            &state,
+            &with_fee(&state, 100),
             exact_in(u128::MAX),
             config(100, id(43), false),
             [0, 800, u128::MAX]
@@ -1097,7 +1130,7 @@ fn arithmetic_and_pending_funding_fail_closed() {
     assert_eq!(
         operation(
             &input,
-            &state,
+            &with_fee(&state, 100),
             Message::CollectFees,
             config(100, id(43), false),
             [u128::MAX, 800, 100]
@@ -1113,7 +1146,7 @@ fn arithmetic_and_pending_funding_fail_closed() {
         assert_eq!(
             operation(
                 &input,
-                &state,
+                &with_fee(&state, 100),
                 message,
                 config(100, id(43), false),
                 [0, 800, 100]
@@ -1318,7 +1351,7 @@ fn settled_expiry_cannot_reopen_buys_with_a_backdated_timestamp_or_donated_token
     assert_eq!(
         operation(
             &input,
-            &settled,
+            &with_fee(&settled, 100),
             exact_in(5),
             config(100, id(43), false),
             [0, 800, 100]
@@ -1377,7 +1410,7 @@ fn prior_fee_collection_preserves_proceeds_and_leaves_collected_self_treasury_fe
     {
         let collected = operation(
             &input,
-            &state,
+            &with_fee(&state, 100),
             Message::CollectFees,
             config(100, treasury, true),
             [1_230, 0, 0],
@@ -1410,7 +1443,7 @@ fn prior_fee_collection_preserves_proceeds_and_leaves_collected_self_treasury_fe
         );
         let collected_after_close = operation(
             &input,
-            &state_of(&response),
+            &with_fee(&state_of(&response), 100),
             Message::CollectFees,
             config(100, id(71), true),
             [17, 0, 0],
@@ -1721,7 +1754,7 @@ fn fixed_price_membership_can_be_reused_in_both_buy_forms_without_changing_econo
     ] {
         let response = operation(
             &input,
-            &state,
+            &with_fee(&state, 100),
             message,
             config(100, id(43), false),
             [
@@ -2021,7 +2054,7 @@ fn fixed_pause_gates_both_buys_and_resume_keeps_namespace_freeze() {
         assert_eq!(
             operation(
                 &input,
-                &state,
+                &with_fee(&state, 100),
                 message.clone(),
                 config(100, id(43), false),
                 [0, 800, 100]
@@ -2033,7 +2066,7 @@ fn fixed_pause_gates_both_buys_and_resume_keeps_namespace_freeze() {
         assert_eq!(
             operation(
                 &input,
-                &resumed,
+                &with_fee(&resumed, 100),
                 message.clone(),
                 config(100, id(43), true),
                 [0, 800, 100]
@@ -2044,7 +2077,7 @@ fn fixed_pause_gates_both_buys_and_resume_keeps_namespace_freeze() {
         assert!(
             operation(
                 &input,
-                &resumed,
+                &with_fee(&resumed, 100),
                 message,
                 config(100, id(43), false),
                 [0, 800, 100]
@@ -2063,7 +2096,7 @@ fn fixed_pause_and_freeze_leave_collection_and_safe_settlement_available() {
     state.recorded_collateral = 4;
     let collected = operation(
         &input,
-        &state,
+        &with_fee(&state, 100),
         Message::CollectFees,
         config(100, id(43), true),
         [5, 800, 0],
@@ -2243,7 +2276,7 @@ fn fixed_final_sellout_buy_keeps_pre_trade_inclusion_bounds_for_both_forms() {
         ] {
             let response = operation(
                 &input,
-                &state,
+                &with_fee(&state, 100),
                 message,
                 config(100, id(43), false),
                 [17, 9, 4],
@@ -2289,7 +2322,7 @@ fn fixed_exact_time_edges_apply_to_both_buy_forms() {
         ] {
             let result = operation(
                 &input,
-                &state,
+                &with_fee(&state, 100),
                 message,
                 config(100, id(43), false),
                 [0, 800, 100],
@@ -2351,7 +2384,7 @@ fn fixed_selected_ending_separates_empty_inventory_from_scheduled_close() {
         assert_eq!(
             operation(
                 &input,
-                &state,
+                &with_fee(&state, 100),
                 exact_in(5),
                 config(100, id(43), false),
                 [0, 0, 100]
@@ -2504,7 +2537,7 @@ fn fixed_completed_progress_blocks_controls_and_both_buy_forms() {
             assert_eq!(
                 operation(
                     &input,
-                    &state,
+                    &with_fee(&state, 100),
                     message,
                     config(100, id(43), false),
                     [0, 800, 100]
@@ -2648,7 +2681,7 @@ fn fixed_trade_events_match_both_transfer_forms_and_saved_fee_accounting() {
     ] {
         let response = operation(
             &input,
-            &state,
+            &with_fee(&state, 100),
             message,
             config(100, id(43), false),
             [0, 800, 1000],
@@ -2700,7 +2733,7 @@ fn fixed_sellout_events_follow_selected_ending_without_fabricated_depletion() {
         }
         let response = operation(
             &input,
-            &state,
+            &with_fee(&state, 100),
             exact_in(5),
             config(100, id(43), false),
             [0, 2, 1000],
@@ -2756,7 +2789,7 @@ fn fee_events_distinguish_liability_from_self_recipient_token_movement() {
     for treasury in [id(43), input.receiver.account_id] {
         let response = operation(
             &input,
-            &state,
+            &with_fee(&state, 100),
             Message::CollectFees,
             config(100, treasury, false),
             [20, 800, 0],
@@ -2778,7 +2811,7 @@ fn fee_events_distinguish_liability_from_self_recipient_token_movement() {
         let next = state_of(&response);
         let repeated = operation(
             &input,
-            &next,
+            &with_fee(&next, 100),
             Message::CollectFees,
             config(100, treasury, false),
             [17, 800, 0],
@@ -2924,7 +2957,7 @@ fn fixed_sells_use_reverse_floor_and_record_gross_output_fee_separately() {
                 tokens_in: 20,
                 min_collateral_out: 0,
             };
-            let quoted = quote_trade(&state, request, fee_bps, 100).unwrap();
+            let quoted = quote_trade(&with_fee(&state, fee_bps), request, 100).unwrap();
             // The saved price is three collateral units for two token units.
             assert_eq!(quoted.gross_collateral, 30);
             assert_eq!(quoted.amount_in, 20);
@@ -2939,7 +2972,7 @@ fn fixed_sells_use_reverse_floor_and_record_gross_output_fee_separately() {
             );
             let response = operation(
                 &input,
-                &state,
+                &with_fee(&state, fee_bps),
                 Message::SellExactInput {
                     amount_in: 20,
                     min_amount_out: quoted.amount_out,
@@ -2999,12 +3032,11 @@ fn fixed_sells_use_reverse_floor_and_record_gross_output_fee_separately() {
     state.sell_fee_bps = 0;
     assert_eq!(
         quote_trade(
-            &state,
+            &with_fee(&state, 0),
             QuoteRequest::SellExactInput {
                 tokens_in: 3,
                 min_collateral_out: 0
             },
-            0,
             100
         )
         .unwrap()
@@ -3022,7 +3054,7 @@ fn fixed_sells_reject_unavailable_budget_limits_and_invalid_lifecycle() {
         min_collateral_out: 0,
     };
     assert_eq!(
-        quote_trade(&state, request, 0, 100),
+        quote_trade(&with_fee(&state, 0), request, 100),
         Err(Error::TradeDirectionUnsupported)
     );
     state.trade_mode = lbp_core::TradeMode::BuyAndSell;
@@ -3036,7 +3068,7 @@ fn fixed_sells_reject_unavailable_budget_limits_and_invalid_lifecycle() {
     assert_eq!(
         operation(
             &input,
-            &state,
+            &with_fee(&state, 0),
             message.clone(),
             config(0, id(43), false),
             [10_000, 800, 20]
@@ -3048,7 +3080,7 @@ fn fixed_sells_reject_unavailable_budget_limits_and_invalid_lifecycle() {
     assert_eq!(
         operation(
             &input,
-            &state,
+            &with_fee(&state, 0),
             message.clone(),
             config(0, id(43), true),
             [200, 800, 20]
@@ -3060,7 +3092,7 @@ fn fixed_sells_reject_unavailable_budget_limits_and_invalid_lifecycle() {
         assert_eq!(
             operation(
                 &input,
-                &state,
+                &with_fee(&state, 0),
                 message.clone(),
                 config(0, id(43), false),
                 balances
@@ -3071,22 +3103,24 @@ fn fixed_sells_reject_unavailable_budget_limits_and_invalid_lifecycle() {
     }
     assert_eq!(
         quote_trade(
-            &state,
+            &with_fee(&state, 0),
             QuoteRequest::SellExactInput {
                 tokens_in: 20,
                 min_collateral_out: 31
             },
-            0,
             100
         ),
         Err(Error::Slippage)
     );
     for time in [99, 200] {
-        assert_eq!(quote_trade(&state, request, 0, time), Err(Error::Closed));
+        assert_eq!(
+            quote_trade(&with_fee(&state, 0), request, time),
+            Err(Error::Closed)
+        );
     }
     assert_eq!(
-        quote_trade(&state, request, 10_000, 100),
-        Err(Error::InvalidFee)
+        quote_trade(&with_fee(&state, 10_000), request, 100),
+        Err(Error::InvalidState)
     );
     for progress in [
         lbp_core::SettlementProgress::ManualStarted,
@@ -3095,10 +3129,16 @@ fn fixed_sells_reject_unavailable_budget_limits_and_invalid_lifecycle() {
     ] {
         let mut completed = state.clone();
         completed.settlement_progress = progress;
-        assert_eq!(quote_trade(&completed, request, 0, 100), Err(Error::Closed));
+        assert_eq!(
+            quote_trade(&with_fee(&completed, 0), request, 100),
+            Err(Error::Closed)
+        );
     }
     state.trade_control = lbp_core::TradeControl::Paused;
-    assert_eq!(quote_trade(&state, request, 0, 100), Err(Error::Paused));
+    assert_eq!(
+        quote_trade(&with_fee(&state, 0), request, 100),
+        Err(Error::Paused)
+    );
 }
 
 #[test]
@@ -3119,7 +3159,7 @@ fn fixed_scheduled_sellout_can_replenish_but_selected_depletion_is_final() {
         }
         let result = operation(
             &input,
-            &state,
+            &with_fee(&state, 0),
             Message::SellExactInput {
                 amount_in: 20,
                 min_amount_out: 30,
@@ -3135,7 +3175,7 @@ fn fixed_scheduled_sellout_can_replenish_but_selected_depletion_is_final() {
             assert!(!next.closure_observed);
             let buy = operation(
                 &input,
-                &next,
+                &with_fee(&next, 0),
                 exact_in(5),
                 config(0, id(43), false),
                 [70, 20, 5],
@@ -3166,7 +3206,7 @@ fn fixed_sell_bypasses_buy_membership_but_keeps_participant_and_callback_authent
     };
     let _ = operation(
         &input,
-        &state,
+        &with_fee(&state, 0),
         message.clone(),
         config(0, id(43), false),
         [100, 800, 20],
@@ -3224,12 +3264,11 @@ fn fixed_retained_collateral_stays_in_proceeds_after_fee_collection() {
     state.recorded_collateral = 100;
     state.accrued_fees = 3;
     let quoted = quote_trade(
-        &state,
+        &with_fee(&state, 100),
         QuoteRequest::SellExactInput {
             tokens_in: 20,
             min_collateral_out: 0,
         },
-        100,
         100,
     )
     .unwrap();
@@ -3250,7 +3289,7 @@ fn fixed_retained_collateral_stays_in_proceeds_after_fee_collection() {
     assert_eq!(
         operation(
             &input,
-            &state,
+            &with_fee(&state, 100),
             message.clone(),
             config(100, id(43), false),
             [102, 800, 20]
@@ -3260,7 +3299,7 @@ fn fixed_retained_collateral_stays_in_proceeds_after_fee_collection() {
     );
     let response = operation(
         &input,
-        &state,
+        &with_fee(&state, 100),
         message,
         config(100, id(43), false),
         [103, 800, 20],
@@ -3296,7 +3335,34 @@ fn fixed_retained_collateral_stays_in_proceeds_after_fee_collection() {
 }
 
 #[test]
-fn fixed_live_namespace_rate_only_combines_with_retention_for_sells() {
+fn preparation_rejects_saved_sell_fees_that_consume_all_sell_output() {
+    for (trade_mode, protocol_fee_bps, sell_fee_bps, accepted) in [
+        (lbp_core::TradeMode::BuyAndSell, 100, 9_899, true),
+        (lbp_core::TradeMode::BuyAndSell, 100, 9_900, false),
+        (lbp_core::TradeMode::BuyAndSell, 9_999, 1, false),
+        (lbp_core::TradeMode::BuyOnly, 100, 9_999, true),
+        (lbp_core::TradeMode::BuyOnly, 10_000, 0, false),
+    ] {
+        let mut input = prepare();
+        let Message::PrepareFixedPrice { mut inputs } = borsh::from_slice(&input.message).unwrap()
+        else {
+            unreachable!()
+        };
+        inputs.trade_mode = trade_mode;
+        inputs.protocol_fee_bps = protocol_fee_bps;
+        inputs.sell_fee_bps = sell_fee_bps;
+        input.message = borsh::to_vec(&Message::PrepareFixedPrice { inputs }).unwrap();
+        let result = handle(&input);
+        if accepted {
+            assert!(result.is_ok());
+        } else {
+            assert_eq!(result.err(), Some(lbp_core::Error::InvalidFee));
+        }
+    }
+}
+
+#[test]
+fn fixed_saved_rate_only_combines_with_retention_for_sells() {
     use lbp_core::{Error, QuoteRequest, quote_trade};
     let (mut input, mut state) = funded();
     state.trade_mode = lbp_core::TradeMode::BuyAndSell;
@@ -3306,16 +3372,30 @@ fn fixed_live_namespace_rate_only_combines_with_retention_for_sells() {
     for namespace_bps in [4000, 5000, 9999] {
         assert_eq!(
             quote_trade(
-                &state,
+                &with_fee(&state, namespace_bps),
                 QuoteRequest::SellExactInput {
                     tokens_in: 20,
                     min_collateral_out: 0
                 },
-                namespace_bps,
                 100
             ),
-            Err(Error::InvalidFee)
+            Err(Error::InvalidState)
         );
+        // Saved rates cannot change, so these `BuyAndSell` terms are invalid state.
+        assert_eq!(
+            operation(
+                &input,
+                &with_fee(&state, namespace_bps),
+                exact_in(5),
+                config(namespace_bps, id(43), false),
+                [100, 800, 100_000],
+            )
+            .err(),
+            Some(Error::InvalidState)
+        );
+    }
+    state.trade_mode = lbp_core::TradeMode::BuyOnly;
+    for namespace_bps in [4000, 5000, 9999] {
         for request in [
             QuoteRequest::BuyExactInput {
                 collateral_in: 100 * (10_000 / u128::from(10_000 - namespace_bps)),
@@ -3328,16 +3408,16 @@ fn fixed_live_namespace_rate_only_combines_with_retention_for_sells() {
         ] {
             let mut no_retention = state.clone();
             no_retention.sell_fee_bps = 0;
-            let quoted = quote_trade(&state, request, namespace_bps, 100).unwrap();
+            let quoted = quote_trade(&with_fee(&state, namespace_bps), request, 100).unwrap();
             assert_eq!(quoted.retained_fee, 0);
             assert_eq!(
                 quoted,
-                quote_trade(&no_retention, request, namespace_bps, 100).unwrap()
+                quote_trade(&with_fee(&no_retention, namespace_bps), request, 100).unwrap()
             );
         }
         let bought = operation(
             &input,
-            &state,
+            &with_fee(&state, namespace_bps),
             Message::BuyExactOutput {
                 membership: None,
                 amount_out: 1,
@@ -3387,37 +3467,36 @@ fn fixed_retention_uses_independent_ceilings_and_checks_overflow() {
     };
     for tokens in [0, 1, 2] {
         assert_eq!(
-            quote_trade(&state, request(tokens), 1, 100),
+            quote_trade(&with_fee(&state, 1), request(tokens), 100),
             Err(Error::InvalidAmount)
         );
     }
-    let quote = quote_trade(&state, request(3), 1, 100).unwrap();
+    let quote = quote_trade(&with_fee(&state, 1), request(3), 100).unwrap();
     assert_eq!(
         (quote.protocol_fee, quote.retained_fee, quote.amount_out),
         (1, 1, 1)
     );
     assert_eq!(
         quote_trade(
-            &state,
+            &with_fee(&state, 1),
             QuoteRequest::SellExactInput {
                 tokens_in: 3,
                 min_collateral_out: 2
             },
-            1,
             100
         ),
         Err(Error::Slippage)
     );
     state.remaining_inventory = u128::MAX;
     assert_eq!(
-        quote_trade(&state, request(3), 1, 100),
+        quote_trade(&with_fee(&state, 1), request(3), 100),
         Err(Error::Arithmetic)
     );
     state.remaining_inventory = 800;
     state.recorded_collateral = u128::MAX;
     state.accrued_fees = 1;
     assert_eq!(
-        quote_trade(&state, request(3), 1, 100),
+        quote_trade(&with_fee(&state, 1), request(3), 100),
         Err(Error::Arithmetic)
     );
 }
@@ -3483,4 +3562,133 @@ fn fixed_pool_preparation_validates_saved_graduation_percentages() {
             }
         }
     }
+}
+
+fn with_fee(state: &lbp_core::PoolAccount, protocol_fee_bps: u16) -> lbp_core::PoolAccount {
+    let mut state = state.clone();
+    state.protocol_fee_bps = protocol_fee_bps;
+    state
+}
+
+#[test]
+fn namespace_updates_cannot_reprice_saved_buy_or_sell_fees() {
+    let (input, mut state) = funded();
+    state.trade_mode = lbp_core::TradeMode::BuyAndSell;
+    state.recorded_collateral = 10_000;
+    state.protocol_fee_bps = 100;
+    let messages = [
+        exact_in(100),
+        Message::SellExactInput {
+            amount_in: 100,
+            min_amount_out: 0,
+            now: 100,
+        },
+    ];
+    for message in messages {
+        let baseline = operation(
+            &input,
+            &state,
+            message.clone(),
+            config(100, id(43), false),
+            [20_000, state.remaining_inventory, 10_000],
+        )
+        .unwrap();
+        for live_rate in [0, 5000, 9999] {
+            let response = operation(
+                &input,
+                &state,
+                message.clone(),
+                config(live_rate, id(43), false),
+                [20_000, state.remaining_inventory, 10_000],
+            )
+            .unwrap();
+            assert_eq!(state_of(&response), state_of(&baseline));
+            assert_eq!(response.sync_messages, baseline.sync_messages);
+        }
+        assert_eq!(
+            operation(
+                &input,
+                &state,
+                message,
+                config(9999, id(43), true),
+                [20_000, state.remaining_inventory, 10_000]
+            )
+            .err(),
+            Some(lbp_core::Error::Frozen)
+        );
+    }
+}
+
+#[test]
+fn block_ceiling_aggregates_both_buy_forms_and_sells_do_not_refill_it() {
+    let (input, mut state) = funded();
+    state.block_allocation = lbp_core::BlockAllocation::new(Some(6)).unwrap();
+    state.trade_mode = lbp_core::TradeMode::BuyAndSell;
+    let exact_out = |amount_out| Message::BuyExactOutput {
+        membership: None,
+        amount_out,
+        max_amount_in: 100,
+        now: 100,
+    };
+    let first = operation_in_block(
+        &input,
+        &state,
+        exact_out(3),
+        config(0, id(43), false),
+        [100, 800, 100],
+        42,
+    )
+    .unwrap();
+    assert_eq!(first.validity.blocks.start(), Some(43));
+    assert_eq!(first.validity.blocks.end(), Some(44));
+    let state = state_of(&first);
+    let second = operation_in_block(
+        &input,
+        &state,
+        exact_in(6),
+        config(0, id(43), false),
+        [100, 797, 100],
+        42,
+    )
+    .unwrap();
+    let state = state_of(&second);
+    assert_eq!(state.block_allocation.tokens_sold, 6);
+    assert_eq!(
+        operation_in_block(
+            &input,
+            &state,
+            exact_out(1),
+            config(0, id(43), false),
+            [100, 794, 100],
+            42
+        )
+        .err(),
+        Some(lbp_core::Error::BlockAllocationExceeded)
+    );
+    let sell = operation_in_block(
+        &input,
+        &state,
+        Message::SellExactInput {
+            amount_in: 2,
+            min_amount_out: 0,
+            now: 100,
+        },
+        config(0, id(43), false),
+        [100, 794, 100],
+        42,
+    )
+    .unwrap();
+    let state = state_of(&sell);
+    assert_eq!(state.block_allocation.tokens_sold, 6);
+    let next = operation_in_block(
+        &input,
+        &state,
+        exact_out(6),
+        config(0, id(43), false),
+        [100, state.remaining_inventory, 100],
+        43,
+    )
+    .unwrap();
+    assert_eq!(state_of(&next).block_allocation.tokens_sold, 6);
+    assert_eq!(state_of(&next).block_allocation.observed_block, Some(43));
 }

@@ -17,6 +17,7 @@ fn id(n: u8) -> AccountId {
 }
 fn inputs() -> WeightedInputs {
     WeightedInputs {
+        per_block_token_limit: None,
         buy_policy: curve_core::BuyPolicy::Open,
         pause_policy: curve_core::PausePolicy::AuthorityControlled,
         ending_policy: factory_core::EndingPolicy::Scheduled,
@@ -1558,4 +1559,62 @@ fn weighted_funding_rejects_either_substituted_graduation_percentage() {
             Some(Error::InvalidCustody)
         );
     }
+}
+
+#[test]
+fn fee_snapshot_is_captured_from_namespace_before_minting() {
+    let mut input = creation(inputs());
+    let mut response = handle(&input).unwrap();
+    let mut namespace = curve_core::Config::decode(&config()).unwrap();
+    namespace.protocol_fee_bps = 777;
+    for bytes in [borsh::to_vec(&namespace).unwrap(), definition()] {
+        input = reply(&input, &response, bytes);
+        response = handle(&input).unwrap();
+    }
+    let response = finish_clock(&input, response).unwrap();
+    let state =
+        factory_core::LbpLaunchState::decode(response.post_state.as_ref().unwrap()).unwrap();
+    assert_eq!(state.protocol_fee_bps, 777);
+    let allocated = advance(&input, &response, vec![]).unwrap();
+    let prepared = advance(&input, &allocated, vec![]).unwrap();
+    let call = prepared
+        .sync_messages
+        .iter()
+        .find(|call| call.to.program_account_id == id(8))
+        .unwrap();
+    assert!(
+        matches!(borsh::from_slice::<lbp_core::Message>(&call.message).unwrap(), lbp_core::Message::PrepareWeighted { inputs } if inputs.protocol_fee_bps == 777)
+    );
+}
+
+#[test]
+fn block_ceiling_is_saved_at_creation_and_forwarded_to_pool() {
+    let mut terms = inputs();
+    terms.per_block_token_limit = Some(123);
+    let (input, minted) = minted_with_terms(terms);
+    assert_eq!(
+        LbpLaunchState::decode(minted.post_state.as_ref().unwrap())
+            .unwrap()
+            .per_block_token_limit,
+        Some(123)
+    );
+    assert_eq!(
+        LbpLaunchState::decode(minted.post_state.as_ref().unwrap())
+            .unwrap()
+            .protocol_fee_bps,
+        100
+    );
+    let allocated = advance(&input, &minted, vec![]).unwrap();
+    let prepared = advance(&input, &allocated, vec![]).unwrap();
+    let call = prepared
+        .sync_messages
+        .iter()
+        .find(|call| call.to.program_account_id == id(8))
+        .unwrap();
+    assert!(
+        matches!(borsh::from_slice::<lbp_core::Message>(&call.message).unwrap(), lbp_core::Message::PrepareWeighted { inputs } if inputs.per_block_token_limit == Some(123) && inputs.protocol_fee_bps == 100)
+    );
+    let mut invalid = inputs();
+    invalid.per_block_token_limit = Some(0);
+    assert_eq!(handle(&creation(invalid)).err(), Some(Error::InvalidTerms));
 }

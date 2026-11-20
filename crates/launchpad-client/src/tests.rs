@@ -272,6 +272,7 @@ fn fixed_creation() -> factory_core::FixedPriceInputs {
         factory,
     );
     factory_core::FixedPriceInputs {
+        per_block_token_limit: None,
         buy_policy: curve_core::BuyPolicy::Allowlist(curve_core::AllowlistPolicy {
             version: 1,
             namespace: *sale.namespace.value(),
@@ -445,6 +446,7 @@ fn weighted_exact_output_builder_keeps_membership_cap_and_pricing_clock() {
 fn weighted_creation() -> factory_core::WeightedInputs {
     let fixed = fixed_creation();
     factory_core::WeightedInputs {
+        per_block_token_limit: None,
         buy_policy: fixed.buy_policy,
         pause_policy: curve_core::PausePolicy::AuthorityControlled,
         ending_policy: curve_core::EndingPolicy::Scheduled,
@@ -1932,6 +1934,8 @@ fn valid_lbp_factory_state(weighted: bool) -> factory_core::LbpLaunchState {
             bytes.extend(borsh::to_vec(&$value).unwrap());
         };
     }
+    field!(1000u16);
+    field!(None::<u128>);
     field!(curve_core::BuyPolicy::Open);
     field!(curve_core::PausePolicy::Disabled);
     field!(if weighted {
@@ -1947,7 +1951,7 @@ fn valid_lbp_factory_state(weighted: bool) -> factory_core::LbpLaunchState {
     }));
     field!(GraduationPolicy::default());
     field!(if weighted { *b"LZWGLAUN" } else { *b"LZFXLAUN" });
-    field!(5u16);
+    field!(7u16);
     field!(factory_core::compute_creator_role_pda(
         sale.namespace,
         sale.factory_program_id,
@@ -2220,6 +2224,8 @@ fn lbp_pool_snapshot(weighted: bool) -> (lbp_core::PoolAccount, curve_core::Conf
         lbp_core::PoolMode::FixedPrice
     };
     let mut bytes = borsh::to_vec(&(
+        1000u16,
+        (None::<u128>, None::<u64>, 0u128),
         curve_core::BuyPolicy::Open,
         curve_core::TradeControl::Unrestricted,
         curve_core::EndingPolicy::Scheduled,
@@ -2277,15 +2283,58 @@ fn lbp_quotes_reuse_core_results_for_each_engine_and_trade_form() {
                 min_collateral_out: 1,
             },
         ] {
-            let expected =
-                lbp_core::quote_trade(&pool, request, config.protocol_fee_bps, 50).unwrap();
+            let expected = lbp_core::quote_trade(&pool, request, 50).unwrap();
             let before = pool.clone();
             assert_eq!(
-                super::quote_lbp_trade(lbp_sale(), &pool, &config, request, 50).unwrap(),
+                super::quote_lbp_trade(lbp_sale(), &pool, &config, request, 50, None).unwrap(),
                 expected
             );
             assert_eq!(pool, before);
         }
+    }
+}
+
+#[test]
+fn capped_lbp_buy_quotes_check_the_observed_block_allowance() {
+    use super::LbpQuoteRequest::*;
+    let buy = BuyExactOutput {
+        tokens_out: 5,
+        max_collateral_in: 100,
+    };
+    let sell = SellExactInput {
+        tokens_in: 10,
+        min_collateral_out: 1,
+    };
+    for weighted in [false, true] {
+        let (mut pool, mut config) = lbp_pool_snapshot(weighted);
+        config.protocol_fee_bps = 9999;
+        pool.block_allocation = lbp_core::BlockAllocation {
+            limit: Some(8),
+            observed_block: Some(7),
+            tokens_sold: 4,
+        };
+        let quote =
+            |request, block| super::quote_lbp_trade(lbp_sale(), &pool, &config, request, 50, block);
+        assert!(matches!(
+            quote(buy, None),
+            Err(ClientError::BlockIdRequired)
+        ));
+        assert!(matches!(
+            quote(buy, Some(7)),
+            Err(ClientError::QuoteLbpTrade(
+                lbp_core::Error::BlockAllocationExceeded
+            ))
+        ));
+        assert_eq!(
+            quote(buy, Some(8)).unwrap(),
+            lbp_core::quote_trade(&pool, buy, 50).unwrap()
+        );
+        // Sells do not use the allowance or the block ID.
+        assert!(quote(sell, None).is_ok());
+        pool.block_allocation.tokens_sold = 3;
+        let quote =
+            |request, block| super::quote_lbp_trade(lbp_sale(), &pool, &config, request, 50, block);
+        assert_eq!(quote(buy, Some(7)).unwrap().amount_out, 5);
     }
 }
 
@@ -2310,14 +2359,14 @@ fn lbp_quotes_reject_each_pool_identity_mismatch_and_wrong_namespace_config() {
             _ => unreachable!(),
         }
         assert!(matches!(
-            super::quote_lbp_trade(lbp_sale(), &wrong, &config, request, 50),
+            super::quote_lbp_trade(lbp_sale(), &wrong, &config, request, 50, None),
             Err(ClientError::FactorySaleMismatch)
         ));
     }
     let mut wrong = config;
     wrong.namespace = AccountId::new([99; 32]);
     assert!(matches!(
-        super::quote_lbp_trade(lbp_sale(), &pool, &wrong, request, 50),
+        super::quote_lbp_trade(lbp_sale(), &pool, &wrong, request, 50, None),
         Err(ClientError::PoolSelectionMismatch)
     ));
 }
@@ -2332,13 +2381,13 @@ fn lbp_quotes_check_live_freeze_and_preserve_core_errors() {
         let (mut pool, mut config) = lbp_pool_snapshot(weighted);
         config.emergency.is_frozen = true;
         assert!(matches!(
-            super::quote_lbp_trade(lbp_sale(), &pool, &config, request, 50),
+            super::quote_lbp_trade(lbp_sale(), &pool, &config, request, 50, None),
             Err(ClientError::NamespaceFrozen)
         ));
         config.emergency.is_frozen = false;
         pool.trade_mode = super::TradeMode::BuyOnly;
         assert!(matches!(
-            super::quote_lbp_trade(lbp_sale(), &pool, &config, request, 50),
+            super::quote_lbp_trade(lbp_sale(), &pool, &config, request, 50, None),
             Err(ClientError::QuoteLbpTrade(
                 lbp_core::Error::TradeDirectionUnsupported
             ))
@@ -2347,7 +2396,7 @@ fn lbp_quotes_check_live_freeze_and_preserve_core_errors() {
         pool.remaining_inventory = 0;
         pool.ending_policy = super::EndingPolicy::Either;
         assert!(matches!(
-            super::quote_lbp_trade(lbp_sale(), &pool, &config, request, 50),
+            super::quote_lbp_trade(lbp_sale(), &pool, &config, request, 50, None),
             Err(ClientError::QuoteLbpTrade(lbp_core::Error::Closed))
         ));
     }
@@ -2360,7 +2409,7 @@ fn lbp_sell_quotes_apply_net_floor_and_protect_weighted_seed() {
         tokens_in: 10,
         min_collateral_out: 18,
     };
-    let quote = super::quote_lbp_trade(lbp_sale(), &pool, &config, request, 50).unwrap();
+    let quote = super::quote_lbp_trade(lbp_sale(), &pool, &config, request, 50, None).unwrap();
     assert_eq!(
         (
             quote.gross_collateral,
@@ -2374,7 +2423,7 @@ fn lbp_sell_quotes_apply_net_floor_and_protect_weighted_seed() {
         tokens_in: 10,
         min_collateral_out: 19,
     };
-    assert!(super::quote_lbp_trade(lbp_sale(), &pool, &config, too_high, 50).is_err());
+    assert!(super::quote_lbp_trade(lbp_sale(), &pool, &config, too_high, 50, None).is_err());
     let (mut pool, config) = lbp_pool_snapshot(true);
     pool.recorded_collateral = 100;
     if let lbp_core::PoolMode::Weighted {
@@ -2383,7 +2432,7 @@ fn lbp_sell_quotes_apply_net_floor_and_protect_weighted_seed() {
     {
         *pricing_collateral = 100;
     }
-    assert!(super::quote_lbp_trade(lbp_sale(), &pool, &config, request, 50).is_err());
+    assert!(super::quote_lbp_trade(lbp_sale(), &pool, &config, request, 50, None).is_err());
 }
 
 #[test]
@@ -2585,15 +2634,15 @@ fn lbp_quotes_expose_independent_retained_fees_and_net_slippage() {
             tokens_in: 10,
             min_collateral_out: 0,
         };
-        let zero = super::quote_lbp_trade(lbp_sale(), &pool, &config, request, 50).unwrap();
+        let zero = super::quote_lbp_trade(lbp_sale(), &pool, &config, request, 50, None).unwrap();
         assert_eq!(zero.retained_fee, 0);
         let buy = super::LbpQuoteRequest::BuyExactInput {
             collateral_in: 25,
             min_tokens_out: 0,
         };
-        let zero_buy = super::quote_lbp_trade(lbp_sale(), &pool, &config, buy, 50).unwrap();
+        let zero_buy = super::quote_lbp_trade(lbp_sale(), &pool, &config, buy, 50, None).unwrap();
         pool.sell_fee_bps = 500;
-        let quote = super::quote_lbp_trade(lbp_sale(), &pool, &config, request, 50).unwrap();
+        let quote = super::quote_lbp_trade(lbp_sale(), &pool, &config, request, 50, None).unwrap();
         assert_eq!(quote.gross_collateral, zero.gross_collateral);
         assert_eq!(quote.protocol_fee, zero.protocol_fee);
         assert!(quote.retained_fee > 0);
@@ -2603,17 +2652,16 @@ fn lbp_quotes_expose_independent_retained_fees_and_net_slippage() {
         );
         assert_eq!(quote.net_collateral, quote.amount_out);
         assert_eq!(
-            super::quote_lbp_trade(lbp_sale(), &pool, &config, buy, 50).unwrap(),
+            super::quote_lbp_trade(lbp_sale(), &pool, &config, buy, 50, None).unwrap(),
             zero_buy
         );
         let too_high = super::LbpQuoteRequest::SellExactInput {
             tokens_in: 10,
             min_collateral_out: quote.amount_out + 1,
         };
-        let core_error =
-            lbp_core::quote_trade(&pool, too_high, config.protocol_fee_bps, 50).unwrap_err();
+        let core_error = lbp_core::quote_trade(&pool, too_high, 50).unwrap_err();
         let Err(ClientError::QuoteLbpTrade(error)) =
-            super::quote_lbp_trade(lbp_sale(), &pool, &config, too_high, 50)
+            super::quote_lbp_trade(lbp_sale(), &pool, &config, too_high, 50, None)
         else {
             panic!("expected core slippage error")
         };
