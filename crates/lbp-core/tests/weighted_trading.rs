@@ -16,6 +16,7 @@ fn id(n: u8) -> AccountId {
 fn weighted_inputs() -> WeightedPoolInputs {
     WeightedPoolInputs {
         protocol_fee_bps: 100,
+        per_block_token_limit: None,
         buy_policy: curve_core::BuyPolicy::Open,
         pause_policy: lbp_core::PausePolicy::AuthorityControlled,
         ending_policy: lbp_core::EndingPolicy::Scheduled,
@@ -232,6 +233,27 @@ fn operation_at(
             is_authorized: false,
             pre_state: response.post_state.unwrap(),
             message: borsh::to_vec(&clock_core::Reply::Timestamp(timestamp_ms)).unwrap(),
+        };
+        response = handle(&input)?;
+    }
+    if response
+        .sync_messages
+        .last()
+        .is_some_and(|call| call.to == clock_core::clock_actor())
+    {
+        assert_eq!(
+            borsh::from_slice::<clock_core::Message>(
+                &response.sync_messages.last().unwrap().message
+            )
+            .unwrap(),
+            clock_core::Message::ReadBlockId { granularity: 1 }
+        );
+        input = ReceiveInput {
+            receiver: input.receiver,
+            from: Some(clock_core::clock_actor()),
+            is_authorized: false,
+            pre_state: response.post_state.unwrap(),
+            message: borsh::to_vec(&clock_core::Reply::BlockId(42)).unwrap(),
         };
         response = handle(&input)?;
     }
@@ -3761,4 +3783,38 @@ fn namespace_updates_cannot_reprice_saved_buy_or_sell_fees() {
             Some(lbp_core::Error::Frozen)
         );
     }
+}
+
+#[test]
+fn weighted_block_ceiling_uses_actual_output_and_rejects_aggregate_excess() {
+    let (input, mut state) = funded();
+    state.block_allocation = lbp_core::BlockAllocation::new(Some(2000)).unwrap();
+    let message = Message::BuyWeightedExactOutput {
+        membership: None,
+        amount_out: 1000,
+        max_amount_in: 100,
+    };
+    for sold in [1000, 2000] {
+        let response = operation(
+            &input,
+            &state,
+            message.clone(),
+            config(0, id(43), false),
+            [1000, state.remaining_inventory, 100],
+        )
+        .unwrap();
+        state = state_of(&response);
+        assert_eq!(state.block_allocation.tokens_sold, sold);
+    }
+    assert_eq!(
+        operation(
+            &input,
+            &state,
+            message,
+            config(0, id(43), false),
+            [1000, state.remaining_inventory, 100]
+        )
+        .err(),
+        Some(lbp_core::Error::BlockAllocationExceeded)
+    );
 }

@@ -24,7 +24,7 @@ Read [CONTEXT.md](../../CONTEXT.md) for terms. See the [workspace guide](../arch
 | [0018](0018-private-participation.md) | Atomic private route and recovery | Accepted design; private execution pending |
 | [0019](0019-product-packages.md) | Two QML apps and shared core | Accepted design; packaging unverified |
 | [0020](0020-settlement-and-graduation.md) | Shared payouts and adapter initialization | Implemented; live DEX deferred |
-| [0021](0021-modes-and-open-limits.md) | Trade modes, allowlists and allocation ceiling | Public admission implemented; wallet/private route pending; ceiling deferral needs Logos review |
+| [0021](0021-modes-and-open-limits.md) | Trade modes, allowlists and allocation ceiling | Public admission and optional per-block ceilings implemented; wallet/private route pending; allowlist departures need Logos review |
 | [0022](0022-verification-boundaries.md) | Verification boundaries | Accepted |
 | [0025](0025-sale-closing.md) | Ending and payout eligibility | Implemented; RFP-015 expiry departure needs Logos review |
 | [0026](0026-lbp-clock-and-poke.md) | Weighted clock and observations | Upstream clock in normal builds; local execution limits remain |

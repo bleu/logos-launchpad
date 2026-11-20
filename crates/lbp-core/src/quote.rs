@@ -29,7 +29,7 @@ pub struct TradeQuote {
 }
 
 impl QuoteRequest {
-    pub(crate) fn is_sell(self) -> bool {
+    pub fn is_sell(self) -> bool {
         matches!(self, Self::SellExactInput { .. })
     }
 }

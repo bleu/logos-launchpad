@@ -1578,13 +1578,26 @@ pub async fn collect_pool_fees(
     Ok(hashes)
 }
 
-/// Quotes use the saved sale rate and the live namespace freeze state. Weighted pricing time is not inclusion proof.
+/// Reads the block ID that a transaction in the next block observes from the canonical clock.
+pub async fn load_clock_block_id(wallet: &LaunchpadWallet) -> Result<u64> {
+    let data = read_actor(wallet, clock_actor())
+        .await
+        .map_err(ClientError::ReadClock)?;
+    borsh::from_slice::<clock_core::ClockAccountData>(&data)
+        .map(|clock| clock.block_id)
+        .map_err(ClientError::DecodeClock)
+}
+
+/// Quotes use the saved sale rate and live namespace freeze state. Weighted pricing time is not inclusion proof.
+/// Capped buys need `observed_block` from [`load_clock_block_id`]. The allowance check holds only
+/// for inclusion in the next block and does not reserve allocation.
 pub fn quote_lbp_trade(
     sale: LbpSale,
     pool_account: &lbp_core::PoolAccount,
     config: &Config,
     request: LbpQuoteRequest,
     pricing_time: u64,
+    observed_block: Option<u64>,
 ) -> Result<LbpTradeQuote> {
     let addresses = lbp_addresses(sale);
     if config.namespace != sale.namespace {
@@ -1604,7 +1617,21 @@ pub fn quote_lbp_trade(
     if config.emergency.is_frozen {
         return Err(ClientError::NamespaceFrozen);
     }
-    lbp_core::quote_trade(pool_account, request, pricing_time).map_err(ClientError::QuoteLbpTrade)
+    let quote = lbp_core::quote_trade(pool_account, request, pricing_time)
+        .map_err(ClientError::QuoteLbpTrade)?;
+    if !request.is_sell() && pool_account.block_allocation.limit.is_some() {
+        let block = observed_block.ok_or(ClientError::BlockIdRequired)?;
+        if pool_account
+            .block_allocation
+            .remaining(block)
+            .is_some_and(|remaining| quote.amount_out > remaining)
+        {
+            return Err(ClientError::QuoteLbpTrade(
+                lbp_core::Error::BlockAllocationExceeded,
+            ));
+        }
+    }
+    Ok(quote)
 }
 
 /// Quotes an exact-output purchase against a snapshot of the current pool and fee config.

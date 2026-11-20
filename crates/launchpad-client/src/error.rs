@@ -87,6 +87,14 @@ pub enum ClientError {
     QuoteBuyWithCollateral(#[source] pool::SwapError),
     #[error("cannot quote LBP trade: {0}")]
     QuoteLbpTrade(#[source] lbp_core::Error),
+    #[error("a capped LBP buy quote needs the observed block ID")]
+    BlockIdRequired,
+    #[error("reading the canonical clock")]
+    #[strum(serialize = "read_clock")]
+    ReadClock(#[source] Box<dyn Error + Send + Sync>),
+    #[error("decoding the canonical clock")]
+    #[strum(serialize = "decode_clock")]
+    DecodeClock(#[source] std::io::Error),
     #[error("invalid factory curve parameters: {0}")]
     #[strum(serialize = "factory_parameters")]
     FactoryParameters(#[from] factory_core::CreateError),

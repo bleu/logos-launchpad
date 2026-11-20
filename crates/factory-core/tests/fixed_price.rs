@@ -15,6 +15,7 @@ fn id(n: u8) -> AccountId {
 }
 fn inputs() -> FixedPriceInputs {
     FixedPriceInputs {
+        per_block_token_limit: None,
         buy_policy: curve_core::BuyPolicy::Open,
         pause_policy: curve_core::PausePolicy::Disabled,
         ending_policy: factory_core::EndingPolicy::Either,
@@ -397,6 +398,7 @@ fn pool_preparation_uses_saved_terms_and_separate_setup_stage() {
 fn prepared_pool(state: &factory_core::FixedPriceLaunchState, factory: Actor) -> Vec<u8> {
     let inputs = lbp_core::FixedPricePoolInputs {
         protocol_fee_bps: state.protocol_fee_bps,
+        per_block_token_limit: state.per_block_token_limit,
         buy_policy: state.buy_policy.clone(),
         pause_policy: state.pause_policy,
         ending_policy: state.ending_policy,
@@ -1816,6 +1818,7 @@ fn fixed_price_rejects_malformed_saved_terms_and_the_old_record_version() {
     let mut bytes = borsh::to_vec(&state).unwrap();
     let version_offset = borsh::to_vec(&(
         state.protocol_fee_bps,
+        state.per_block_token_limit,
         state.buy_policy,
         state.pause_policy,
         state.ending_policy,
@@ -1829,13 +1832,15 @@ fn fixed_price_rejects_malformed_saved_terms_and_the_old_record_version() {
         + 8;
     assert_eq!(
         &bytes[version_offset..version_offset + 2],
-        &6_u16.to_le_bytes()
+        &7_u16.to_le_bytes()
     );
-    bytes[version_offset..version_offset + 2].copy_from_slice(&2_u16.to_le_bytes());
-    assert_eq!(
-        factory_core::LbpLaunchState::decode(&bytes).err(),
-        Some(Error::InvalidState)
-    );
+    for old_version in [2_u16, 5, 6] {
+        bytes[version_offset..version_offset + 2].copy_from_slice(&old_version.to_le_bytes());
+        assert_eq!(
+            factory_core::LbpLaunchState::decode(&bytes).err(),
+            Some(Error::InvalidState)
+        );
+    }
 }
 
 #[test]

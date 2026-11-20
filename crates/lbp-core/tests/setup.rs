@@ -13,6 +13,7 @@ fn prepare() -> ReceiveInput {
     let factory = AccountId::for_public_pda(&id(7), &PdaSeed::new([3; 32]));
     let inputs = FixedPricePoolInputs {
         protocol_fee_bps: 100,
+        per_block_token_limit: None,
         buy_policy: curve_core::BuyPolicy::Open,
         pause_policy: lbp_core::PausePolicy::Disabled,
         ending_policy: lbp_core::EndingPolicy::Either,
@@ -421,6 +422,16 @@ fn operation(
     config: Vec<u8>,
     balances: [u128; 3],
 ) -> Result<lee_core::program::Response, lbp_core::Error> {
+    operation_in_block(input, state, message, config, balances, 42)
+}
+fn operation_in_block(
+    input: &ReceiveInput,
+    state: &lbp_core::PoolAccount,
+    message: Message,
+    config: Vec<u8>,
+    balances: [u128; 3],
+    block: u64,
+) -> Result<lee_core::program::Response, lbp_core::Error> {
     let mut input = input.clone();
     input.pre_state = borsh::to_vec(state).unwrap().into();
     input.message = borsh::to_vec(&message).unwrap();
@@ -449,6 +460,27 @@ fn operation(
     for bytes in values {
         let source = response.sync_messages.last().unwrap().to;
         input = reply(&input, &response, source, bytes);
+        response = handle(&input)?;
+    }
+    if response
+        .sync_messages
+        .last()
+        .is_some_and(|call| call.to == clock_core::clock_actor())
+    {
+        assert_eq!(
+            borsh::from_slice::<clock_core::Message>(
+                &response.sync_messages.last().unwrap().message
+            )
+            .unwrap(),
+            clock_core::Message::ReadBlockId { granularity: 1 }
+        );
+        input = ReceiveInput {
+            receiver: input.receiver,
+            from: Some(clock_core::clock_actor()),
+            is_authorized: false,
+            pre_state: response.post_state.unwrap(),
+            message: borsh::to_vec(&clock_core::Reply::BlockId(block)).unwrap(),
+        };
         response = handle(&input)?;
     }
     Ok(response)
@@ -3585,4 +3617,78 @@ fn namespace_updates_cannot_reprice_saved_buy_or_sell_fees() {
             Some(lbp_core::Error::Frozen)
         );
     }
+}
+
+#[test]
+fn block_ceiling_aggregates_both_buy_forms_and_sells_do_not_refill_it() {
+    let (input, mut state) = funded();
+    state.block_allocation = lbp_core::BlockAllocation::new(Some(6)).unwrap();
+    state.trade_mode = lbp_core::TradeMode::BuyAndSell;
+    let exact_out = |amount_out| Message::BuyExactOutput {
+        membership: None,
+        amount_out,
+        max_amount_in: 100,
+        now: 100,
+    };
+    let first = operation_in_block(
+        &input,
+        &state,
+        exact_out(3),
+        config(0, id(43), false),
+        [100, 800, 100],
+        42,
+    )
+    .unwrap();
+    assert_eq!(first.validity.blocks.start(), Some(43));
+    assert_eq!(first.validity.blocks.end(), Some(44));
+    let state = state_of(&first);
+    let second = operation_in_block(
+        &input,
+        &state,
+        exact_in(6),
+        config(0, id(43), false),
+        [100, 797, 100],
+        42,
+    )
+    .unwrap();
+    let state = state_of(&second);
+    assert_eq!(state.block_allocation.tokens_sold, 6);
+    assert_eq!(
+        operation_in_block(
+            &input,
+            &state,
+            exact_out(1),
+            config(0, id(43), false),
+            [100, 794, 100],
+            42
+        )
+        .err(),
+        Some(lbp_core::Error::BlockAllocationExceeded)
+    );
+    let sell = operation_in_block(
+        &input,
+        &state,
+        Message::SellExactInput {
+            amount_in: 2,
+            min_amount_out: 0,
+            now: 100,
+        },
+        config(0, id(43), false),
+        [100, 794, 100],
+        42,
+    )
+    .unwrap();
+    let state = state_of(&sell);
+    assert_eq!(state.block_allocation.tokens_sold, 6);
+    let next = operation_in_block(
+        &input,
+        &state,
+        exact_out(6),
+        config(0, id(43), false),
+        [100, state.remaining_inventory, 100],
+        43,
+    )
+    .unwrap();
+    assert_eq!(state_of(&next).block_allocation.tokens_sold, 6);
+    assert_eq!(state_of(&next).block_allocation.observed_block, Some(43));
 }

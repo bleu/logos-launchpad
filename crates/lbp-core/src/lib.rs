@@ -7,7 +7,9 @@ pub use sale_policy::{
     SettlementProgress, SettlementRoute, TradeControl, TradeMode,
 };
 
+mod block_allocation;
 mod events;
+pub use block_allocation::BlockAllocation;
 #[path = "settlement.rs"]
 mod lbp_settlement;
 mod pricing;
@@ -55,6 +57,7 @@ pub enum CreatorAllocationRelease {
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize, Serialize, Deserialize)]
 pub struct FixedPricePoolInputs {
     pub protocol_fee_bps: u16,
+    pub per_block_token_limit: Option<u128>,
     pub buy_policy: BuyPolicy,
     pub pause_policy: PausePolicy,
     pub ending_policy: EndingPolicy,
@@ -87,6 +90,7 @@ pub struct FixedPricePoolInputs {
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize, Serialize, Deserialize)]
 pub struct WeightedPoolInputs {
     pub protocol_fee_bps: u16,
+    pub per_block_token_limit: Option<u128>,
     pub buy_policy: BuyPolicy,
     pub pause_policy: PausePolicy,
     pub ending_policy: EndingPolicy,
@@ -220,6 +224,7 @@ pub enum PoolMode {
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PoolAccount {
     pub protocol_fee_bps: u16,
+    pub block_allocation: BlockAllocation,
     pub buy_policy: BuyPolicy,
     pub trade_control: TradeControl,
     pub ending_policy: EndingPolicy,
@@ -280,6 +285,7 @@ pub enum Error {
     Underfunded,
     PauseDisabled,
     TradeDirectionUnsupported,
+    BlockAllocationExceeded,
 }
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -312,6 +318,7 @@ impl PoolAccount {
     fn validate_policies(&self) -> Result<(), Error> {
         validate_sale_fees(self.trade_mode, self.protocol_fee_bps, self.sell_fee_bps)
             .map_err(|_| Error::InvalidState)?;
+        self.block_allocation.validate()?;
         self.graduation_policy
             .validate(self.graduation_adapter.is_some())
             .map_err(|_| Error::InvalidState)?;
@@ -726,6 +733,7 @@ pub fn handle(input: &ReceiveInput) -> Result<Response, Error> {
                 .map_err(|_| Error::InvalidTerms)?;
             let state = PoolAccount {
                 protocol_fee_bps: inputs.protocol_fee_bps,
+                block_allocation: BlockAllocation::new(inputs.per_block_token_limit)?,
                 buy_policy: inputs.buy_policy,
                 trade_control: TradeControl::new(inputs.pause_policy),
                 ending_policy: inputs.ending_policy,
@@ -860,6 +868,7 @@ pub fn handle(input: &ReceiveInput) -> Result<Response, Error> {
                 .map_err(|_| Error::InvalidTerms)?;
             let state = PoolAccount {
                 protocol_fee_bps: inputs.protocol_fee_bps,
+                block_allocation: BlockAllocation::new(inputs.per_block_token_limit)?,
                 buy_policy: inputs.buy_policy,
                 trade_control: TradeControl::new(inputs.pause_policy),
                 ending_policy: inputs.ending_policy,

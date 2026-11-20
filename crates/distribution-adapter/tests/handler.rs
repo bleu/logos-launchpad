@@ -87,6 +87,7 @@ fn factory_state(kind: GraduationIntentKind) -> Vec<u8> {
         },
         GraduationIntentKind::FixedPrice => Message::CreateFixedPriceLbp {
             inputs: FixedPriceInputs {
+                per_block_token_limit: None,
                 buy_policy: curve_core::BuyPolicy::Open,
                 pause_policy: PausePolicy::Disabled,
                 ending_policy: EndingPolicy::Scheduled,
@@ -117,6 +118,7 @@ fn factory_state(kind: GraduationIntentKind) -> Vec<u8> {
         },
         GraduationIntentKind::Weighted => Message::CreateWeightedLbp {
             inputs: WeightedInputs {
+                per_block_token_limit: None,
                 buy_policy: curve_core::BuyPolicy::Open,
                 pause_policy: PausePolicy::Disabled,
                 ending_policy: EndingPolicy::Scheduled,
