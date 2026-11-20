@@ -2420,7 +2420,7 @@ fn weighted_factory_executes_all_stages_and_rolls_back_failed_funding() {
         let execute = |state: &mut V03State, instruction| execute_at(state, instruction, 100_000);
         let creation = factory_core::Message::CreateWeightedLbp {
             inputs: WeightedInputs {
-                per_block_token_limit: None,
+                per_block_token_limit: Some(800),
                 buy_policy: policy.clone(),
                 pause_policy: curve_core::PausePolicy::AuthorityControlled,
                 ending_policy,
@@ -2469,6 +2469,7 @@ fn weighted_factory_executes_all_stages_and_rolls_back_failed_funding() {
         let mut at_start = clock_state(state.clone(), 150_000);
         execute_at(&mut at_start, creation.clone(), 150_000).unwrap();
         execute(&mut state, creation).unwrap();
+        state = fixed_config(state, 9999, TREASURY, false);
         assert_eq!(balance(&state, mint, launch), 1000);
         for stage in [LbpCreationStage::Minted, LbpCreationStage::Allocated] {
             assert_eq!(
@@ -2596,6 +2597,8 @@ fn weighted_factory_executes_all_stages_and_rolls_back_failed_funding() {
         assert_eq!(launch_state.creation_stage, LbpCreationStage::Complete);
         assert_eq!(launch_state.buy_policy, policy);
         assert_eq!(launch_state.ending_policy, ending_policy);
+        assert_eq!(launch_state.protocol_fee_bps, 100);
+        assert_eq!(launch_state.per_block_token_limit, Some(800));
         assert_eq!(balance(&state, pool, launch), 800);
         assert_eq!(balance(&state, pool, COLLATERAL), 141);
         assert_eq!(balance(&state, creator, COLLATERAL), 0);
@@ -2622,6 +2625,8 @@ fn weighted_factory_executes_all_stages_and_rolls_back_failed_funding() {
         assert!(sale.funded);
         assert_eq!(sale.buy_policy, policy);
         assert_eq!(sale.ending_policy, ending_policy);
+        assert_eq!(sale.protocol_fee_bps, 100);
+        assert_eq!(sale.block_allocation.limit, Some(800));
         assert!(matches!(
             sale.mode,
             lbp_core::PoolMode::Weighted {
@@ -2652,7 +2657,7 @@ fn weighted_factory_executes_all_stages_and_rolls_back_failed_funding() {
         let (diff, charge) = lee::ValidatedStateDiff::from_public_transaction_with_cycle_budget(
             &transaction,
             &state,
-            1,
+            2,
             150_000,
             10_000_000,
         )
@@ -2680,7 +2685,7 @@ fn weighted_factory_executes_all_stages_and_rolls_back_failed_funding() {
         let (diff, charge) = lee::ValidatedStateDiff::from_public_transaction_with_cycle_budget(
             &transaction,
             &state,
-            1,
+            2,
             150_000,
             10_000_000,
         )
@@ -9425,6 +9430,8 @@ fn block_ceiling_signed_buys_share_allowance_and_failed_transfers_roll_back() {
             Actor::new(pool, LBP),
             borsh::to_vec(&sale).unwrap(),
         )]);
+        state = fixed_config(state, 9999, TREASURY, false);
+        let saved_rate = sale.protocol_fee_bps;
         let message = if weighted {
             lbp_core::Message::BuyWeightedExactOutput {
                 membership: None,
@@ -9456,7 +9463,10 @@ fn block_ceiling_signed_buys_share_allowance_and_failed_transfers_roll_back() {
             state
                 .transition_from_public_transaction(&transaction, 2, 100_000)
                 .unwrap();
-            assert_eq!(fixed_pool(&state, pool).block_allocation.tokens_sold, sold);
+            let saved = fixed_pool(&state, pool);
+            assert_eq!(saved.block_allocation.tokens_sold, sold);
+            assert_eq!(saved.protocol_fee_bps, saved_rate);
+            assert!(saved.accrued_fees > 0);
         }
         let excess = if weighted {
             lbp_core::Message::BuyWeightedExactInput {

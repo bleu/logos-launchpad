@@ -1459,7 +1459,7 @@ fn fixed_pool_state_tuple_places_policies_after_trade_control() {
     let account = AccountId::new([5; 32]);
     let mut bytes = borsh::to_vec(&(
         1000u16,
-        (None::<u128>, None::<u64>, 0u128),
+        (Some(17u128), Some(8u64), 5u128),
         curve_core::BuyPolicy::Open,
         curve_core::TradeControl::Unrestricted,
         lbp_core::EndingPolicy::Either,
@@ -1488,6 +1488,10 @@ fn fixed_pool_state_tuple_places_policies_after_trade_control() {
     bytes.push(0); // No pending operation.
     let pool = lbp_core::PoolAccount::decode(&bytes).unwrap();
     assert!(!pool.closure_observed);
+    assert_eq!(pool.protocol_fee_bps, 1000);
+    assert_eq!(pool.block_allocation.limit, Some(17));
+    assert_eq!(pool.block_allocation.observed_block, Some(8));
+    assert_eq!(pool.block_allocation.tokens_sold, 5);
     assert_eq!(pool.ending_policy, lbp_core::EndingPolicy::Either);
     assert_eq!(pool.remaining_inventory, 800);
     assert_eq!(pool.graduation_adapter, None);
@@ -1495,7 +1499,7 @@ fn fixed_pool_state_tuple_places_policies_after_trade_control() {
         pool.settlement_progress,
         lbp_core::SettlementProgress::Unselected
     );
-    assert_eq!(&bytes[20..23], &[0, 0, 3]);
+    assert_eq!(&bytes[44..47], &[0, 0, 3]);
     assert_eq!(borsh::to_vec(&pool).unwrap(), bytes);
 }
 

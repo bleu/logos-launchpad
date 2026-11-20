@@ -3645,7 +3645,7 @@ fn block_ceiling_aggregates_both_buy_forms_and_sells_do_not_refill_it() {
     let second = operation_in_block(
         &input,
         &state,
-        exact_in(5),
+        exact_in(6),
         config(0, id(43), false),
         [100, 797, 100],
         42,
@@ -3669,7 +3669,7 @@ fn block_ceiling_aggregates_both_buy_forms_and_sells_do_not_refill_it() {
         &input,
         &state,
         Message::SellExactInput {
-            amount_in: 1,
+            amount_in: 2,
             min_amount_out: 0,
             now: 100,
         },

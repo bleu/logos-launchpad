@@ -1,6 +1,6 @@
 # ADR 0021: Sale types, trade modes, allowlists and open limits
 
-Status: Accepted internally; public admission implemented; wallet/private execution pending; optional per-block ceiling implemented; private execution pending.
+Status: Accepted internally; public admission and optional per-block ceilings implemented; wallet/private execution pending; allowlist departures: To be reviewed by Logos team.
 
 ## Sale modes
 

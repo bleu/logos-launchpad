@@ -1834,11 +1834,13 @@ fn fixed_price_rejects_malformed_saved_terms_and_the_old_record_version() {
         &bytes[version_offset..version_offset + 2],
         &7_u16.to_le_bytes()
     );
-    bytes[version_offset..version_offset + 2].copy_from_slice(&2_u16.to_le_bytes());
-    assert_eq!(
-        factory_core::LbpLaunchState::decode(&bytes).err(),
-        Some(Error::InvalidState)
-    );
+    for old_version in [2_u16, 5, 6] {
+        bytes[version_offset..version_offset + 2].copy_from_slice(&old_version.to_le_bytes());
+        assert_eq!(
+            factory_core::LbpLaunchState::decode(&bytes).err(),
+            Some(Error::InvalidState)
+        );
+    }
 }
 
 #[test]

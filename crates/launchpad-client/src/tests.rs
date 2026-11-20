@@ -2306,7 +2306,8 @@ fn capped_lbp_buy_quotes_check_the_observed_block_allowance() {
         min_collateral_out: 1,
     };
     for weighted in [false, true] {
-        let (mut pool, config) = lbp_pool_snapshot(weighted);
+        let (mut pool, mut config) = lbp_pool_snapshot(weighted);
+        config.protocol_fee_bps = 9999;
         pool.block_allocation = lbp_core::BlockAllocation {
             limit: Some(8),
             observed_block: Some(7),
@@ -2324,7 +2325,10 @@ fn capped_lbp_buy_quotes_check_the_observed_block_allowance() {
                 lbp_core::Error::BlockAllocationExceeded
             ))
         ));
-        assert_eq!(quote(buy, Some(8)).unwrap().amount_out, 5);
+        assert_eq!(
+            quote(buy, Some(8)).unwrap(),
+            lbp_core::quote_trade(&pool, buy, 50).unwrap()
+        );
         // Sells do not use the allowance or the block ID.
         assert!(quote(sell, None).is_ok());
         pool.block_allocation.tokens_sold = 3;

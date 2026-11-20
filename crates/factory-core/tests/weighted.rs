@@ -1598,6 +1598,12 @@ fn block_ceiling_is_saved_at_creation_and_forwarded_to_pool() {
             .per_block_token_limit,
         Some(123)
     );
+    assert_eq!(
+        LbpLaunchState::decode(minted.post_state.as_ref().unwrap())
+            .unwrap()
+            .protocol_fee_bps,
+        100
+    );
     let allocated = advance(&input, &minted, vec![]).unwrap();
     let prepared = advance(&input, &allocated, vec![]).unwrap();
     let call = prepared
@@ -1606,7 +1612,7 @@ fn block_ceiling_is_saved_at_creation_and_forwarded_to_pool() {
         .find(|call| call.to.program_account_id == id(8))
         .unwrap();
     assert!(
-        matches!(borsh::from_slice::<lbp_core::Message>(&call.message).unwrap(), lbp_core::Message::PrepareWeighted { inputs } if inputs.per_block_token_limit == Some(123))
+        matches!(borsh::from_slice::<lbp_core::Message>(&call.message).unwrap(), lbp_core::Message::PrepareWeighted { inputs } if inputs.per_block_token_limit == Some(123) && inputs.protocol_fee_bps == 100)
     );
     let mut invalid = inputs();
     invalid.per_block_token_limit = Some(0);
