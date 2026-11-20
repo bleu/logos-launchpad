@@ -38,7 +38,7 @@ fn creation() -> ReceiveInput {
             creator_allocation: 100,
             virtual_token_reserve: 1000,
             virtual_collateral_reserve: 100,
-            end_timestamp: Some(200),
+            end_timestamp: Some(400),
             curve_program_id: id(6),
             collateral_definition_id: id(41),
             creator: id(42),
@@ -496,7 +496,7 @@ fn settlement_as(
             creator_hint: Some(creator),
         }
     } else {
-        Message::WithdrawFactoryProceeds { creator, now: 200 }
+        Message::WithdrawFactoryProceeds { creator, now: 400 }
     })
     .unwrap();
     let mut response = handle(&input).unwrap();
@@ -524,7 +524,7 @@ fn settlement_as(
 fn settlement_and_graduation_use_expiry_only_for_a_saved_open_pool() {
     for hook in [false, true] {
         for (lifecycle, expected) in [
-            (pool::PoolLifecycle::Open, Some(200_000)),
+            (pool::PoolLifecycle::Open, Some(400_000)),
             (pool::PoolLifecycle::Closed, None),
         ] {
             let (input, active) = active_for_route(hook);
@@ -555,7 +555,7 @@ fn expiry_starts_manual_settlement_with_canonical_collateral_custody() {
     assert!(
         matches!(&launch_events(&response)[..], [SaleEventV1 { kind: SaleEventKindV1::Settlement { step: SettlementStepV1::Prepared, route: None, effects }, .. }] if effects.is_empty())
     );
-    assert_eq!(response.validity.timestamps.start(), Some(200_000));
+    assert_eq!(response.validity.timestamps.start(), Some(400_000));
     assert_eq!(response.validity.timestamps.end(), None);
     assert_eq!(state.pool_id, compute_pool_address(&state, input.receiver));
 }
@@ -618,7 +618,7 @@ fn reserve_withdrawal_records_unsold_inventory_and_recorded_collateral() {
         .unwrap();
     assert_eq!(
         borsh::from_slice::<curve_core::Message>(&call.message).unwrap(),
-        curve_core::Message::WithdrawReserves { now: 200 }
+        curve_core::Message::WithdrawReserves { now: 400 }
     );
     assert_eq!(state.creator_allocation, 100);
     assert_eq!(
@@ -652,7 +652,7 @@ fn manual_settlement_pays_both_assets_without_burning_or_paying_surplus() {
     input.from = None;
     input.message = borsh::to_vec(&Message::WithdrawFactoryProceeds {
         creator: id(42),
-        now: 200,
+        now: 400,
     })
     .unwrap();
     assert_eq!(handle(&input).err(), Some(Error::AlreadySettled));
@@ -660,7 +660,7 @@ fn manual_settlement_pays_both_assets_without_burning_or_paying_surplus() {
 #[test]
 fn allocation_uses_saved_closure_instead_of_a_future_client_time() {
     for (lifecycle, expected) in [
-        (pool::PoolLifecycle::Open, Some(200_000)),
+        (pool::PoolLifecycle::Open, Some(400_000)),
         (pool::PoolLifecycle::Closed, None),
     ] {
         let (mut input, active) = active();
@@ -695,7 +695,7 @@ fn creator_allocation_follows_the_role_to_its_current_holder_after_closure() {
     input.pre_state = active.post_state.unwrap();
     input.message = borsh::to_vec(&Message::ClaimCreatorAllocation {
         creator: id(99),
-        now: 200,
+        now: 400,
     })
     .unwrap();
     let response = handle(&input).unwrap();
@@ -733,7 +733,7 @@ fn creator_allocation_follows_the_role_to_its_current_holder_after_closure() {
     input.pre_state = response.post_state.unwrap();
     input.message = borsh::to_vec(&Message::ClaimCreatorAllocation {
         creator: id(99),
-        now: 200,
+        now: 400,
     })
     .unwrap();
     assert!(matches!(handle(&input), Err(Error::AlreadyClaimed)));
@@ -795,7 +795,7 @@ fn hook_preparation_saves_both_liabilities_and_forbids_manual_override() {
     input.from = None;
     input.message = borsh::to_vec(&Message::WithdrawFactoryProceeds {
         creator: id(42),
-        now: 200,
+        now: 400,
     })
     .unwrap();
     assert_eq!(handle(&input).err(), Some(Error::InvalidTerms));
@@ -976,7 +976,7 @@ fn traded_pool_settlement_checks_immutable_k_instead_of_initial_virtual_reserves
     input.pre_state = active.post_state.unwrap();
     input.message = borsh::to_vec(&Message::ClaimCreatorAllocation {
         creator: id(42),
-        now: 200,
+        now: 400,
     })
     .unwrap();
     let response = handle(&input).unwrap();
@@ -1070,7 +1070,7 @@ fn expiry_is_proved_separately_from_the_supplied_zero_lower_bound() {
         input = reply(&input, &response, bytes);
         response = handle(&input).unwrap()
     }
-    assert_eq!(response.validity.timestamps.start(), Some(200_000));
+    assert_eq!(response.validity.timestamps.start(), Some(400_000));
     assert_eq!(response.validity.timestamps.end(), None);
 }
 
@@ -1088,7 +1088,7 @@ fn curve_creation_reads_namespace_before_bootstrapping_its_creator_role() {
 fn curve_creation_bootstraps_a_transfer_only_creator_role_with_the_mint() {
     let (_, response) = minted();
     assert_eq!(response.validity.timestamps.start(), None);
-    assert_eq!(response.validity.timestamps.end(), Some(140_001));
+    assert_eq!(response.validity.timestamps.end(), Some(100_001));
     let call = response
         .sync_messages
         .iter()
@@ -1282,7 +1282,7 @@ fn creator_transfer_requires_consent_and_moves_all_remaining_factory_rights() {
             SettlementStage::Unstarted,
             Message::ClaimCreatorAllocation {
                 creator: id(99),
-                now: 200,
+                now: 400,
             },
         ),
         (
@@ -1293,7 +1293,7 @@ fn creator_transfer_requires_consent_and_moves_all_remaining_factory_rights() {
             },
             Message::WithdrawFactoryProceeds {
                 creator: id(99),
-                now: 200,
+                now: 400,
             },
         ),
     ] {
@@ -1345,7 +1345,7 @@ fn creator_transfer_requires_consent_and_moves_all_remaining_factory_rights() {
                 current.virtual_collateral_reserve,
                 current.end_timestamp
             ),
-            (1000, 100, Some(200))
+            (1000, 100, Some(400))
         );
         assert_eq!(
             (
@@ -1469,11 +1469,11 @@ fn creator_callbacks_reject_wrong_program_role_holder_and_legacy_nft_proofs() {
         },
         Message::ClaimCreatorAllocation {
             creator: id(42),
-            now: 200,
+            now: 400,
         },
         Message::WithdrawFactoryProceeds {
             creator: id(42),
-            now: 200,
+            now: 400,
         },
     ] {
         let mut request = input.clone();
@@ -1693,7 +1693,7 @@ fn curve_creation_checks_the_ending_matrix_before_reads() {
         EndingPolicy::Depletion,
         EndingPolicy::Either,
     ] {
-        for end in [None, Some(200)] {
+        for end in [None, Some(400)] {
             let mut input = creation();
             let mut command: Message = borsh::from_slice(&input.message).unwrap();
             if let Message::CreateFactoryPool {
@@ -1829,7 +1829,7 @@ fn selected_ending_controls_allocation_proceeds_and_hook_payouts() {
                 state.end_timestamp = if ending == EndingPolicy::Depletion {
                     None
                 } else {
-                    Some(200)
+                    Some(400)
                 };
                 let mut saved = pool_state(&state, input.receiver, true);
                 saved.pool.real_reserve0 = remaining;
@@ -1882,11 +1882,11 @@ fn selected_ending_controls_allocation_proceeds_and_hook_payouts() {
                 let early = remaining == 0 && ending != EndingPolicy::Scheduled;
                 assert_eq!(
                     response.validity.timestamps.start(),
-                    if early { None } else { Some(200_000) }
+                    if early { None } else { Some(400_000) }
                 );
                 assert_eq!(response.validity.timestamps.end(), None);
-                assert_eq!(response.validity.timestamps.is_valid_for(199_999), early);
-                assert!(response.validity.timestamps.is_valid_for(200_000));
+                assert_eq!(response.validity.timestamps.is_valid_for(399_999), early);
+                assert!(response.validity.timestamps.is_valid_for(400_000));
                 let after = FactoryState::decode(response.post_state.as_ref().unwrap()).unwrap();
                 assert_eq!(after.creator_allocation, 100);
                 assert_eq!(after.sale_reserve, 800);
@@ -1907,7 +1907,7 @@ fn curve_setup_keeps_each_selected_ending_and_its_depletion_side() {
         let end = if ending == EndingPolicy::Depletion {
             None
         } else {
-            Some(200)
+            Some(400)
         };
         if let Message::CreateFactoryPool {
             ending_policy,
@@ -2046,7 +2046,7 @@ fn configured_adapter_blocks_manual_settlement_at_every_stage_even_with_zero_sha
         input.from = None;
         input.message = borsh::to_vec(&Message::WithdrawFactoryProceeds {
             creator: id(42),
-            now: 200,
+            now: 400,
         })
         .unwrap();
         assert_eq!(
@@ -2124,7 +2124,7 @@ fn curve_created_event_names_the_launch_and_immutable_terms_once() {
                 },
                 collateral_seed: 0,
                 start_timestamp: None,
-                end_timestamp: Some(200),
+                end_timestamp: Some(400),
                 policies: EventPoliciesV1 {
                     ending: EndingPolicy::Either,
                     pause: PausePolicy::Disabled,
@@ -2189,7 +2189,7 @@ fn curve_allocation_read_emits_only_actual_allocation_payment() {
                 }]
             ));
         }
-        assert_eq!(response.validity.timestamps.start(), Some(200_000));
+        assert_eq!(response.validity.timestamps.start(), Some(400_000));
     }
 }
 
@@ -2278,11 +2278,11 @@ fn retained_curve_invariant_binds_original_product_and_allows_checked_growth() {
         for command in [
             Message::ClaimCreatorAllocation {
                 creator: id(42),
-                now: 200,
+                now: 400,
             },
             Message::WithdrawFactoryProceeds {
                 creator: id(42),
-                now: 200,
+                now: 400,
             },
             Message::ExecuteGraduationHook {
                 creator_hint: Some(id(42)),
@@ -2583,7 +2583,7 @@ fn curve_zero_balances_finalize_once_on_the_configured_route() {
         } else {
             Message::WithdrawFactoryProceeds {
                 creator: id(42),
-                now: 200,
+                now: 400,
             }
         })
         .unwrap();
@@ -2761,10 +2761,10 @@ fn graduation_reserve_is_in_initial_supply_but_not_curve_pricing() {
 #[test]
 fn configured_curve_expiry_requires_minimum_duration_and_inclusion_bound() {
     for (now, accepted) in [
-        (139, true),
-        (140, true),
-        (141, false),
-        (200, false),
+        (99, true),
+        (100, true),
+        (101, false),
+        (400, false),
         (u64::MAX, false),
     ] {
         let mut input = creation();
@@ -2776,14 +2776,14 @@ fn configured_curve_expiry_requires_minimum_duration_and_inclusion_bound() {
         let result = handle(&input);
         if accepted {
             let response = result.unwrap();
-            assert_eq!(response.validity.timestamps.end(), Some(140_001));
+            assert_eq!(response.validity.timestamps.end(), Some(100_001));
         } else {
             assert_eq!(result.err(), Some(Error::InvalidTerms));
         }
     }
     assert!(validate_curve_duration(None, u64::MAX).is_ok());
-    assert!(validate_curve_duration(Some(59), 0).is_err());
-    assert!(validate_curve_duration(Some(60), 0).is_ok());
+    assert!(validate_curve_duration(Some(299), 0).is_err());
+    assert!(validate_curve_duration(Some(300), 0).is_ok());
 }
 
 #[test]
@@ -2793,12 +2793,12 @@ fn every_curve_setup_reply_keeps_the_minimum_duration_window() {
     for bytes in [config(), definition()] {
         input = reply(&input, &response, bytes);
         response = handle(&input).unwrap();
-        assert_eq!(response.validity.timestamps.end(), Some(140_001));
+        assert_eq!(response.validity.timestamps.end(), Some(100_001));
     }
     let (input, allocated) = continued(&input, &response, 900, 0, 0);
-    assert_eq!(allocated.validity.timestamps.end(), Some(140_001));
+    assert_eq!(allocated.validity.timestamps.end(), Some(100_001));
     let (input, prepared) = continued(&input, &allocated, 0, 800, 100);
-    assert_eq!(prepared.validity.timestamps.end(), Some(140_001));
+    assert_eq!(prepared.validity.timestamps.end(), Some(100_001));
     let (_, activated) = continued(&input, &prepared, 0, 800, 100);
-    assert_eq!(activated.validity.timestamps.end(), Some(140_001));
+    assert_eq!(activated.validity.timestamps.end(), Some(100_001));
 }

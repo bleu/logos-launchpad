@@ -1626,7 +1626,7 @@ fn curve_resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
     })())
 }
 /// Operational floor for configured curve expiry. Private-path fairness still needs measurements.
-pub const MIN_CURVE_SALE_DURATION_SECONDS: u64 = 60;
+pub const MIN_CURVE_SALE_DURATION_SECONDS: u64 = 300;
 
 pub fn validate_curve_duration(end: Option<u64>, now: u64) -> Result<(), Error> {
     if end.is_some_and(|end| {

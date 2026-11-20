@@ -1430,7 +1430,7 @@ fn curve_factory_locks_allowlist_before_setup_and_buys_with_the_same_policy() {
                 end_timestamp: if ending_policy == curve_core::EndingPolicy::Depletion {
                     None
                 } else {
-                    Some(200)
+                    Some(400)
                 },
                 curve_program_id: CURVE,
                 collateral_definition_id: COLLATERAL,
@@ -5751,7 +5751,7 @@ fn curve_factory_env_with_reserve(
             curve_program_id: CURVE,
             collateral_definition_id: COLLATERAL,
             creator,
-            now: 1,
+            now: 0,
         },
     );
     for _ in 0..3 {
@@ -5764,7 +5764,7 @@ fn curve_factory_env_with_reserve(
         assert_eq!(stored.sell_fee_bps, 0u16);
         execute(
             &mut state,
-            factory_core::Message::ContinueCreation { creator, now: 1 },
+            factory_core::Message::ContinueCreation { creator, now: 0 },
         );
     }
     actors.extend([
@@ -9492,7 +9492,7 @@ fn curve_minimum_duration_rejects_late_creation_and_activation_atomically() {
         creator_allocation: 0,
         virtual_token_reserve: 1000,
         virtual_collateral_reserve: 100,
-        end_timestamp: Some(200),
+        end_timestamp: Some(500),
         curve_program_id: CURVE,
         collateral_definition_id: COLLATERAL,
         creator,
@@ -9509,13 +9509,13 @@ fn curve_minimum_duration_rejects_late_creation_and_activation_atomically() {
             launch,
             pool,
             create.clone(),
-            140_001
+            200_001
         )
         .is_err()
     );
     assert!(state == before);
     factory_execute_at(
-        &mut state, factory, &actors, &key, salt, launch, pool, create, 140_000,
+        &mut state, factory, &actors, &key, salt, launch, pool, create, 200_000,
     )
     .unwrap();
     let continue_creation = factory_core::Message::ContinueCreation { creator, now: 100 };
@@ -9529,7 +9529,7 @@ fn curve_minimum_duration_rejects_late_creation_and_activation_atomically() {
             launch,
             pool,
             continue_creation.clone(),
-            140_000,
+            200_000,
         )
         .unwrap();
     }
@@ -9544,13 +9544,13 @@ fn curve_minimum_duration_rejects_late_creation_and_activation_atomically() {
             launch,
             pool,
             continue_creation.clone(),
-            140_001
+            200_001
         )
         .is_err()
     );
     assert!(state == before);
     let mut expired = state.clone();
-    let recover = factory_core::Message::ContinueCreation { creator, now: 200 };
+    let recover = factory_core::Message::ContinueCreation { creator, now: 500 };
     let saved = expired.clone();
     assert!(
         factory_execute_at(
@@ -9562,7 +9562,7 @@ fn curve_minimum_duration_rejects_late_creation_and_activation_atomically() {
             launch,
             pool,
             recover.clone(),
-            199_999
+            499_999
         )
         .is_err()
     );
@@ -9576,7 +9576,7 @@ fn curve_minimum_duration_rejects_late_creation_and_activation_atomically() {
         launch,
         pool,
         recover,
-        200_000,
+        500_000,
     )
     .unwrap();
     assert_eq!(
@@ -9595,8 +9595,8 @@ fn curve_minimum_duration_rejects_late_creation_and_activation_atomically() {
             salt,
             launch,
             pool,
-            factory_core::Message::WithdrawFactoryProceeds { creator, now: 200 },
-            200_000,
+            factory_core::Message::WithdrawFactoryProceeds { creator, now: 500 },
+            500_000,
         )
         .unwrap();
     }
@@ -9610,7 +9610,7 @@ fn curve_minimum_duration_rejects_late_creation_and_activation_atomically() {
         launch,
         pool,
         continue_creation,
-        140_000,
+        200_000,
     )
     .unwrap();
     assert!(
