@@ -27,3 +27,5 @@ The workspace guide is the current evidence record. Host tests alone do not prov
 See [ADR 0036](../adr/0036-graduation-adapter-delivery.md) for the plain-transfer distribution adapter and later deposits.
 
 Configured expiry requires at least 5 minutes remaining through factory setup and activation. Inclusion bounds enforce this rule. An existing setup can finish after expiry only into a closed pool for asset recovery. Pause rights can shorten actual trading time, because pause does not extend expiry. This operational minimum is not a verified private-path latency guarantee. See [ending policy](../adr/0025-sale-closing.md).
+
+Factory curve sales reject nonzero retained sell fees. Their pricing invariant stays fixed at creation. Direct curve pools are internal primitives and do not define the factory sale product.

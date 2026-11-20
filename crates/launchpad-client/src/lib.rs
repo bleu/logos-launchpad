@@ -505,8 +505,11 @@ fn build_curve_sale_invocation(
     } else {
         factory_core::validate_curve_duration(request.end_timestamp, request.now)?;
     }
-    curve_core::SellFeeRate::new(request.sell_fee_bps)
-        .map_err(|_| ClientError::FactoryPolicy(factory_core::Error::InvalidTerms))?;
+    if request.sell_fee_bps != 0 {
+        return Err(ClientError::FactoryPolicy(
+            factory_core::Error::InvalidTerms,
+        ));
+    }
     request
         .graduation_policy
         .validate(request.graduation_hook.is_some())
@@ -1400,8 +1403,9 @@ pub(crate) fn validate_factory_pool(
     Ok(())
 }
 pub(crate) fn validate_factory_state(sale: FactorySale, state: &FactoryState) -> Result<()> {
-    curve_core::SellFeeRate::new(state.sell_fee_bps)
-        .map_err(|_| ClientError::FactorySaleMismatch)?;
+    if state.sell_fee_bps != 0 {
+        return Err(ClientError::FactorySaleMismatch);
+    }
     factory_core::validate_curve_policies(state.ending_policy, state.end_timestamp)
         .map_err(|_| ClientError::FactorySaleMismatch)?;
     let a = factory_pool_addresses(sale);
@@ -1592,13 +1596,26 @@ pub async fn collect_pool_fees(
     Ok(hashes)
 }
 
-/// Quotes against pool and live namespace snapshots. Weighted pricing time is not inclusion proof.
+/// Reads the block ID that a transaction in the next block observes from the canonical clock.
+pub async fn load_clock_block_id(wallet: &LaunchpadWallet) -> Result<u64> {
+    let data = read_actor(wallet, clock_actor())
+        .await
+        .map_err(ClientError::ReadClock)?;
+    borsh::from_slice::<clock_core::ClockAccountData>(&data)
+        .map(|clock| clock.block_id)
+        .map_err(ClientError::DecodeClock)
+}
+
+/// Quotes use the saved sale rate and live namespace freeze state. Weighted pricing time is not inclusion proof.
+/// Capped buys need `observed_block` from [`load_clock_block_id`]. The allowance check holds only
+/// for inclusion in the next block and does not reserve allocation.
 pub fn quote_lbp_trade(
     sale: LbpSale,
     pool_account: &lbp_core::PoolAccount,
     config: &Config,
     request: LbpQuoteRequest,
     pricing_time: u64,
+    observed_block: Option<u64>,
 ) -> Result<LbpTradeQuote> {
     let addresses = lbp_addresses(sale);
     if config.namespace != sale.namespace {
@@ -1618,8 +1635,21 @@ pub fn quote_lbp_trade(
     if config.emergency.is_frozen {
         return Err(ClientError::NamespaceFrozen);
     }
-    lbp_core::quote_trade(pool_account, request, config.protocol_fee_bps, pricing_time)
-        .map_err(ClientError::QuoteLbpTrade)
+    let quote = lbp_core::quote_trade(pool_account, request, pricing_time)
+        .map_err(ClientError::QuoteLbpTrade)?;
+    if !request.is_sell() && pool_account.block_allocation.limit.is_some() {
+        let block = observed_block.ok_or(ClientError::BlockIdRequired)?;
+        if pool_account
+            .block_allocation
+            .remaining(block)
+            .is_some_and(|remaining| quote.amount_out > remaining)
+        {
+            return Err(ClientError::QuoteLbpTrade(
+                lbp_core::Error::BlockAllocationExceeded,
+            ));
+        }
+    }
+    Ok(quote)
 }
 
 /// Quotes an exact-output purchase against a snapshot of the current pool and fee config.

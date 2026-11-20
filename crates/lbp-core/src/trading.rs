@@ -18,6 +18,7 @@ struct Pending {
     step: u8,
     // One reply per weighted trade, in Unix seconds. Never persisted in the final pool state.
     pricing_time: Option<u64>,
+    allocation_block: Option<u64>,
     config: Option<Config>,
     balances: [u128; 3],
 }
@@ -69,6 +70,21 @@ impl Pending {
                 Response::set_state(borsh::to_vec(&self).unwrap()).send_sync(
                     crate::pricing_clock::actor(),
                     &crate::pricing_clock::request(),
+                ),
+            );
+        }
+        if self.step == 4
+            && self.state.block_allocation.limit.is_some()
+            && !is_sell(&self.message)
+            && !matches!(self.message, Message::CollectFees)
+            && self.allocation_block.is_none()
+        {
+            let mut pending = self;
+            pending.step = 5;
+            return Ok(
+                Response::set_state(borsh::to_vec(&pending).unwrap()).send_sync(
+                    crate::pricing_clock::actor(),
+                    &clock_core::Message::ReadBlockId { granularity: 1 },
                 ),
             );
         }
@@ -194,7 +210,7 @@ impl Pending {
             | Message::SellExactInput { now, .. } => now,
             _ => self.pricing_time.ok_or(Error::InvalidState)?,
         };
-        let quote = quote_trade(&self.state, request, config.protocol_fee_bps, pricing_time)?;
+        let quote = quote_trade(&self.state, request, pricing_time)?;
         let amount_in = quote.amount_in;
         let amount_out = quote.amount_out;
         if self.balances[2] < amount_in {
@@ -237,6 +253,12 @@ impl Pending {
             None
         };
         let bounds = self.state.trade_bounds()?;
+        if !sell && self.state.block_allocation.limit.is_some() {
+            self.state.block_allocation.record(
+                self.allocation_block.ok_or(Error::InvalidState)?,
+                amount_out,
+            )?;
+        }
         // Save trade records only after all math, coverage and fit checks pass.
         self.state.recorded_collateral = next_recorded;
         self.state.accrued_fees = next_fees;
@@ -282,6 +304,15 @@ impl Pending {
                     PoolMode::FixedPrice => Error::InvalidTerms,
                     PoolMode::Weighted { .. } => Error::Arithmetic,
                 })?;
+        let response = if let Some(block) = self.allocation_block {
+            let inclusion = block.checked_add(1).ok_or(Error::Arithmetic)?;
+            let next = inclusion.checked_add(1).ok_or(Error::Arithmetic)?;
+            response
+                .try_block_window(inclusion..next)
+                .map_err(|_| Error::InvalidState)?
+        } else {
+            response
+        };
         let response = if let Some(event) = checkpoint_event {
             response.event(event)
         } else {
@@ -324,7 +355,7 @@ impl Pending {
                     amount_out,
                     fee_definition: *self.state.collateral_definition_id.value(),
                     fee_amount: quote.protocol_fee,
-                    fee_bps: config.protocol_fee_bps,
+                    fee_bps: self.state.protocol_fee_bps,
                     retained_fee: quote.retained_fee,
                     sell_fee_bps: self.state.sell_fee_bps,
                     pricing_time: self.pricing_time,
@@ -509,6 +540,7 @@ pub(super) fn begin(input: &ReceiveInput, message: Message) -> Result<Response, 
         buyer,
         step: 0,
         pricing_time: None,
+        allocation_block: None,
         config: None,
         balances: [0; 3],
     }
@@ -524,6 +556,18 @@ pub(super) fn resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
         pending.state.validate_address(input.receiver)?;
         if pending.step == 4 {
             pending.pricing_time = Some(crate::pricing_clock::read(input)?);
+            return pending.advance(input.receiver);
+        }
+        if pending.step == 5 {
+            if input.from != Some(crate::pricing_clock::actor()) {
+                return Err(Error::Unauthorized);
+            }
+            let clock_core::Reply::BlockId(block) =
+                borsh::from_slice(&input.message).map_err(|_| Error::InvalidMessage)?
+            else {
+                return Err(Error::InvalidMessage);
+            };
+            pending.allocation_block = Some(block);
             return pending.finish(input.receiver);
         }
         if pending.step > 3 {
@@ -766,6 +810,8 @@ mod tests {
         )
         .unwrap();
         let state = PoolAccount {
+            protocol_fee_bps: 100,
+            block_allocation: crate::BlockAllocation::default(),
             buy_policy: crate::BuyPolicy::Open,
             trade_control: TradeControl::Paused,
             ending_policy: crate::EndingPolicy::Either,
@@ -862,6 +908,7 @@ mod tests {
                 buyer: id(50),
                 step: 4,
                 pricing_time: Some(100),
+                allocation_block: None,
                 config: Some(config.clone()),
                 balances: [100, 800, 100],
             };
@@ -965,6 +1012,7 @@ mod tests {
                             buyer: AccountId::new([50; 32]),
                             step,
                             pricing_time: Some(100),
+                            allocation_block: None,
                             config: None,
                             balances: [0; 3],
                         };

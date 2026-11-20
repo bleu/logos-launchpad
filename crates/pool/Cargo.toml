@@ -3,7 +3,7 @@ name = "pool"
 version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
-license = "MIT"
+license = "MIT OR Apache-2.0"
 
 # No `lee_core`: the pool state machine stays testable without account fixtures.
 [dependencies]

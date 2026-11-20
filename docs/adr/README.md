@@ -19,12 +19,12 @@ Read [CONTEXT.md](../../CONTEXT.md) for terms. See the [workspace guide](../arch
 | [0012](0012-weighted-series.md) | Weighted series | Accepted; unaudited |
 | [0013](0013-weighted-exact-output.md) | Weighted exact output | Accepted; unaudited |
 | [0014](0014-weighted-math-evidence.md) | Weighted math evidence | Accepted; unaudited |
-| [0015](0015-fee-accounting.md) | Live collateral fees, formulas and collection | RFP-016 departures; Logos review pending |
+| [0015](0015-fee-accounting.md) | Collateral fee snapshots, formulas and collection | RFP-016 departures; Logos review pending |
 | [0017](0017-quotes-and-slippage.md) | Quotes and slippage | Accepted |
 | [0018](0018-private-participation.md) | Atomic private route and recovery | Accepted design; private execution pending |
 | [0019](0019-product-packages.md) | Two QML apps and shared core | Accepted design; packaging unverified |
 | [0020](0020-settlement-and-graduation.md) | Shared payouts and adapter initialization | Implemented; live DEX deferred |
-| [0021](0021-modes-and-open-limits.md) | Trade modes, allowlists and allocation ceiling | Public admission implemented; wallet/private route pending; ceiling deferral needs Logos review |
+| [0021](0021-modes-and-open-limits.md) | Trade modes, allowlists and allocation ceiling | Public admission and optional per-block ceilings implemented; wallet/private route pending; allowlist departures need Logos review |
 | [0022](0022-verification-boundaries.md) | Verification boundaries | Accepted |
 | [0025](0025-sale-closing.md) | Ending and payout eligibility | Implemented; uncalibrated curve expiry minimum needs Logos review |
 | [0026](0026-lbp-clock-and-poke.md) | Weighted clock and observations | Upstream clock in normal builds; local execution limits remain |

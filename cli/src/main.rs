@@ -309,9 +309,6 @@ impl From<EndingPolicyArg> for launchpad_client::EndingPolicy {
 struct CreateSaleArgs {
     #[arg(long, value_enum)]
     trade_mode: TradeModeArg,
-    /// Collateral retained by the sale on sells, in basis points.
-    #[arg(long, default_value_t = 0, value_parser = clap::value_parser!(u16).range(0..10_000))]
-    sell_fee_bps: u16,
     /// Let the current creator pause and resume swaps.
     #[arg(long)]
     pausable: bool,
@@ -412,7 +409,8 @@ impl CreateSaleArgs {
                 }
             }),
             trade_mode: self.trade_mode.into(),
-            sell_fee_bps: self.sell_fee_bps,
+            // Factory curve sales keep a fixed invariant and accept no retained sell fee.
+            sell_fee_bps: 0,
             graduation_hook: self.graduation_hook_program_id.map(|program_id| {
                 launchpad_client::GraduationHook {
                     program_id,
@@ -2261,18 +2259,7 @@ mod tests {
         };
         assert!(args.sale_request().graduation_hook.is_none());
         assert_eq!(args.sale_request().sell_fee_bps, 0);
-        for rate in ["0", "125", "9999"] {
-            let mut selected = arguments.clone();
-            selected.extend(["--sell-fee-bps", rate]);
-            let Command::CreateSale(args) = Cli::try_parse_from(selected).unwrap().command else {
-                panic!("create sale")
-            };
-            assert_eq!(
-                args.sale_request().sell_fee_bps,
-                rate.parse::<u16>().unwrap()
-            );
-        }
-        for rate in ["10000", "65535", "65536", "-1"] {
+        for rate in ["0", "125"] {
             let mut selected = arguments.clone();
             selected.extend(["--sell-fee-bps", rate]);
             assert!(Cli::try_parse_from(selected).is_err());

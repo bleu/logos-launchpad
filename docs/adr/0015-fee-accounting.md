@@ -4,9 +4,9 @@ Status: Accepted internally; fixed-price and weighted-sale RFP departures: To be
 
 ## Decision
 
-### Live rates and collection
+### Sale rates and collection
 
-All engines charge namespace fees in collateral: buy input or sell output. Curve factory collateral is token1. Use the namespace rate at execution, not a creation snapshot. Rates at creation and update must be integers in `0..=9_999` basis points. Reject 10,000 or more. Rounding can still consume a small trade, so trade guards remain necessary.
+All engines charge namespace fees in collateral: buy input or sell output. Curve factory collateral is token1. Curve sales use the namespace rate at execution. Fixed-price and weighted sales snapshot the authenticated namespace rate at initial factory creation, before minting. Save it in factory terms, forward it unchanged through pool preparation, and bind it in pool validation. Activation, quotes, buy and sell execution and trade events use that saved rate. Later namespace updates affect new fixed-price and weighted sales. The snapshot uses the rate at inclusion of the namespace read; creation has no maximum-rate input, so creators trust the namespace administrator not to raise the rate just before creation. Freeze and treasury remain live namespace settings. Rates at creation and update must be integers in `0..=9_999` basis points. Reject 10,000 or more. Rounding can still consume a small trade, so trade guards remain necessary.
 
 Track accrued namespace fees separately from reserves and creator proceeds. Anyone can collect the full amount at any time. Collection is idempotent and pays the current namespace treasury, including fees accrued before a treasury change. The caller cannot redirect payment. Terminal settlement collects the remainder atomically with the relevant payout.
 
@@ -22,15 +22,15 @@ Weighted seed-inclusive accounting follows [ADR 0030](0030-lbp-pricing-collatera
 
 ### Retained sell fees
 
-Creation fixes creator-selected `sell_fee_bps` in `0..=9_999`, defaulting to zero. For each sell, calculate namespace fee and retained fee independently as `ceil(gross_output * rate / 10_000)`. Do not round their combined rate. Pay gross output minus both fees.
+Factory curve sales require `sell_fee_bps == 0` to preserve the [fixed curve invariant](0009-curve-arithmetic.md). Other engines and direct internal pools fix creator-selected `sell_fee_bps` in `0..=9_999`, defaulting to zero. For each sell, calculate namespace fee and retained fee independently as `ceil(gross_output * rate / 10_000)`. Do not round their combined rate. Pay gross output minus both fees.
 
-Before each sell, require the live namespace rate plus saved `sell_fee_bps` to be below `10_000`. Reject rounding that leaves no net output. This combined check does not apply to buys. Debit reserves or recorded collateral by `gross_output - retained_fee`. Retained collateral stays in reserves or recorded proceeds. It is not collectible debt and grants no early creator payout. Fixed-price pricing and settlement timing stay unchanged.
+Fixed-price and weighted `BuyAndSell` creation rejects a saved namespace rate plus `sell_fee_bps` of `10_000` or more, because neither rate can change later. Pool preparation and saved-state validation repeat this check. Before each sell, require the applicable namespace rate plus saved `sell_fee_bps` to be below `10_000`. Reject rounding that leaves no net output. This combined check does not apply to buys. Debit reserves or recorded collateral by `gross_output - retained_fee`. Retained collateral stays in reserves or recorded proceeds. It is not collectible debt and grants no early creator payout. Fixed-price pricing and settlement timing stay unchanged.
 
 ## Reason and limits
 
 Separate fees from backing so collection cannot change pricing or spend remaining obligations. Vault coverage, rounding and production-input evidence remain required; see [execution limits](../architecture/workspace-guide.md#execution-and-evidence-limits).
 
-RFP-016 F.2 and F.10 require creation-time fee snapshots; F.10 bars collection before scheduled end, and F.5 gates creator withdrawal on that end. This design uses live rates, anytime collection and payouts when the [selected ending policy](0025-sale-closing.md) permits them. Trader-borne fixed-price fees are an additional departure. Fixed-price and weighted-sale departures have external status `To be reviewed by Logos team`. Internal acceptance and local execution do not establish external approval.
+RFP-016 F.2 and F.10 require creation-time fee snapshots; F.10 bars collection before scheduled end, and F.5 gates creator withdrawal on that end. The fixed-price and weighted rate snapshot follows F.2 and F.10. This design still uses anytime collection and payouts when the [selected ending policy](0025-sale-closing.md) permits them. Trader-borne fixed-price and weighted fees are additional departures. Fixed-price and weighted-sale departures have external status `To be reviewed by Logos team`. Internal acceptance and local execution do not establish external approval.
 
 ## Sources
 
