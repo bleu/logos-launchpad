@@ -28,6 +28,10 @@ Fixed-price and weighted `BuyAndSell` creation rejects a saved namespace rate pl
 
 ## Reason and limits
 
+Fixed-price and weighted sales charge traders because both support `BuyAndSell`. Deducting the buy fee before pricing leaves net collateral to back the purchased tokens and records the treasury claim separately. With creator-borne buy fees, a fixed-price buyer could pay 100 units for 100 tokens while a 1-unit treasury claim leaves only 99 units for a full-price sell back. That model needs a creator subsidy, different sell terms or a buy-only restriction. Net-input pricing avoids this conflict without a separate subsidy. Creators receive net trading proceeds; buyers receive fewer tokens for the same gross input. Exact-output buyers pay the grossed-up amount. These effects must appear in quotes and confirmation views.
+
+The proposed buy-only model can support creator-borne fees. This choice retains bidirectional sales and makes each trade pay its own namespace fee. It is a product change, not a consequence of shared code. [Balancer swap fees](https://balancer.gitbook.io/balancer-v2/concepts/fees) provide a precedent for trader-paid fees, but do not establish that this project's economics are externally approved. Fee burden does not require live rates or early collection; those are separate decisions.
+
 Separate fees from backing so collection cannot change pricing or spend remaining obligations. Vault coverage, rounding and production-input evidence remain required; see [execution limits](../architecture/workspace-guide.md#execution-and-evidence-limits).
 
 RFP-016 F.2 and F.10 require creation-time fee snapshots; F.10 bars collection before scheduled end, and F.5 gates creator withdrawal on that end. The fixed-price and weighted rate snapshot follows F.2 and F.10. This design still uses anytime collection and payouts when the [selected ending policy](0025-sale-closing.md) permits them. Trader-borne fixed-price and weighted fees are additional departures. Fixed-price and weighted-sale departures have external status `To be reviewed by Logos team`. Internal acceptance and local execution do not establish external approval.

@@ -36,6 +36,14 @@ Public paths reveal the used salt, index and sibling hashes. Hash comparisons, s
 
 All engines use `crates/eligibility-policy`. [Signed public execution evidence](../architecture/allowlist-proof.md#public-execution-evidence) covers actual-trader authority, replay rejection and complete public buys. Weighted public buys use the pinned upstream clock, which normal builds use. These checks do not establish native private proving or deployment readiness.
 
+## Reason for membership and repeat buys
+
+The allowlist answers whether an account may buy. It does not ration purchases among approved people. Permit unlimited repeat buys to keep admission stateless after enrollment: no consumed credential, member counter, cumulative allowance or cross-address quota needs storage and atomic updates. Participants can split purchases and react to weighted prices. A one-purchase rule does not itself prevent concentration because one buy can take all inventory. This is a deliberate simplicity choice. It does not claim fair distribution, human uniqueness or protection against an approved buyer taking the full allocation.
+
+Choose public salted SHA-256 Merkle paths to check the actual approved trader with a small, bounded verifier and no separate eligibility proof generation per purchase. The [allowlist evidence](../architecture/allowlist-proof.md#earlier-measurements) records local execution costs. The historical Semaphore verifier exceeded the tested execution gate; that supports changing the verifier, not removing a participation rule. Repeat permission is the separate product choice above. Native privacy proofs for funding and returns remain required and unverified.
+
+The proposal's sale-scoped nullifier limited each enrolled member to one purchase and hid the acting member. This design intentionally changes both properties. Public paths expose the used address and membership data. The creator can link a participant's address batch. Salts do not hide the used public address. Keep these limits visible to participants. Transaction replay rejection prevents an old authorization from executing twice; it does not impose a purchase allowance. These proposal departures have external status `To be reviewed by Logos team`.
+
 ## Limits and open work
 
 Fixed-price and weighted creation inputs accept immutable `per_block_token_limit: Option<u128>`. `None` disables the ceiling; a configured limit must be positive. The pool counts actual launch-token output across exact-input and exact-output buys in the same inclusion block, regardless of trader or allowlist membership. Reject the whole buy when the aggregate would exceed the limit. Sells do not refill this allowance. Commit the counter with the trade so a failed transaction cannot consume allocation.
