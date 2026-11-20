@@ -102,6 +102,7 @@ pub enum LbpCreationStage {
 }
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct LbpLaunchState {
+    pub protocol_fee_bps: u16,
     pub buy_policy: curve_core::BuyPolicy,
     pub pause_policy: PausePolicy,
     pub ending_policy: EndingPolicy,
@@ -350,6 +351,7 @@ fn create(input: &ReceiveInput, inputs: SetupInputs, command: Message) -> Result
         .validate_binding(inputs.namespace.value(), pool_id.value())
         .map_err(|_| Error::InvalidTerms)?;
     let state = LbpLaunchState {
+        protocol_fee_bps: 0,
         buy_policy: inputs.buy_policy,
         pause_policy: inputs.pause_policy,
         ending_policy: inputs.ending_policy,
@@ -361,7 +363,7 @@ fn create(input: &ReceiveInput, inputs: SetupInputs, command: Message) -> Result
             LbpSetupMode::FixedPrice => *b"LZFXLAUN",
             LbpSetupMode::Weighted { .. } => *b"LZWGLAUN",
         },
-        version: 5,
+        version: 6,
         creator_role_id: compute_creator_role_pda(inputs.namespace, program, inputs.launch_salt),
         mode: inputs.mode,
         creation_stage: LbpCreationStage::Minted,
@@ -735,6 +737,7 @@ pub(super) fn resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
                 || pool.graduation_adapter != state.adapter(input.receiver)
                 || pool.ending_policy != state.ending_policy
                 || pool.trade_mode != state.trade_mode
+                || pool.protocol_fee_bps != state.protocol_fee_bps
                 || pool.sell_fee_bps != state.sell_fee_bps
             {
                 return Err(Error::InvalidCustody);
@@ -846,6 +849,7 @@ pub(super) fn resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
                     || pool.graduation_adapter != state.adapter(input.receiver)
                     || pool.ending_policy != state.ending_policy
                     || pool.trade_mode != state.trade_mode
+                    || pool.protocol_fee_bps != state.protocol_fee_bps
                     || pool.sell_fee_bps != state.sell_fee_bps
                 {
                     return Err(Error::InvalidCustody);
@@ -968,6 +972,7 @@ pub(super) fn resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
                 let prepare = match state.mode {
                     LbpSetupMode::FixedPrice => lbp_core::Message::PrepareFixedPrice {
                         inputs: lbp_core::FixedPricePoolInputs {
+                            protocol_fee_bps: state.protocol_fee_bps,
                             buy_policy: state.buy_policy.clone(),
                             pause_policy: state.pause_policy,
                             ending_policy: state.ending_policy,
@@ -996,6 +1001,7 @@ pub(super) fn resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
                         token_weight_end,
                     } => lbp_core::Message::PrepareWeighted {
                         inputs: lbp_core::WeightedPoolInputs {
+                            protocol_fee_bps: state.protocol_fee_bps,
                             buy_policy: state.buy_policy.clone(),
                             pause_policy: state.pause_policy,
                             ending_policy: state.ending_policy,
@@ -1082,6 +1088,13 @@ pub(super) fn resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
         if config.namespace != state.namespace {
             return Err(Error::WrongAccount);
         }
+        lbp_core::validate_sale_fees(
+            state.trade_mode,
+            config.protocol_fee_bps,
+            state.sell_fee_bps,
+        )
+        .map_err(|_| Error::InvalidTerms)?;
+        state.protocol_fee_bps = config.protocol_fee_bps;
         if !matches!(
             TokenState::decode(&pending.values[1])?,
             TokenState::Definition {
@@ -1228,7 +1241,9 @@ impl LbpLaunchState {
             LbpSetupMode::FixedPrice => *b"LZFXLAUN",
             LbpSetupMode::Weighted { .. } => *b"LZWGLAUN",
         };
-        if self.format != expected || self.version != 5 {
+        lbp_core::validate_sale_fees(self.trade_mode, self.protocol_fee_bps, self.sell_fee_bps)
+            .map_err(|_| Error::InvalidState)?;
+        if self.format != expected || self.version != 6 {
             return Err(Error::InvalidState);
         }
         Ok(())
@@ -1349,6 +1364,7 @@ impl LbpLaunchState {
             || pool.graduation_adapter != self.adapter(factory)
             || pool.ending_policy != self.ending_policy
             || pool.trade_mode != self.trade_mode
+            || pool.protocol_fee_bps != self.protocol_fee_bps
             || pool.sell_fee_bps != self.sell_fee_bps
         {
             return Err(Error::InvalidCustody);

@@ -54,6 +54,7 @@ pub enum CreatorAllocationRelease {
 }
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize, Serialize, Deserialize)]
 pub struct FixedPricePoolInputs {
+    pub protocol_fee_bps: u16,
     pub buy_policy: BuyPolicy,
     pub pause_policy: PausePolicy,
     pub ending_policy: EndingPolicy,
@@ -85,6 +86,7 @@ pub struct FixedPricePoolInputs {
 /// Each endpoint pair sums to `WEIGHT_TOTAL`. Each weight is at least 1%.
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize, Serialize, Deserialize)]
 pub struct WeightedPoolInputs {
+    pub protocol_fee_bps: u16,
     pub buy_policy: BuyPolicy,
     pub pause_policy: PausePolicy,
     pub ending_policy: EndingPolicy,
@@ -217,6 +219,7 @@ pub enum PoolMode {
 
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PoolAccount {
+    pub protocol_fee_bps: u16,
     pub buy_policy: BuyPolicy,
     pub trade_control: TradeControl,
     pub ending_policy: EndingPolicy,
@@ -307,6 +310,8 @@ impl PoolAccount {
             .map_err(ending_error)
     }
     fn validate_policies(&self) -> Result<(), Error> {
+        validate_sale_fees(self.trade_mode, self.protocol_fee_bps, self.sell_fee_bps)
+            .map_err(|_| Error::InvalidState)?;
         self.graduation_policy
             .validate(self.graduation_adapter.is_some())
             .map_err(|_| Error::InvalidState)?;
@@ -623,6 +628,19 @@ fn advance_setup_steps(
 // Entry point
 // ---------------------------------------------------------------------------
 
+/// Saved sale rates are fixed, so `BuyAndSell` terms must leave positive sell output.
+pub fn validate_sale_fees(
+    trade_mode: TradeMode,
+    protocol_fee_bps: u16,
+    sell_fee_bps: u16,
+) -> Result<(), Error> {
+    let combined = u32::from(protocol_fee_bps) + u32::from(sell_fee_bps);
+    if protocol_fee_bps >= 10_000 || trade_mode == TradeMode::BuyAndSell && combined >= 10_000 {
+        return Err(Error::InvalidFee);
+    }
+    Ok(())
+}
+
 pub fn handle(input: &ReceiveInput) -> Result<Response, Error> {
     if let Some(result) = lez_compat_core::clock::resume(input) {
         return result.map_err(|error| match error {
@@ -654,6 +672,11 @@ pub fn handle(input: &ReceiveInput) -> Result<Response, Error> {
     let message: Message = borsh::from_slice(&input.message).map_err(|_| Error::InvalidMessage)?;
     match message {
         Message::PrepareFixedPrice { inputs } => {
+            validate_sale_fees(
+                inputs.trade_mode,
+                inputs.protocol_fee_bps,
+                inputs.sell_fee_bps,
+            )?;
             if !input.pre_state.is_empty() {
                 return Err(Error::AlreadyInitialized);
             }
@@ -702,6 +725,7 @@ pub fn handle(input: &ReceiveInput) -> Result<Response, Error> {
                 .validate_binding(inputs.namespace.value(), input.receiver.account_id.value())
                 .map_err(|_| Error::InvalidTerms)?;
             let state = PoolAccount {
+                protocol_fee_bps: inputs.protocol_fee_bps,
                 buy_policy: inputs.buy_policy,
                 trade_control: TradeControl::new(inputs.pause_policy),
                 ending_policy: inputs.ending_policy,
@@ -784,6 +808,11 @@ pub fn handle(input: &ReceiveInput) -> Result<Response, Error> {
             ))
         }
         Message::PrepareWeighted { inputs } => {
+            validate_sale_fees(
+                inputs.trade_mode,
+                inputs.protocol_fee_bps,
+                inputs.sell_fee_bps,
+            )?;
             if !input.pre_state.is_empty() {
                 return Err(Error::AlreadyInitialized);
             }
@@ -830,6 +859,7 @@ pub fn handle(input: &ReceiveInput) -> Result<Response, Error> {
                 .validate_binding(inputs.namespace.value(), input.receiver.account_id.value())
                 .map_err(|_| Error::InvalidTerms)?;
             let state = PoolAccount {
+                protocol_fee_bps: inputs.protocol_fee_bps,
                 buy_policy: inputs.buy_policy,
                 trade_control: TradeControl::new(inputs.pause_policy),
                 ending_policy: inputs.ending_policy,

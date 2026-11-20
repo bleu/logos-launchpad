@@ -38,7 +38,6 @@ impl QuoteRequest {
 pub fn quote_trade(
     state: &PoolAccount,
     request: QuoteRequest,
-    namespace_bps: u16,
     pricing_time: u64,
 ) -> Result<TradeQuote, Error> {
     state.validate_policies()?;
@@ -61,9 +60,7 @@ pub fn quote_trade(
     if !sell && state.remaining_inventory == 0 {
         return Err(Error::Closed);
     }
-    if namespace_bps >= 10_000 {
-        return Err(Error::InvalidFee);
-    }
+    let namespace_bps = state.protocol_fee_bps;
     let rate = FeeRate::new(namespace_bps).map_err(fee_error)?;
     let weights = if let PoolMode::Weighted {
         collateral_seed,

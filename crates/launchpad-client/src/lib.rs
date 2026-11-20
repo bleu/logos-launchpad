@@ -1578,7 +1578,7 @@ pub async fn collect_pool_fees(
     Ok(hashes)
 }
 
-/// Quotes against pool and live namespace snapshots. Weighted pricing time is not inclusion proof.
+/// Quotes use the saved sale rate and the live namespace freeze state. Weighted pricing time is not inclusion proof.
 pub fn quote_lbp_trade(
     sale: LbpSale,
     pool_account: &lbp_core::PoolAccount,
@@ -1604,8 +1604,7 @@ pub fn quote_lbp_trade(
     if config.emergency.is_frozen {
         return Err(ClientError::NamespaceFrozen);
     }
-    lbp_core::quote_trade(pool_account, request, config.protocol_fee_bps, pricing_time)
-        .map_err(ClientError::QuoteLbpTrade)
+    lbp_core::quote_trade(pool_account, request, pricing_time).map_err(ClientError::QuoteLbpTrade)
 }
 
 /// Quotes an exact-output purchase against a snapshot of the current pool and fee config.
