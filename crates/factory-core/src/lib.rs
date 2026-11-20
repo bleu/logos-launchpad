@@ -1630,7 +1630,92 @@ fn curve_resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
         }
     })())
 }
+/// Operational floor for configured curve expiry. Private-path fairness still needs measurements.
+pub const MIN_CURVE_SALE_DURATION_SECONDS: u64 = 300;
+
+pub fn validate_curve_duration(end: Option<u64>, now: u64) -> Result<(), Error> {
+    if end.is_some_and(|end| {
+        end.checked_sub(now)
+            .is_none_or(|duration| duration < MIN_CURVE_SALE_DURATION_SECONDS)
+    }) {
+        return Err(Error::InvalidTerms);
+    }
+    Ok(())
+}
+
+pub fn validate_curve_continuation_duration(end: Option<u64>, now: u64) -> Result<(), Error> {
+    if end.is_some_and(|end| now >= end) {
+        return Ok(());
+    }
+    validate_curve_duration(end, now)
+}
+
 pub fn handle(input: &ReceiveInput) -> Result<Response, Error> {
+    let saved = FactoryState::decode(&input.pre_state).ok();
+    let command = saved
+        .as_ref()
+        .and_then(|state| {
+            state
+                .pending
+                .as_ref()
+                .map(|pending| pending.command.clone())
+        })
+        .or_else(|| borsh::from_slice::<Message>(&input.message).ok());
+    let (expiry, recovery) = match command {
+        Some(Message::CreateFactoryPool {
+            end_timestamp, now, ..
+        }) => {
+            validate_curve_duration(end_timestamp, now)?;
+            (end_timestamp, false)
+        }
+        Some(Message::ContinueCreation { now, .. }) => {
+            let end = saved.as_ref().ok_or(Error::InvalidState)?.end_timestamp;
+            validate_curve_continuation_duration(end, now)?;
+            (end, end.is_some_and(|end| now >= end))
+        }
+        _ => (None, false),
+    };
+    let mut response = handle_inner(input)?;
+    if let Some(end) = expiry {
+        if recovery {
+            let lower = curve_core::timestamp_millis(end).map_err(|_| Error::InvalidTerms)?;
+            let lower = response
+                .validity
+                .timestamps
+                .start()
+                .map_or(lower, |existing| existing.max(lower));
+            response = match response.validity.timestamps.end() {
+                Some(upper) => response
+                    .try_timestamp_window(lower..upper)
+                    .map_err(|_| Error::InvalidTerms)?,
+                None => response.timestamp_window(lower..),
+            };
+            return Ok(response);
+        }
+        // Inclusion time, not the caller's hint, limits every setup callback and activation.
+        let latest = end
+            .checked_sub(MIN_CURVE_SALE_DURATION_SECONDS)
+            .ok_or(Error::InvalidTerms)?;
+        let upper = curve_core::timestamp_millis(latest)
+            .map_err(|_| Error::InvalidTerms)?
+            .checked_add(1)
+            .ok_or(Error::InvalidTerms)?;
+        let upper = response
+            .validity
+            .timestamps
+            .end()
+            .map_or(upper, |existing| existing.min(upper));
+        response = match response.validity.timestamps.start() {
+            Some(start) => response
+                .try_timestamp_window(start..upper)
+                .map_err(|_| Error::InvalidTerms)?,
+            None => response.timestamp_window(..upper),
+        };
+    }
+    Ok(response)
+}
+
+fn handle_inner(input: &ReceiveInput) -> Result<Response, Error> {
     if let Some(result) = lez_compat_core::clock::resume(input) {
         return result.map_err(|error| match error {
             lez_compat_core::Error::Unauthorized => Error::Unauthorized,

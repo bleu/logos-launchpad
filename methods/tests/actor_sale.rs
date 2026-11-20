@@ -1444,7 +1444,7 @@ fn curve_factory_locks_allowlist_before_setup_and_buys_with_the_same_policy() {
                 end_timestamp: if ending_policy == curve_core::EndingPolicy::Depletion {
                     None
                 } else {
-                    Some(200)
+                    Some(400)
                 },
                 curve_program_id: CURVE,
                 collateral_definition_id: COLLATERAL,
@@ -5777,7 +5777,7 @@ fn curve_factory_env_with_reserve(
             curve_program_id: CURVE,
             collateral_definition_id: COLLATERAL,
             creator,
-            now: 1,
+            now: 0,
         },
     );
     for _ in 0..3 {
@@ -5790,7 +5790,7 @@ fn curve_factory_env_with_reserve(
         assert_eq!(stored.sell_fee_bps, 0u16);
         execute(
             &mut state,
-            factory_core::Message::ContinueCreation { creator, now: 1 },
+            factory_core::Message::ContinueCreation { creator, now: 0 },
         );
     }
     actors.extend([
@@ -9427,6 +9427,220 @@ fn signed_wrong_kind_adapter_initialization_rolls_back_then_correct_kind_succeed
 
 #[path = "actor_sale/distribution.rs"]
 mod distribution;
+
+#[test]
+fn curve_minimum_duration_rejects_late_creation_and_activation_atomically() {
+    const FACTORY: AccountId = AccountId::new([17; 32]);
+    let key = PrivateKey::try_new([23; 32]).unwrap();
+    let creator = AccountId::from(&PublicKey::new_from_private_key(&key));
+    let salt = [24; 32];
+    let factory = factory_core::compute_factory_pda(NAMESPACE, FACTORY, salt);
+    let launch = factory_core::compute_definition_pda(NAMESPACE, FACTORY, salt);
+    let mint = factory_core::compute_mint_pda(NAMESPACE, FACTORY, salt);
+    let escrow = factory_core::compute_escrow_pda(NAMESPACE, FACTORY, salt);
+    let role = factory_core::compute_curve_creator_role_pda(NAMESPACE, FACTORY, salt);
+    let pool = curve_core::compute_pool_pda(NAMESPACE, CURVE, launch, COLLATERAL, factory);
+    let mut state = fixed_config(
+        V03State::new()
+            .with_programs_at([
+                (
+                    FACTORY,
+                    Program::new(Cow::Borrowed(launchpad_methods::FACTORY_ELF)).unwrap(),
+                    true,
+                ),
+                (
+                    CURVE,
+                    Program::new(Cow::Borrowed(launchpad_methods::CURVE_ELF)).unwrap(),
+                    true,
+                ),
+                (
+                    TOKEN_PROGRAM_ACCOUNT_ID,
+                    Program::new(Cow::Borrowed(lez_compat_methods::COMPAT_TOKEN_ELF)).unwrap(),
+                    true,
+                ),
+                (
+                    factory_core::AUTHORITY_PROGRAM_ACCOUNT_ID,
+                    Program::new(Cow::Borrowed(lez_compat_methods::COMPAT_AUTHORITY_ELF)).unwrap(),
+                    true,
+                ),
+            ])
+            .with_public_accounts([account(
+                Actor::new(COLLATERAL, TOKEN_PROGRAM_ACCOUNT_ID),
+                borsh::to_vec(&TokenState::Definition {
+                    name: "Collateral".into(),
+                    kind: TokenKind::Fungible,
+                    supply: 1000,
+                    metadata: None,
+                })
+                .unwrap(),
+            )]),
+        0,
+        TREASURY,
+        false,
+    );
+    let mut actors = vec![
+        Actor::new(factory, FACTORY),
+        Actor::new(pool, CURVE),
+        Actor::new(role, factory_core::AUTHORITY_PROGRAM_ACCOUNT_ID),
+        Actor::new(creator, factory_core::AUTHORITY_PROGRAM_ACCOUNT_ID),
+        Actor::new(curve_core::compute_config_pda(NAMESPACE, CURVE), CURVE),
+        Actor::new(launch, TOKEN_PROGRAM_ACCOUNT_ID),
+        Actor::new(COLLATERAL, TOKEN_PROGRAM_ACCOUNT_ID),
+    ];
+    for owner in [factory, mint, escrow, pool, creator, role, launch] {
+        actors.extend([
+            Actor::new(owner, FACTORY),
+            Actor::new(owner, CURVE),
+            Actor::new(owner, TOKEN_PROGRAM_ACCOUNT_ID),
+            holding(owner, launch),
+            holding(owner, COLLATERAL),
+        ]);
+    }
+    let create = factory_core::Message::CreateFactoryPool {
+        buy_policy: curve_core::BuyPolicy::Open,
+        pause_policy: curve_core::PausePolicy::Disabled,
+        ending_policy: curve_core::EndingPolicy::Scheduled,
+        trade_mode: 1,
+        sell_fee_bps: 0,
+        graduation_hook_program_id: None,
+        graduation_hook_configuration: vec![],
+        namespace: NAMESPACE,
+        launch_salt: salt,
+        name: "Curve".into(),
+        uri: "https://example.test/curve".into(),
+        sale_reserve: 800,
+        graduation_reserve: 0,
+        graduation_policy: factory_core::GraduationPolicy::default(),
+        creator_allocation: 0,
+        virtual_token_reserve: 1000,
+        virtual_collateral_reserve: 100,
+        end_timestamp: Some(500),
+        curve_program_id: CURVE,
+        collateral_definition_id: COLLATERAL,
+        creator,
+        now: 100,
+    };
+    let before = state.clone();
+    assert!(
+        factory_execute_at(
+            &mut state,
+            factory,
+            &actors,
+            &key,
+            salt,
+            launch,
+            pool,
+            create.clone(),
+            200_001
+        )
+        .is_err()
+    );
+    assert!(state == before);
+    factory_execute_at(
+        &mut state, factory, &actors, &key, salt, launch, pool, create, 200_000,
+    )
+    .unwrap();
+    let continue_creation = factory_core::Message::ContinueCreation { creator, now: 100 };
+    for _ in 0..2 {
+        factory_execute_at(
+            &mut state,
+            factory,
+            &actors,
+            &key,
+            salt,
+            launch,
+            pool,
+            continue_creation.clone(),
+            200_000,
+        )
+        .unwrap();
+    }
+    let before = state.clone();
+    assert!(
+        factory_execute_at(
+            &mut state,
+            factory,
+            &actors,
+            &key,
+            salt,
+            launch,
+            pool,
+            continue_creation.clone(),
+            200_001
+        )
+        .is_err()
+    );
+    assert!(state == before);
+    let mut expired = state.clone();
+    let recover = factory_core::Message::ContinueCreation { creator, now: 500 };
+    let saved = expired.clone();
+    assert!(
+        factory_execute_at(
+            &mut expired,
+            factory,
+            &actors,
+            &key,
+            salt,
+            launch,
+            pool,
+            recover.clone(),
+            499_999
+        )
+        .is_err()
+    );
+    assert!(expired == saved);
+    factory_execute_at(
+        &mut expired,
+        factory,
+        &actors,
+        &key,
+        salt,
+        launch,
+        pool,
+        recover,
+        500_000,
+    )
+    .unwrap();
+    assert_eq!(
+        PoolAccount::decode(expired.get_account_by_id(pool).data.actor_state(CURVE))
+            .unwrap()
+            .pool
+            .lifecycle,
+        pool::PoolLifecycle::Closed
+    );
+    for _ in 0..3 {
+        factory_execute_at(
+            &mut expired,
+            factory,
+            &actors,
+            &key,
+            salt,
+            launch,
+            pool,
+            factory_core::Message::WithdrawFactoryProceeds { creator, now: 500 },
+            500_000,
+        )
+        .unwrap();
+    }
+    assert_eq!(balance(&expired, creator, launch), 800);
+    factory_execute_at(
+        &mut state,
+        factory,
+        &actors,
+        &key,
+        salt,
+        launch,
+        pool,
+        continue_creation,
+        200_000,
+    )
+    .unwrap();
+    assert!(
+        PoolAccount::decode(state.get_account_by_id(pool).data.actor_state(CURVE))
+            .unwrap()
+            .funded
+    );
+}
 
 #[test]
 fn block_ceiling_signed_buys_share_allowance_and_failed_transfers_roll_back() {

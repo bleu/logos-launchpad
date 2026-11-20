@@ -87,7 +87,7 @@ fn closed_sale(
                 creator_allocation: 50,
                 virtual_token_reserve: 1_000,
                 virtual_collateral_reserve: 1_000,
-                end_timestamp: Some(2),
+                end_timestamp: Some(301),
                 curve_program_id: CURVE,
                 collateral_definition_id: COLLATERAL,
                 creator: id(&creator),
@@ -142,7 +142,7 @@ fn closed_sale(
         assert_eq!(balance(&fixture.state, fixture.pool, COLLATERAL), 125);
         assert_eq!(pool_state(&fixture).pool.fees_accrued, 13);
     }
-    fixture.inclusion_timestamp_ms = 2_000;
+    fixture.inclusion_timestamp_ms = 301_000;
     fixture
 }
 
@@ -234,7 +234,7 @@ fn manual_events(
         &key(48),
         factory_core::Message::WithdrawFactoryProceeds {
             creator: id(&key(48)),
-            now: 2,
+            now: 301,
         },
     )
 }
@@ -250,7 +250,7 @@ fn claim_events(
         &key(48),
         factory_core::Message::ClaimCreatorAllocation {
             creator: id(&key(48)),
-            now: 2,
+            now: 301,
         },
     )
 }
@@ -647,7 +647,7 @@ fn curve_late_activation_failure_restores_funding_and_continuation_activates_onc
                 creator_allocation: 50,
                 virtual_token_reserve: 1_000,
                 virtual_collateral_reserve: 1_000,
-                end_timestamp: Some(2),
+                end_timestamp: Some(301),
                 curve_program_id: CURVE,
                 collateral_definition_id: COLLATERAL,
                 creator: id(&creator),
@@ -841,7 +841,7 @@ fn settlement_while_frozen_keeps_creator_checks_and_completes_fees_and_payouts()
                     &key(49),
                     factory_core::Message::WithdrawFactoryProceeds {
                         creator: id(&key(49)),
-                        now: 2,
+                        now: 301,
                     },
                 )
             },
@@ -1048,15 +1048,15 @@ fn settlement_nested_adapter_calls_roll_back_and_repaired_retry_pays_once() {
         },
         factory_core::Message::WithdrawFactoryProceeds {
             creator: id(&key(48)),
-            now: 2,
+            now: 301,
         },
         factory_core::Message::ClaimCreatorAllocation {
             creator: id(&key(48)),
-            now: 2,
+            now: 301,
         },
         factory_core::Message::ContinueCreation {
             creator: id(&key(48)),
-            now: 2,
+            now: 301,
         },
     ] {
         attempts.push((
@@ -1077,8 +1077,8 @@ fn settlement_nested_adapter_calls_roll_back_and_repaired_retry_pays_once() {
         "InvalidState",
     ));
     for message in [
-        curve_core::Message::ClosePool { now: 2 },
-        curve_core::Message::WithdrawReserves { now: 2 },
+        curve_core::Message::ClosePool { now: 301 },
+        curve_core::Message::WithdrawReserves { now: 301 },
     ] {
         attempts.push((
             nested_configuration(Actor::new(pool, CURVE), message),

@@ -54,7 +54,7 @@ fn factory_state(kind: GraduationIntentKind) -> Vec<u8> {
             creator_allocation: 100,
             virtual_token_reserve: 1_000,
             virtual_collateral_reserve: 100,
-            end_timestamp: Some(200),
+            end_timestamp: Some(400),
             curve_program_id: id(6),
             collateral_definition_id: id(41),
             creator: id(42),

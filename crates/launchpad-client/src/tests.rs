@@ -1685,7 +1685,7 @@ fn paused_curve_quotes_reject_both_buy_forms_and_sells() {
 fn creation_accepts_only_factory_ending_windows() {
     use curve_core::EndingPolicy::{Depletion, Either, Manual, Scheduled};
     for ending in [Manual, Scheduled, Depletion, Either] {
-        for end in [None, Some(100)] {
+        for end in [None, Some(400)] {
             let mut request = creation();
             request.ending_policy = ending;
             request.end_timestamp = end;
@@ -1723,8 +1723,8 @@ fn creation_resume_rejects_ending_and_deadline_replacements_at_every_stage() {
     ] {
         for (ending, end) in [
             (Depletion, None),
-            (Scheduled, Some(100)),
-            (Either, Some(100)),
+            (Scheduled, Some(400)),
+            (Either, Some(400)),
         ] {
             let mut state = valid_factory_state(sale());
             state.creation_stage = stage;
@@ -1744,9 +1744,9 @@ fn creation_resume_rejects_ending_and_deadline_replacements_at_every_stage() {
             );
             for (replacement, deadline) in [
                 (Depletion, None),
-                (Scheduled, Some(100)),
-                (Either, Some(100)),
-                (ending, Some(101)),
+                (Scheduled, Some(400)),
+                (Either, Some(400)),
+                (ending, Some(401)),
             ] {
                 if (replacement, deadline) == (ending, end) {
                     continue;
@@ -2796,4 +2796,36 @@ fn resumed_creation_cannot_change_the_graduation_reserve() {
         invocation.instruction,
         factory_core::Message::ContinueCreation { .. }
     ));
+}
+
+#[test]
+fn curve_continuation_recovers_after_expiry_without_allowing_a_short_live_sale() {
+    let mut state = valid_factory_state(sale());
+    state.creation_stage = CreationStage::Minted;
+    state.ending_policy = factory_core::EndingPolicy::Either;
+    state.end_timestamp = Some(400);
+    for (now, accepted) in [
+        (100, true),
+        (101, false),
+        (399, false),
+        (400, true),
+        (401, true),
+    ] {
+        let mut request = creation();
+        request.ending_policy = state.ending_policy;
+        request.end_timestamp = state.end_timestamp;
+        request.now = now;
+        let result = super::next_creation_invocation(
+            sale(),
+            AccountId::new([9; 32]),
+            request.clone(),
+            Some(&state),
+        );
+        assert_eq!(result.is_ok(), accepted, "hint {now}");
+        if now >= 400 {
+            assert!(
+                build_create_sale_invocation(sale(), AccountId::new([9; 32]), request).is_err()
+            );
+        }
+    }
 }

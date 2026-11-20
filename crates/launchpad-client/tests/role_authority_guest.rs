@@ -485,7 +485,7 @@ fn transferred_curve_creator_funds_and_settles_without_pool_custody() {
                 creator_allocation: 50,
                 virtual_token_reserve: 1_000,
                 virtual_collateral_reserve: 1_000,
-                end_timestamp: Some(2),
+                end_timestamp: Some(301),
                 curve_program_id: CURVE,
                 collateral_definition_id: COLLATERAL,
                 creator: id(&creator),
@@ -615,13 +615,13 @@ fn transferred_curve_creator_funds_and_settles_without_pool_custody() {
         100
     );
     assert_eq!(balance(&fixture.state, fixture.pool, COLLATERAL), 112);
-    fixture.inclusion_timestamp_ms = 2_000;
+    fixture.inclusion_timestamp_ms = 301_000;
     let before = fixture.state.clone();
     let rejected = fixture.call(
         &creator,
         factory_core::Message::ClaimCreatorAllocation {
             creator: id(&creator),
-            now: 2,
+            now: 301,
         },
     );
     assert!(
@@ -645,7 +645,7 @@ fn transferred_curve_creator_funds_and_settles_without_pool_custody() {
         &successor,
         factory_core::Message::ClaimCreatorAllocation {
             creator: id(&successor),
-            now: 2,
+            now: 301,
         },
     );
     assert!(
@@ -662,7 +662,7 @@ fn transferred_curve_creator_funds_and_settles_without_pool_custody() {
             &successor,
             factory_core::Message::ClaimCreatorAllocation {
                 creator: id(&successor),
-                now: 2,
+                now: 301,
             },
         )
         .unwrap();
@@ -683,7 +683,7 @@ fn transferred_curve_creator_funds_and_settles_without_pool_custody() {
             &creator,
             factory_core::Message::WithdrawFactoryProceeds {
                 creator: id(&creator),
-                now: 2,
+                now: 301,
             },
         );
         assert!(
@@ -696,7 +696,7 @@ fn transferred_curve_creator_funds_and_settles_without_pool_custody() {
                 &successor,
                 factory_core::Message::WithdrawFactoryProceeds {
                     creator: id(&successor),
-                    now: 2,
+                    now: 301,
                 },
             )
             .unwrap();

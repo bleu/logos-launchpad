@@ -1171,7 +1171,7 @@ fn frozen_direct_pool_keeps_owner_close_and_reserve_recovery_checks() {
 #[test]
 #[ignore = "requires fresh application and compatibility ELFs and the pinned clock ELF"]
 fn factory_expiry_rejects_current_and_stale_trades_and_can_close_while_frozen() {
-    let mut fixture = fresh_sale(1, Some(2));
+    let mut fixture = fresh_sale(1, Some(301));
     trade(
         &mut fixture,
         curve_core::Message::SwapExactInput {
@@ -1183,8 +1183,8 @@ fn factory_expiry_rejects_current_and_stale_trades_and_can_close_while_frozen() 
         },
     )
     .unwrap();
-    fixture.inclusion_timestamp_ms = 2_000;
-    for now in [1, 2] {
+    fixture.inclusion_timestamp_ms = 301_000;
+    for now in [1, 301] {
         for token_in in [COLLATERAL, fixture.definition] {
             let before = fixture.state.clone();
             let result = trade(
@@ -1230,7 +1230,7 @@ fn factory_expiry_rejects_current_and_stale_trades_and_can_close_while_frozen() 
                 &key(48),
                 factory_core::Message::WithdrawFactoryProceeds {
                     creator: id(&key(48)),
-                    now: 2,
+                    now: 301,
                 },
             )
             .unwrap();
@@ -1275,7 +1275,7 @@ fn factory_expiry_rejects_current_and_stale_trades_and_can_close_while_frozen() 
                         amount_in: 1,
                         min_amount_out: 0,
                         token_in,
-                        now: 2,
+                        now: 301,
                     },
                 )
             },
@@ -1301,7 +1301,7 @@ fn set_sale_paused(
 #[test]
 #[ignore = "requires fresh application and compatibility ELFs and the pinned clock ELF"]
 fn curve_pause_uses_current_creator_blocks_all_swaps_and_preserves_frozen_settlement() {
-    let mut fixture = sale_with_pause(1, Some(2), curve_core::PausePolicy::AuthorityControlled);
+    let mut fixture = sale_with_pause(1, Some(301), curve_core::PausePolicy::AuthorityControlled);
     let creator = key(48);
     let successor = key(49);
     fixture.actors.extend([
@@ -1440,7 +1440,7 @@ fn curve_pause_uses_current_creator_blocks_all_swaps_and_preserves_frozen_settle
         "Frozen",
     );
     set_sale_paused(&mut fixture, &successor, true).unwrap();
-    fixture.inclusion_timestamp_ms = 2_000;
+    fixture.inclusion_timestamp_ms = 301_000;
     let before = fixture.state.clone();
     let result = set_sale_paused(&mut fixture, &successor, false);
     assert!(
@@ -1454,7 +1454,7 @@ fn curve_pause_uses_current_creator_blocks_all_swaps_and_preserves_frozen_settle
                 &successor,
                 factory_core::Message::WithdrawFactoryProceeds {
                     creator: id(&successor),
-                    now: 2,
+                    now: 301,
                 },
             )
             .unwrap();
@@ -1482,7 +1482,7 @@ fn curve_pause_uses_current_creator_blocks_all_swaps_and_preserves_frozen_settle
                     paused: false,
                 },
                 &[&successor],
-                2_000,
+                301_000,
             )
         },
         "Closed",
