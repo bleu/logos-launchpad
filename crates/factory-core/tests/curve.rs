@@ -1088,7 +1088,7 @@ fn curve_creation_reads_namespace_before_bootstrapping_its_creator_role() {
 fn curve_creation_bootstraps_a_transfer_only_creator_role_with_the_mint() {
     let (_, response) = minted();
     assert_eq!(response.validity.timestamps.start(), None);
-    assert_eq!(response.validity.timestamps.end(), Some(100_001));
+    assert_eq!(response.validity.timestamps.end(), Some(400_000));
     let call = response
         .sync_messages
         .iter()
@@ -1926,7 +1926,7 @@ fn curve_setup_keeps_each_selected_ending_and_its_depletion_side() {
         }
         assert_eq!(
             response.validity.timestamps.end(),
-            end.map(|end| (end - MIN_CURVE_SALE_DURATION_SECONDS) * 1000 + 1)
+            end.map(|end| end * 1000)
         );
         let (input, allocated) = continued(&input, &response, 900, 0, 0);
         let (input, prepared) = continued(&input, &allocated, 0, 800, 100);
@@ -2759,11 +2759,11 @@ fn graduation_reserve_is_in_initial_supply_but_not_curve_pricing() {
 }
 
 #[test]
-fn configured_curve_expiry_requires_minimum_duration_and_inclusion_bound() {
+fn short_curve_sale_still_requires_inclusion_before_expiry() {
     for (now, accepted) in [
         (99, true),
         (100, true),
-        (101, false),
+        (399, true),
         (400, false),
         (u64::MAX, false),
     ] {
@@ -2776,31 +2776,29 @@ fn configured_curve_expiry_requires_minimum_duration_and_inclusion_bound() {
         let result = handle(&input);
         if accepted {
             let response = result.unwrap();
-            assert_eq!(response.validity.timestamps.end(), Some(100_001));
+            assert_eq!(response.validity.timestamps.end(), Some(400_000));
         } else {
             assert_eq!(result.err(), Some(Error::InvalidTerms));
         }
     }
-    assert!(validate_curve_duration(None, u64::MAX).is_ok());
-    assert!(validate_curve_duration(Some(299), 0).is_err());
-    assert!(validate_curve_duration(Some(300), 0).is_ok());
+    assert!(validate_curve_expiry(None, u64::MAX).is_ok());
 }
 
 #[test]
-fn every_curve_setup_reply_keeps_the_minimum_duration_window() {
+fn every_curve_setup_reply_keeps_the_expiry_window() {
     let mut input = creation();
     let mut response = handle(&input).unwrap();
     for bytes in [config(), definition()] {
         input = reply(&input, &response, bytes);
         response = handle(&input).unwrap();
-        assert_eq!(response.validity.timestamps.end(), Some(100_001));
+        assert_eq!(response.validity.timestamps.end(), Some(400_000));
     }
     let (input, allocated) = continued(&input, &response, 900, 0, 0);
-    assert_eq!(allocated.validity.timestamps.end(), Some(100_001));
+    assert_eq!(allocated.validity.timestamps.end(), Some(400_000));
     let (input, prepared) = continued(&input, &allocated, 0, 800, 100);
-    assert_eq!(prepared.validity.timestamps.end(), Some(100_001));
+    assert_eq!(prepared.validity.timestamps.end(), Some(400_000));
     let (_, activated) = continued(&input, &prepared, 0, 800, 100);
-    assert_eq!(activated.validity.timestamps.end(), Some(100_001));
+    assert_eq!(activated.validity.timestamps.end(), Some(400_000));
 }
 
 #[test]

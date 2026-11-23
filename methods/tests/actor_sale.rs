@@ -9429,7 +9429,7 @@ fn signed_wrong_kind_adapter_initialization_rolls_back_then_correct_kind_succeed
 mod distribution;
 
 #[test]
-fn curve_minimum_duration_rejects_late_creation_and_activation_atomically() {
+fn curve_short_setup_still_enforces_expiry_and_allows_closed_recovery() {
     const FACTORY: AccountId = AccountId::new([17; 32]);
     let key = PrivateKey::try_new([23; 32]).unwrap();
     let creator = AccountId::from(&PublicKey::new_from_private_key(&key));
@@ -9531,13 +9531,13 @@ fn curve_minimum_duration_rejects_late_creation_and_activation_atomically() {
             launch,
             pool,
             create.clone(),
-            200_001
+            500_000
         )
         .is_err()
     );
     assert!(state == before);
     factory_execute_at(
-        &mut state, factory, &actors, &key, salt, launch, pool, create, 200_000,
+        &mut state, factory, &actors, &key, salt, launch, pool, create, 499_999,
     )
     .unwrap();
     let continue_creation = factory_core::Message::ContinueCreation { creator, now: 100 };
@@ -9551,7 +9551,7 @@ fn curve_minimum_duration_rejects_late_creation_and_activation_atomically() {
             launch,
             pool,
             continue_creation.clone(),
-            200_000,
+            499_999,
         )
         .unwrap();
     }
@@ -9566,7 +9566,7 @@ fn curve_minimum_duration_rejects_late_creation_and_activation_atomically() {
             launch,
             pool,
             continue_creation.clone(),
-            200_001
+            500_000
         )
         .is_err()
     );
@@ -9632,7 +9632,7 @@ fn curve_minimum_duration_rejects_late_creation_and_activation_atomically() {
         launch,
         pool,
         continue_creation,
-        200_000,
+        499_999,
     )
     .unwrap();
     assert!(

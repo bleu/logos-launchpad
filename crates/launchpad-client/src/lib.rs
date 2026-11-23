@@ -500,10 +500,8 @@ fn build_curve_sale_invocation(
         request.virtual_collateral_reserve,
     )?;
     factory_core::validate_curve_policies(request.ending_policy, request.end_timestamp)?;
-    if continuation {
-        factory_core::validate_curve_continuation_duration(request.end_timestamp, request.now)?;
-    } else {
-        factory_core::validate_curve_duration(request.end_timestamp, request.now)?;
+    if !continuation {
+        factory_core::validate_curve_expiry(request.end_timestamp, request.now)?;
     }
     if request.sell_fee_bps != 0 {
         return Err(ClientError::FactoryPolicy(
