@@ -23,6 +23,7 @@ fn frozen_namespace_rejects_current_state_purchase_quotes() {
         allowed_input_token: None,
         funded: true,
         closure_observed: false,
+        block_allocation: Default::default(),
         namespace,
         token0_definition_id: AccountId::new([1; 32]),
         token1_definition_id: AccountId::new([2; 32]),
@@ -41,7 +42,7 @@ fn frozen_namespace_rejects_current_state_purchase_quotes() {
         .unwrap(),
     };
     assert_eq!(
-        launchpad_client::quote_buy(&pool, &config, 200, 0)
+        launchpad_client::quote_buy(&pool, &config, 200, 0, None)
             .unwrap_err()
             .to_string(),
         "namespace is frozen"
@@ -70,6 +71,7 @@ fn purchase_preparation_checks_the_participant_cap_with_current_namespace_fees()
         allowed_input_token: None,
         funded: true,
         closure_observed: false,
+        block_allocation: Default::default(),
         namespace,
         token0_definition_id: AccountId::new([1; 32]),
         token1_definition_id: AccountId::new([2; 32]),
@@ -105,6 +107,7 @@ fn purchase_preparation_checks_the_participant_cap_with_current_namespace_fees()
         },
         None,
         0,
+        None,
     );
     assert!(matches!(
         result,
@@ -344,6 +347,7 @@ fn creation_request_preserves_unix_seconds_on_the_public_wire() {
             ending_policy: curve_core::EndingPolicy::Either,
             trade_mode: launchpad_client::TradeMode::BuyAndSell,
             sell_fee_bps: 0,
+            per_block_token_limit: None,
             graduation_hook: None,
             name: "Sale".into(),
             uri: "ipfs://sale".into(),
@@ -367,10 +371,10 @@ fn creation_request_preserves_unix_seconds_on_the_public_wire() {
         }
     ));
     let bytes = call.message_bytes().unwrap();
-    assert_eq!(bytes.len(), 296);
+    assert_eq!(bytes.len(), 297);
     assert_eq!(&bytes[..8], &[0, 0, 0, 3, 1, 0, 0, 0]);
-    assert_eq!(&bytes[183..192], &[1, 0x10, 0xff, 0x53, 0x65, 0, 0, 0, 0]);
-    assert_eq!(&bytes[288..], &[0x00, 0xf1, 0x53, 0x65, 0, 0, 0, 0]);
+    assert_eq!(&bytes[184..193], &[1, 0x10, 0xff, 0x53, 0x65, 0, 0, 0, 0]);
+    assert_eq!(&bytes[289..], &[0x00, 0xf1, 0x53, 0x65, 0, 0, 0, 0]);
 }
 
 #[test]

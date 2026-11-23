@@ -77,6 +77,7 @@ pub struct CreateSaleRequest {
     pub ending_policy: EndingPolicy,
     pub trade_mode: TradeMode,
     pub sell_fee_bps: u16,
+    pub per_block_token_limit: Option<u128>,
     pub graduation_hook: Option<GraduationHook>,
     pub name: String,
     pub uri: String,
@@ -494,6 +495,9 @@ fn build_curve_sale_invocation(
     continuation: bool,
 ) -> Result<PublicInvocation<FactoryInstruction>> {
     request.total_supply()?;
+    if request.per_block_token_limit == Some(0) {
+        return Err(factory_core::Error::InvalidTerms.into());
+    }
     factory_core::validate_curve_parameters(
         request.sale_reserve,
         request.virtual_token_reserve,
@@ -505,11 +509,8 @@ fn build_curve_sale_invocation(
     } else {
         factory_core::validate_curve_duration(request.end_timestamp, request.now)?;
     }
-    if request.sell_fee_bps != 0 {
-        return Err(ClientError::FactoryPolicy(
-            factory_core::Error::InvalidTerms,
-        ));
-    }
+    curve_core::SellFeeRate::new(request.sell_fee_bps)
+        .map_err(|_| ClientError::FactoryPolicy(factory_core::Error::InvalidTerms))?;
     request
         .graduation_policy
         .validate(request.graduation_hook.is_some())
@@ -526,6 +527,7 @@ fn build_curve_sale_invocation(
                 ending_policy: request.ending_policy,
                 trade_mode: request.trade_mode as u8,
                 sell_fee_bps: request.sell_fee_bps,
+                per_block_token_limit: request.per_block_token_limit,
                 graduation_hook_program_id: request.graduation_hook.as_ref().map(|h| h.program_id),
                 graduation_hook_configuration: request
                     .graduation_hook
@@ -798,6 +800,7 @@ fn trade_invocation(
     }
     call
 }
+#[allow(clippy::too_many_arguments)]
 pub fn prepare_buy_invocation(
     sale: FactorySale,
     participant: AccountId,
@@ -806,8 +809,9 @@ pub fn prepare_buy_invocation(
     terms: ExactOutputTradeTerms,
     membership: Option<MembershipPath>,
     now: u64,
+    observed_block: Option<u64>,
 ) -> Result<PublicInvocation<CurveInstruction>> {
-    let quote = quote_buy(pool, config, terms.amount_out, now)?;
+    let quote = quote_buy(pool, config, terms.amount_out, now, observed_block)?;
     if quote.amount_in > terms.max_amount_in {
         return Err(ClientError::QuoteBuy(pool::SwapError::SlippageExceeded));
     }
@@ -839,6 +843,7 @@ pub fn build_buy_invocation(
         },
     )
 }
+#[allow(clippy::too_many_arguments)]
 pub fn prepare_buy_with_collateral_invocation(
     sale: FactorySale,
     participant: AccountId,
@@ -847,8 +852,9 @@ pub fn prepare_buy_with_collateral_invocation(
     terms: ExactInputTradeTerms,
     membership: Option<MembershipPath>,
     now: u64,
+    observed_block: Option<u64>,
 ) -> Result<PublicInvocation<CurveInstruction>> {
-    let quote = quote_buy_with_collateral(pool, config, terms.amount_in, now)?;
+    let quote = quote_buy_with_collateral(pool, config, terms.amount_in, now, observed_block)?;
     if quote.amount_out < terms.min_amount_out {
         return Err(ClientError::QuoteBuyWithCollateral(
             pool::SwapError::SlippageExceeded,
@@ -1381,6 +1387,7 @@ pub(crate) fn validate_factory_pool(
         || state.trade_control.policy() != factory.pause_policy
         || state.pool.ending_policy != factory.ending_policy
         || state.pool.sell_fee_bps != factory.sell_fee_bps
+        || state.block_allocation.limit != factory.per_block_token_limit
         || state.pool.validate_policy().is_err()
         || Some(state.pool.initial_k)
             != factory
@@ -1403,9 +1410,8 @@ pub(crate) fn validate_factory_pool(
     Ok(())
 }
 pub(crate) fn validate_factory_state(sale: FactorySale, state: &FactoryState) -> Result<()> {
-    if state.sell_fee_bps != 0 {
-        return Err(ClientError::FactorySaleMismatch);
-    }
+    curve_core::SellFeeRate::new(state.sell_fee_bps)
+        .map_err(|_| ClientError::FactorySaleMismatch)?;
     factory_core::validate_curve_policies(state.ending_policy, state.end_timestamp)
         .map_err(|_| ClientError::FactorySaleMismatch)?;
     let a = factory_pool_addresses(sale);
@@ -1606,7 +1612,7 @@ pub async fn load_clock_block_id(wallet: &LaunchpadWallet) -> Result<u64> {
         .map_err(ClientError::DecodeClock)
 }
 
-/// Quotes use the saved sale rate and live namespace freeze state. Weighted pricing time is not inclusion proof.
+/// Quotes use the live namespace rate and freeze state. Weighted pricing time is not inclusion proof.
 /// Capped buys need `observed_block` from [`load_clock_block_id`]. The allowance check holds only
 /// for inclusion in the next block and does not reserve allocation.
 pub fn quote_lbp_trade(
@@ -1635,7 +1641,7 @@ pub fn quote_lbp_trade(
     if config.emergency.is_frozen {
         return Err(ClientError::NamespaceFrozen);
     }
-    let quote = lbp_core::quote_trade(pool_account, request, pricing_time)
+    let quote = lbp_core::quote_trade(pool_account, request, config.protocol_fee_bps, pricing_time)
         .map_err(ClientError::QuoteLbpTrade)?;
     if !request.is_sell() && pool_account.block_allocation.limit.is_some() {
         let block = observed_block.ok_or(ClientError::BlockIdRequired)?;
@@ -1659,6 +1665,7 @@ pub fn quote_buy(
     config: &Config,
     amount_out: u128,
     now: u64,
+    observed_block: Option<u64>,
 ) -> Result<pool::SwapOutcome> {
     if config.emergency.is_frozen {
         return Err(ClientError::NamespaceFrozen);
@@ -1680,15 +1687,18 @@ pub fn quote_buy(
         .validate_policy()
         .map_err(|_| ClientError::QuoteBuy(pool::SwapError::InvalidPolicy))?;
     let mut pool = pool_account.pool.clone();
-    pool.swap_exact_output(pool::ExactOutputSwap {
-        token_in: pool::TokenSide::Token1,
-        amount_out,
-        max_amount_in: u128::MAX,
-        pool_fee_bps: 0,
-        protocol_fee_bps: config.protocol_fee_bps,
-        now,
-    })
-    .map_err(ClientError::QuoteBuy)
+    let quote = pool
+        .swap_exact_output(pool::ExactOutputSwap {
+            token_in: pool::TokenSide::Token1,
+            amount_out,
+            max_amount_in: u128::MAX,
+            pool_fee_bps: 0,
+            protocol_fee_bps: config.protocol_fee_bps,
+            now,
+        })
+        .map_err(ClientError::QuoteBuy)?;
+    check_curve_allocation(pool_account, observed_block, quote.amount_out)?;
+    Ok(quote)
 }
 
 /// Quotes an exact-input sale against a snapshot of the current pool and fee config.
@@ -1736,6 +1746,7 @@ pub fn quote_buy_with_collateral(
     config: &Config,
     collateral_in: u128,
     now: u64,
+    observed_block: Option<u64>,
 ) -> Result<pool::SwapOutcome> {
     if config.emergency.is_frozen {
         return Err(ClientError::NamespaceFrozen);
@@ -1757,13 +1768,34 @@ pub fn quote_buy_with_collateral(
         .validate_policy()
         .map_err(|_| ClientError::QuoteBuyWithCollateral(pool::SwapError::InvalidPolicy))?;
     let mut pool = pool_account.pool.clone();
-    pool.swap_exact_input(pool::ExactInputSwap {
-        token_in: pool::TokenSide::Token1,
-        amount_in: collateral_in,
-        min_amount_out: 0,
-        pool_fee_bps: 0,
-        protocol_fee_bps: config.protocol_fee_bps,
-        now,
-    })
-    .map_err(ClientError::QuoteBuyWithCollateral)
+    let quote = pool
+        .swap_exact_input(pool::ExactInputSwap {
+            token_in: pool::TokenSide::Token1,
+            amount_in: collateral_in,
+            min_amount_out: 0,
+            pool_fee_bps: 0,
+            protocol_fee_bps: config.protocol_fee_bps,
+            now,
+        })
+        .map_err(ClientError::QuoteBuyWithCollateral)?;
+    check_curve_allocation(pool_account, observed_block, quote.amount_out)?;
+    Ok(quote)
+}
+
+fn check_curve_allocation(
+    state: &curve_core::PoolAccount,
+    observed_block: Option<u64>,
+    amount_out: u128,
+) -> Result<()> {
+    if state.block_allocation.limit.is_some() {
+        let block = observed_block.ok_or(ClientError::BlockIdRequired)?;
+        if state
+            .block_allocation
+            .remaining(block)
+            .is_some_and(|remaining| amount_out > remaining)
+        {
+            return Err(ClientError::CurveBlockAllocationExceeded);
+        }
+    }
+    Ok(())
 }

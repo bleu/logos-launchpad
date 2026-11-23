@@ -42,6 +42,7 @@ fn factory_state(kind: GraduationIntentKind) -> Vec<u8> {
             ending_policy: EndingPolicy::Scheduled,
             trade_mode: 0,
             sell_fee_bps: 0,
+            per_block_token_limit: None,
             graduation_hook_program_id: Some(id(9)),
             graduation_hook_configuration: vec![],
             namespace: id(40),

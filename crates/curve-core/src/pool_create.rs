@@ -25,6 +25,7 @@ pub fn begin(input: &ReceiveInput, message: Message) -> Result<Response, Error> 
         pause_policy,
         ending_policy,
         sell_fee_bps,
+        per_block_token_limit,
         namespace,
         token0_definition_id,
         token1_definition_id,
@@ -134,6 +135,10 @@ pub fn begin(input: &ReceiveInput, message: Message) -> Result<Response, Error> 
         owner,
         owner_program,
         pool,
+        block_allocation: sale_policy::block_allocation::BlockAllocation::new(
+            per_block_token_limit,
+        )
+        .map_err(|_| Error::InvalidPool)?,
     };
     state.validate_address(input.receiver)?;
     let mut queries = vec![Query::Namespace, Query::Definition0, Query::Definition1];
@@ -245,6 +250,7 @@ pub(crate) fn finish(mut pending: Pending, receiver: Actor) -> Result<Response, 
         pause_policy,
         ending_policy,
         sell_fee_bps,
+        per_block_token_limit,
         close_timestamp,
         close_on_depletion,
         ..
@@ -255,6 +261,7 @@ pub(crate) fn finish(mut pending: Pending, receiver: Actor) -> Result<Response, 
     if pending.state.trade_control.policy() != pause_policy
         || pending.state.pool.ending_policy != ending_policy
         || pending.state.pool.sell_fee_bps != sell_fee_bps
+        || pending.state.block_allocation.limit != per_block_token_limit
         || pending.state.pool.close_timestamp != close_timestamp
         || pending.state.pool.close_on_depletion != side(close_on_depletion)?
     {

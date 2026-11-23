@@ -65,6 +65,7 @@ fn seeded_state_with_sell_fee(
         allowed_input_token: Some(pool::TokenSide::Token1),
         funded: true,
         closure_observed: false,
+        block_allocation: Default::default(),
         namespace: NAMESPACE,
         token0_definition_id: LAUNCH,
         token1_definition_id: COLLATERAL,
@@ -239,7 +240,6 @@ fn fixed_state(buyer: AccountId, end: Option<u64>) -> (V03State, AccountId) {
     let pool = lbp_core::compute_pool_pda(NAMESPACE, LBP, LAUNCH, COLLATERAL, OWNER);
     // Seeded funded state does not test the four setup stages.
     let bytes = borsh::to_vec(&(
-        333u16,
         (None::<u128>, None::<u64>, 0u128),
         (
             curve_core::BuyPolicy::Open,
@@ -687,7 +687,7 @@ fn fixed_rejected(
 }
 
 #[test]
-fn fixed_price_buys_preserve_saved_fees_before_pricing_and_collect_to_current_treasury() {
+fn fixed_price_buys_deduct_live_fees_before_pricing_and_collect_to_current_treasury() {
     use lbp_core::Message::{BuyExactInput, BuyExactOutput, CollectFees};
     let key = PrivateKey::try_new([23; 32]).unwrap();
     let buyer = AccountId::from(&PublicKey::new_from_private_key(&key));
@@ -724,13 +724,13 @@ fn fixed_price_buys_preserve_saved_fees_before_pricing_and_collect_to_current_tr
         BuyExactOutput {
             membership: None,
             amount_out: 13,
-            max_amount_in: 21,
+            max_amount_in: 23,
             now: 100,
         },
     )
     .unwrap();
     assert_eq!(balance(&state, buyer, LAUNCH), 77);
-    assert_eq!(balance(&state, buyer, COLLATERAL), 1_878);
+    assert_eq!(balance(&state, buyer, COLLATERAL), 1_876);
     let sale = fixed_pool(&state, pool);
     assert_eq!(
         (
@@ -738,15 +738,15 @@ fn fixed_price_buys_preserve_saved_fees_before_pricing_and_collect_to_current_tr
             sale.recorded_collateral,
             sale.accrued_fees
         ),
-        (923, 117, 5)
+        (923, 117, 7)
     );
-    assert_eq!(balance(&state, pool, COLLATERAL), 163);
+    assert_eq!(balance(&state, pool, COLLATERAL), 165);
     assert_eq!(balance(&state, pool, LAUNCH), 930);
 
     state = clock_state(fixed_config(state, 1_001, NEXT_TREASURY, true), 200_001);
     fixed_execute_at(&mut state, pool, &key, CollectFees, 200_001).unwrap();
     assert_eq!(balance(&state, TREASURY, COLLATERAL), 0);
-    assert_eq!(balance(&state, NEXT_TREASURY, COLLATERAL), 5);
+    assert_eq!(balance(&state, NEXT_TREASURY, COLLATERAL), 7);
     assert_eq!(balance(&state, pool, COLLATERAL), 158);
     let sale = fixed_pool(&state, pool);
     assert_eq!((sale.recorded_collateral, sale.accrued_fees), (117, 0));
@@ -867,7 +867,7 @@ fn fixed_price_fee_only_slippage_and_fee_consuming_dust_preserve_state_and_nonce
         &key,
         BuyExactInput {
             membership: None,
-            amount_in: 1,
+            amount_in: 3,
             min_amount_out: 0,
             now: 100,
         },
@@ -1286,23 +1286,11 @@ fn curve_allowlist_signed_buy_checks_actual_trader_and_reuses_membership() {
 
 #[test]
 fn curve_factory_locks_allowlist_before_setup_and_buys_with_the_same_policy() {
-    for (ending_policy, trade_mode) in [
-        (
-            curve_core::EndingPolicy::Scheduled,
-            factory_core::TradeMode::BuyOnly,
-        ),
-        (
-            curve_core::EndingPolicy::Depletion,
-            factory_core::TradeMode::BuyOnly,
-        ),
-        (
-            curve_core::EndingPolicy::Either,
-            factory_core::TradeMode::BuyOnly,
-        ),
-        (
-            curve_core::EndingPolicy::Either,
-            factory_core::TradeMode::BuyAndSell,
-        ),
+    for (ending_policy, sell_fee_bps) in [
+        (curve_core::EndingPolicy::Scheduled, 0),
+        (curve_core::EndingPolicy::Depletion, 0),
+        (curve_core::EndingPolicy::Either, 0),
+        (curve_core::EndingPolicy::Either, 777),
     ] {
         const FACTORY: AccountId = AccountId::new([17; 32]);
         let key = PrivateKey::try_new([21; 32]).unwrap();
@@ -1427,8 +1415,9 @@ fn curve_factory_locks_allowlist_before_setup_and_buys_with_the_same_policy() {
                 buy_policy: policy.clone(),
                 pause_policy: curve_core::PausePolicy::Disabled,
                 ending_policy,
-                trade_mode: u8::from(trade_mode == factory_core::TradeMode::BuyAndSell),
-                sell_fee_bps: 0,
+                trade_mode: u8::from(sell_fee_bps > 0),
+                sell_fee_bps,
+                per_block_token_limit: None,
                 graduation_hook_program_id: None,
                 graduation_hook_configuration: vec![],
                 namespace: NAMESPACE,
@@ -1459,8 +1448,7 @@ fn curve_factory_locks_allowlist_before_setup_and_buys_with_the_same_policy() {
             .unwrap();
             assert_eq!(stored.buy_policy, policy);
             assert_eq!(stored.ending_policy, ending_policy);
-            assert_eq!(stored.trade_mode, trade_mode);
-            assert_eq!(stored.sell_fee_bps, 0);
+            assert_eq!(stored.sell_fee_bps, sell_fee_bps);
             execute(
                 &mut state,
                 factory_core::Message::ContinueCreation { creator, now: 1 },
@@ -1471,8 +1459,7 @@ fn curve_factory_locks_allowlist_before_setup_and_buys_with_the_same_policy() {
         assert!(stored.funded);
         assert_eq!(stored.buy_policy, policy);
         assert_eq!(stored.pool.ending_policy, ending_policy);
-        assert_eq!(stored.pool.sell_fee_bps, 0);
-        assert_eq!(stored.pool.k, stored.pool.initial_k);
+        assert_eq!(stored.pool.sell_fee_bps, sell_fee_bps);
         let mut message = Message::try_new(
             Actor::new(creator, CURVE),
             actors,
@@ -2483,7 +2470,7 @@ fn weighted_factory_executes_all_stages_and_rolls_back_failed_funding() {
         let mut at_start = clock_state(state.clone(), 150_000);
         execute_at(&mut at_start, creation.clone(), 150_000).unwrap();
         execute(&mut state, creation).unwrap();
-        state = fixed_config(state, 9999, TREASURY, false);
+        state = fixed_config(state, 200, TREASURY, false);
         assert_eq!(balance(&state, mint, launch), 1000);
         for stage in [LbpCreationStage::Minted, LbpCreationStage::Allocated] {
             assert_eq!(
@@ -2611,7 +2598,6 @@ fn weighted_factory_executes_all_stages_and_rolls_back_failed_funding() {
         assert_eq!(launch_state.creation_stage, LbpCreationStage::Complete);
         assert_eq!(launch_state.buy_policy, policy);
         assert_eq!(launch_state.ending_policy, ending_policy);
-        assert_eq!(launch_state.protocol_fee_bps, 100);
         assert_eq!(launch_state.per_block_token_limit, Some(800));
         assert_eq!(balance(&state, pool, launch), 800);
         assert_eq!(balance(&state, pool, COLLATERAL), 141);
@@ -2639,7 +2625,6 @@ fn weighted_factory_executes_all_stages_and_rolls_back_failed_funding() {
         assert!(sale.funded);
         assert_eq!(sale.buy_policy, policy);
         assert_eq!(sale.ending_policy, ending_policy);
-        assert_eq!(sale.protocol_fee_bps, 100);
         assert_eq!(sale.block_allocation.limit, Some(800));
         assert!(matches!(
             sale.mode,
@@ -5081,6 +5066,7 @@ fn factory_creation_rejects_invalid_ending_matrix_without_state_changes() {
                     ending_policy,
                     trade_mode: 0,
                     sell_fee_bps: 0,
+                    per_block_token_limit: None,
                     graduation_hook_program_id: None,
                     graduation_hook_configuration: vec![],
                     namespace: NAMESPACE,
@@ -5761,6 +5747,7 @@ fn curve_factory_env_with_reserve(
             ending_policy: curve_core::EndingPolicy::Scheduled,
             trade_mode: 0,
             sell_fee_bps: 0,
+            per_block_token_limit: None,
             graduation_hook_program_id: hook.then_some(LBP_HOOK_PROGRAM),
             graduation_hook_configuration: configuration,
             namespace: NAMESPACE,
@@ -8356,6 +8343,7 @@ fn signed_common_sells_weighted_seed_fee_surplus_isolation() {
             tokens_in: 100,
             min_collateral_out: 0,
         },
+        100,
         150,
     )
     .unwrap();
@@ -8636,7 +8624,7 @@ fn signed_common_sells_controls_and_late_credit_rollback() {
 }
 
 #[test]
-fn signed_retained_sells_fixed_and_weighted_accounting_and_saved_fee_scope() {
+fn signed_retained_sells_fixed_and_weighted_accounting_and_live_fee_scope() {
     let retained_bps = 777;
     for weighted in [false, true] {
         let (mut state, factory, pool, launch, key, actors, salt, membership, now, namespace_bps) =
@@ -8684,6 +8672,7 @@ fn signed_retained_sells_fixed_and_weighted_accounting_and_saved_fee_scope() {
                 tokens_in: 40,
                 min_collateral_out: 0,
             },
+            namespace_bps,
             now,
         )
         .unwrap();
@@ -8802,19 +8791,21 @@ fn signed_retained_sells_fixed_and_weighted_accounting_and_saved_fee_scope() {
         let saved = state.clone();
         let sell = if weighted {
             lbp_core::Message::SellWeightedExactInput {
-                amount_in: 40,
+                amount_in: 10,
                 min_amount_out: 0,
             }
         } else {
             lbp_core::Message::SellExactInput {
-                amount_in: 40,
+                amount_in: 10,
                 min_amount_out: 0,
                 now,
             }
         };
-        fixed_execute_events_at(&mut state, pool, &key, sell, now * 1_000).unwrap();
-        assert!(state != saved);
-        assert_eq!(fixed_pool(&state, pool).protocol_fee_bps, namespace_bps);
+        assert!(
+            matches!(fixed_execute_events_at(&mut state, pool, &key, sell, now * 1_000),
+            Err(lee::error::LeeError::ProgramExecutionFailed(error)) if error.contains("InvalidFee"))
+        );
+        assert!(state == saved);
         let buy = if weighted {
             lbp_core::Message::BuyWeightedExactInput {
                 membership,
@@ -9502,6 +9493,7 @@ fn curve_minimum_duration_rejects_late_creation_and_activation_atomically() {
         ending_policy: curve_core::EndingPolicy::Scheduled,
         trade_mode: 1,
         sell_fee_bps: 0,
+        per_block_token_limit: None,
         graduation_hook_program_id: None,
         graduation_hook_configuration: vec![],
         namespace: NAMESPACE,
@@ -9658,8 +9650,7 @@ fn block_ceiling_signed_buys_share_allowance_and_failed_transfers_roll_back() {
             Actor::new(pool, LBP),
             borsh::to_vec(&sale).unwrap(),
         )]);
-        state = fixed_config(state, 9999, TREASURY, false);
-        let saved_rate = sale.protocol_fee_bps;
+        state = fixed_config(state, 200, TREASURY, false);
         let message = if weighted {
             lbp_core::Message::BuyWeightedExactOutput {
                 membership: None,
@@ -9693,7 +9684,6 @@ fn block_ceiling_signed_buys_share_allowance_and_failed_transfers_roll_back() {
                 .unwrap();
             let saved = fixed_pool(&state, pool);
             assert_eq!(saved.block_allocation.tokens_sold, sold);
-            assert_eq!(saved.protocol_fee_bps, saved_rate);
             assert!(saved.accrued_fees > 0);
         }
         let excess = if weighted {

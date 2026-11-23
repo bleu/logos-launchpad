@@ -6,6 +6,7 @@ use lee_core::{
     account::{AccountId, Actor},
     program::{PdaSeed, ReceiveInput, Response, SyncMessage},
 };
+pub use sale_policy::block_allocation::BlockAllocation;
 pub use sale_policy::events;
 pub use sale_policy::{
     EndingDecision, EndingError, EndingPolicy, EndingReason, PausePolicy, SellFeeRate,
@@ -27,6 +28,7 @@ pub const AUTHORITY_PROGRAM_ACCOUNT_ID: AccountId = AccountId::new([
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Error {
+    BlockAllocationExceeded,
     InvalidMessage,
     InvalidState,
     Unauthorized,
@@ -82,6 +84,7 @@ pub enum Message {
         pause_policy: PausePolicy,
         ending_policy: EndingPolicy,
         sell_fee_bps: u16,
+        per_block_token_limit: Option<u128>,
         namespace: AccountId,
         token0_definition_id: AccountId,
         token1_definition_id: AccountId,
@@ -454,6 +457,7 @@ pub struct PoolAccount {
     pub owner: AccountId,
     pub owner_program: Option<(AccountId, [u8; 32])>,
     pub pool: pool::Pool,
+    pub block_allocation: BlockAllocation,
 }
 impl PoolAccount {
     pub fn decode(bytes: &[u8]) -> Result<Self, Error> {
@@ -471,6 +475,9 @@ impl PoolAccount {
         {
             return Err(Error::WrongAccount);
         }
+        self.block_allocation
+            .validate()
+            .map_err(|_| Error::InvalidPool)?;
         self.pool
             .validate_policy()
             .map_err(|_| Error::InvalidPool)?;

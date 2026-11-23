@@ -36,6 +36,7 @@ fn creation() -> CreateSaleRequest {
         ending_policy: curve_core::EndingPolicy::Depletion,
         trade_mode: factory_core::TradeMode::BuyAndSell,
         sell_fee_bps: 0,
+        per_block_token_limit: None,
         graduation_hook: None,
         graduation_policy: GraduationPolicy::default(),
         name: "E2E token".into(),
@@ -57,6 +58,7 @@ fn pool_snapshot() -> (curve_core::PoolAccount, curve_core::Config) {
         allowed_input_token: None,
         funded: true,
         closure_observed: false,
+        block_allocation: Default::default(),
         namespace: AccountId::new([0xAD; 32]),
         token0_definition_id: AccountId::new([2; 32]),
         token1_definition_id: AccountId::new([5; 32]),
@@ -103,6 +105,7 @@ fn valid_factory_state(sale: FactorySale) -> FactoryState {
     field!(curve_core::EndingPolicy::Depletion);
     field!(factory_core::TradeMode::BuyAndSell);
     field!(0u16);
+    field!(None::<u128>);
     field!(None::<factory_core::GraduationHook>);
     field!(CreationStage::Active);
     field!(SettlementStage::Ready);
@@ -1058,6 +1061,7 @@ fn exact_output_purchase_preparation_keeps_membership_and_price_limits() {
         },
         Some(membership.clone()),
         1,
+        None,
     )
     .unwrap();
     let curve_core::Message::Execute { instruction, .. } = call.instruction else {
@@ -1165,6 +1169,7 @@ fn collateral_purchase_preparation_keeps_membership_and_price_limits() {
         },
         Some(membership.clone()),
         1,
+        None,
     )
     .unwrap();
     let curve_core::Message::Execute { instruction, .. } = call.instruction else {
@@ -1196,7 +1201,8 @@ fn collateral_purchase_preparation_rejects_output_below_participant_floor() {
                 min_amount_out: 201
             },
             None,
-            1
+            1,
+            None,
         ),
         Err(ClientError::QuoteBuyWithCollateral(
             pool::SwapError::SlippageExceeded
@@ -1231,9 +1237,12 @@ fn buy_only_quotes_reject_selling_and_keep_both_buy_forms() {
         quote_sell(&pool, &config, 250, 1),
         Err(ClientError::InputTokenRestricted)
     ));
-    assert_eq!(quote_buy(&pool, &config, 200, 1).unwrap().amount_in, 25);
     assert_eq!(
-        quote_buy_with_collateral(&pool, &config, 25, 1)
+        quote_buy(&pool, &config, 200, 1, None).unwrap().amount_in,
+        25
+    );
+    assert_eq!(
+        quote_buy_with_collateral(&pool, &config, 25, 1, None)
             .unwrap()
             .amount_out,
         200
@@ -1245,8 +1254,8 @@ fn token0_only_pool_quotes_reject_both_collateral_buy_forms() {
     let (mut pool, config) = pool_snapshot();
     pool.allowed_input_token = Some(pool::TokenSide::Token0);
     let quotes = [
-        quote_buy(&pool, &config, 200, 1),
-        quote_buy_with_collateral(&pool, &config, 25, 1),
+        quote_buy(&pool, &config, 200, 1, None),
+        quote_buy_with_collateral(&pool, &config, 25, 1, None),
     ];
     for (form, quote) in ["exact-output", "exact-input"].into_iter().zip(quotes) {
         assert!(
@@ -1259,8 +1268,8 @@ fn token0_only_pool_quotes_reject_both_collateral_buy_forms() {
 #[test]
 fn quote_builders_match_pool_snapshot_rules_and_map_errors() {
     let (pool, config) = pool_snapshot();
-    let exact_output = quote_buy(&pool, &config, 200, 1).unwrap();
-    let exact_input = quote_buy_with_collateral(&pool, &config, 25, 1).unwrap();
+    let exact_output = quote_buy(&pool, &config, 200, 1, None).unwrap();
+    let exact_input = quote_buy_with_collateral(&pool, &config, 25, 1, None).unwrap();
     let sell = quote_sell(&pool, &config, 250, 1).unwrap();
 
     assert_eq!((exact_output.amount_in, exact_output.amount_out), (25, 200));
@@ -1270,7 +1279,7 @@ fn quote_builders_match_pool_snapshot_rules_and_map_errors() {
     assert_eq!(pool.pool.real_reserve0, 800);
     assert_eq!(pool.pool.real_reserve1, 100);
     assert!(matches!(
-        quote_buy(&pool, &config, 801, 1),
+        quote_buy(&pool, &config, 801, 1, None),
         Err(ClientError::QuoteBuy(
             pool::SwapError::InsufficientRealOutputReserve
         ))
@@ -1280,7 +1289,7 @@ fn quote_builders_match_pool_snapshot_rules_and_map_errors() {
         Err(ClientError::QuoteSell(pool::SwapError::ZeroAmount))
     ));
     assert!(matches!(
-        quote_buy_with_collateral(&pool, &config, 0, 1),
+        quote_buy_with_collateral(&pool, &config, 0, 1, None),
         Err(ClientError::QuoteBuyWithCollateral(
             pool::SwapError::ZeroAmount
         ))
@@ -1288,7 +1297,7 @@ fn quote_builders_match_pool_snapshot_rules_and_map_errors() {
     let mut pending = pool;
     pending.funded = false;
     assert!(matches!(
-        quote_buy(&pending, &config, 1, 1),
+        quote_buy(&pending, &config, 1, 1, None),
         Err(ClientError::PoolFundingPending)
     ));
 }
@@ -1673,8 +1682,8 @@ fn paused_curve_quotes_reject_both_buy_forms_and_sells() {
     let (mut pool, config) = pool_snapshot();
     pool.trade_control = curve_core::TradeControl::Paused;
     for result in [
-        quote_buy(&pool, &config, 1, 1),
-        quote_buy_with_collateral(&pool, &config, 1, 1),
+        quote_buy(&pool, &config, 1, 1, None),
+        quote_buy_with_collateral(&pool, &config, 1, 1, None),
         quote_sell(&pool, &config, 1, 1),
     ] {
         assert!(matches!(result, Err(ClientError::PoolPaused)));
@@ -1868,7 +1877,7 @@ fn malformed_policy_quotes_keep_the_quote_error_label_and_source() {
         let before = pool.clone();
         for (error, label) in [
             (
-                super::quote_buy(&pool, &config, 1, 0).unwrap_err(),
+                super::quote_buy(&pool, &config, 1, 0, None).unwrap_err(),
                 "quote_buy",
             ),
             (
@@ -1876,7 +1885,7 @@ fn malformed_policy_quotes_keep_the_quote_error_label_and_source() {
                 "quote_sell",
             ),
             (
-                super::quote_buy_with_collateral(&pool, &config, 1, 0).unwrap_err(),
+                super::quote_buy_with_collateral(&pool, &config, 1, 0, None).unwrap_err(),
                 "quote_buy_with_collateral",
             ),
         ] {
@@ -1934,7 +1943,6 @@ fn valid_lbp_factory_state(weighted: bool) -> factory_core::LbpLaunchState {
             bytes.extend(borsh::to_vec(&$value).unwrap());
         };
     }
-    field!(1000u16);
     field!(None::<u128>);
     field!(curve_core::BuyPolicy::Open);
     field!(curve_core::PausePolicy::Disabled);
@@ -1951,7 +1959,7 @@ fn valid_lbp_factory_state(weighted: bool) -> factory_core::LbpLaunchState {
     }));
     field!(GraduationPolicy::default());
     field!(if weighted { *b"LZWGLAUN" } else { *b"LZFXLAUN" });
-    field!(7u16);
+    field!(8u16);
     field!(factory_core::compute_creator_role_pda(
         sale.namespace,
         sale.factory_program_id,
@@ -2224,7 +2232,6 @@ fn lbp_pool_snapshot(weighted: bool) -> (lbp_core::PoolAccount, curve_core::Conf
         lbp_core::PoolMode::FixedPrice
     };
     let mut bytes = borsh::to_vec(&(
-        1000u16,
         (None::<u128>, None::<u64>, 0u128),
         curve_core::BuyPolicy::Open,
         curve_core::TradeControl::Unrestricted,
@@ -2283,7 +2290,8 @@ fn lbp_quotes_reuse_core_results_for_each_engine_and_trade_form() {
                 min_collateral_out: 1,
             },
         ] {
-            let expected = lbp_core::quote_trade(&pool, request, 50).unwrap();
+            let expected =
+                lbp_core::quote_trade(&pool, request, config.protocol_fee_bps, 50).unwrap();
             let before = pool.clone();
             assert_eq!(
                 super::quote_lbp_trade(lbp_sale(), &pool, &config, request, 50, None).unwrap(),
@@ -2306,8 +2314,7 @@ fn capped_lbp_buy_quotes_check_the_observed_block_allowance() {
         min_collateral_out: 1,
     };
     for weighted in [false, true] {
-        let (mut pool, mut config) = lbp_pool_snapshot(weighted);
-        config.protocol_fee_bps = 9999;
+        let (mut pool, config) = lbp_pool_snapshot(weighted);
         pool.block_allocation = lbp_core::BlockAllocation {
             limit: Some(8),
             observed_block: Some(7),
@@ -2327,7 +2334,7 @@ fn capped_lbp_buy_quotes_check_the_observed_block_allowance() {
         ));
         assert_eq!(
             quote(buy, Some(8)).unwrap(),
-            lbp_core::quote_trade(&pool, buy, 50).unwrap()
+            lbp_core::quote_trade(&pool, buy, config.protocol_fee_bps, 50).unwrap()
         );
         // Sells do not use the allowance or the block ID.
         assert!(quote(sell, None).is_ok());
@@ -2502,12 +2509,54 @@ fn lbp_sell_builders_keep_participant_authority_reverse_holdings_and_clock() {
 }
 
 #[test]
-fn curve_creation_rejects_nonzero_retained_sell_fee() {
-    for rate in [1, 250, 9999, 10000, u16::MAX] {
-        let mut request = creation();
+fn retained_sell_fee_is_forwarded_and_immutable_at_each_creation_stage() {
+    let mut request = creation();
+    request.sell_fee_bps = 250;
+    let call =
+        build_create_sale_invocation(sale(), AccountId::new([9; 32]), request.clone()).unwrap();
+    assert!(matches!(
+        call.instruction,
+        factory_core::Message::CreateFactoryPool {
+            sell_fee_bps: 250,
+            ..
+        }
+    ));
+    for stage in [
+        CreationStage::Minted,
+        CreationStage::Allocated,
+        CreationStage::PoolPrepared,
+        CreationStage::Active,
+    ] {
+        let mut state = valid_factory_state(sale());
+        state.creation_stage = stage;
+        state.sell_fee_bps = 250;
+        assert!(
+            super::next_creation_invocation(
+                sale(),
+                AccountId::new([9; 32]),
+                request.clone(),
+                Some(&state)
+            )
+            .is_ok()
+        );
+        for replacement in [0, 251] {
+            let mut changed = request.clone();
+            changed.sell_fee_bps = replacement;
+            assert!(matches!(
+                super::next_creation_invocation(
+                    sale(),
+                    AccountId::new([9; 32]),
+                    changed,
+                    Some(&state)
+                ),
+                Err(ClientError::LaunchParametersMismatch)
+            ));
+        }
+    }
+    for rate in [10_000, u16::MAX] {
         request.sell_fee_bps = rate;
         assert!(matches!(
-            build_create_sale_invocation(sale(), AccountId::new([9; 32]), request),
+            build_create_sale_invocation(sale(), AccountId::new([9; 32]), request.clone()),
             Err(ClientError::FactoryPolicy(
                 factory_core::Error::InvalidTerms
             ))
@@ -2522,9 +2571,9 @@ fn curve_creation_rejects_nonzero_retained_sell_fee() {
 }
 
 #[test]
-fn factory_pool_binds_fixed_k_after_sell() {
+fn factory_pool_binds_initial_k_and_accepts_current_k_after_retained_sell() {
     let mut state = valid_factory_state(sale());
-    state.sell_fee_bps = 0;
+    state.sell_fee_bps = 1_000;
     let mut pool = matching_factory_pool(&state);
     let initial = pool.pool.initial_k;
     let quote = pool
@@ -2538,8 +2587,8 @@ fn factory_pool_binds_fixed_k_after_sell() {
             now: 1,
         })
         .unwrap();
-    assert_eq!(quote.retained_fee, 0);
-    assert_eq!(pool.pool.k, initial);
+    assert!(quote.retained_fee > 0);
+    assert!(pool.pool.k > initial);
     assert_eq!(pool.pool.initial_k, initial);
     super::validate_factory_pool(sale(), &state, &pool).unwrap();
     let mut changed = pool.clone();
@@ -2561,7 +2610,7 @@ fn curve_quotes_expose_retained_fee_without_changing_buy_quotes() {
     let (mut pool, mut config) = pool_snapshot();
     config.protocol_fee_bps = 1_000;
     let zero_sell = quote_sell(&pool, &config, 250, 1).unwrap();
-    let zero_buy = quote_buy_with_collateral(&pool, &config, 25, 1).unwrap();
+    let zero_buy = quote_buy_with_collateral(&pool, &config, 25, 1, None).unwrap();
     assert_eq!(zero_sell.retained_fee, 0);
     pool.pool.sell_fee_bps = 500;
     let sell = quote_sell(&pool, &config, 250, 1).unwrap();
@@ -2575,13 +2624,13 @@ fn curve_quotes_expose_retained_fee_without_changing_buy_quotes() {
         (20, 2, 1, 17)
     );
     assert_eq!(
-        quote_buy_with_collateral(&pool, &config, 25, 1).unwrap(),
+        quote_buy_with_collateral(&pool, &config, 25, 1, None).unwrap(),
         zero_buy
     );
     assert_eq!(pool.pool.k, pool.pool.initial_k);
     config.protocol_fee_bps = 9_500;
     assert!(quote_sell(&pool, &config, 250, 1).is_err());
-    assert!(quote_buy_with_collateral(&pool, &config, 100, 1).is_ok());
+    assert!(quote_buy_with_collateral(&pool, &config, 100, 1, None).is_ok());
 }
 
 #[test]
@@ -2617,7 +2666,8 @@ fn lbp_quotes_expose_independent_retained_fees_and_net_slippage() {
             tokens_in: 10,
             min_collateral_out: quote.amount_out + 1,
         };
-        let core_error = lbp_core::quote_trade(&pool, too_high, 50).unwrap_err();
+        let core_error =
+            lbp_core::quote_trade(&pool, too_high, config.protocol_fee_bps, 50).unwrap_err();
         let Err(ClientError::QuoteLbpTrade(error)) =
             super::quote_lbp_trade(lbp_sale(), &pool, &config, too_high, 50, None)
         else {
@@ -2828,4 +2878,33 @@ fn curve_continuation_recovers_after_expiry_without_allowing_a_short_live_sale()
             );
         }
     }
+}
+
+#[test]
+fn capped_curve_quotes_use_remaining_allowance_for_both_buy_forms() {
+    let (mut pool, config) = pool_snapshot();
+    pool.block_allocation = curve_core::BlockAllocation {
+        limit: Some(250),
+        observed_block: Some(7),
+        tokens_sold: 100,
+    };
+    assert!(matches!(
+        quote_buy(&pool, &config, 200, 1, None),
+        Err(ClientError::BlockIdRequired)
+    ));
+    for quote in [
+        quote_buy(&pool, &config, 200, 1, Some(7)),
+        quote_buy_with_collateral(&pool, &config, 25, 1, Some(7)),
+    ] {
+        assert!(matches!(
+            quote,
+            Err(ClientError::CurveBlockAllocationExceeded)
+        ));
+    }
+    assert_eq!(
+        quote_buy(&pool, &config, 200, 1, Some(8))
+            .unwrap()
+            .amount_out,
+        200
+    );
 }

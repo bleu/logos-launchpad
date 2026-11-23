@@ -28,4 +28,4 @@ See [ADR 0036](../adr/0036-graduation-adapter-delivery.md) for the plain-transfe
 
 Configured expiry requires at least 5 minutes remaining through factory setup and activation. Inclusion bounds enforce this rule. An existing setup can finish after expiry only into a closed pool for asset recovery. Pause rights can shorten actual trading time, because pause does not extend expiry. This operational minimum is not a verified private-path latency guarantee. See [ending policy](../adr/0025-sale-closing.md).
 
-Factory curve sales reject nonzero retained sell fees. Their pricing invariant stays fixed at creation. Direct curve pools are internal primitives and do not define the factory sale product.
+Factory curve sales support an optional retained sell fee and an optional aggregate token purchase limit per block. See [curve pricing](../adr/0009-curve-arithmetic.md) and [sale limits](../adr/0021-modes-and-open-limits.md).

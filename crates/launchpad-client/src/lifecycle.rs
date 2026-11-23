@@ -197,6 +197,7 @@ pub fn next_creation_invocation(
             && state.ending_policy == request.ending_policy
             && state.trade_mode == request.trade_mode
             && state.sell_fee_bps == request.sell_fee_bps
+            && state.per_block_token_limit == request.per_block_token_limit
             && state.graduation_hook == request.graduation_hook
             && state.sale_reserve == request.sale_reserve
             && state.graduation_reserve == request.graduation_reserve

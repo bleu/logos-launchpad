@@ -210,7 +210,7 @@ impl Pending {
             | Message::SellExactInput { now, .. } => now,
             _ => self.pricing_time.ok_or(Error::InvalidState)?,
         };
-        let quote = quote_trade(&self.state, request, pricing_time)?;
+        let quote = quote_trade(&self.state, request, config.protocol_fee_bps, pricing_time)?;
         let amount_in = quote.amount_in;
         let amount_out = quote.amount_out;
         if self.balances[2] < amount_in {
@@ -355,7 +355,7 @@ impl Pending {
                     amount_out,
                     fee_definition: *self.state.collateral_definition_id.value(),
                     fee_amount: quote.protocol_fee,
-                    fee_bps: self.state.protocol_fee_bps,
+                    fee_bps: config.protocol_fee_bps,
                     retained_fee: quote.retained_fee,
                     sell_fee_bps: self.state.sell_fee_bps,
                     pricing_time: self.pricing_time,
@@ -810,7 +810,6 @@ mod tests {
         )
         .unwrap();
         let state = PoolAccount {
-            protocol_fee_bps: 100,
             block_allocation: crate::BlockAllocation::default(),
             buy_policy: crate::BuyPolicy::Open,
             trade_control: TradeControl::Paused,

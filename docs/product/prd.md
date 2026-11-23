@@ -31,6 +31,7 @@ The admin app handles namespace administration. The configured-sales app handles
 | Price | Positive exact ratio in smallest units | Constant product with virtual reserves and real-reserve limits | Balances and scheduled weights |
 | Buy forms | Exact input or exact output | Exact input or exact output | Exact input or exact output |
 | Ending policy | `Scheduled`, `Depletion` or `Either` | `Scheduled`, `Depletion` or `Either` | `Scheduled` or `Either`; schedule end required |
+| Purchase limit per block | Optional | Optional | Optional |
 | Overview | [Fixed-price and weighted sales](lbp-contract.md) | [Bonding-curve sale](curve-contract.md) | [Fixed-price and weighted sales](lbp-contract.md) |
 
 All three factory engines support `BuyOnly` or `BuyAndSell`. Permitted sells use exact input. Namespace fees use collateral buy input or sell output. Selected depletion is final; `Scheduled` waits for its end even when inventory is empty. See [trade modes](../adr/0021-modes-and-open-limits.md), [fees](../adr/0015-fee-accounting.md) and [ending rules](../adr/0025-sale-closing.md).
