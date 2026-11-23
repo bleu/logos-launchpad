@@ -140,6 +140,7 @@ fn create_message(defer_funding: bool) -> Message {
         pause_policy: crate::PausePolicy::Disabled,
         ending_policy: crate::EndingPolicy::Scheduled,
         sell_fee_bps: 0,
+        per_block_token_limit: None,
         namespace: NS,
         token0_definition_id: TOKEN0,
         token1_definition_id: TOKEN1,
@@ -1715,6 +1716,7 @@ fn pool_state() -> PoolAccount {
         allowed_input_token: None,
         funded: true,
         closure_observed: false,
+        block_allocation: Default::default(),
         namespace: NS,
         token0_definition_id: TOKEN0,
         token1_definition_id: TOKEN1,
@@ -1752,6 +1754,9 @@ fn answer_reads(
         .as_ref()
         .is_some_and(|s| s.starts_with(b"LZCVPEND"))
     {
+        if response.sync_messages[0].to == clock_core::clock_actor() {
+            break;
+        }
         let query = response.sync_messages.remove(0);
         let (from, bytes) = if query.to == Actor::new(HOLDER, crate::AUTHORITY_PROGRAM_ACCOUNT_ID) {
             let role = crate::compute_pool_owner_role(NS, pool_id(), PROGRAM);
@@ -3267,4 +3272,64 @@ fn retained_sell_event_and_transfers_keep_collateral_in_reserves() {
         107 - 18,
         after.pool.real_reserve1 + after.pool.fees_accrued + 7
     );
+}
+
+#[test]
+fn capped_curve_buys_share_one_allowance_and_bind_inclusion() {
+    let mut state = pool_state();
+    state.block_allocation = crate::BlockAllocation::new(Some(200)).unwrap();
+
+    let execute = |state: &PoolAccount, message, block| {
+        let response = answer_reads(
+            start(state, message)?,
+            state,
+            namespace(),
+            [
+                state.pool.real_reserve0,
+                state.pool.real_reserve1 + state.pool.fees_accrued,
+            ],
+        )?;
+        let reply = borsh::to_vec(&clock_core::Reply::BlockId(block)).unwrap();
+        let call = |from| ReceiveInput {
+            receiver: Actor::new(pool_id(), PROGRAM),
+            from: Some(from),
+            is_authorized: false,
+            pre_state: response.post_state.clone().unwrap(),
+            message: reply.clone(),
+        };
+        assert!(matches!(
+            handle(&call(Actor::new(HOLDER, PROGRAM))),
+            Err(crate::Error::Unauthorized)
+        ));
+        handle(&call(clock_core::clock_actor()))
+    };
+
+    let buy = Message::SwapExactOutput {
+        token_in: TOKEN1,
+        amount_out: 200,
+        max_amount_in: 100,
+        now: 1,
+        membership: None,
+    };
+    let first = execute(&state, buy, 8).unwrap();
+    assert_eq!(first.validity.blocks.start(), Some(9));
+    assert_eq!(first.validity.blocks.end(), Some(10));
+    state = PoolAccount::decode(&first.post_state.unwrap()).unwrap();
+    assert_eq!(state.block_allocation.tokens_sold, 200);
+
+    let buy = Message::SwapExactInput {
+        token_in: TOKEN1,
+        amount_in: 10,
+        min_amount_out: 1,
+        now: 1,
+        membership: None,
+    };
+    assert!(matches!(
+        execute(&state, buy.clone(), 8),
+        Err(crate::Error::BlockAllocationExceeded)
+    ));
+    let next = execute(&state, buy, 9).unwrap();
+    let state = PoolAccount::decode(&next.post_state.unwrap()).unwrap();
+    assert_eq!(state.block_allocation.observed_block, Some(9));
+    assert!((1..200).contains(&state.block_allocation.tokens_sold));
 }

@@ -8,9 +8,9 @@ Use checked `u128` constant-product arithmetic with pool-favouring rounding. Eac
 
 Virtual reserves set prices but cannot back withdrawals. Cap output by the matching real reserve and exclude accrued fees from pricing reserves. Check arithmetic at runtime; creation bounds do not prove every trade safe.
 
-Factory curve sales require `sell_fee_bps == 0` at creation and on saved-state validation. Their `k` must equal `initial_k` through trading and settlement. This preserves the proposal's fixed pricing invariant and avoids an additional exit charge without an established product need. Namespace fees remain separate from reserves.
+Factory curve sales can set a retained sell fee at creation. It defaults to zero. It retains collateral inside the pool and can increase `k`. This changes the fixed invariant specified in the curve proposal and needs Logos review. Namespace fees remain separate from reserves.
 
-Direct curve pools remain internal primitives that can use retained fees. Quotes use current `k`. Retained sell collateral `r` increases it by `k_after = k_before + virtual_token_after * r`, with checked arithmetic. Namespace fees do not increase `k`. At zero retained sell-fee rate, `k == initial_k`. The virtual-reserve product stays at least current `k`; rounding can make that product decrease between trades.
+Factory and direct pool quotes use current `k`. Retained sell collateral `r` increases it by `k_after = k_before + virtual_token_after * r`, with checked arithmetic. Namespace fees do not increase `k`. At zero retained sell-fee rate, `k == initial_k`. The virtual-reserve product stays at least current `k`; rounding can make that product decrease between trades.
 
 ## Reason and limits
 

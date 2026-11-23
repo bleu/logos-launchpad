@@ -77,6 +77,7 @@ pub struct FactoryState {
     pub ending_policy: EndingPolicy,
     pub trade_mode: TradeMode,
     pub sell_fee_bps: u16,
+    pub per_block_token_limit: Option<u128>,
     pub graduation_hook: Option<GraduationHook>,
     pub creation_stage: CreationStage,
     pub settlement_stage: SettlementStage,
@@ -169,9 +170,9 @@ impl FactoryState {
         {
             return Err(Error::InvalidState);
         }
-        if self.sell_fee_bps != 0 {
-            return Err(Error::InvalidState);
-        }
+        SellFeeRate::new(self.sell_fee_bps).map_err(|_| Error::InvalidState)?;
+        curve_core::BlockAllocation::new(self.per_block_token_limit)
+            .map_err(|_| Error::InvalidState)?;
         self.graduation_policy
             .validate(self.graduation_hook.is_some())
             .map_err(|_| Error::InvalidState)?;
@@ -224,6 +225,7 @@ pub enum Message {
         ending_policy: EndingPolicy,
         trade_mode: u8,
         sell_fee_bps: u16,
+        per_block_token_limit: Option<u128>,
         graduation_hook_program_id: Option<AccountId>,
         graduation_hook_configuration: Vec<u8>,
         namespace: AccountId,
@@ -647,6 +649,7 @@ fn create_curve(input: &ReceiveInput, command: Message) -> Result<Response, Erro
         ending_policy,
         trade_mode,
         sell_fee_bps,
+        per_block_token_limit,
         graduation_hook_program_id,
         graduation_hook_configuration,
         namespace,
@@ -684,9 +687,8 @@ fn create_curve(input: &ReceiveInput, command: Message) -> Result<Response, Erro
     {
         return Err(Error::InvalidTerms);
     }
-    if sell_fee_bps != 0 {
-        return Err(Error::InvalidTerms);
-    }
+    SellFeeRate::new(sell_fee_bps).map_err(|_| Error::InvalidTerms)?;
+    curve_core::BlockAllocation::new(per_block_token_limit).map_err(|_| Error::InvalidTerms)?;
     validate_curve_policies(ending_policy, end_timestamp)?;
     graduation_policy.validate(graduation_hook_program_id.is_some())?;
     let total_supply = total_supply(sale_reserve, graduation_reserve, creator_allocation)
@@ -708,6 +710,7 @@ fn create_curve(input: &ReceiveInput, command: Message) -> Result<Response, Erro
         ending_policy,
         trade_mode: TradeMode::try_from(trade_mode).map_err(|_| Error::InvalidTerms)?,
         sell_fee_bps,
+        per_block_token_limit,
         graduation_hook: graduation_hook_program_id.map(|program_id| GraduationHook {
             program_id,
             configuration: graduation_hook_configuration,
@@ -797,9 +800,9 @@ fn validate_pool(
     actor: Actor,
     saved: &curve_core::PoolAccount,
 ) -> Result<(), Error> {
-    if saved.pool.k != saved.pool.initial_k
-        || saved.pool.ending_policy != state.ending_policy
+    if saved.pool.ending_policy != state.ending_policy
         || saved.pool.sell_fee_bps != state.sell_fee_bps
+        || saved.block_allocation.limit != state.per_block_token_limit
     {
         return Err(Error::InvalidCustody);
     }
@@ -1505,6 +1508,7 @@ fn curve_resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
                                 pause_policy: state.pause_policy,
                                 ending_policy: state.ending_policy,
                                 sell_fee_bps: state.sell_fee_bps,
+                                per_block_token_limit: state.per_block_token_limit,
                                 namespace: state.namespace,
                                 token0_definition_id: state.token_definition_id,
                                 token1_definition_id: state.collateral_definition_id,

@@ -89,6 +89,8 @@ pub enum ClientError {
     QuoteLbpTrade(#[source] lbp_core::Error),
     #[error("a capped LBP buy quote needs the observed block ID")]
     BlockIdRequired,
+    #[error("purchase exceeds the sale token allowance for this block")]
+    CurveBlockAllocationExceeded,
     #[error("reading the canonical clock")]
     #[strum(serialize = "read_clock")]
     ReadClock(#[source] Box<dyn Error + Send + Sync>),

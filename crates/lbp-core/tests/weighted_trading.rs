@@ -15,7 +15,6 @@ fn id(n: u8) -> AccountId {
 
 fn weighted_inputs() -> WeightedPoolInputs {
     WeightedPoolInputs {
-        protocol_fee_bps: 100,
         per_block_token_limit: None,
         buy_policy: curve_core::BuyPolicy::Open,
         pause_policy: lbp_core::PausePolicy::AuthorityControlled,
@@ -293,7 +292,7 @@ fn weighted_buys_cannot_bypass_clock_reads_with_fixed_price_messages() {
         assert_eq!(
             operation(
                 &input,
-                &with_fee(&state, 0),
+                &state,
                 message,
                 config(0, id(43), false),
                 [100, 1_000_000, 1000]
@@ -322,7 +321,7 @@ fn weighted_pricing_ignores_unsolicited_vault_transfers() {
         let quote = |balances| {
             operation(
                 &input,
-                &with_fee(&state, 0),
+                &state,
                 message.clone(),
                 config(0, id(43), false),
                 balances,
@@ -355,14 +354,7 @@ fn weighted_program_rejects_unsafe_and_uncertified_quotes_with_defined_errors() 
         min_amount_out: 1,
     };
     let run = |state: &lbp_core::PoolAccount, message, balances| {
-        operation(
-            &input,
-            &with_fee(state, 0),
-            message,
-            config(0, id(43), false),
-            balances,
-        )
-        .err()
+        operation(&input, state, message, config(0, id(43), false), balances).err()
     };
 
     for invalid in [0, 100, u128::MAX] {
@@ -474,7 +466,7 @@ fn weighted_program_checks_full_inventory_and_post_buy_vault_capacity() {
     assert_eq!(
         operation(
             &input,
-            &with_fee(&state, 100),
+            &state,
             buy.clone(),
             config(100, id(43), false),
             [100, state.remaining_inventory - 1, 1000]
@@ -486,7 +478,7 @@ fn weighted_program_checks_full_inventory_and_post_buy_vault_capacity() {
     assert_eq!(
         operation(
             &input,
-            &with_fee(&state, 100),
+            &state,
             buy.clone(),
             config(100, id(43), false),
             [u128::MAX, state.remaining_inventory, 1000]
@@ -497,7 +489,7 @@ fn weighted_program_checks_full_inventory_and_post_buy_vault_capacity() {
     assert_eq!(
         operation(
             &input,
-            &with_fee(&state, 100),
+            &state,
             buy.clone(),
             config(100, id(43), false),
             [99, state.remaining_inventory, 1000]
@@ -510,7 +502,7 @@ fn weighted_program_checks_full_inventory_and_post_buy_vault_capacity() {
     assert_eq!(
         operation(
             &input,
-            &with_fee(&state, 100),
+            &state,
             buy,
             config(100, id(43), false),
             [u128::MAX, state.remaining_inventory, 1000]
@@ -538,7 +530,7 @@ fn weighted_positive_fees_price_net_input_against_constant_product_reference() {
             let net = gross - fee;
             let result = operation(
                 &input,
-                &with_fee(&state, fee_bps),
+                &state,
                 Message::BuyWeightedExactInput {
                     membership: None,
                     amount_in: gross,
@@ -582,7 +574,7 @@ fn weighted_same_time_buys_use_updated_reserves_and_collection_keeps_the_quote()
     };
     let first = operation(
         &input,
-        &with_fee(&state, 100),
+        &state,
         message.clone(),
         config(100, id(43), false),
         [100, state.remaining_inventory, 1000],
@@ -597,7 +589,7 @@ fn weighted_same_time_buys_use_updated_reserves_and_collection_keeps_the_quote()
 
     let quote_before_collection = operation(
         &input,
-        &with_fee(&after_first, 100),
+        &after_first,
         message.clone(),
         config(100, id(43), false),
         [150, after_first.remaining_inventory, 950],
@@ -605,7 +597,7 @@ fn weighted_same_time_buys_use_updated_reserves_and_collection_keeps_the_quote()
     .unwrap();
     let collected = operation(
         &input,
-        &with_fee(&after_first, 100),
+        &after_first,
         Message::CollectFees,
         config(100, id(43), false),
         [150, after_first.remaining_inventory, 950],
@@ -616,7 +608,7 @@ fn weighted_same_time_buys_use_updated_reserves_and_collection_keeps_the_quote()
     assert_eq!(pricing_collateral(&after_collection), 149);
     let quote_after_collection = operation(
         &input,
-        &with_fee(&after_collection, 100),
+        &after_collection,
         message,
         config(100, id(43), false),
         [149, after_collection.remaining_inventory, 950],
@@ -664,7 +656,7 @@ fn weighted_buy_exact_in_returns_correct_amount_from_weighted_formula() {
     let response = operation_at(
         inputs.start_timestamp * 1000,
         &input,
-        &with_fee(&state, 100),
+        &state,
         Message::BuyWeightedExactInput {
             membership: None,
             amount_in,
@@ -708,7 +700,7 @@ fn weighted_buy_exact_out_charges_correct_amount_from_weighted_formula() {
     let response = operation_at(
         inputs.start_timestamp * 1000,
         &input,
-        &with_fee(&state, fee_bps as u16),
+        &state,
         Message::BuyWeightedExactOutput {
             membership: None,
             amount_out,
@@ -738,7 +730,7 @@ fn weighted_buy_updates_collateral_balance_in_state() {
     let response = operation_at(
         inputs.start_timestamp * 1000,
         &input,
-        &with_fee(&state, fee_bps as u16),
+        &state,
         Message::BuyWeightedExactInput {
             membership: None,
             amount_in,
@@ -771,7 +763,7 @@ fn weighted_buy_rejects_before_and_after_sale_window() {
             operation_at(
                 now * 1000,
                 &input,
-                &with_fee(&state, 100),
+                &state,
                 Message::BuyWeightedExactInput {
                     membership: None,
                     amount_in: 50,
@@ -797,7 +789,7 @@ fn weighted_buy_rejects_slippage_exact_in() {
         operation_at(
             inputs.start_timestamp * 1000,
             &input,
-            &with_fee(&state, 100),
+            &state,
             Message::BuyWeightedExactInput {
                 membership: None,
                 amount_in: 50,
@@ -821,7 +813,7 @@ fn weighted_buy_rejects_slippage_exact_out() {
         operation_at(
             inputs.start_timestamp * 1000,
             &input,
-            &with_fee(&state, 100),
+            &state,
             Message::BuyWeightedExactOutput {
                 membership: None,
                 amount_out: 500,
@@ -844,7 +836,7 @@ fn weighted_buy_rejects_frozen_pool() {
         operation_at(
             inputs.start_timestamp * 1000,
             &input,
-            &with_fee(&state, 100),
+            &state,
             Message::BuyWeightedExactInput {
                 membership: None,
                 amount_in: 50,
@@ -867,7 +859,7 @@ fn weighted_buy_rejects_invalid_fee() {
         operation_at(
             inputs.start_timestamp * 1000,
             &input,
-            &with_fee(&state, 10_000),
+            &state,
             Message::BuyWeightedExactInput {
                 membership: None,
                 amount_in: 50,
@@ -878,7 +870,7 @@ fn weighted_buy_rejects_invalid_fee() {
         )
         .err()
         .unwrap(),
-        lbp_core::Error::InvalidState
+        lbp_core::Error::InvalidFee
     );
 }
 
@@ -890,7 +882,7 @@ fn weighted_buy_rejects_zero_amount_in() {
         operation_at(
             inputs.start_timestamp * 1000,
             &input,
-            &with_fee(&state, 100),
+            &state,
             Message::BuyWeightedExactInput {
                 membership: None,
                 amount_in: 0,
@@ -912,7 +904,7 @@ fn weighted_buy_rejects_underfunded_vault() {
         operation_at(
             inputs.start_timestamp * 1000,
             &input,
-            &with_fee(&state, 100),
+            &state,
             Message::BuyWeightedExactInput {
                 membership: None,
                 amount_in: 50,
@@ -936,7 +928,7 @@ fn weighted_buy_closes_when_remaining_inventory_hits_zero() {
         operation_at(
             inputs.start_timestamp * 1000,
             &input,
-            &with_fee(&state, 100),
+            &state,
             Message::BuyWeightedExactInput {
                 membership: None,
                 amount_in: 50,
@@ -965,7 +957,7 @@ fn weighted_buy_prices_fall_as_weights_shift() {
         let response = operation_at(
             now * 1000,
             &input,
-            &with_fee(&state, 100),
+            &state,
             Message::BuyWeightedExactInput {
                 membership: None,
                 amount_in: 50,
@@ -1032,7 +1024,7 @@ fn normalized_weights_keep_fractional_percentage_schedule_steps() {
         operation_at(
             second * 1000,
             &input,
-            &with_fee(&state, 0),
+            &state,
             Message::BuyWeightedExactInput {
                 membership: None,
                 amount_in: 10,
@@ -1121,7 +1113,7 @@ fn clock_read_prices_both_forms_and_preserves_sale_inclusion_bounds() {
                 let r = operation_at(
                     ms,
                     &input,
-                    &with_fee(&state, 0),
+                    &state,
                     message,
                     config(0, id(43), false),
                     [100, 1_000_000, 10000],
@@ -1206,7 +1198,7 @@ fn weighted_schedule_bounds_reject_millisecond_overflow() {
     assert_eq!(
         operation(
             &input,
-            &with_fee(&state, 0),
+            &state,
             Message::BuyWeightedExactInput {
                 membership: None,
                 amount_in: 10,
@@ -1343,7 +1335,7 @@ fn weighted_resume_cannot_override_namespace_freeze() {
     assert_eq!(
         operation(
             &input,
-            &with_fee(&state, 0),
+            &state,
             Message::BuyWeightedExactInput {
                 membership: None,
                 amount_in: 50,
@@ -1365,7 +1357,7 @@ fn weighted_fees_collectible_when_paused() {
     state.trade_control.set_paused(true).unwrap();
     let response = operation(
         &input,
-        &with_fee(&state, 0),
+        &state,
         Message::CollectFees,
         config(0, id(43), false),
         [105, state.remaining_inventory, 0],
@@ -1771,7 +1763,7 @@ fn weighted_membership_can_be_reused_in_both_buy_forms_without_changing_economic
         ];
         let response = operation(
             &input,
-            &with_fee(&state, 100),
+            &state,
             approved,
             config(100, id(43), false),
             balances,
@@ -1779,14 +1771,8 @@ fn weighted_membership_can_be_reused_in_both_buy_forms_without_changing_economic
         .unwrap();
         let mut public = state.clone();
         public.buy_policy = curve_core::BuyPolicy::Open;
-        let expected = operation(
-            &input,
-            &with_fee(&public, 100),
-            open,
-            config(100, id(43), false),
-            balances,
-        )
-        .unwrap();
+        let expected =
+            operation(&input, &public, open, config(100, id(43), false), balances).unwrap();
         state = state_of(&response);
         assert_eq!(state.buy_policy, policy);
         let mut actual = state.clone();
@@ -2059,7 +2045,7 @@ fn buy_updates_checkpoint_on_new_timestamp() {
     let response = operation_at(
         1_500_000,
         &input,
-        &with_fee(&state, 0),
+        &state,
         Message::BuyWeightedExactInput {
             membership: None,
             amount_in: 10,
@@ -2085,7 +2071,7 @@ fn buy_at_same_timestamp_does_not_change_checkpoint() {
     let first = operation_at(
         1_500_000,
         &input,
-        &with_fee(&state, 0),
+        &state,
         Message::BuyWeightedExactInput {
             membership: None,
             amount_in: 10,
@@ -2101,7 +2087,7 @@ fn buy_at_same_timestamp_does_not_change_checkpoint() {
     let second = operation_at(
         1_500_000,
         &input,
-        &with_fee(&after_first, 0),
+        &after_first,
         Message::BuyWeightedExactInput {
             membership: None,
             amount_in: 10,
@@ -2122,7 +2108,7 @@ fn buy_at_different_timestamp_updates_checkpoint() {
     let first = operation_at(
         1_500_000,
         &input,
-        &with_fee(&state, 0),
+        &state,
         Message::BuyWeightedExactInput {
             membership: None,
             amount_in: 10,
@@ -2137,7 +2123,7 @@ fn buy_at_different_timestamp_updates_checkpoint() {
     let second = operation_at(
         2_000_000,
         &input,
-        &with_fee(&after_first, 0),
+        &after_first,
         Message::BuyWeightedExactInput {
             membership: None,
             amount_in: 10,
@@ -2174,7 +2160,7 @@ fn exact_output_checkpoint_event_matches_poke_with_fractional_weights() {
         let response = operation_at(
             time_ms,
             &input,
-            &with_fee(&state, 0),
+            &state,
             Message::BuyWeightedExactOutput {
                 membership: None,
                 amount_out: 500,
@@ -2219,7 +2205,7 @@ fn failed_buy_does_not_change_checkpoint() {
     let result = operation_at(
         2_000_000,
         &input,
-        &with_fee(&after_poke, 0),
+        &after_poke,
         Message::BuyWeightedExactInput {
             membership: None,
             amount_in: 10,
@@ -2373,7 +2359,7 @@ fn common_weighted_resume_keeps_namespace_freeze_for_both_buys() {
         assert_eq!(
             operation(
                 &input,
-                &with_fee(&resumed, 0),
+                &resumed,
                 message.clone(),
                 config(0, id(43), true),
                 [100, 1_000_000, 1000]
@@ -2384,7 +2370,7 @@ fn common_weighted_resume_keeps_namespace_freeze_for_both_buys() {
         assert!(
             operation(
                 &input,
-                &with_fee(&resumed, 0),
+                &resumed,
                 message,
                 config(0, id(43), false),
                 [100, 1_000_000, 1000]
@@ -2457,7 +2443,7 @@ fn weighted_exact_output_gross_limit_and_fee_rounding_use_net_pricing() {
                 assert_eq!(
                     operation(
                         &input,
-                        &with_fee(&state, fee_bps),
+                        &state,
                         Message::BuyWeightedExactOutput {
                             membership: None,
                             amount_out: output,
@@ -2472,7 +2458,7 @@ fn weighted_exact_output_gross_limit_and_fee_rounding_use_net_pricing() {
             }
             let response = operation(
                 &input,
-                &with_fee(&state, fee_bps),
+                &state,
                 Message::BuyWeightedExactOutput {
                     membership: None,
                     amount_out: output,
@@ -2510,7 +2496,7 @@ fn weighted_exact_time_edges_apply_to_both_buy_forms() {
             let result = operation_at(
                 timestamp_ms,
                 &input,
-                &with_fee(&state, 100),
+                &state,
                 message,
                 config(100, id(43), false),
                 [100, 1_000_000, 1000],
@@ -2611,7 +2597,7 @@ fn weighted_collection_and_settlement_reject_unbacked_pricing_or_reduced_seed() 
         assert_eq!(
             operation(
                 &input,
-                &with_fee(&state, 100),
+                &state,
                 Message::CollectFees,
                 config(100, id(43), false),
                 [1000, 1_000_000, 1000]
@@ -2813,7 +2799,7 @@ fn weighted_completed_progress_blocks_controls_and_both_buy_forms() {
             assert_eq!(
                 operation(
                     &input,
-                    &with_fee(&state, 100),
+                    &state,
                     message,
                     config(100, id(43), false),
                     [100, state.remaining_inventory, 1000]
@@ -2952,7 +2938,7 @@ fn weighted_trade_events_use_net_pricing_input_and_trusted_time_for_both_forms()
         let response = operation_at(
             1_500_999,
             &input,
-            &with_fee(&state, 100),
+            &state,
             message,
             config(100, id(43), false),
             [100, state.remaining_inventory, 1000],
@@ -3266,11 +3252,12 @@ fn weighted_sells_price_full_reserves_and_pay_only_net_collateral() {
         for tokens in [1000_u128, 100_000, 250_000] {
             for fee_bps in [0_u16, 100, 3333] {
                 let quoted = quote_trade(
-                    &with_fee(&state, fee_bps),
+                    &state,
                     QuoteRequest::SellExactInput {
                         tokens_in: tokens,
                         min_collateral_out: 0,
                     },
+                    fee_bps,
                     1500,
                 )
                 .unwrap();
@@ -3297,7 +3284,7 @@ fn weighted_sells_price_full_reserves_and_pay_only_net_collateral() {
                 };
                 let response = operation(
                     &input,
-                    &with_fee(&state, fee_bps),
+                    &state,
                     message.clone(),
                     config(fee_bps, id(43), false),
                     [1_100_007, 1_000_000, tokens],
@@ -3353,7 +3340,7 @@ fn weighted_sells_price_full_reserves_and_pay_only_net_collateral() {
                 );
                 let donated = operation(
                     &input,
-                    &with_fee(&state, fee_bps),
+                    &state,
                     message,
                     config(fee_bps, id(43), false),
                     [2_000_007, 2_000_000, tokens],
@@ -3362,7 +3349,7 @@ fn weighted_sells_price_full_reserves_and_pay_only_net_collateral() {
                 assert_eq!(response.post_state, donated.post_state);
                 let buy = operation(
                     &input,
-                    &with_fee(&next, 0),
+                    &next,
                     Message::BuyWeightedExactInput {
                         membership: None,
                         amount_in: 10,
@@ -3398,7 +3385,7 @@ fn weighted_sells_protect_original_seed_even_with_fees_and_donations() {
         min_collateral_out: 0,
     };
     assert_eq!(
-        quote_trade(&with_fee(&state, 0), request, 1500),
+        quote_trade(&state, request, 0, 1500),
         Err(Error::Underfunded)
     );
     let message = Message::SellWeightedExactInput {
@@ -3408,7 +3395,7 @@ fn weighted_sells_protect_original_seed_even_with_fees_and_donations() {
     assert_eq!(
         operation(
             &input,
-            &with_fee(&state, 0),
+            &state,
             message,
             config(0, id(43), false),
             [10_000, 1_000_000, 100_000]
@@ -3424,7 +3411,7 @@ fn weighted_sells_protect_original_seed_even_with_fees_and_donations() {
         *pricing_collateral = 101;
     }
     assert_eq!(
-        quote_trade(&with_fee(&state, 0), request, 1500),
+        quote_trade(&state, request, 0, 1500),
         Err(Error::Underfunded)
     );
 }
@@ -3444,7 +3431,7 @@ fn weighted_sells_keep_mode_pause_time_freeze_and_selected_depletion_checks() {
     assert_eq!(
         operation(
             &input,
-            &with_fee(&state, 0),
+            &state,
             message.clone(),
             config(0, id(43), false),
             [100, 1_000_000, 1000]
@@ -3465,7 +3452,7 @@ fn weighted_sells_keep_mode_pause_time_freeze_and_selected_depletion_checks() {
             operation_at(
                 time,
                 &input,
-                &with_fee(&state, 0),
+                &state,
                 message.clone(),
                 config(0, id(43), false),
                 [1_000_000, 1_000_000, 1000]
@@ -3477,7 +3464,7 @@ fn weighted_sells_keep_mode_pause_time_freeze_and_selected_depletion_checks() {
     assert_eq!(
         operation(
             &input,
-            &with_fee(&state, 0),
+            &state,
             message.clone(),
             config(0, id(43), true),
             [1_000_000, 1_000_000, 1000]
@@ -3489,7 +3476,7 @@ fn weighted_sells_keep_mode_pause_time_freeze_and_selected_depletion_checks() {
     assert_eq!(
         operation(
             &input,
-            &with_fee(&state, 0),
+            &state,
             message.clone(),
             config(0, id(43), false),
             [1_000_000, 1_000_000, 1000]
@@ -3500,10 +3487,7 @@ fn weighted_sells_keep_mode_pause_time_freeze_and_selected_depletion_checks() {
     state.trade_control = lbp_core::TradeControl::Unrestricted;
     state.ending_policy = lbp_core::EndingPolicy::Either;
     state.remaining_inventory = 0;
-    assert_eq!(
-        quote_trade(&with_fee(&state, 0), request, 1500),
-        Err(Error::Closed)
-    );
+    assert_eq!(quote_trade(&state, request, 0, 1500), Err(Error::Closed));
 }
 
 #[test]
@@ -3528,7 +3512,7 @@ fn weighted_retention_cannot_expand_gross_payout_budget_into_seed() {
         tokens_in: 200_000,
         min_collateral_out: 0,
     };
-    let quoted = quote_trade(&with_fee(&state, 100), request, 1500).unwrap();
+    let quoted = quote_trade(&state, request, 100, 1500).unwrap();
     assert!(quoted.gross_collateral > 100);
     assert!(quoted.gross_collateral - quoted.retained_fee <= 100);
     if let lbp_core::PoolMode::Weighted {
@@ -3538,13 +3522,13 @@ fn weighted_retention_cannot_expand_gross_payout_budget_into_seed() {
         *collateral_seed = 900;
     }
     assert_eq!(
-        quote_trade(&with_fee(&state, 100), request, 1500),
+        quote_trade(&state, request, 100, 1500),
         Err(Error::Underfunded)
     );
     assert_eq!(
         operation(
             &input,
-            &with_fee(&state, 100),
+            &state,
             Message::SellWeightedExactInput {
                 amount_in: 200_000,
                 min_amount_out: 0
@@ -3572,11 +3556,12 @@ fn weighted_retention_preserves_custody_and_remains_creator_proceeds() {
         *pricing_collateral = 1000;
     }
     let quote = quote_trade(
-        &with_fee(&state, 100),
+        &state,
         QuoteRequest::SellExactInput {
             tokens_in: 100_000,
             min_collateral_out: 0,
         },
+        100,
         1500,
     )
     .unwrap();
@@ -3587,7 +3572,7 @@ fn weighted_retention_preserves_custody_and_remains_creator_proceeds() {
     assert_eq!(
         operation(
             &input,
-            &with_fee(&state, 100),
+            &state,
             message.clone(),
             config(100, id(43), false),
             [1006, 1_000_000, 100_000]
@@ -3597,7 +3582,7 @@ fn weighted_retention_preserves_custody_and_remains_creator_proceeds() {
     );
     let response = operation(
         &input,
-        &with_fee(&state, 100),
+        &state,
         message,
         config(100, id(43), false),
         [1007, 1_000_000, 100_000],
@@ -3644,59 +3629,44 @@ fn weighted_retention_preserves_custody_and_remains_creator_proceeds() {
 }
 
 #[test]
-fn weighted_saved_fee_combines_with_retention_without_changing_buys_or_controls() {
+fn weighted_live_fee_updates_reject_sells_without_changing_buys_or_controls() {
     use lbp_core::{Error, QuoteRequest, quote_trade};
     let (mut input, mut state) = funded();
     state.trade_mode = lbp_core::TradeMode::BuyAndSell;
     state.sell_fee_bps = 6000;
-    let buy = Message::BuyWeightedExactOutput {
-        membership: None,
-        amount_out: 1000,
-        max_amount_in: 1_000_000,
-    };
     for namespace_bps in [4000, 5000, 9999] {
         assert_eq!(
             quote_trade(
-                &with_fee(&state, namespace_bps),
+                &state,
                 QuoteRequest::SellExactInput {
                     tokens_in: 100_000,
                     min_collateral_out: 0
                 },
+                namespace_bps,
                 1500
             ),
-            Err(Error::InvalidState)
+            Err(Error::InvalidFee)
         );
-        // Saved rates cannot change, so these `BuyAndSell` terms are invalid state.
-        assert_eq!(
-            operation(
-                &input,
-                &with_fee(&state, namespace_bps),
-                buy.clone(),
-                config(namespace_bps, id(43), false),
-                [100, 1_000_000, 1_000_000],
-            )
-            .err(),
-            Some(Error::InvalidState)
-        );
-    }
-    state.trade_mode = lbp_core::TradeMode::BuyOnly;
-    for namespace_bps in [4000, 5000, 9999] {
         let request = QuoteRequest::BuyExactOutput {
             tokens_out: 1000,
             max_collateral_in: 1_000_000,
         };
-        let quoted = quote_trade(&with_fee(&state, namespace_bps), request, 1500).unwrap();
+        let quoted = quote_trade(&state, request, namespace_bps, 1500).unwrap();
         assert_eq!(quoted.retained_fee, 0);
         let mut no_retention = state.clone();
         no_retention.sell_fee_bps = 0;
         assert_eq!(
             quoted,
-            quote_trade(&with_fee(&no_retention, namespace_bps), request, 1500).unwrap()
+            quote_trade(&no_retention, request, namespace_bps, 1500).unwrap()
         );
         let response = operation(
             &input,
-            &with_fee(&state, namespace_bps),
-            buy.clone(),
+            &state,
+            Message::BuyWeightedExactOutput {
+                membership: None,
+                amount_out: 1000,
+                max_amount_in: 1_000_000,
+            },
             config(namespace_bps, id(43), false),
             [100, 1_000_000, 1_000_000],
         )
@@ -3719,102 +3689,4 @@ fn weighted_saved_fee_combines_with_retention_without_changing_buys_or_controls(
     input.pre_state = resumed.post_state.unwrap();
     input.message = borsh::to_vec(&Message::ReadState).unwrap();
     let _ = handle(&input).unwrap();
-}
-
-fn with_fee(state: &lbp_core::PoolAccount, protocol_fee_bps: u16) -> lbp_core::PoolAccount {
-    let mut state = state.clone();
-    state.protocol_fee_bps = protocol_fee_bps;
-    state
-}
-
-#[test]
-fn namespace_updates_cannot_reprice_saved_buy_or_sell_fees() {
-    let (input, mut state) = funded();
-    state.trade_mode = lbp_core::TradeMode::BuyAndSell;
-    state.recorded_collateral = 10_000;
-    state.protocol_fee_bps = 100;
-    if let lbp_core::PoolMode::Weighted {
-        pricing_collateral, ..
-    } = &mut state.mode
-    {
-        *pricing_collateral = 10_000;
-    }
-    let messages = [
-        Message::BuyWeightedExactInput {
-            membership: None,
-            amount_in: 100,
-            min_amount_out: 0,
-        },
-        Message::SellWeightedExactInput {
-            amount_in: 100,
-            min_amount_out: 0,
-        },
-    ];
-    for message in messages {
-        let baseline = operation(
-            &input,
-            &state,
-            message.clone(),
-            config(100, id(43), false),
-            [20_000, state.remaining_inventory, 10_000],
-        )
-        .unwrap();
-        for live_rate in [0, 5000, 9999] {
-            let response = operation(
-                &input,
-                &state,
-                message.clone(),
-                config(live_rate, id(43), false),
-                [20_000, state.remaining_inventory, 10_000],
-            )
-            .unwrap();
-            assert_eq!(state_of(&response), state_of(&baseline));
-            assert_eq!(response.sync_messages, baseline.sync_messages);
-        }
-        assert_eq!(
-            operation(
-                &input,
-                &state,
-                message,
-                config(9999, id(43), true),
-                [20_000, state.remaining_inventory, 10_000]
-            )
-            .err(),
-            Some(lbp_core::Error::Frozen)
-        );
-    }
-}
-
-#[test]
-fn weighted_block_ceiling_uses_actual_output_and_rejects_aggregate_excess() {
-    let (input, mut state) = funded();
-    state.block_allocation = lbp_core::BlockAllocation::new(Some(2000)).unwrap();
-    let message = Message::BuyWeightedExactOutput {
-        membership: None,
-        amount_out: 1000,
-        max_amount_in: 100,
-    };
-    for sold in [1000, 2000] {
-        let response = operation(
-            &input,
-            &state,
-            message.clone(),
-            config(0, id(43), false),
-            [1000, state.remaining_inventory, 100],
-        )
-        .unwrap();
-        state = state_of(&response);
-        assert_eq!(state.block_allocation.tokens_sold, sold);
-    }
-    assert_eq!(
-        operation(
-            &input,
-            &state,
-            message,
-            config(0, id(43), false),
-            [1000, state.remaining_inventory, 100]
-        )
-        .err(),
-        Some(lbp_core::Error::BlockAllocationExceeded)
-    );
 }

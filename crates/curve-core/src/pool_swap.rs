@@ -43,13 +43,11 @@ pub fn begin(input: &ReceiveInput, message: Message) -> Result<Response, Error> 
             .admit(sender.account_id.value(), membership.as_ref())
             .map_err(|_| Error::Unauthorized)?;
     }
-    Pending::new(
-        state,
-        message,
-        sender.account_id,
-        vec![Query::Namespace, Query::Vault0, Query::Vault1],
-    )
-    .advance(input.receiver)
+    let mut queries = vec![Query::Namespace, Query::Vault0, Query::Vault1];
+    if *token_in == state.token1_definition_id && state.block_allocation.limit.is_some() {
+        queries.push(Query::AllocationBlock);
+    }
+    Pending::new(state, message, sender.account_id, queries).advance(input.receiver)
 }
 pub(crate) fn backed(pending: &Pending) -> Result<(), Error> {
     let collateral = pending
@@ -156,6 +154,24 @@ pub(crate) fn finish(mut pending: Pending, receiver: Actor) -> Result<Response, 
         _ => return Err(Error::InvalidMessage),
     }
     .map_err(|_| Error::InvalidPool)?;
+    let inclusion = if side == TokenSide::Token1 && pending.state.block_allocation.limit.is_some() {
+        let block = pending.allocation_block.ok_or(Error::InvalidState)?;
+        pending
+            .state
+            .block_allocation
+            .record(block, outcome.amount_out)
+            .map_err(|error| match error {
+                sale_policy::block_allocation::Error::BlockAllocationExceeded => {
+                    Error::BlockAllocationExceeded
+                }
+                _ => Error::InvalidState,
+            })?;
+        let start = block.checked_add(1).ok_or(Error::Arithmetic)?;
+        let end = start.checked_add(1).ok_or(Error::Arithmetic)?;
+        Some(start..end)
+    } else {
+        None
+    };
     let closure = if pending.state.pool.lifecycle == pool::PoolLifecycle::Closed {
         let reason = pending.state.depletion_reason().ok_or(Error::InvalidPool)?;
         pending.state.observe_closure(receiver, reason, bounds)
@@ -167,6 +183,11 @@ pub(crate) fn finish(mut pending: Pending, receiver: Actor) -> Result<Response, 
         bounds.at_least,
         bounds.before,
     )?;
+    if let Some(inclusion) = inclusion {
+        response = response
+            .try_block_window(inclusion)
+            .map_err(|_| Error::InvalidState)?;
+    }
     response = response.event(pending.state.event(
         receiver,
         SaleEventKindV1::Trade {

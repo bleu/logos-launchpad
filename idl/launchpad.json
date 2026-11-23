@@ -26,6 +26,7 @@
     "block_allocation": [],
     "controls": [],
     "curve": [
+      "block_allocation",
       "eligibility_policy",
       "events",
       "pool",
@@ -68,6 +69,7 @@
       "sale_policy"
     ],
     "sale_policy": [
+      "block_allocation",
       "controls",
       "events",
       "settlement",
@@ -321,6 +323,10 @@
                 "type": "u16"
               },
               {
+                "name": "per_block_token_limit",
+                "type": "Option<u128>"
+              },
+              {
                 "name": "namespace",
                 "type": "AccountId"
               },
@@ -557,6 +563,10 @@
           {
             "name": "pool",
             "type": "pool::Pool"
+          },
+          {
+            "name": "block_allocation",
+            "type": "BlockAllocation"
           }
         ]
       }
@@ -1543,6 +1553,10 @@
             "type": "u16"
           },
           {
+            "name": "per_block_token_limit",
+            "type": "Option<u128>"
+          },
+          {
             "name": "graduation_hook",
             "type": "Option<GraduationHook>"
           },
@@ -1671,6 +1685,10 @@
               {
                 "name": "sell_fee_bps",
                 "type": "u16"
+              },
+              {
+                "name": "per_block_token_limit",
+                "type": "Option<u128>"
               },
               {
                 "name": "graduation_hook_program_id",
@@ -2222,10 +2240,6 @@
       "FixedPricePoolInputs": {
         "fields": [
           {
-            "name": "protocol_fee_bps",
-            "type": "u16"
-          },
-          {
             "name": "per_block_token_limit",
             "type": "Option<u128>"
           },
@@ -2569,10 +2583,6 @@
       "PoolAccount": {
         "fields": [
           {
-            "name": "protocol_fee_bps",
-            "type": "u16"
-          },
-          {
             "name": "block_allocation",
             "type": "BlockAllocation"
           },
@@ -2731,10 +2741,6 @@
       },
       "WeightedPoolInputs": {
         "fields": [
-          {
-            "name": "protocol_fee_bps",
-            "type": "u16"
-          },
           {
             "name": "per_block_token_limit",
             "type": "Option<u128>"
@@ -3043,10 +3049,6 @@
       },
       "LbpLaunchState": {
         "fields": [
-          {
-            "name": "protocol_fee_bps",
-            "type": "u16"
-          },
           {
             "name": "per_block_token_limit",
             "type": "Option<u128>"

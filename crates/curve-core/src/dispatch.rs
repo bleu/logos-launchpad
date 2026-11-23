@@ -15,6 +15,7 @@ pub(crate) enum Query {
     Definition1,
     Vault0,
     Vault1,
+    AllocationBlock,
 }
 #[derive(BorshSerialize, BorshDeserialize)]
 pub(crate) struct Pending {
@@ -25,6 +26,7 @@ pub(crate) struct Pending {
     pub queries: Vec<Query>,
     pub config: Option<Config>,
     pub balances: [u128; 2],
+    pub allocation_block: Option<u64>,
 }
 impl Pending {
     pub fn new(
@@ -41,6 +43,7 @@ impl Pending {
             queries,
             config: None,
             balances: [0; 2],
+            allocation_block: None,
         }
     }
     fn expected(&self, query: &Query, program: AccountId) -> Actor {
@@ -64,6 +67,7 @@ impl Pending {
             Query::Namespace => {
                 return Actor::new(compute_config_pda(self.state.namespace, program), program);
             }
+            Query::AllocationBlock => return clock_core::clock_actor(),
             Query::Definition0 => self.state.token0_definition_id,
             Query::Definition1 => self.state.token1_definition_id,
             Query::Vault0 | Query::Vault1 => {
@@ -115,6 +119,10 @@ impl Pending {
                     namespace: self.state.namespace,
                 },
             ),
+            Query::AllocationBlock => SyncMessage::new(
+                clock_core::clock_actor(),
+                &clock_core::Message::ReadBlockId { granularity: 1 },
+            ),
             _ => SyncMessage::new(
                 self.expected(query, receiver.program_account_id),
                 &token::Message::ReadState,
@@ -149,6 +157,14 @@ pub fn resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
                     return Err(Error::WrongAccount);
                 }
                 pending.config = Some(config);
+            }
+            Query::AllocationBlock => {
+                let clock_core::Reply::BlockId(block) =
+                    borsh::from_slice(&input.message).map_err(|_| Error::InvalidMessage)?
+                else {
+                    return Err(Error::InvalidMessage);
+                };
+                pending.allocation_block = Some(block);
             }
             Query::Definition0 | Query::Definition1 => {
                 if !matches!(

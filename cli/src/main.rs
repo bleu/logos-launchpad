@@ -14,10 +14,10 @@ use eyre::{Context, ContextCompat, Result};
 use launchpad_client::{
     AccountLocation, CreateSaleRequest, ExactInputTradeTerms, ExactOutputTradeTerms, FactorySale,
     PoolFeeTarget, PrivateAccountId, PrivateBuyRequest, ProgramHandle,
-    build_claim_creator_allocation_invocation, load_curve_config, load_factory_pool,
-    load_factory_state, prepare_buy_invocation, prepare_buy_with_collateral_invocation,
-    prepare_sell_invocation, quote_buy, quote_buy_with_collateral, quote_sell,
-    submit_public_invocation,
+    build_claim_creator_allocation_invocation, load_clock_block_id, load_curve_config,
+    load_factory_pool, load_factory_state, prepare_buy_invocation,
+    prepare_buy_with_collateral_invocation, prepare_sell_invocation, quote_buy,
+    quote_buy_with_collateral, quote_sell, submit_public_invocation,
 };
 use serde::Serialize;
 use wallet::WalletCore;
@@ -309,6 +309,12 @@ impl From<EndingPolicyArg> for launchpad_client::EndingPolicy {
 struct CreateSaleArgs {
     #[arg(long, value_enum)]
     trade_mode: TradeModeArg,
+    /// Collateral retained by the sale on sells, in basis points.
+    #[arg(long, default_value_t = 0, value_parser = clap::value_parser!(u16).range(0..10_000))]
+    sell_fee_bps: u16,
+    /// Maximum launch tokens all buys can receive per block, in smallest units.
+    #[arg(long)]
+    per_block_token_limit: Option<u128>,
     /// Let the current creator pause and resume swaps.
     #[arg(long)]
     pausable: bool,
@@ -409,8 +415,8 @@ impl CreateSaleArgs {
                 }
             }),
             trade_mode: self.trade_mode.into(),
-            // Factory curve sales keep a fixed invariant and accept no retained sell fee.
-            sell_fee_bps: 0,
+            sell_fee_bps: self.sell_fee_bps,
+            per_block_token_limit: self.per_block_token_limit,
             graduation_hook: self.graduation_hook_program_id.map(|program_id| {
                 launchpad_client::GraduationHook {
                     program_id,
@@ -745,6 +751,8 @@ enum QuoteMode {
 
 #[derive(Serialize)]
 struct SaleSnapshot {
+    sell_fee_bps: u16,
+    per_block_token_limit: Option<u128>,
     graduation_reserve: u128,
     trade_mode: TradeModeArg,
     graduation_hook: Option<HookSnapshot>,
@@ -1133,14 +1141,22 @@ async fn price(namespace: lee::AccountId, json: bool, args: PriceArgs) -> Result
         .duration_since(UNIX_EPOCH)
         .context("reading the current time")?
         .as_secs();
+    let observed_block = if !args.sell && pool.block_allocation.limit.is_some() {
+        Some(load_clock_block_id(&wallet).await?)
+    } else {
+        None
+    };
     let (kind, quote) = match (args.tokens, args.collateral) {
         (Some(tokens), None) if args.sell => {
             (QuoteMode::Sell, quote_sell(&pool, &config, tokens, now)?)
         }
-        (Some(tokens), None) => (QuoteMode::Buy, quote_buy(&pool, &config, tokens, now)?),
+        (Some(tokens), None) => (
+            QuoteMode::Buy,
+            quote_buy(&pool, &config, tokens, now, observed_block)?,
+        ),
         (None, Some(collateral)) => (
             QuoteMode::Buy,
-            quote_buy_with_collateral(&pool, &config, collateral, now)?,
+            quote_buy_with_collateral(&pool, &config, collateral, now, observed_block)?,
         ),
         _ => eyre::bail!("provide exactly one of --tokens or --collateral"),
     };
@@ -1216,6 +1232,8 @@ async fn sale_snapshot(namespace: lee::AccountId, json: bool, args: LaunchReadAr
     };
     let config = load_curve_config(namespace, &wallet, curve_program.account_id).await?;
     let snapshot = SaleSnapshot {
+        sell_fee_bps: factory.sell_fee_bps,
+        per_block_token_limit: factory.per_block_token_limit,
         graduation_reserve: factory.graduation_reserve,
         trade_mode: factory.trade_mode.into(),
         graduation_hook: factory.graduation_hook.as_ref().map(HookSnapshot::from),
@@ -1282,6 +1300,10 @@ async fn sale_snapshot(namespace: lee::AccountId, json: bool, args: LaunchReadAr
             snapshot.graduation_collateral_bps,
             snapshot.graduation_reserve,
         );
+        println!("retained sell fee: {} bps", snapshot.sell_fee_bps);
+        if let Some(limit) = snapshot.per_block_token_limit {
+            println!("purchase limit per block: {limit} launch-token units");
+        }
         if let Some(hook) = &snapshot.graduation_hook {
             println!(
                 "graduation hook: program_id={} configuration={}",
@@ -1320,6 +1342,11 @@ async fn buy(namespace: lee::AccountId, json: bool, args: BuyArgs) -> Result<()>
         .duration_since(UNIX_EPOCH)
         .context("reading the current time")?
         .as_secs();
+    let observed_block = if pool.block_allocation.limit.is_some() {
+        Some(load_clock_block_id(&wallet).await?)
+    } else {
+        None
+    };
     let invocation = prepare_buy_invocation(
         sale,
         participant,
@@ -1331,6 +1358,7 @@ async fn buy(namespace: lee::AccountId, json: bool, args: BuyArgs) -> Result<()>
         },
         None,
         now,
+        observed_block,
     )?;
     let transaction_hash = submit_public_invocation(&wallet, &curve_program, invocation).await?;
     print_submission(
@@ -1371,6 +1399,11 @@ async fn buy_with_collateral(
         .duration_since(UNIX_EPOCH)
         .context("reading the current time")?
         .as_secs();
+    let observed_block = if pool.block_allocation.limit.is_some() {
+        Some(load_clock_block_id(&wallet).await?)
+    } else {
+        None
+    };
     let invocation = prepare_buy_with_collateral_invocation(
         sale,
         participant,
@@ -1382,6 +1415,7 @@ async fn buy_with_collateral(
         },
         None,
         now,
+        observed_block,
     )?;
     let transaction_hash = submit_public_invocation(&wallet, &curve_program, invocation).await?;
     print_submission(
@@ -2259,7 +2293,18 @@ mod tests {
         };
         assert!(args.sale_request().graduation_hook.is_none());
         assert_eq!(args.sale_request().sell_fee_bps, 0);
-        for rate in ["0", "125"] {
+        for rate in ["0", "125", "9999"] {
+            let mut selected = arguments.clone();
+            selected.extend(["--sell-fee-bps", rate]);
+            let Command::CreateSale(args) = Cli::try_parse_from(selected).unwrap().command else {
+                panic!("create sale")
+            };
+            assert_eq!(
+                args.sale_request().sell_fee_bps,
+                rate.parse::<u16>().unwrap()
+            );
+        }
+        for rate in ["10000", "65535", "65536", "-1"] {
             let mut selected = arguments.clone();
             selected.extend(["--sell-fee-bps", rate]);
             assert!(Cli::try_parse_from(selected).is_err());
@@ -2496,6 +2541,8 @@ mod tests {
             (SaleStatus::Withdrawn, "withdrawn"),
         ] {
             let snapshot = SaleSnapshot {
+                sell_fee_bps: 0,
+                per_block_token_limit: None,
                 trade_mode: TradeModeArg::BuyOnly,
                 graduation_hook: None,
                 graduation_launch_bps: 0,

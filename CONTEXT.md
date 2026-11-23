@@ -19,7 +19,7 @@ This page defines the shared domain language. The [glossary](docs/glossary.md) e
 | Pool | Mechanism state and token custody. A curve pool holds one ordered token pair. Direct curve pools are internal primitives and test surfaces. |
 | Token0 / token1 | Ordered curve token roles. Bonding-curve sales use the launch token as token0 and collateral as token1. |
 | Real reserve | Tokens available to back swap output. Accrued fees are separate. |
-| Virtual reserve | Pricing-only curve state. The creation-time product is `initial_k`; factory curve sales keep `k == initial_k`. Direct internal pools can grow `k` through retained sell collateral. |
+| Virtual reserve | Pricing-only curve state. The creation-time product is `initial_k`; curve pools can grow `k` through retained sell collateral. With no retained sell fee, `k == initial_k`. |
 | Factory | Shared launch adapter for matching creation, allocation, namespace-binding and setup rules. It shares policy decisions without combining pricing state or custody. |
 | `D` | Purchasable bonding-curve sale allocation. |
 | `R` | Graduation reserve of launch tokens, separate from purchasable inventory, for all three sale types. The selected adapter defines its use; it does not promise DEX liquidity. See [reserve rules](docs/adr/0020-settlement-and-graduation.md#graduation-reserve). |

@@ -1,5 +1,10 @@
 //! Aggregate gross token sales per inclusion block. Sells do not restore allowance.
-use crate::Error;
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Error {
+    InvalidTerms,
+    InvalidState,
+    BlockAllocationExceeded,
+}
 use borsh::{BorshDeserialize, BorshSerialize};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -19,7 +24,7 @@ impl BlockAllocation {
         Ok(value)
     }
 
-    pub(crate) fn validate(&self) -> Result<(), Error> {
+    pub fn validate(&self) -> Result<(), Error> {
         match self.limit {
             Some(limit) if limit == 0 || self.tokens_sold > limit => Err(Error::InvalidTerms),
             None if self.observed_block.is_some() || self.tokens_sold != 0 => {
@@ -40,7 +45,7 @@ impl BlockAllocation {
         }
     }
 
-    pub(crate) fn record(&mut self, block: u64, tokens: u128) -> Result<(), Error> {
+    pub fn record(&mut self, block: u64, tokens: u128) -> Result<(), Error> {
         self.validate()?;
         let limit = self.limit.ok_or(Error::InvalidState)?;
         if self.observed_block.is_some_and(|previous| block < previous) {

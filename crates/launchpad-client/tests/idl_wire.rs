@@ -479,6 +479,7 @@ fn direct_pool_creation_keeps_namespace_owner_and_funding_terms_on_wire() {
             pause_policy: curve_core::PausePolicy::Disabled,
             ending_policy: curve_core::EndingPolicy::Either,
             sell_fee_bps: 0x0102,
+            per_block_token_limit: Some(1000),
             namespace: AccountId::new([1; 32]),
             token0_definition_id: AccountId::new([2; 32]),
             token1_definition_id: AccountId::new([3; 32]),
@@ -498,6 +499,7 @@ fn direct_pool_creation_keeps_namespace_owner_and_funding_terms_on_wire() {
         },
         concat!(
             "080000030201",
+            "01e8030000000000000000000000000000",
             "0101010101010101010101010101010101010101010101010101010101010101",
             "0202020202020202020202020202020202020202020202020202020202020202",
             "0303030303030303030303030303030303030303030303030303030303030303",
@@ -525,6 +527,7 @@ fn direct_pool_creation_keeps_namespace_owner_and_funding_terms_on_wire() {
                 {"name":"pause_policy","type":"PausePolicy"},
                 {"name":"ending_policy","type":"EndingPolicy"},
                 {"name":"sell_fee_bps","type":"u16"},
+                {"name":"per_block_token_limit","type":"Option<u128>"},
                 {"name":"namespace","type":"AccountId"},
                 {"name":"token0_definition_id","type":"AccountId"},
                 {"name":"token1_definition_id","type":"AccountId"},
@@ -550,6 +553,7 @@ fn factory_creation_keeps_creator_namespace_and_saved_hook_terms_on_wire() {
             ending_policy: curve_core::EndingPolicy::Either,
             trade_mode: 1,
             sell_fee_bps: 0x0102,
+            per_block_token_limit: None,
             graduation_hook_program_id: Some(AccountId::new([1; 32])),
             graduation_hook_configuration: vec![2, 3],
             namespace: AccountId::new([4; 32]),
@@ -572,7 +576,7 @@ fn factory_creation_keeps_creator_namespace_and_saved_hook_terms_on_wire() {
             now: 15,
         },
         concat!(
-            "0000000301020101",
+            "000000030102010001",
             "0101010101010101010101010101010101010101010101010101010101010101",
             "020000000203",
             "0404040404040404040404040404040404040404040404040404040404040404",
@@ -601,6 +605,7 @@ fn factory_creation_keeps_creator_namespace_and_saved_hook_terms_on_wire() {
                 {"name":"ending_policy","type":"EndingPolicy"},
                 {"name":"trade_mode","type":"u8"},
                 {"name":"sell_fee_bps","type":"u16"},
+                {"name":"per_block_token_limit","type":"Option<u128>"},
                 {"name":"graduation_hook_program_id","type":"Option<AccountId>"},
                 {"name":"graduation_hook_configuration","type":"Vec<u8>"},
                 {"name":"namespace","type":"AccountId"},{"name":"launch_salt","type":"[u8;32]"},
@@ -1458,7 +1463,6 @@ fn immutable_policy_fields_follow_controls_except_inside_the_curve_pool() {
 fn fixed_pool_state_tuple_places_policies_after_trade_control() {
     let account = AccountId::new([5; 32]);
     let mut bytes = borsh::to_vec(&(
-        1000u16,
         (Some(17u128), Some(8u64), 5u128),
         curve_core::BuyPolicy::Open,
         curve_core::TradeControl::Unrestricted,
@@ -1488,7 +1492,6 @@ fn fixed_pool_state_tuple_places_policies_after_trade_control() {
     bytes.push(0); // No pending operation.
     let pool = lbp_core::PoolAccount::decode(&bytes).unwrap();
     assert!(!pool.closure_observed);
-    assert_eq!(pool.protocol_fee_bps, 1000);
     assert_eq!(pool.block_allocation.limit, Some(17));
     assert_eq!(pool.block_allocation.observed_block, Some(8));
     assert_eq!(pool.block_allocation.tokens_sold, 5);
@@ -1499,7 +1502,7 @@ fn fixed_pool_state_tuple_places_policies_after_trade_control() {
         pool.settlement_progress,
         lbp_core::SettlementProgress::Unselected
     );
-    assert_eq!(&bytes[44..47], &[0, 0, 3]);
+    assert_eq!(&bytes[42..45], &[0, 0, 3]);
     assert_eq!(borsh::to_vec(&pool).unwrap(), bytes);
 }
 
@@ -1567,7 +1570,6 @@ fn fixed_pool_terminal_states_use_progress_tags_instead_of_boolean_completion() 
         (lbp_core::SettlementProgress::Graduated, 3),
     ] {
         let mut bytes = borsh::to_vec(&(
-            1000u16,
             (None::<u128>, None::<u64>, 0u128),
             curve_core::BuyPolicy::Open,
             curve_core::TradeControl::Unrestricted,
@@ -1870,7 +1872,6 @@ fn weighted_pool_binds_the_split_and_keeps_seed_in_recorded_collateral() {
     let account = AccountId::new([5; 32]);
     let adapter = lee_core::account::Actor::new(AccountId::new([6; 32]), AccountId::new([7; 32]));
     let mut bytes = borsh::to_vec(&(
-        1000u16,
         (None::<u128>, None::<u64>, 0u128),
         curve_core::BuyPolicy::Open,
         curve_core::TradeControl::Unrestricted,
@@ -1910,7 +1911,7 @@ fn weighted_pool_binds_the_split_and_keeps_seed_in_recorded_collateral() {
     bytes.push(0);
     let pool = lbp_core::PoolAccount::decode(&bytes).unwrap();
     assert!(!pool.closure_observed);
-    assert_eq!(&bytes[20..27], &[0, 0, 1, 0, 0, 0, 1]);
+    assert_eq!(&bytes[18..25], &[0, 0, 1, 0, 0, 0, 1]);
     assert_eq!(pool.graduation_adapter, Some(adapter));
     assert_eq!(pool.recorded_collateral, 140);
     assert_eq!(pool.graduation_policy.collateral_bps, 7500);
