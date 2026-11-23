@@ -13,18 +13,18 @@ Read [CONTEXT.md](../../CONTEXT.md) for terms. See the [workspace guide](../arch
 | [0006](0006-namespaces-and-authority.md) | Namespaces and separate role authority | Accepted |
 | [0007](0007-typed-sale-inputs.md) | Typed immutable sale inputs | Logos review pending |
 | [0008](0008-curve-allocation-and-close.md) | Curve allocations | Logos review pending |
-| [0009](0009-curve-arithmetic.md) | Curve arithmetic and backing | Accepted baseline |
+| [0009](0009-curve-arithmetic.md) | Curve arithmetic and backing | Accepted baseline; retained sell fee needs Logos review |
 | [0010](0010-weighted-integer-arithmetic.md) | Weighted integer arithmetic | Accepted; unaudited |
 | [0011](0011-weighted-precision.md) | Weighted precision | Accepted; unaudited |
 | [0012](0012-weighted-series.md) | Weighted series | Accepted; unaudited |
 | [0013](0013-weighted-exact-output.md) | Weighted exact output | Accepted; unaudited |
 | [0014](0014-weighted-math-evidence.md) | Weighted math evidence | Accepted; unaudited |
-| [0015](0015-fee-accounting.md) | Collateral fee snapshots, formulas and collection | RFP-016 departures; Logos review pending |
+| [0015](0015-fee-accounting.md) | Live namespace fees, retained fees and collection | RFP-016 departures; Logos review pending |
 | [0017](0017-quotes-and-slippage.md) | Quotes and slippage | Accepted |
 | [0018](0018-private-participation.md) | Atomic private route and recovery | Accepted design; private execution pending |
 | [0019](0019-product-packages.md) | Two QML apps and shared core | Accepted design; packaging unverified |
 | [0020](0020-settlement-and-graduation.md) | Shared payouts and adapter initialization | Implemented; live DEX deferred |
-| [0021](0021-modes-and-open-limits.md) | Trade modes, allowlists and allocation ceiling | Public admission and optional per-block ceilings implemented; wallet/private route pending; allowlist departures need Logos review |
+| [0021](0021-modes-and-open-limits.md) | Trade modes, allowlists and allocation ceiling | Public admission and optional per-block ceilings implemented; wallet/private route pending; allowlist and curve ceiling departures need Logos review |
 | [0022](0022-verification-boundaries.md) | Verification boundaries | Accepted |
 | [0025](0025-sale-closing.md) | Ending and payout eligibility | Implemented; uncalibrated curve expiry minimum needs Logos review |
 | [0026](0026-lbp-clock-and-poke.md) | Weighted clock and observations | Upstream clock in normal builds; local execution limits remain |
@@ -37,6 +37,8 @@ Read [CONTEXT.md](../../CONTEXT.md) for terms. See the [workspace guide](../arch
 | [0033](0033-fixed-price-lbp-recorded-collateral.md) | Fixed-price recorded collateral invariant | Accepted; implemented |
 | [0034](0034-lez-v04-migration.md) | Actor target and temporary compatibility | Accepted; readiness gaps remain |
 | [0036](0036-graduation-adapter-delivery.md) | Plain-transfer distribution adapter; liquidity deferred | Implemented; local guest evidence; liquidity deferred |
+
+See the [proposal review register](../product/proposal-departures.md) for decisions that need Logos review.
 
 ## Editing decisions
 
