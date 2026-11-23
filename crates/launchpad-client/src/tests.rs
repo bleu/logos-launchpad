@@ -2849,18 +2849,12 @@ fn resumed_creation_cannot_change_the_graduation_reserve() {
 }
 
 #[test]
-fn curve_continuation_recovers_after_expiry_without_allowing_a_short_live_sale() {
+fn curve_sdk_allows_short_sales_and_continuation_after_expiry() {
     let mut state = valid_factory_state(sale());
     state.creation_stage = CreationStage::Minted;
     state.ending_policy = factory_core::EndingPolicy::Either;
     state.end_timestamp = Some(400);
-    for (now, accepted) in [
-        (100, true),
-        (101, false),
-        (399, false),
-        (400, true),
-        (401, true),
-    ] {
+    for now in [399, 400, 401] {
         let mut request = creation();
         request.ending_policy = state.ending_policy;
         request.end_timestamp = state.end_timestamp;
@@ -2871,12 +2865,12 @@ fn curve_continuation_recovers_after_expiry_without_allowing_a_short_live_sale()
             request.clone(),
             Some(&state),
         );
-        assert_eq!(result.is_ok(), accepted, "hint {now}");
-        if now >= 400 {
-            assert!(
-                build_create_sale_invocation(sale(), AccountId::new([9; 32]), request).is_err()
-            );
-        }
+        assert!(result.is_ok(), "hint {now}");
+        assert_eq!(
+            build_create_sale_invocation(sale(), AccountId::new([9; 32]), request).is_ok(),
+            now < 400,
+            "hint {now}"
+        );
     }
 }
 

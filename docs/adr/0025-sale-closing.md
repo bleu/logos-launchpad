@@ -1,6 +1,6 @@
 # ADR 0025: Shared sale ending rules
 
-Status: Accepted internally; curve expiry minimum implemented; uncalibrated five-minute value: To be reviewed by Logos team
+Status: Accepted internally; deferral of the minimum curve duration needs Logos review.
 
 ## Decision
 
@@ -13,7 +13,7 @@ Check an immutable ending policy at the pool boundary. [ADR 0031](0031-shared-la
 | `Depletion` | Ends when the selected recorded reserve is exhausted | Factory curve and fixed-price sales; no end timestamp |
 | `Either` | Ends at selected depletion or the configured end, whichever occurs first | Factory curve, fixed-price and weighted sales |
 
-Weighted sales require their schedule end for interpolation and as a settlement fallback, including with `Either`. They reject `Manual` and pure `Depletion`. Curve and fixed-price factory sales reject `Manual`. A creator cannot close a factory sale early. No final trade or separate close transaction is required for an automatic ending. Factory curve sales with a configured expiry require at least 5 minutes remaining at creation and any activation that can open trading. Setup callbacks carry an inclusion-time upper bound of `end - 5 minutes`, inclusive. Caller time hints cannot bypass this bound. After expiry, an existing setup can instead finish under an inclusion-time lower bound of `end`. Activation then closes the pool and preserves post-close withdrawal. It cannot admit a short live sale. The recovered sale then settles like a sale with no buyers through its saved payout route, including a configured graduation hook. New creation after expiry is rejected. Direct internal pools are outside this factory sale policy.
+Weighted sales require their schedule end for interpolation and as a settlement fallback, including with `Either`. They reject `Manual` and pure `Depletion`. Curve and fixed-price factory sales reject `Manual`. A creator cannot close a factory sale early. No final trade or separate close transaction is required for an automatic ending. Factory curve sales can be created and activated for trading at any block timestamp before their configured expiry. Setup responses bound normal inclusion to that expiry, exclusive. After expiry, an existing setup can finish with a closed pool and settle through its saved payout route. This recovery path requires inclusion at or after expiry.
 
 Selected depletion is final: later trades cannot reopen that sale. `Scheduled` ignores depletion for ending decisions. Empty inventory still prevents buys, but does not permit early proceeds or `AfterEnd` allocation payouts. Only recorded trading depletion counts; settlement payouts cannot create depletion evidence. Pause and namespace freeze block trades without moving the schedule or changing settlement rights.
 
@@ -25,7 +25,7 @@ The separate `AfterEnd` allocation follows the selected ending policy and can be
 
 ## Reason and limits
 
-The minimum expiry duration prevents creators from configuring or activating an arbitrarily short factory sale. Five minutes is a provisional operational floor for transaction preparation, submission and retries, not a measured privacy guarantee. Complete private-route proof and inclusion latency must be measured before calibrating the production value. Selected depletion may still close an `Either` sale early. Pause does not extend expiry, so a creator with pause rights can reduce the trading time below the minimum. The minimum is a trading-time guarantee only for sales with `PausePolicy::Disabled`; participants must treat pause rights as creator trust. This restores the minimum-duration mechanism promised in RFP-015 without claiming equal private and public execution latency. The five-minute value departs from the RFP intent until measured latency supports it, so it keeps external status `To be reviewed by Logos team`.
+The submitted curve proposal lists an enforced minimum duration under Soft-3. RFP-015 calls for enough time for the private route. Defer the minimum until the private route works and we can measure its proof and inclusion latency. The previous five-minute value had no measured basis. Short public sales are possible in the interim. Creator pause and depletion can also shorten trading.
 
 Trading and payout eligibility must follow the same saved policy. Local guest checks cover transfers, burns, rollback and retries, not live clock support, private execution or production readiness. See [workspace evidence](../architecture/workspace-guide.md#execution-and-evidence-limits) and [fee policy](0015-fee-accounting.md).
 

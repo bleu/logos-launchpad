@@ -1634,24 +1634,11 @@ fn curve_resume(input: &ReceiveInput) -> Option<Result<Response, Error>> {
         }
     })())
 }
-/// Operational floor for configured curve expiry. Private-path fairness still needs measurements.
-pub const MIN_CURVE_SALE_DURATION_SECONDS: u64 = 300;
-
-pub fn validate_curve_duration(end: Option<u64>, now: u64) -> Result<(), Error> {
-    if end.is_some_and(|end| {
-        end.checked_sub(now)
-            .is_none_or(|duration| duration < MIN_CURVE_SALE_DURATION_SECONDS)
-    }) {
+pub fn validate_curve_expiry(end: Option<u64>, now: u64) -> Result<(), Error> {
+    if end.is_some_and(|end| now >= end) {
         return Err(Error::InvalidTerms);
     }
     Ok(())
-}
-
-pub fn validate_curve_continuation_duration(end: Option<u64>, now: u64) -> Result<(), Error> {
-    if end.is_some_and(|end| now >= end) {
-        return Ok(());
-    }
-    validate_curve_duration(end, now)
 }
 
 pub fn handle(input: &ReceiveInput) -> Result<Response, Error> {
@@ -1669,12 +1656,11 @@ pub fn handle(input: &ReceiveInput) -> Result<Response, Error> {
         Some(Message::CreateFactoryPool {
             end_timestamp, now, ..
         }) => {
-            validate_curve_duration(end_timestamp, now)?;
+            validate_curve_expiry(end_timestamp, now)?;
             (end_timestamp, false)
         }
         Some(Message::ContinueCreation { now, .. }) => {
             let end = saved.as_ref().ok_or(Error::InvalidState)?.end_timestamp;
-            validate_curve_continuation_duration(end, now)?;
             (end, end.is_some_and(|end| now >= end))
         }
         _ => (None, false),
@@ -1696,14 +1682,7 @@ pub fn handle(input: &ReceiveInput) -> Result<Response, Error> {
             };
             return Ok(response);
         }
-        // Inclusion time, not the caller's hint, limits every setup callback and activation.
-        let latest = end
-            .checked_sub(MIN_CURVE_SALE_DURATION_SECONDS)
-            .ok_or(Error::InvalidTerms)?;
-        let upper = curve_core::timestamp_millis(latest)
-            .map_err(|_| Error::InvalidTerms)?
-            .checked_add(1)
-            .ok_or(Error::InvalidTerms)?;
+        let upper = curve_core::timestamp_millis(end).map_err(|_| Error::InvalidTerms)?;
         let upper = response
             .validity
             .timestamps
