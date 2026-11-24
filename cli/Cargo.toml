@@ -20,9 +20,20 @@ hex.workspace = true
 launchpad-client.workspace = true
 pool.workspace = true
 serde.workspace = true
-serde_json.workspace = true
+serde_json = { workspace = true, features = ["arbitrary_precision"] }
 tokio.workspace = true
 wallet.workspace = true
+
+[dev-dependencies]
+borsh.workspace = true
+curve-core.workspace = true
+factory-core.workspace = true
+lbp-core.workspace = true
+lee_core.workspace = true
+program_loader_core.workspace = true
+programs.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
 
 [lints]
 workspace = true

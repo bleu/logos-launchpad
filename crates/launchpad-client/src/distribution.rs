@@ -143,7 +143,7 @@ pub fn hook(
 }
 
 pub async fn load_state(
-    wallet: &LaunchpadWallet,
+    wallet: &WalletCore<impl WalletSequencerClient>,
     adapter_program: AccountId,
     factory_program: AccountId,
     namespace: AccountId,

@@ -4,6 +4,7 @@
 
 mod error;
 mod lifecycle;
+mod sale_info;
 mod types;
 pub use curve_core::{
     AllowlistPolicy, BuyPolicy, EndingPolicy, MembershipPath, PausePolicy,
@@ -11,9 +12,16 @@ pub use curve_core::{
 };
 pub use error::{ClientError, Result};
 pub use factory_core::{CreationStage, GraduationHook, SettlementStage, TradeMode};
-pub use factory_core::{GraduationPolicy, SettlementPayouts};
-pub use lbp_core::{QuoteRequest as LbpQuoteRequest, TradeQuote as LbpTradeQuote};
+pub use factory_core::{GraduationPolicy, LbpCreationStage, SettlementPayouts};
+pub use lbp_core::{
+    QuoteRequest as LbpQuoteRequest, SettlementProgress as LbpSettlementProgress,
+    TradeQuote as LbpTradeQuote,
+};
 pub use lifecycle::{FactorySession, LifecycleReceipt, next_creation_invocation};
+pub use sale_info::{
+    CurvePoolObservation, CurveSaleInfo, FixedPriceSaleInfo, LbpSaleInfo, SaleInfo, SaleSelection,
+    SavedSaleTerms, WeightedSaleInfo, load_sale_info,
+};
 pub use types::{
     AccountLocation, ExactInputTradeTerms, ExactOutputTradeTerms, FactorySale, LbpSale,
     PoolFeeTarget, PrivateAccountId,
@@ -36,7 +44,7 @@ use lee_core::{account::Actor, program::ProgramId};
 use lez_compat_core::token;
 use program_loader_core::LoaderActorState as _;
 use std::path::Path;
-use wallet::AccountIdentity;
+use wallet::{AccountIdentity, WalletCore, WalletSequencerClient};
 
 /// The upstream wallet with the RPC client used by the launchpad SDK and CLI.
 pub type LaunchpadWallet = wallet::WalletCore<sequencer_service_rpc::SequencerClient>;
@@ -1303,7 +1311,7 @@ pub async fn submit_private_authority<I: PrivateInstruction>(
 }
 
 async fn read_actor(
-    wallet: &LaunchpadWallet,
+    wallet: &WalletCore<impl WalletSequencerClient>,
     actor: Actor,
 ) -> std::result::Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
     let account = wallet
@@ -1324,7 +1332,7 @@ async fn read_actor(
 }
 pub async fn load_curve_config(
     namespace: AccountId,
-    wallet: &LaunchpadWallet,
+    wallet: &WalletCore<impl WalletSequencerClient>,
     curve: AccountId,
 ) -> Result<Config> {
     let data = read_actor(
@@ -1340,7 +1348,7 @@ pub async fn load_curve_config(
     Ok(config)
 }
 pub async fn load_factory_state(
-    wallet: &LaunchpadWallet,
+    wallet: &WalletCore<impl WalletSequencerClient>,
     sale: FactorySale,
 ) -> Result<FactoryState> {
     let a = factory_pool_addresses(sale);
@@ -1352,7 +1360,7 @@ pub async fn load_factory_state(
     Ok(state)
 }
 pub async fn load_factory_pool(
-    wallet: &LaunchpadWallet,
+    wallet: &WalletCore<impl WalletSequencerClient>,
     sale: FactorySale,
 ) -> Result<curve_core::PoolAccount> {
     let a = factory_pool_addresses(sale);
@@ -1432,9 +1440,9 @@ pub(crate) fn validate_factory_state(sale: FactorySale, state: &FactoryState) ->
     Ok(())
 }
 
-/// The upstream wallet selects fees, reads nonces, signs and submits.
+/// Submits through the Logos wallet. Returns the hash only after a successful execution receipt.
 pub async fn submit_public_invocation<I: BorshSerialize>(
-    wallet: &LaunchpadWallet,
+    wallet: &WalletCore<impl WalletSequencerClient>,
     program: &ProgramHandle,
     call: PublicInvocation<I>,
 ) -> Result<HashType> {
@@ -1463,18 +1471,56 @@ pub async fn submit_public_invocation<I: BorshSerialize>(
     let hash = wallet
         .send_pub_tx_paid_by(actors, root, message, call.fee_payer)
         .await
-        .map_err(|e| ClientError::SubmitPublicTransaction(Box::new(e)))?;
-    wait_for_confirmation(wallet, hash).await?;
+        .map_err(public_send_error)?;
+    wait_for_execution(wallet, hash).await?;
     Ok(hash)
 }
-async fn wait_for_confirmation(wallet: &LaunchpadWallet, hash: HashType) -> Result<()> {
-    tokio::time::timeout(
-        std::time::Duration::from_secs(60),
-        wallet.poll_transaction(hash),
-    )
+
+fn public_send_error(source: wallet::ExecutionFailureKind) -> ClientError {
+    use wallet::ExecutionFailureKind::*;
+
+    match source {
+        SimulatedRevert(_) => ClientError::PublicWriteRejected(Box::new(source)),
+        TransactionBuildError(_)
+        | SignError(_)
+        | KeyNotFoundError
+        | InsufficientFundsError
+        | ConflictingAccountIdentity(_)
+        | DryRun(_) => ClientError::PublicWritePreparation(Box::new(source)),
+        // The wallet uses some of the same errors for preparation reads and submission.
+        _ => ClientError::PublicWritePending {
+            hash: None,
+            source: Box::new(source),
+        },
+    }
+}
+
+async fn wait_for_execution(
+    wallet: &WalletCore<impl WalletSequencerClient>,
+    hash: HashType,
+) -> Result<()> {
+    use std::time::Duration;
+
+    let receipt = tokio::time::timeout(Duration::from_secs(60), async {
+        loop {
+            if let Some(receipt) = wallet.client().get_transaction_receipt(hash).await? {
+                break Ok::<_, Box<dyn std::error::Error + Send + Sync>>(receipt);
+            }
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+    })
     .await
-    .map_err(|source| ClientError::ConfirmationTimeout { hash, source })?
-    .map_err(|e| ClientError::ConfirmTransaction(e.into_boxed_dyn_error()))?;
+    .map_err(|source| ClientError::PublicWritePending {
+        hash: Some(hash),
+        source: Box::new(source),
+    })?
+    .map_err(|source| ClientError::PublicWritePending {
+        hash: Some(hash),
+        source,
+    })?;
+    if !receipt.success {
+        return Err(ClientError::PublicWriteReverted { hash });
+    }
     Ok(())
 }
 
@@ -1554,7 +1600,7 @@ pub fn build_collect_fees_invocation(
     .with_holding(treasury, collateral)
 }
 pub async fn prepare_fee_collection(
-    wallet: &LaunchpadWallet,
+    wallet: &WalletCore<impl WalletSequencerClient>,
     namespace: AccountId,
     curve: AccountId,
     _collateral: AccountId,
@@ -1563,7 +1609,7 @@ pub async fn prepare_fee_collection(
     Ok(load_curve_config(namespace, wallet, curve).await?.treasury)
 }
 pub async fn collect_pool_fees(
-    wallet: &LaunchpadWallet,
+    wallet: &WalletCore<impl WalletSequencerClient>,
     namespace: AccountId,
     curve: &ProgramHandle,
     targets: &[PoolFeeTarget],
@@ -1571,37 +1617,48 @@ pub async fn collect_pool_fees(
 ) -> Result<Vec<HashType>> {
     let mut hashes = Vec::new();
     for target in targets {
-        let data = read_actor(wallet, Actor::new(target.pool, curve.account_id))
-            .await
-            .map_err(ClientError::ReadCollectionPool)?;
-        let pool =
-            curve_core::PoolAccount::decode(&data).map_err(ClientError::DecodeCollectionPool)?;
-        if pool.namespace != namespace || pool.token1_definition_id != target.collateral_definition
-        {
-            return Err(ClientError::PoolSelectionMismatch);
+        match collect_pool_fee(wallet, namespace, curve, target, payer).await {
+            Ok(hash) => hashes.push(hash),
+            Err(error) => return Err(error.after_execution(hashes)),
         }
-        let treasury = prepare_fee_collection(
-            wallet,
-            namespace,
-            curve.account_id,
-            target.collateral_definition,
-        )
-        .await?;
-        let mut call = build_collect_fees_invocation(
-            namespace,
-            curve.account_id,
-            target.pool,
-            target.collateral_definition,
-            treasury,
-        );
-        call.fee_payer = Some(payer);
-        hashes.push(submit_public_invocation(wallet, curve, call).await?);
     }
     Ok(hashes)
 }
 
+async fn collect_pool_fee(
+    wallet: &WalletCore<impl WalletSequencerClient>,
+    namespace: AccountId,
+    curve: &ProgramHandle,
+    target: &PoolFeeTarget,
+    payer: AccountId,
+) -> Result<HashType> {
+    let data = read_actor(wallet, Actor::new(target.pool, curve.account_id))
+        .await
+        .map_err(ClientError::ReadCollectionPool)?;
+    let pool = curve_core::PoolAccount::decode(&data).map_err(ClientError::DecodeCollectionPool)?;
+    if pool.namespace != namespace || pool.token1_definition_id != target.collateral_definition {
+        return Err(ClientError::PoolSelectionMismatch);
+    }
+    let treasury = prepare_fee_collection(
+        wallet,
+        namespace,
+        curve.account_id,
+        target.collateral_definition,
+    )
+    .await?;
+    let mut call = build_collect_fees_invocation(
+        namespace,
+        curve.account_id,
+        target.pool,
+        target.collateral_definition,
+        treasury,
+    );
+    call.fee_payer = Some(payer);
+    submit_public_invocation(wallet, curve, call).await
+}
+
 /// Reads the block ID that a transaction in the next block observes from the canonical clock.
-pub async fn load_clock_block_id(wallet: &LaunchpadWallet) -> Result<u64> {
+pub async fn load_clock_block_id(wallet: &WalletCore<impl WalletSequencerClient>) -> Result<u64> {
     let data = read_actor(wallet, clock_actor())
         .await
         .map_err(ClientError::ReadClock)?;
