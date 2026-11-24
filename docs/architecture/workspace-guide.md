@@ -50,6 +50,8 @@ Root handlers accept `ReceiveInput` and return `Result<Response, Error>`. Guests
 
 Application, SDK and CLI timestamps use Unix seconds. Programs convert stored bounds to LEZ milliseconds with checked arithmetic. Response validity windows enforce start-inclusive, end-exclusive inclusion-block time. Saved clock data cannot enforce the current block's deadline. See [sale closing](../adr/0025-sale-closing.md).
 
+Run upstream private-route probes by hand only when evaluating a candidate dependency. Use a separate checkout and the tools required by that revision. Keep these probes out of Launchpad CI and leave the Launchpad pin unchanged. See [LOG-61](https://linear.app/bleu-builders/issue/LOG-61/check-logos-wallet-and-private-route-support) for commands and results.
+
 ## CLI payout terms
 
 Curve `create-sale` uses `--graduation-launch-bps` and `--graduation-collateral-bps`. Both must be explicit with `--graduation-hook-program-id`, including zero values. `status` and `sale-info` show saved terms. Permissionless `graduate` requires `--creator-hint`. [ADR 0020](../adr/0020-settlement-and-graduation.md) defines validation, recipients, required routing and adapter initialization. Fixed-price and weighted CLI creation flows remain unsupported.

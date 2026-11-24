@@ -2,7 +2,7 @@
 
 Status: Product and recovery requirements accepted; platform, wallet and proof verification pending.
 
-This is the shared private-flow specification for curve buys, curve sells, fixed-price sale buys and weighted sale buys. It defines required behavior, not implemented production behavior. The selected actor revision's temporary token support has no private holdings. Existing private purchase and authority helpers return explicit unsupported errors. See [ADR 0018](../adr/0018-private-participation.md), [migration limits](../adr/0034-lez-v04-migration.md) and [allowlist policy](../adr/0021-modes-and-open-limits.md).
+This specification covers exact-input and exact-output buys and permitted exact-input sells in bonding-curve, fixed-price and weighted sales. Private execution is unsupported. The selected actor revision's temporary token support has no private holdings. Existing private purchase and authority helpers return explicit unsupported errors. See [ADR 0018](../adr/0018-private-participation.md), [migration limits](../adr/0034-lez-v04-migration.md) and [allowlist policy](../adr/0021-modes-and-open-limits.md).
 
 ## Transaction contract
 
@@ -23,11 +23,11 @@ Private and public routes use the same mechanism state, custody checks, price ru
 | Operation | Input | Received tokens | Protocol fee rule |
 | --- | --- | --- | --- |
 | Curve buy | Collateral | Launch tokens | Deducted from collateral input. |
-| Curve sell | Launch tokens | Collateral | Deducted from collateral output. The output limit uses the applicable net result. |
 | Fixed-price sale buy | Collateral | Launch tokens | Deducted before pricing. Exact output grosses up required net collateral; the input limit caps gross payment ([ADR 0015](../adr/0015-fee-accounting.md)). |
 | Weighted sale buy | Collateral | Launch tokens | Deducted before pricing. Exact output grosses up required net collateral; the input limit caps gross payment ([ADR 0031](../adr/0031-shared-launch-factory.md)). |
+| Exact-input sell in any sale type | Launch tokens | Collateral | Deduct namespace and retained sell fees from gross collateral output. Apply the output limit to net collateral ([ADR 0015](../adr/0015-fee-accounting.md#retained-sell-fees)). |
 
-Public exact-input sells are available in all factory engines when `BuyAndSell` permits them. This does not add private execution or complete private sell routes for fixed-price and weighted sales. Fixed-price and weighted sale buys retain their separate price rules. All three engines use the selected ending policy. Selected depletion is final; `Scheduled` does not permit early payouts on empty inventory. Weighted `Either` retains the schedule end as a fallback. See [sale closing](../adr/0025-sale-closing.md), [weighted sale clock](../adr/0026-lbp-clock-and-poke.md) and [fee accounting](../adr/0015-fee-accounting.md).
+Exact-input sells require `BuyAndSell` on both routes. Each sale type keeps its own pricing rules. All three engines use the selected ending policy. Selected depletion is final; `Scheduled` does not permit early payouts on empty inventory. Weighted `Either` retains the schedule end as a fallback. See [sale closing](../adr/0025-sale-closing.md) and [weighted sale clock](../adr/0026-lbp-clock-and-poke.md).
 
 The SDK obtains a fresh quote from current chain state and retains explicit participant-selected bounds. Apply the [quote and slippage decision](../adr/0017-quotes-and-slippage.md) to each supported operation. This specification does not add an on-chain instruction or change exact-input and exact-output meanings.
 
@@ -105,9 +105,9 @@ These are required tests for later implementation. They have not been executed f
 | Scenario | Required result |
 | --- | --- |
 | Curve private buy succeeds | Pool and fee state change once. Received launch tokens, unused collateral and unused gas end in participant-controlled private accounts. |
-| Curve private sell succeeds | Permitted sale mode, correct collateral fee treatment and explicit output bound. Received collateral, unused launch input and unused gas end private. |
 | Fixed-price sale private buy succeeds | Fixed-price sale execution follows current chain state. Pricing uses collateral after fees; exact output grosses up required net collateral. Returns use actual gross input spent without charging the fee twice. All user returns end private. |
 | Weighted sale private buy succeeds | Weighted sale execution follows current chain state. Pricing uses net collateral; exact output grosses up required net collateral. Returns use actual gross input spent without charging the fee twice. All user returns end private. |
+| Private exact-input sell succeeds in each sale type | Require `BuyAndSell` and apply the explicit minimum to net collateral output. The received collateral, any unused launch tokens and unused gas end in participant-controlled private accounts in the same transaction. |
 | Sale closes, pauses or rejects selling | Current mechanism checks reject the trade. No deshield or trade application changes commit. Account for any actual transaction charge separately. |
 | Collateral funding fails | No funding, trade or return application changes commit. Account for any actual transaction charge separately. |
 | Native funding fails or uses the wrong program owner | Reject the complete transaction. Do not treat successful collateral funding as a completed stage. |
