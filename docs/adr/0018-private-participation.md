@@ -4,7 +4,7 @@ Status: Accepted design; private-route platform, wallet and proof support pendin
 
 ## Decision
 
-Provide public trades and an SDK-managed private route for bonding-curve buys, permitted bonding-curve sells, and fixed-price and weighted buys. In one transaction, move private input and gas to public trading accounts, trade within explicit limits, then return received tokens, unused input and unused gas to participant-controlled private accounts. Exclude actual fees from returns.
+Provide public trades and an SDK-managed private route for exact-input and exact-output buys in bonding-curve, fixed-price and weighted sales. Include exact-input sells in all three sale types when `BuyAndSell` permits them. In one transaction, move private input and gas to public trading accounts, trade within explicit limits, then return received tokens, unused input and unused gas to participant-controlled private accounts. Exclude actual fees from returns.
 
 All steps must succeed or fail together. Do not report success with participant funds left public. Check control and asset/private-state support for each return account. Different assets can require different account types.
 
