@@ -64,6 +64,10 @@ jobs:
           bash verify/tests/check-dev.sh
       - name: Run light host tests
         run: bash verify/check-dev.sh
+      - name: Check fixed and standalone role-authority addresses
+        env:
+          CARGO_PROFILE_DEV_DEBUG: 0
+        run: bash verify/tests/check-role-authority-address.sh
 
   builds:
     name: Manual full builds, tests and IDL

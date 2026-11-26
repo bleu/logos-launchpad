@@ -18,5 +18,8 @@ lee_core.workspace = true
 risc0-zkvm.workspace = true
 pool.workspace = true
 
+[features]
+standalone-test = []
+
 [lints]
 workspace = true

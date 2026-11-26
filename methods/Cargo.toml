@@ -26,10 +26,10 @@ risc0-build = { version = "3.0.7", features = ["unstable"] }
 risc0-binfmt = "3.0.6"
 risc0-zkvm = { version = "3.1.0", default-features = false, features = ["client"] }
 borsh = "1.6"
-clock_core = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", rev = "cb075d5777cb812ba44216429d4f2837ea8518bd" }
-programs = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", rev = "cb075d5777cb812ba44216429d4f2837ea8518bd", features = ["artifacts"] }
-lee = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", rev = "cb075d5777cb812ba44216429d4f2837ea8518bd" }
-lee_core = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", rev = "cb075d5777cb812ba44216429d4f2837ea8518bd" }
+clock_core = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", rev = "55c0bf37184728556e158a9ffa987e3e9b41732b" }
+programs = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", rev = "55c0bf37184728556e158a9ffa987e3e9b41732b", features = ["artifacts"] }
+lee = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", rev = "55c0bf37184728556e158a9ffa987e3e9b41732b" }
+lee_core = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", rev = "55c0bf37184728556e158a9ffa987e3e9b41732b" }
 curve-core = { path = "../crates/curve-core" }
 factory-core = { path = "../crates/factory-core" }
 lbp-core = { path = "../crates/lbp-core" }
@@ -41,6 +41,7 @@ lez-compat-methods = { path = "../packages/lez-compat/methods" }
 methods = ["guest"]
 
 [features]
+standalone-test = ["curve-core/standalone-test"]
 overflow-tests = []
 actor-execution-tests = ["lee/test-utils"]
 
