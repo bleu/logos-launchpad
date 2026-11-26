@@ -58,6 +58,12 @@ fn namespace_signer_creates_its_config_without_an_authority_nft() {
         1,
         "administrator bootstrap is synchronous"
     );
+    if let Ok(expected) = std::env::var("EXPECTED_LAUNCHPAD_AUTHORITY_PROGRAM_ACCOUNT") {
+        assert_eq!(
+            response.sync_messages[0].to.program_account_id,
+            expected.parse::<AccountId>().unwrap()
+        );
+    }
 }
 
 #[test]

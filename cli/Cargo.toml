@@ -24,5 +24,11 @@ serde_json.workspace = true
 tokio.workspace = true
 wallet.workspace = true
 
+[dev-dependencies]
+lee_core.workspace = true
+program_loader_core.workspace = true
+risc0-binfmt = "3.0.6"
+tempfile = "3"
+
 [lints]
 workspace = true

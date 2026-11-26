@@ -34,7 +34,7 @@ A prepared private proof can require an exact return message. A price limit does
 
 ## Sources
 
-- [Selected LEZ clock interface](https://github.com/logos-blockchain/logos-execution-zone/blob/cb075d5777cb812ba44216429d4f2837ea8518bd/lez/programs/clock/core/src/lib.rs)
-- [Selected LEZ clock handler](https://github.com/logos-blockchain/logos-execution-zone/blob/cb075d5777cb812ba44216429d4f2837ea8518bd/lez/programs/clock/src/main.rs)
+- [Selected LEZ clock interface](https://github.com/logos-blockchain/logos-execution-zone/blob/55c0bf37184728556e158a9ffa987e3e9b41732b/lez/programs/clock/core/src/lib.rs)
+- [Selected LEZ clock handler](https://github.com/logos-blockchain/logos-execution-zone/blob/55c0bf37184728556e158a9ffa987e3e9b41732b/lez/programs/clock/src/main.rs)
 - [Upstream clock change](https://github.com/logos-blockchain/logos-execution-zone/pull/988): merged into `dev` on 10 November 2026.
 - [RFP-016 fixed-price and weighted sales](https://github.com/logos-co/rfp/blob/master/RFPs/RFP-016-lbp-launchpad.md)

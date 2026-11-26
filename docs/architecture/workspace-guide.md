@@ -10,7 +10,7 @@ Plain `cargo test --locked` selects only the root core crates. Client and CLI te
 
 ## Build contexts
 
-Full checks use LEZ `cb075d5777cb812ba44216429d4f2837ea8518bd`, host Rust 1.98.1, guest Rust 1.94.1, RISC0 3.1.0 and zkOS wrapper 2.2.3. The RISC0 build library is 3.0.7; it has a separate version from the zkVM and executor. The [development base guide](../../packages/lez-compat/README.md) gives installation requirements. Check local tools with `bash verify/check-builds.sh --preflight`. Scaffold and SPEL CLI are not required.
+Full checks use LEZ `55c0bf37184728556e158a9ffa987e3e9b41732b`, host Rust 1.98.1, guest Rust 1.94.1, RISC0 3.1.0 and zkOS wrapper 2.2.3. The RISC0 build library is 3.0.7; it has a separate version from the zkVM and executor. The [development base guide](../../packages/lez-compat/README.md) gives installation requirements. Check local tools with `bash verify/check-builds.sh --preflight`. Scaffold and SPEL CLI are not required.
 
 Curve host and guest builds require `CURVE_EMERGENCY_AUTHORITY`, a nonzero 64-character hex account ID. For local tests, run this from the repository root:
 
@@ -49,6 +49,8 @@ The build script selects locked host/client/CLI tests, application and compatibi
 Root handlers accept `ReceiveInput` and return `Result<Response, Error>`. Guests turn handler errors into transaction failure. Program account addresses identify deployments; image IDs identify binaries. Use program account addresses for PDA derivation and callbacks. Rebuild clients and guests together after wire changes. See the [actor interface guide](../../packages/lez-compat/README.md#interfaces-and-addresses).
 
 Application, SDK and CLI timestamps use Unix seconds. Programs convert stored bounds to LEZ milliseconds with checked arithmetic. Response validity windows enforce start-inclusive, end-exclusive inclusion-block time. Saved clock data cannot enforce the current block's deadline. See [sale closing](../adr/0025-sale-closing.md).
+
+Run the [standalone LEZ checks](local-node-checks.md) to configure a namespace through the CLI and check Rust wallet recovery. These tests need a disposable node and are ignored by ordinary test runs.
 
 Run upstream private-route probes by hand only when evaluating a candidate dependency. Use a separate checkout and the tools required by that revision. Keep these probes out of Launchpad CI and leave the Launchpad pin unchanged. See [LOG-61](https://linear.app/bleu-builders/issue/LOG-61/check-logos-wallet-and-private-route-support) for commands and results.
 

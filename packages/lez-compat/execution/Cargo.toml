@@ -8,8 +8,8 @@ license = "MIT OR Apache-2.0"
 [workspace]
 
 [dependencies]
-lee = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", rev = "cb075d5777cb812ba44216429d4f2837ea8518bd", features = ["test-utils"] }
-lee_core = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", rev = "cb075d5777cb812ba44216429d4f2837ea8518bd" }
+lee = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", rev = "55c0bf37184728556e158a9ffa987e3e9b41732b", features = ["test-utils"] }
+lee_core = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", rev = "55c0bf37184728556e158a9ffa987e3e9b41732b" }
 borsh = "1.6"
 lez-compat-core = { path = "../core" }
 lez-compat-methods = { path = "../methods" }

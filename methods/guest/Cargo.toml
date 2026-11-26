@@ -21,7 +21,7 @@ workspace = true
 lez-compat-core = { path = "../../packages/lez-compat/core" }
 distribution-adapter = { path = "../../crates/distribution-adapter" }
 borsh = "1.8"
-lee_core = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", rev = "cb075d5777cb812ba44216429d4f2837ea8518bd", default-features = false }
+lee_core = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", rev = "55c0bf37184728556e158a9ffa987e3e9b41732b", default-features = false }
 risc0-zkvm = { version = "3.1.0", default-features = false, features = ["std"] }
 
 # Declared before it is used. This crate is its own workspace with its own lock, so
