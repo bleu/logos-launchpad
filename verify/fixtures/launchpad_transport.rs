@@ -79,10 +79,11 @@ impl FixtureTransport {
     }
 }
 
-pub fn write_wallet(
+pub fn write_wallet<C: WalletSequencerClient>(
     home: &Path,
     mut transport: FixtureTransport,
-) -> (WalletCore<FixtureTransport>, AccountId) {
+    wrap: impl FnOnce(FixtureTransport) -> C,
+) -> (WalletCore<C>, AccountId) {
     let key = lee::PrivateKey::try_new([1; 32]).unwrap();
     let signer = AccountId::from(&lee::PublicKey::new_from_private_key(&key));
     transport
@@ -96,7 +97,7 @@ pub fn write_wallet(
         home.join("wallet_storage"),
         None,
         "",
-        transport,
+        wrap(transport),
     )
     .unwrap();
     wallet

@@ -6,6 +6,7 @@ mod error;
 mod lifecycle;
 mod sale_info;
 mod types;
+mod write_transport;
 pub use curve_core::{
     AllowlistPolicy, BuyPolicy, EndingPolicy, MembershipPath, PausePolicy,
     TOKEN_PROGRAM_ACCOUNT_ID, TradeControl,
@@ -26,6 +27,7 @@ pub use types::{
     AccountLocation, ExactInputTradeTerms, ExactOutputTradeTerms, FactorySale, LbpSale,
     PoolFeeTarget, PrivateAccountId,
 };
+pub use write_transport::{PublicWriteWallet, WriteTransport};
 
 #[cfg(test)]
 mod tests;
@@ -46,7 +48,7 @@ use program_loader_core::LoaderActorState as _;
 use std::path::Path;
 use wallet::{AccountIdentity, WalletCore, WalletSequencerClient};
 
-/// The upstream wallet with the RPC client used by the launchpad SDK and CLI.
+/// The upstream wallet for legacy authority and private-flow helpers.
 pub type LaunchpadWallet = wallet::WalletCore<sequencer_service_rpc::SequencerClient>;
 
 /// A deployed program address and its expected binary image. PDAs use `account_id`.
@@ -1442,7 +1444,7 @@ pub(crate) fn validate_factory_state(sale: FactorySale, state: &FactoryState) ->
 
 /// Submits through the Logos wallet. Returns the hash only after a successful execution receipt.
 pub async fn submit_public_invocation<I: BorshSerialize>(
-    wallet: &WalletCore<impl WalletSequencerClient>,
+    wallet: &PublicWriteWallet<impl WalletSequencerClient>,
     program: &ProgramHandle,
     call: PublicInvocation<I>,
 ) -> Result<HashType> {
@@ -1477,21 +1479,15 @@ pub async fn submit_public_invocation<I: BorshSerialize>(
 }
 
 fn public_send_error(source: wallet::ExecutionFailureKind) -> ClientError {
-    use wallet::ExecutionFailureKind::*;
-
     match source {
-        SimulatedRevert(_) => ClientError::PublicWriteRejected(Box::new(source)),
-        TransactionBuildError(_)
-        | SignError(_)
-        | KeyNotFoundError
-        | InsufficientFundsError
-        | ConflictingAccountIdentity(_)
-        | DryRun(_) => ClientError::PublicWritePreparation(Box::new(source)),
-        // The wallet uses some of the same errors for preparation reads and submission.
-        _ => ClientError::PublicWritePending {
+        wallet::ExecutionFailureKind::SimulatedRevert(_) => {
+            ClientError::PublicWriteRejected(Box::new(source))
+        }
+        source if write_transport::is_send_failure(&source) => ClientError::PublicWritePending {
             hash: None,
             source: Box::new(source),
         },
+        source => ClientError::PublicWritePreparation(Box::new(source)),
     }
 }
 
@@ -1530,6 +1526,14 @@ pub async fn load_authority_identity(
     location: AccountLocation,
     definition: AccountId,
 ) -> Result<AccountId> {
+    read_authority_holding(wallet, location, definition).await
+}
+
+async fn read_authority_holding(
+    wallet: &WalletCore<impl WalletSequencerClient>,
+    location: AccountLocation,
+    definition: AccountId,
+) -> Result<AccountId> {
     if location.is_private() {
         return Err(ClientError::UnsupportedPrivateAuthority);
     }
@@ -1552,7 +1556,7 @@ pub async fn load_authority_identity(
 }
 /// Transfers a legacy NFT, not a launch role authority.
 pub async fn transfer_authority(
-    wallet: &mut LaunchpadWallet,
+    wallet: &mut PublicWriteWallet<impl WalletSequencerClient>,
     token_program: &ProgramHandle,
     source: AccountLocation,
     destination: AccountLocation,
@@ -1564,7 +1568,7 @@ pub async fn transfer_authority(
     if source == destination {
         return Err(ClientError::SameAuthoritySourceAndDestination);
     }
-    load_authority_identity(wallet, source, definition).await?;
+    read_authority_holding(wallet, source, definition).await?;
     submit_public_invocation(
         wallet,
         token_program,
@@ -1609,7 +1613,7 @@ pub async fn prepare_fee_collection(
     Ok(load_curve_config(namespace, wallet, curve).await?.treasury)
 }
 pub async fn collect_pool_fees(
-    wallet: &WalletCore<impl WalletSequencerClient>,
+    wallet: &PublicWriteWallet<impl WalletSequencerClient>,
     namespace: AccountId,
     curve: &ProgramHandle,
     targets: &[PoolFeeTarget],
@@ -1626,7 +1630,7 @@ pub async fn collect_pool_fees(
 }
 
 async fn collect_pool_fee(
-    wallet: &WalletCore<impl WalletSequencerClient>,
+    wallet: &PublicWriteWallet<impl WalletSequencerClient>,
     namespace: AccountId,
     curve: &ProgramHandle,
     target: &PoolFeeTarget,

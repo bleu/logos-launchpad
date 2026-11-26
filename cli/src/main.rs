@@ -14,9 +14,9 @@ use clap::{Args, Parser, Subcommand, builder::Styles};
 use eyre::{Context, Result};
 use launchpad_client::{
     AccountLocation, CreateSaleRequest, ExactInputTradeTerms, ExactOutputTradeTerms, FactorySale,
-    PoolFeeTarget, PrivateAccountId, PrivateBuyRequest, ProgramHandle,
-    build_claim_creator_allocation_invocation, load_clock_block_id, load_curve_config,
-    load_factory_pool, load_factory_state, prepare_buy_invocation,
+    PoolFeeTarget, PrivateAccountId, PrivateBuyRequest, ProgramHandle, PublicWriteWallet,
+    WriteTransport, build_claim_creator_allocation_invocation, load_clock_block_id,
+    load_curve_config, load_factory_pool, load_factory_state, prepare_buy_invocation,
     prepare_buy_with_collateral_invocation, prepare_sell_invocation, quote_buy,
     quote_buy_with_collateral, quote_sell, submit_public_invocation,
 };
@@ -757,8 +757,8 @@ fn read_client() -> Result<impl WalletSequencerClient> {
         .map_err(|error| eyre::eyre!(error.into_boxed_dyn_error()))
 }
 
-fn open_wallet() -> Result<launchpad_client::LaunchpadWallet> {
-    WalletCore::from_env()
+fn open_wallet() -> Result<PublicWriteWallet<impl WalletSequencerClient>> {
+    WalletCore::from_env_with_client(WriteTransport::new(read_client()?))
         .map_err(|error| eyre::eyre!(error.into_boxed_dyn_error()))
         .context("opening the project wallet")
 }
@@ -766,7 +766,7 @@ fn open_wallet() -> Result<launchpad_client::LaunchpadWallet> {
 async fn run_command<R: WalletSequencerClient, C: WalletSequencerClient>(
     cli: Cli,
     read_client: impl FnOnce() -> Result<R>,
-    open_wallet: impl FnOnce() -> Result<WalletCore<C>>,
+    open_wallet: impl FnOnce() -> Result<PublicWriteWallet<C>>,
     output: &mut impl Write,
     errors: &mut impl Write,
 ) -> io::Result<u8> {
@@ -873,7 +873,7 @@ async fn run<R: WalletSequencerClient, C: WalletSequencerClient>(
     json: bool,
     cli: Cli,
     read_client: impl FnOnce() -> Result<R>,
-    open_wallet: impl FnOnce() -> Result<WalletCore<C>>,
+    open_wallet: impl FnOnce() -> Result<PublicWriteWallet<C>>,
     output: &mut impl Write,
 ) -> Result<Option<WriteSuccess>> {
     cli.validate_route()?;
@@ -1023,7 +1023,7 @@ fn error_category(error: &eyre::Report) -> ErrorCategory {
 async fn configure<C: WalletSequencerClient>(
     namespace: lee::AccountId,
     args: ConfigArgs,
-    open_wallet: impl FnOnce() -> Result<WalletCore<C>>,
+    open_wallet: impl FnOnce() -> Result<PublicWriteWallet<C>>,
 ) -> Result<WriteSuccess> {
     let curve_program = load_deployment(&args.curve_program_path, args.curve_program_account)?;
     let wallet = open_wallet()?;
@@ -1041,7 +1041,7 @@ async fn withdraw_factory_proceeds<C: WalletSequencerClient>(
     namespace: lee::AccountId,
     args: FactoryLifecycleArgs,
     router: Option<&Path>,
-    open_wallet: impl FnOnce() -> Result<WalletCore<C>>,
+    open_wallet: impl FnOnce() -> Result<PublicWriteWallet<C>>,
 ) -> Result<WriteSuccess> {
     let factory_program =
         load_deployment(&args.factory_program_path, args.factory_program_account)?;
@@ -1073,7 +1073,7 @@ async fn withdraw_factory_proceeds<C: WalletSequencerClient>(
 async fn graduate<C: WalletSequencerClient>(
     namespace: lee::AccountId,
     args: GraduationArgs,
-    open_wallet: impl FnOnce() -> Result<WalletCore<C>>,
+    open_wallet: impl FnOnce() -> Result<PublicWriteWallet<C>>,
 ) -> Result<WriteSuccess> {
     let factory = load_deployment(&args.factory_program_path, args.factory_program_account)?;
     let curve = load_deployment(&args.curve_program_path, args.curve_program_account)?;
@@ -1126,7 +1126,7 @@ fn read_distribution_configuration(
 async fn run_distribution<C: WalletSequencerClient>(
     namespace: lee::AccountId,
     command: DistributionCommand,
-    open_wallet: impl FnOnce() -> Result<WalletCore<C>>,
+    open_wallet: impl FnOnce() -> Result<PublicWriteWallet<C>>,
 ) -> Result<WriteSuccess> {
     use launchpad_client::distribution;
     let (identity, kind) = match command {
@@ -1250,7 +1250,7 @@ async fn price(namespace: lee::AccountId, json: bool, args: PriceArgs) -> Result
 async fn buy<C: WalletSequencerClient>(
     namespace: lee::AccountId,
     args: BuyArgs,
-    open_wallet: impl FnOnce() -> Result<WalletCore<C>>,
+    open_wallet: impl FnOnce() -> Result<PublicWriteWallet<C>>,
 ) -> Result<WriteSuccess> {
     let factory_program = load_deployment(
         &args.trade.factory_program_path,
@@ -1303,7 +1303,7 @@ async fn buy<C: WalletSequencerClient>(
 async fn buy_with_collateral<C: WalletSequencerClient>(
     namespace: lee::AccountId,
     args: BuyWithCollateralArgs,
-    open_wallet: impl FnOnce() -> Result<WalletCore<C>>,
+    open_wallet: impl FnOnce() -> Result<PublicWriteWallet<C>>,
 ) -> Result<WriteSuccess> {
     let factory_program = load_deployment(
         &args.trade.factory_program_path,
@@ -1367,7 +1367,7 @@ async fn private_buy(_namespace: lee::AccountId, args: PrivateBuyArgs) -> Result
 async fn sell<C: WalletSequencerClient>(
     namespace: lee::AccountId,
     args: SellArgs,
-    open_wallet: impl FnOnce() -> Result<WalletCore<C>>,
+    open_wallet: impl FnOnce() -> Result<PublicWriteWallet<C>>,
 ) -> Result<WriteSuccess> {
     let factory_program = load_deployment(
         &args.trade.factory_program_path,
@@ -1413,7 +1413,7 @@ async fn sell<C: WalletSequencerClient>(
 async fn claim_creator_allocation<C: WalletSequencerClient>(
     namespace: lee::AccountId,
     args: FactoryLifecycleArgs,
-    open_wallet: impl FnOnce() -> Result<WalletCore<C>>,
+    open_wallet: impl FnOnce() -> Result<PublicWriteWallet<C>>,
 ) -> Result<WriteSuccess> {
     let factory_program =
         load_deployment(&args.factory_program_path, args.factory_program_account)?;
@@ -1443,7 +1443,7 @@ async fn create_sale<C: WalletSequencerClient>(
     namespace: lee::AccountId,
     args: CreateSaleArgs,
     router: Option<&Path>,
-    open_wallet: impl FnOnce() -> Result<WalletCore<C>>,
+    open_wallet: impl FnOnce() -> Result<PublicWriteWallet<C>>,
 ) -> Result<WriteSuccess> {
     let request = args.prepared_sale_request(namespace)?;
     let factory_program =

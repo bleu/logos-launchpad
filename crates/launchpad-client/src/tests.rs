@@ -189,7 +189,11 @@ async fn public_write_stays_pending_without_a_receipt_even_when_included() {
     transport.deploy(program.account_id, program.image_id());
     transport.acknowledge(hash, None);
     let home = tempfile::tempdir().unwrap();
-    let (wallet, signer) = launchpad_transport::write_wallet(home.path(), transport.clone());
+    let (wallet, signer) = launchpad_transport::write_wallet(
+        home.path(),
+        transport.clone(),
+        super::WriteTransport::new,
+    );
     let call = super::build_initialize_namespace_invocation(signer, program.account_id, 0, signer);
 
     let result = super::submit_public_invocation(&wallet, &program, call).await;
@@ -212,7 +216,11 @@ async fn public_write_keeps_the_hash_when_receipt_lookup_fails() {
     transport.acknowledge(hash, None);
     transport.fail_receipt_lookup();
     let home = tempfile::tempdir().unwrap();
-    let (wallet, signer) = launchpad_transport::write_wallet(home.path(), transport.clone());
+    let (wallet, signer) = launchpad_transport::write_wallet(
+        home.path(),
+        transport.clone(),
+        super::WriteTransport::new,
+    );
     let call = build_initialize_namespace_invocation(signer, program.account_id, 0, signer);
 
     let result = super::submit_public_invocation(&wallet, &program, call).await;
@@ -233,7 +241,11 @@ async fn public_write_with_a_lost_send_response_is_pending_without_a_hash() {
     transport.deploy(program.account_id, program.image_id());
     transport.lose_send_response();
     let home = tempfile::tempdir().unwrap();
-    let (wallet, signer) = launchpad_transport::write_wallet(home.path(), transport.clone());
+    let (wallet, signer) = launchpad_transport::write_wallet(
+        home.path(),
+        transport.clone(),
+        super::WriteTransport::new,
+    );
     let call = build_initialize_namespace_invocation(signer, program.account_id, 0, signer);
 
     let result = super::submit_public_invocation(&wallet, &program, call).await;

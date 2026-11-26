@@ -1,6 +1,6 @@
 use clap::Parser;
 use factory_core::{CreationStage, GraduationPolicy, SettlementStage, TradeMode};
-use launchpad_client::{BuyPolicy, EndingPolicy, PausePolicy};
+use launchpad_client::{BuyPolicy, EndingPolicy, PausePolicy, PublicWriteWallet, WriteTransport};
 use lee::AccountId;
 use lee_core::account::Actor;
 use serde_json::Value;
@@ -16,7 +16,7 @@ async fn run_command(
     run_cli(
         cli,
         read_client,
-        || -> eyre::Result<wallet::WalletCore<FixtureTransport>> {
+        || -> eyre::Result<PublicWriteWallet<FixtureTransport>> {
             panic!("sale-info must not open a wallet")
         },
         output,
@@ -29,7 +29,7 @@ async fn run_command(
 mod launchpad_transport;
 use launchpad_transport::FixtureTransport;
 
-use ConfigureDeployment::{Clock, HeaderOnly, Missing};
+use ConfigureDeployment::{Clock, HeaderOnly, Missing, MissingSegments};
 
 #[tokio::test(start_paused = true)]
 async fn configure_reports_pending_with_the_acknowledged_hash() {
@@ -117,6 +117,17 @@ async fn configure_reports_preparation_failure_without_sending() {
 }
 
 #[tokio::test]
+async fn configure_reports_preparation_failure_when_wallet_cannot_load_program() {
+    let transport = FixtureTransport::default();
+    let (code, result) = run_configure(transport.clone(), MissingSegments).await;
+    assert_eq!(transport.sent_count(), 0);
+    assert_eq!(code, 1, "{result}");
+    assert_eq!(result["status"], "preparation_failed");
+    assert_eq!(result["submission"], "not_sent");
+    assert!(result["transaction_hash"].is_null());
+}
+
+#[tokio::test]
 async fn configure_reports_simulation_rejection_without_sending() {
     let transport = FixtureTransport::default();
     let (code, result) = run_configure(transport.clone(), Clock).await;
@@ -130,6 +141,7 @@ async fn configure_reports_simulation_rejection_without_sending() {
 enum ConfigureDeployment {
     Missing,
     HeaderOnly,
+    MissingSegments,
     Clock,
 }
 
@@ -144,7 +156,7 @@ async fn run_configure(
     std::fs::write(&path, program.elf()).unwrap();
     match deployment {
         Missing => {}
-        HeaderOnly => transport.deploy(program_account, program.id()),
+        HeaderOnly | MissingSegments => transport.deploy(program_account, program.id()),
         Clock => {
             use lee_core::program::PROGRAM_LOADER_ACCOUNT_ID;
             use program_loader_core::{LoaderActorState, MAX_SEGMENT_DATA_LEN, ProgramSegment};
@@ -168,8 +180,9 @@ async fn run_configure(
             transport.deploy(program_account, program.id());
         }
     }
-    let (mut wallet, signer) = launchpad_transport::write_wallet(home.path(), transport);
-    if matches!(deployment, Clock) {
+    let (mut wallet, signer) =
+        launchpad_transport::write_wallet(home.path(), transport, WriteTransport::new);
+    if matches!(deployment, Clock | MissingSegments) {
         wallet.set_fee_params(wallet::FeeParams::default());
     }
     let cli = Cli::try_parse_from([
@@ -261,7 +274,8 @@ async fn collect_fees_stops_on_pending_and_reports_the_executed_step() {
     let home = tempfile::tempdir().unwrap();
     let path = home.path().join("curve.elf");
     std::fs::write(&path, program.elf()).unwrap();
-    let (wallet, signer) = launchpad_transport::write_wallet(home.path(), transport.clone());
+    let (wallet, signer) =
+        launchpad_transport::write_wallet(home.path(), transport.clone(), WriteTransport::new);
     let cli = Cli::try_parse_from([
         "launchpad",
         "--namespace",
@@ -354,7 +368,8 @@ async fn completed_withdrawal_reports_no_new_execution() {
     let home = tempfile::tempdir().unwrap();
     let path = home.path().join("guest.elf");
     std::fs::write(&path, programs::clock().elf()).unwrap();
-    let (wallet, signer) = launchpad_transport::write_wallet(home.path(), transport.clone());
+    let (wallet, signer) =
+        launchpad_transport::write_wallet(home.path(), transport.clone(), WriteTransport::new);
     let cli = Cli::try_parse_from([
         "launchpad",
         "--namespace",
