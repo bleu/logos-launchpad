@@ -171,7 +171,7 @@ pub enum ClientError {
     #[strum(serialize = "transfer_private_authority")]
     TransferPrivateAuthority(#[source] Box<wallet::ExecutionFailureKind>),
     #[error(
-        "confirmation timed out for transaction {}; synchronize the wallet and resume the same launch",
+        "confirmation timed out; outcome unknown for transaction {}. Check its receipt before submitting again",
         hex::encode(hash)
     )]
     #[strum(serialize = "confirmation_timeout")]
@@ -180,9 +180,16 @@ pub enum ClientError {
         #[source]
         source: tokio::time::error::Elapsed,
     },
-    #[error("waiting for transaction inclusion")]
+    #[error(
+        "could not confirm inclusion; outcome unknown for transaction {}. Check its receipt before submitting again",
+        hex::encode(hash)
+    )]
     #[strum(serialize = "confirm_transaction")]
-    ConfirmTransaction(#[source] Box<dyn Error + Send + Sync>),
+    ConfirmTransaction {
+        hash: common::HashType,
+        #[source]
+        source: Box<dyn Error + Send + Sync>,
+    },
     #[error("expected a private transaction")]
     ExpectedPrivateTransaction,
     #[error("private result count mismatch")]

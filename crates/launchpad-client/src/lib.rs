@@ -1464,17 +1464,30 @@ pub async fn submit_public_invocation<I: BorshSerialize>(
         .send_pub_tx_paid_by(actors, root, message, call.fee_payer)
         .await
         .map_err(|e| ClientError::SubmitPublicTransaction(Box::new(e)))?;
-    wait_for_confirmation(wallet, hash).await?;
-    Ok(hash)
-}
-async fn wait_for_confirmation(wallet: &LaunchpadWallet, hash: HashType) -> Result<()> {
-    tokio::time::timeout(
+    wait_for_confirmation(
+        hash,
         std::time::Duration::from_secs(60),
         wallet.poll_transaction(hash),
     )
-    .await
-    .map_err(|source| ClientError::ConfirmationTimeout { hash, source })?
-    .map_err(|e| ClientError::ConfirmTransaction(e.into_boxed_dyn_error()))?;
+    .await?;
+    Ok(hash)
+}
+
+async fn wait_for_confirmation<T, E>(
+    hash: HashType,
+    timeout: std::time::Duration,
+    poll: impl Future<Output = std::result::Result<T, E>>,
+) -> Result<()>
+where
+    E: Into<Box<dyn std::error::Error + Send + Sync>>,
+{
+    tokio::time::timeout(timeout, poll)
+        .await
+        .map_err(|source| ClientError::ConfirmationTimeout { hash, source })?
+        .map_err(|error| ClientError::ConfirmTransaction {
+            hash,
+            source: error.into(),
+        })?;
     Ok(())
 }
 

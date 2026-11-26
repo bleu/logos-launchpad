@@ -31,6 +31,8 @@ enum ErrorCategory {
     SaleReserveOvershoot,
     #[error("collateral_reserve_overshoot")]
     CollateralReserveOvershoot,
+    #[error("outcome_unknown")]
+    OutcomeUnknown(common::HashType),
     #[error("general")]
     General,
 }
@@ -798,16 +800,7 @@ async fn main() {
     let json = cli.json;
     if let Err(error) = run(json, cli).await {
         if json {
-            println!(
-                "{}",
-                serde_json::json!({
-                    "status": "error",
-                    "error": {
-                        "category": error_category(&error).to_string(),
-                        "message": error.to_string(),
-                    },
-                })
-            );
+            println!("{}", json_error(&error));
         } else {
             eprintln!("Error: {error:#}");
         }
@@ -923,6 +916,16 @@ async fn run(json: bool, cli: Cli) -> Result<()> {
     }
 }
 
+fn json_error(error: &eyre::Report) -> serde_json::Value {
+    let category = error_category(error);
+    let mut details =
+        serde_json::json!({"category": category.to_string(), "message": error.to_string()});
+    if let ErrorCategory::OutcomeUnknown(hash) = category {
+        details["transaction_hash"] = hex::encode(hash).into();
+    }
+    serde_json::json!({"status": "error", "error": details})
+}
+
 fn error_category(error: &eyre::Report) -> ErrorCategory {
     if let Some(category) = error.downcast_ref::<ErrorCategory>() {
         return *category;
@@ -933,6 +936,8 @@ fn error_category(error: &eyre::Report) -> ErrorCategory {
     use launchpad_client::ClientError;
     use pool::SwapError;
     match error {
+        ClientError::ConfirmationTimeout { hash, .. }
+        | ClientError::ConfirmTransaction { hash, .. } => ErrorCategory::OutcomeUnknown(*hash),
         ClientError::QuoteBuy(SwapError::SlippageExceeded)
         | ClientError::QuoteBuyWithCollateral(SwapError::SlippageExceeded)
         | ClientError::QuoteSell(SwapError::SlippageExceeded) => ErrorCategory::SlippageFloor,
@@ -2618,6 +2623,36 @@ mod tests {
             serde_json::to_value(SaleStatus::Graduated).unwrap(),
             "graduated"
         );
+    }
+
+    #[tokio::test]
+    async fn unconfirmed_submissions_report_unknown_outcome_and_hash() {
+        use launchpad_client::ClientError;
+
+        let hash = common::HashType([42; 32]);
+        let elapsed = tokio::time::timeout(std::time::Duration::ZERO, std::future::pending::<()>())
+            .await
+            .unwrap_err();
+        for error in [
+            ClientError::ConfirmationTimeout {
+                hash,
+                source: elapsed,
+            },
+            ClientError::ConfirmTransaction {
+                hash,
+                source: std::io::Error::other("transaction not found").into(),
+            },
+        ] {
+            let report = eyre::Report::new(error);
+            let output = json_error(&report);
+            assert_eq!(output["status"], "error");
+            assert_eq!(output["error"]["category"], "outcome_unknown");
+            assert_eq!(output["error"]["transaction_hash"], hex::encode(hash));
+            let message = report.to_string();
+            assert!(message.contains("outcome unknown"));
+            assert!(message.contains(&hex::encode(hash)));
+            assert_eq!(output["error"]["message"], message);
+        }
     }
 
     #[test]

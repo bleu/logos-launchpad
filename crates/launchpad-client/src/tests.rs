@@ -19,6 +19,26 @@ use super::{
 const FACTORY_PROGRAM_ID: AccountId = AccountId::new([7; 32]);
 const CURVE_PROGRAM_ID: AccountId = AccountId::new([6; 32]);
 
+#[tokio::test]
+async fn confirmation_timeout_keeps_the_submitted_hash() {
+    let hash = common::HashType([42; 32]);
+    let lookup = std::future::pending::<std::io::Result<()>>();
+    let error = super::wait_for_confirmation(hash, std::time::Duration::ZERO, lookup)
+        .await
+        .unwrap_err();
+    assert!(matches!(error, ClientError::ConfirmationTimeout { hash: saved, .. } if saved == hash));
+}
+
+#[tokio::test]
+async fn exhausted_confirmation_lookup_keeps_the_submitted_hash() {
+    let hash = common::HashType([24; 32]);
+    let lookup = async { Err::<(), _>(std::io::Error::other("transaction not found")) };
+    let error = super::wait_for_confirmation(hash, std::time::Duration::from_secs(60), lookup)
+        .await
+        .unwrap_err();
+    assert!(matches!(error, ClientError::ConfirmTransaction { hash: saved, .. } if saved == hash));
+}
+
 fn sale() -> FactorySale {
     FactorySale {
         namespace: AccountId::new([0xAD; 32]),
