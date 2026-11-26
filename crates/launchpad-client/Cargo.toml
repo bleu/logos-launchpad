@@ -43,6 +43,7 @@ serde_json.workspace = true
 weighted-math-core = { path = "../../packages/weighted-math/crates/weighted-math-core" }
 
 [features]
+standalone-test = ["curve-core/standalone-test"]
 actor-execution-tests = ["lee/test-utils"]
 
 [[test]]

@@ -405,7 +405,7 @@ dependencies = [
 [[package]]
 name = "build_utils"
 version = "0.1.0"
-source = "git+https://github.com/logos-blockchain/logos-execution-zone.git?rev=cb075d5777cb812ba44216429d4f2837ea8518bd#cb075d5777cb812ba44216429d4f2837ea8518bd"
+source = "git+https://github.com/logos-blockchain/logos-execution-zone.git?rev=55c0bf37184728556e158a9ffa987e3e9b41732b#55c0bf37184728556e158a9ffa987e3e9b41732b"
 dependencies = [
  "anyhow",
  "risc0-binfmt",
@@ -544,7 +544,7 @@ dependencies = [
 [[package]]
 name = "clock_core"
 version = "0.1.0"
-source = "git+https://github.com/logos-blockchain/logos-execution-zone.git?rev=cb075d5777cb812ba44216429d4f2837ea8518bd#cb075d5777cb812ba44216429d4f2837ea8518bd"
+source = "git+https://github.com/logos-blockchain/logos-execution-zone.git?rev=55c0bf37184728556e158a9ffa987e3e9b41732b#55c0bf37184728556e158a9ffa987e3e9b41732b"
 dependencies = [
  "borsh",
  "lee_core",
@@ -1502,7 +1502,7 @@ dependencies = [
 [[package]]
 name = "lee"
 version = "0.1.0"
-source = "git+https://github.com/logos-blockchain/logos-execution-zone.git?rev=cb075d5777cb812ba44216429d4f2837ea8518bd#cb075d5777cb812ba44216429d4f2837ea8518bd"
+source = "git+https://github.com/logos-blockchain/logos-execution-zone.git?rev=55c0bf37184728556e158a9ffa987e3e9b41732b#55c0bf37184728556e158a9ffa987e3e9b41732b"
 dependencies = [
  "anyhow",
  "borsh",
@@ -1527,7 +1527,7 @@ dependencies = [
 [[package]]
 name = "lee_core"
 version = "0.1.0"
-source = "git+https://github.com/logos-blockchain/logos-execution-zone.git?rev=cb075d5777cb812ba44216429d4f2837ea8518bd#cb075d5777cb812ba44216429d4f2837ea8518bd"
+source = "git+https://github.com/logos-blockchain/logos-execution-zone.git?rev=55c0bf37184728556e158a9ffa987e3e9b41732b#55c0bf37184728556e158a9ffa987e3e9b41732b"
 dependencies = [
  "base58",
  "borsh",
@@ -1900,7 +1900,7 @@ dependencies = [
 [[package]]
 name = "program_loader_core"
 version = "0.1.0"
-source = "git+https://github.com/logos-blockchain/logos-execution-zone.git?rev=cb075d5777cb812ba44216429d4f2837ea8518bd#cb075d5777cb812ba44216429d4f2837ea8518bd"
+source = "git+https://github.com/logos-blockchain/logos-execution-zone.git?rev=55c0bf37184728556e158a9ffa987e3e9b41732b#55c0bf37184728556e158a9ffa987e3e9b41732b"
 dependencies = [
  "borsh",
  "lee_core",

@@ -23,6 +23,7 @@ use wallet::{ExecutionFailureKind, FeeParams, FeeStateQuote, WalletCore, WalletS
 pub struct FixtureTransport {
     accounts: BTreeMap<AccountId, Account>,
     writes: Arc<Mutex<Writes>>,
+    receipt_lookup_fails: bool,
 }
 
 #[derive(Default)]
@@ -55,6 +56,10 @@ impl FixtureTransport {
             .unwrap()
             .responses
             .push_back(Err(TransportError));
+    }
+
+    pub fn fail_receipt_lookup(&mut self) {
+        self.receipt_lookup_fails = true;
     }
 
     pub fn sent_count(&self) -> usize {
@@ -168,6 +173,9 @@ impl WalletSequencerClient for FixtureTransport {
         &self,
         hash: HashType,
     ) -> Result<Option<TransactionReceipt>, Self::Error> {
+        if self.receipt_lookup_fails {
+            return Err(TransportError);
+        }
         Ok(self
             .writes
             .lock()

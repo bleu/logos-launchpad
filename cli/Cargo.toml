@@ -24,6 +24,9 @@ serde_json = { workspace = true, features = ["arbitrary_precision"] }
 tokio.workspace = true
 wallet.workspace = true
 
+[features]
+standalone-test = ["launchpad-client/standalone-test"]
+
 [dev-dependencies]
 borsh.workspace = true
 curve-core.workspace = true
@@ -32,6 +35,7 @@ lbp-core.workspace = true
 lee_core.workspace = true
 program_loader_core.workspace = true
 programs.workspace = true
+risc0-binfmt = "3.0.6"
 tempfile.workspace = true
 tokio = { workspace = true, features = ["test-util"] }
 

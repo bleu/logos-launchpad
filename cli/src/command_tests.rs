@@ -45,6 +45,20 @@ async fn configure_reports_pending_with_the_acknowledged_hash() {
 }
 
 #[tokio::test]
+async fn configure_reports_pending_when_receipt_lookup_fails() {
+    let hash = common::HashType([24; 32]);
+    let mut transport = FixtureTransport::default();
+    transport.acknowledge(hash, None);
+    transport.fail_receipt_lookup();
+    let (code, result) = run_configure(transport.clone(), HeaderOnly).await;
+    assert_eq!(code, 3, "{result}");
+    assert_eq!(result["status"], "pending");
+    assert_eq!(result["submission"], "acknowledged");
+    assert_eq!(result["transaction_hash"], hex::encode(hash));
+    assert_eq!(transport.sent_count(), 1);
+}
+
+#[tokio::test]
 async fn configure_reports_unknown_submission_without_a_hash() {
     let mut transport = FixtureTransport::default();
     transport.lose_send_response();

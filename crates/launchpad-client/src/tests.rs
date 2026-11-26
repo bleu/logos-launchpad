@@ -201,6 +201,29 @@ async fn public_write_stays_pending_without_a_receipt_even_when_included() {
 }
 
 #[tokio::test]
+async fn public_write_keeps_the_hash_when_receipt_lookup_fails() {
+    let program = super::ProgramHandle {
+        account_id: AccountId::new([42; 32]),
+        image: programs::clock(),
+    };
+    let hash = common::HashType([24; 32]);
+    let mut transport = launchpad_transport::FixtureTransport::default();
+    transport.deploy(program.account_id, program.image_id());
+    transport.acknowledge(hash, None);
+    transport.fail_receipt_lookup();
+    let home = tempfile::tempdir().unwrap();
+    let (wallet, signer) = launchpad_transport::write_wallet(home.path(), transport.clone());
+    let call = build_initialize_namespace_invocation(signer, program.account_id, 0, signer);
+
+    let result = super::submit_public_invocation(&wallet, &program, call).await;
+    assert!(
+        matches!(result, Err(ClientError::PublicWritePending { hash: Some(known), .. }) if known == hash),
+        "{result:?}"
+    );
+    assert_eq!(transport.sent_count(), 1);
+}
+
+#[tokio::test]
 async fn public_write_with_a_lost_send_response_is_pending_without_a_hash() {
     let program = super::ProgramHandle {
         account_id: AccountId::new([42; 32]),

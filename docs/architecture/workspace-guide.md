@@ -10,7 +10,7 @@ Plain `cargo test --locked` selects only the root core crates. Client and CLI te
 
 ## Build contexts
 
-Full checks use LEZ `cb075d5777cb812ba44216429d4f2837ea8518bd`, host Rust 1.98.1, guest Rust 1.94.1, RISC0 3.1.0 and zkOS wrapper 2.2.3. The RISC0 build library is 3.0.7; it has a separate version from the zkVM and executor. The [development base guide](../../packages/lez-compat/README.md) gives installation requirements. Check local tools with `bash verify/check-builds.sh --preflight`. Scaffold and SPEL CLI are not required.
+Full checks use LEZ `55c0bf37184728556e158a9ffa987e3e9b41732b`, host Rust 1.98.1, guest Rust 1.94.1, RISC0 3.1.0 and zkOS wrapper 2.2.3. The RISC0 build library is 3.0.7; it has a separate version from the zkVM and executor. The [development base guide](../../packages/lez-compat/README.md) gives installation requirements. Check local tools with `bash verify/check-builds.sh --preflight`. Scaffold and SPEL CLI are not required.
 
 Curve host and guest builds require `CURVE_EMERGENCY_AUTHORITY`, a nonzero 64-character hex account ID. For local tests, run this from the repository root:
 
@@ -50,6 +50,8 @@ Root handlers accept `ReceiveInput` and return `Result<Response, Error>`. Guests
 
 Application, SDK and CLI timestamps use Unix seconds. Programs convert stored bounds to LEZ milliseconds with checked arithmetic. Response validity windows enforce start-inclusive, end-exclusive inclusion-block time. Saved clock data cannot enforce the current block's deadline. See [sale closing](../adr/0025-sale-closing.md).
 
+Run the [standalone LEZ checks](local-node-checks.md) to configure a namespace through the CLI and check Rust wallet recovery. These tests need a disposable node and are ignored by ordinary test runs.
+
 Run upstream private-route probes by hand only when evaluating a candidate dependency. Use a separate checkout and the tools required by that revision. Keep these probes out of Launchpad CI and leave the Launchpad pin unchanged. See [LOG-61](https://linear.app/bleu-builders/issue/LOG-61/check-logos-wallet-and-private-route-support) for commands and results.
 
 ## CLI payout terms
@@ -62,7 +64,7 @@ Curve `create-sale` uses `--graduation-launch-bps` and `--graduation-collateral-
 
 A public write reports `executed` only after a successful receipt. An already-complete command can report `no_change`. Both exit `0`. Preparation failure, rejection before send and a reverted receipt exit `1`. Invalid command arguments exit `2`. A write with an unknown outcome reports `pending` and exits `3`. It includes the transaction hash if the sequencer acknowledged the send. A pending stage stops later writes. The result keeps hashes of earlier steps with successful receipts. Check the pending result before you retry.
 
-Workspace checks passed 746 tests. The SDK and CLI fixtures check saved-state validation and public write results. The IDL check passed 74 tests and found no schema drift. These checks do not prove live sequencer behavior or transaction finality.
+Workspace checks passed 748 tests. The SDK and CLI fixtures check saved-state validation and public write results. The IDL check passed 74 tests and found no schema drift. These checks do not prove live sequencer behavior or transaction finality.
 
 ## CI
 

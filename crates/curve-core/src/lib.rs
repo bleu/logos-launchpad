@@ -14,16 +14,12 @@ pub use sale_policy::{
     TradeControl, TradeMode,
 };
 
-include!(concat!(env!("OUT_DIR"), "/emergency_authority.rs"));
+include!(concat!(env!("OUT_DIR"), "/authority_accounts.rs"));
 
 pub const MAX_FEE_BPS: u16 = 10_000;
 pub const TOKEN_PROGRAM_ACCOUNT_ID: AccountId = AccountId::new([
     227, 49, 42, 31, 136, 159, 220, 198, 195, 186, 3, 242, 23, 1, 47, 213, 204, 150, 77, 104, 203,
     183, 207, 146, 116, 205, 6, 145, 114, 161, 89, 113,
-]);
-pub const AUTHORITY_PROGRAM_ACCOUNT_ID: AccountId = AccountId::new([
-    94, 144, 155, 106, 14, 146, 62, 120, 135, 16, 55, 144, 76, 89, 251, 81, 15, 154, 235, 51, 72,
-    22, 124, 218, 6, 52, 198, 24, 253, 158, 192, 243,
 ]);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
