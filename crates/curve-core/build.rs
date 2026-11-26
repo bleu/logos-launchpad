@@ -17,7 +17,7 @@ fn parse_account_id(setting: &str, value: &str) -> [u8; 32] {
         "{setting} must contain only hexadecimal digits"
     );
     let mut bytes = [0; 32];
-    for (byte, pair) in bytes.iter_mut().zip(value.as_bytes().chunks_exact(2)) {
+    for (byte, pair) in bytes.iter_mut().zip(value.as_bytes().as_chunks::<2>().0) {
         *byte = u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap();
     }
     assert!(
@@ -27,17 +27,24 @@ fn parse_account_id(setting: &str, value: &str) -> [u8; 32] {
     bytes
 }
 
-fn main() {
-    println!("cargo:rerun-if-env-changed=CURVE_EMERGENCY_AUTHORITY");
+fn role_authority() -> [u8; 32] {
+    if !cfg!(feature = "standalone-test") {
+        return DEFAULT_ROLE_AUTHORITY;
+    }
     println!("cargo:rerun-if-env-changed={ROLE_AUTHORITY_SETTING}");
-    let emergency = env::var("CURVE_EMERGENCY_AUTHORITY")
-        .expect("Set CURVE_EMERGENCY_AUTHORITY to a nonzero 64-character hex account ID");
-    let emergency = parse_account_id("CURVE_EMERGENCY_AUTHORITY", &emergency);
-    let role_authority = match env::var(ROLE_AUTHORITY_SETTING) {
+    match env::var(ROLE_AUTHORITY_SETTING) {
         Ok(address) => parse_account_id(ROLE_AUTHORITY_SETTING, &address),
         Err(env::VarError::NotPresent) => DEFAULT_ROLE_AUTHORITY,
         Err(env::VarError::NotUnicode(_)) => panic!("{ROLE_AUTHORITY_SETTING} must be ASCII hex"),
-    };
+    }
+}
+
+fn main() {
+    println!("cargo:rerun-if-env-changed=CURVE_EMERGENCY_AUTHORITY");
+    let emergency = env::var("CURVE_EMERGENCY_AUTHORITY")
+        .expect("Set CURVE_EMERGENCY_AUTHORITY to a nonzero 64-character hex account ID");
+    let emergency = parse_account_id("CURVE_EMERGENCY_AUTHORITY", &emergency);
+    let role_authority = role_authority();
     let output = PathBuf::from(env::var_os("OUT_DIR").expect("Cargo must set OUT_DIR"));
     fs::write(
         output.join("authority_accounts.rs"),

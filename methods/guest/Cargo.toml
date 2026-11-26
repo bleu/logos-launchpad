@@ -17,6 +17,9 @@ all = { level = "deny", priority = -1 }
 [lints]
 workspace = true
 
+[features]
+standalone-test = ["curve-core/standalone-test"]
+
 [dependencies]
 lez-compat-core = { path = "../../packages/lez-compat/core" }
 distribution-adapter = { path = "../../crates/distribution-adapter" }

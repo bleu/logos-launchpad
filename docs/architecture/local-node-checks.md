@@ -59,11 +59,11 @@ compat_elf="$CARGO_TARGET_DIR/riscv-guest/lez-compat-methods/lez-compat-guests/r
 cargo +1.98.1 run --locked -p launchpad-cli --example deploy_local_guest -- "$compat_elf" --payer "$LAUNCHPAD_LOCAL_SENDER"
 ```
 
-Copy the `program_account_hex` value into `LAUNCHPAD_AUTHORITY_PROGRAM_ACCOUNT`. Use the same value to build the curve guest and run the CLI test, which also builds the host SDK. The setting takes 64 hex characters with no prefix. When unset, the build keeps the default role-authority address, which stock standalone LEZ does not provision.
+Copy `program_account_hex` into `LAUNCHPAD_AUTHORITY_PROGRAM_ACCOUNT` (64 hex characters, no prefix). Select `standalone-test` for both the curve guest and the CLI so they use the same deployed authority. Normal builds ignore the variable and keep the fixed role-authority address. Stock standalone LEZ has no program at that address.
 
 ```sh
 export LAUNCHPAD_AUTHORITY_PROGRAM_ACCOUNT='<program_account_hex from the authority deployment>'
-cargo +1.98.1 build --locked --manifest-path methods/Cargo.toml
+cargo +1.98.1 build --locked --features standalone-test --manifest-path methods/Cargo.toml
 export LAUNCHPAD_LOCAL_CURVE_ELF="$CARGO_TARGET_DIR/riscv-guest/launchpad_methods/launchpad_programs/riscv32im-risc0-zkvm-elf/release/curve.bin"
 cargo +1.98.1 run --locked -p launchpad-cli --example deploy_local_guest -- "$LAUNCHPAD_LOCAL_CURVE_ELF" --payer "$LAUNCHPAD_LOCAL_SENDER"
 ```
@@ -74,7 +74,7 @@ Use the `program_account` value from the curve deployment. It is a base58 addres
 export LAUNCHPAD_LOCAL_CURVE_ACCOUNT='<program_account from the curve deployment>'
 export LAUNCHPAD_LOCAL_NAMESPACE="$LAUNCHPAD_LOCAL_SENDER"
 export LAUNCHPAD_LOCAL_TREASURY="$LAUNCHPAD_LOCAL_RECIPIENT"
-cargo +1.98.1 test --locked -p launchpad-cli --test local_node configure_namespace_on_standalone_lez -- --ignored --nocapture
+cargo +1.98.1 test --locked -p launchpad-cli --features standalone-test --test local_node configure_namespace_on_standalone_lez -- --ignored --nocapture
 ```
 
-Unset `LAUNCHPAD_AUTHORITY_PROGRAM_ACCOUNT` before regular builds and node-free checks. The PDA successor fixture uses the default address. When done, stop the node with `kill "$node_pid"`, then wait for it to exit. Delete the scratch directory created above. It contains unencrypted test wallet keys.
+When done, stop the node with `kill "$node_pid"`, then wait for it to exit. Delete the scratch directory created above. It contains unencrypted test wallet keys.

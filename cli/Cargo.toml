@@ -24,6 +24,9 @@ serde_json.workspace = true
 tokio.workspace = true
 wallet.workspace = true
 
+[features]
+standalone-test = ["launchpad-client/standalone-test"]
+
 [dev-dependencies]
 lee_core.workspace = true
 program_loader_core.workspace = true

@@ -41,6 +41,7 @@ lez-compat-methods = { path = "../packages/lez-compat/methods" }
 methods = ["guest"]
 
 [features]
+standalone-test = ["curve-core/standalone-test"]
 overflow-tests = []
 actor-execution-tests = ["lee/test-utils"]
 
