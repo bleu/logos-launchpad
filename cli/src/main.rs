@@ -14,11 +14,12 @@ use clap::{Args, Parser, Subcommand, builder::Styles};
 use eyre::{Context, Result};
 use launchpad_client::{
     AccountLocation, CreateSaleRequest, ExactInputTradeTerms, ExactOutputTradeTerms, FactorySale,
-    PoolFeeTarget, PrivateAccountId, PrivateBuyRequest, ProgramHandle, PublicWriteWallet,
-    WriteTransport, build_claim_creator_allocation_invocation, load_clock_block_id,
-    load_curve_config, load_factory_pool, load_factory_state, prepare_buy_invocation,
-    prepare_buy_with_collateral_invocation, prepare_sell_invocation, quote_buy,
-    quote_buy_with_collateral, quote_sell, submit_public_invocation,
+    NamespaceAction, PoolFeeTarget, PrivateAccountId, PrivateBuyRequest, ProgramHandle,
+    PublicWriteWallet, WriteTransport, build_claim_creator_allocation_invocation,
+    load_clock_block_id, load_curve_config, load_factory_pool, load_factory_state,
+    prepare_buy_invocation, prepare_buy_with_collateral_invocation, prepare_sell_invocation,
+    quote_buy, quote_buy_with_collateral, quote_sell, submit_namespace_action,
+    submit_public_invocation,
 };
 use serde::Serialize;
 use wallet::{WalletCore, WalletSequencerClient};
@@ -125,7 +126,12 @@ impl Cli {
         }
         if matches!(
             self.command,
-            Command::Configure(_) | Command::RenounceAdmin(_) | Command::NamespaceInfo(_)
+            Command::Configure(_)
+                | Command::RenounceAdmin(_)
+                | Command::NamespaceInfo(_)
+                | Command::UpdateFee(_)
+                | Command::UpdateTreasury(_)
+                | Command::TransferAdmin(_)
         ) && (self.authority_router_path.is_some()
             || self.namespace.is_some_and(AccountLocation::is_private))
         {
@@ -184,7 +190,14 @@ enum Command {
     /// Unsupported legacy NFT command. Launch roles use role authority.
     TransferAuthority(TransferAuthorityArgs),
     NamespaceInfo(NamespaceReadArgs),
-    RenounceAdmin(NamespaceAdminArgs),
+    /// Change the namespace protocol fee rate.
+    UpdateFee(UpdateFeeArgs),
+    /// Change the account that receives namespace protocol fees.
+    UpdateTreasury(UpdateTreasuryArgs),
+    /// Transfer namespace administration with signatures from both accounts.
+    TransferAdmin(TransferAdminArgs),
+    /// Permanently remove the namespace administrator. The emergency role stays in place.
+    RenounceAdmin(RenounceAdminArgs),
 }
 
 #[derive(Debug, Subcommand)]
@@ -271,6 +284,40 @@ struct NamespaceAdminArgs {
     #[arg(long, value_parser = parse_public_account_id)]
     admin: lee::AccountId,
 }
+
+#[derive(Debug, Args)]
+struct UpdateFeeArgs {
+    #[command(flatten)]
+    authority: NamespaceAdminArgs,
+    #[arg(long)]
+    protocol_fee_bps: u16,
+}
+
+#[derive(Debug, Args)]
+struct UpdateTreasuryArgs {
+    #[command(flatten)]
+    authority: NamespaceAdminArgs,
+    #[arg(long, value_parser = parse_public_account_id)]
+    treasury: lee::AccountId,
+}
+
+#[derive(Debug, Args)]
+struct TransferAdminArgs {
+    #[command(flatten)]
+    authority: NamespaceAdminArgs,
+    #[arg(long, value_parser = parse_public_account_id)]
+    new_admin: lee::AccountId,
+}
+
+#[derive(Debug, Args)]
+struct RenounceAdminArgs {
+    #[command(flatten)]
+    authority: NamespaceAdminArgs,
+    /// Confirm permanent removal of the namespace administrator.
+    #[arg(long)]
+    confirm_renounce: bool,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum, Serialize)]
 #[serde(rename_all = "kebab-case")]
 enum TradeModeArg {
@@ -774,6 +821,9 @@ async fn run_command<R: WalletSequencerClient, C: WalletSequencerClient>(
     let public_write = matches!(
         cli.command,
         Command::Configure(_)
+            | Command::UpdateFee(_)
+            | Command::UpdateTreasury(_)
+            | Command::TransferAdmin(_)
             | Command::RenounceAdmin(_)
             | Command::CreateSale(_)
             | Command::Withdraw(_)
@@ -970,18 +1020,61 @@ async fn run<R: WalletSequencerClient, C: WalletSequencerClient>(
             )?;
             return Ok(None);
         }
-        Command::RenounceAdmin(args) => {
-            let program = load_deployment(&args.curve_program_path, args.curve_program_account)?;
-            let wallet = open_wallet()?;
-            let invocation = launchpad_client::build_renounce_admin_invocation(
+        Command::UpdateFee(args) => {
+            namespace_write(
                 namespace,
-                program.account_id,
-                args.admin,
-            );
-            WriteSuccess::single(
-                submit_public_invocation(&wallet, &program, invocation).await?,
-                None,
+                &args.authority.curve_program_path,
+                args.authority.curve_program_account,
+                NamespaceAction::UpdateFee {
+                    admin: args.authority.admin,
+                    protocol_fee_bps: args.protocol_fee_bps,
+                },
+                open_wallet,
             )
+            .await?
+        }
+        Command::UpdateTreasury(args) => {
+            namespace_write(
+                namespace,
+                &args.authority.curve_program_path,
+                args.authority.curve_program_account,
+                NamespaceAction::UpdateTreasury {
+                    admin: args.authority.admin,
+                    treasury: args.treasury,
+                },
+                open_wallet,
+            )
+            .await?
+        }
+        Command::TransferAdmin(args) => {
+            namespace_write(
+                namespace,
+                &args.authority.curve_program_path,
+                args.authority.curve_program_account,
+                NamespaceAction::TransferAdmin {
+                    admin: args.authority.admin,
+                    new_admin: args.new_admin,
+                },
+                open_wallet,
+            )
+            .await?
+        }
+        Command::RenounceAdmin(args) => {
+            if !args.confirm_renounce {
+                eyre::bail!(
+                    "renounce-admin permanently removes the namespace administrator; pass --confirm-renounce to proceed"
+                );
+            }
+            namespace_write(
+                namespace,
+                &args.authority.curve_program_path,
+                args.authority.curve_program_account,
+                NamespaceAction::RenounceAdmin {
+                    admin: args.authority.admin,
+                },
+                open_wallet,
+            )
+            .await?
         }
     };
     Ok(Some(receipt))
@@ -1025,16 +1118,30 @@ async fn configure<C: WalletSequencerClient>(
     args: ConfigArgs,
     open_wallet: impl FnOnce() -> Result<PublicWriteWallet<C>>,
 ) -> Result<WriteSuccess> {
-    let curve_program = load_deployment(&args.curve_program_path, args.curve_program_account)?;
-    let wallet = open_wallet()?;
-    let invocation = launchpad_client::build_initialize_namespace_invocation(
+    namespace_write(
         namespace,
-        curve_program.account_id,
-        args.protocol_fee_bps,
-        args.treasury,
-    );
-    let transaction_hash = submit_public_invocation(&wallet, &curve_program, invocation).await?;
-    Ok(WriteSuccess::single(transaction_hash, None))
+        &args.curve_program_path,
+        args.curve_program_account,
+        NamespaceAction::Initialize {
+            protocol_fee_bps: args.protocol_fee_bps,
+            treasury: args.treasury,
+        },
+        open_wallet,
+    )
+    .await
+}
+
+async fn namespace_write<C: WalletSequencerClient>(
+    namespace: lee::AccountId,
+    program_path: &Path,
+    program_account: lee::AccountId,
+    action: NamespaceAction,
+    open_wallet: impl FnOnce() -> Result<PublicWriteWallet<C>>,
+) -> Result<WriteSuccess> {
+    let program = load_deployment(program_path, program_account)?;
+    let wallet = open_wallet()?;
+    let receipt = submit_namespace_action(&wallet, &program, namespace, action).await?;
+    Ok(WriteSuccess::namespace(receipt))
 }
 
 async fn withdraw_factory_proceeds<C: WalletSequencerClient>(

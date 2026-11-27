@@ -1,7 +1,7 @@
 use std::io::{self, Write};
 
 use common::HashType;
-use launchpad_client::LifecycleReceipt;
+use launchpad_client::{LifecycleReceipt, NamespaceReceipt};
 use lee::AccountId;
 use serde_json::json;
 
@@ -25,6 +25,13 @@ impl WriteSuccess {
         Self {
             launch_salt,
             ..Self::new(vec![hash])
+        }
+    }
+
+    pub(super) fn namespace(receipt: NamespaceReceipt) -> Self {
+        Self {
+            authority_holders: receipt.new_admin.into_iter().collect(),
+            ..Self::single(receipt.transaction_hash, None)
         }
     }
 

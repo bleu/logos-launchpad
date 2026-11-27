@@ -4,6 +4,7 @@
 
 mod error;
 mod lifecycle;
+mod namespace;
 mod sale_info;
 mod types;
 mod write_transport;
@@ -19,6 +20,7 @@ pub use lbp_core::{
     TradeQuote as LbpTradeQuote,
 };
 pub use lifecycle::{FactorySession, LifecycleReceipt, next_creation_invocation};
+pub use namespace::{NamespaceAction, NamespaceReceipt, submit_namespace_action};
 pub use sale_info::{
     CurvePoolObservation, CurveSaleInfo, FixedPriceSaleInfo, LbpSaleInfo, SaleInfo, SaleSelection,
     SavedSaleTerms, WeightedSaleInfo, load_sale_info,
@@ -1470,6 +1472,7 @@ pub async fn submit_public_invocation<I: BorshSerialize>(
         .position(|a| *a == call.destination)
         .ok_or(ClientError::InvocationDestinationMissing)?;
     let actors = call.account_mentions();
+    // TODO(LOG-66): Save the signed transaction in the wallet before broadcast and recover its receipt after restart.
     let hash = wallet
         .send_pub_tx_paid_by(actors, root, message, call.fee_payer)
         .await
