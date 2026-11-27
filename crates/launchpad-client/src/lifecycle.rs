@@ -1,4 +1,4 @@
-//! Resumable factory workflows. Each stage needs a successful receipt before the next stage.
+//! Public factory creation and resumable settlement.
 use super::*;
 use factory_core::CreationStage;
 
@@ -66,12 +66,12 @@ impl<'a, C: WalletSequencerClient> FactorySession<'a, C> {
         let state = FactoryState::decode(bytes.as_ref())
             .map_err(ClientError::DecodeResumableFactoryState)?;
         validate_factory_state(sale, &state)?;
-        if matches!(
-            state.creation_stage,
-            CreationStage::PoolPrepared | CreationStage::Active
-        ) {
+        if state.creation_stage == CreationStage::Active {
             let pool = load_factory_pool(self.wallet, sale).await?;
             validate_factory_pool(sale, &state, &pool)?;
+            if !pool.funded {
+                return Err(ClientError::CreationIncomplete);
+            }
         }
         Ok(Some(state))
     }
@@ -93,18 +93,18 @@ impl<'a, C: WalletSequencerClient> FactorySession<'a, C> {
         Ok(())
     }
 
-    /// Resume from on-chain state; completed creation is an idempotent no-op.
+    /// Create and verify a funded sale. A matching active sale is a no-op.
     pub async fn create_sale(
         &self,
         sale: FactorySale,
         request: CreateSaleRequest,
     ) -> Result<LifecycleReceipt> {
         let mut receipt = LifecycleReceipt::default();
-        let result = self.create_steps(sale, request, &mut receipt).await;
+        let result = self.create_once(sale, request, &mut receipt).await;
         finish(result, receipt)
     }
 
-    async fn create_steps(
+    async fn create_once(
         &self,
         sale: FactorySale,
         request: CreateSaleRequest,
@@ -114,35 +114,22 @@ impl<'a, C: WalletSequencerClient> FactorySession<'a, C> {
         if self.authority.is_private() {
             return Err(ClientError::UnsupportedPrivateAuthority);
         }
-        for _ in 0..4 {
-            let state = self.state(sale).await?;
-            if next_creation_invocation(
-                sale,
-                self.authority.account_id(),
-                request.clone(),
-                state.as_ref(),
-            )?
-            .is_none()
-            {
-                return Ok(());
-            }
-            self.submit(
-                |holder| {
-                    next_creation_invocation(sale, holder, request.clone(), state.as_ref())?
-                        .ok_or(ClientError::CreationAlreadyComplete)
-                },
-                receipt,
-            )
-            .await?;
-        }
-        if !(self
+        let state = self.state(sale).await?;
+        let Some(call) = next_creation_invocation(
+            sale,
+            self.authority.account_id(),
+            request.clone(),
+            state.as_ref(),
+        )?
+        else {
+            return Ok(());
+        };
+        self.submit(|_| Ok(call), receipt).await?;
+        let state = self
             .state(sale)
             .await?
-            .is_some_and(|state| state.creation_stage == CreationStage::Active))
-        {
-            return Err(ClientError::CreationIncomplete);
-        }
-        Ok(())
+            .ok_or(ClientError::CreationIncomplete)?;
+        validate_completed_creation(sale, &request, &state)
     }
 
     /// Resume the exact withdrawal and payout sequence without paying a stage twice.
@@ -210,7 +197,7 @@ fn finish(result: Result<()>, receipt: LifecycleReceipt) -> Result<LifecycleRece
     }
 }
 
-/// Chooses the next wire call from persisted state; never resubmits the mint stage.
+/// Build one creation call for a fresh sale. A matching active sale needs no call.
 pub fn next_creation_invocation(
     sale: FactorySale,
     holder: AccountId,
@@ -218,37 +205,39 @@ pub fn next_creation_invocation(
     state: Option<&FactoryState>,
 ) -> Result<Option<PublicInvocation<FactoryInstruction>>> {
     if let Some(state) = state {
-        validate_factory_state(sale, state)?;
-        if !(state.buy_policy == request.buy_policy
-            && state.pause_policy == request.pause_policy
-            && state.ending_policy == request.ending_policy
-            && state.trade_mode == request.trade_mode
-            && state.sell_fee_bps == request.sell_fee_bps
-            && state.per_block_token_limit == request.per_block_token_limit
-            && state.graduation_hook == request.graduation_hook
-            && state.sale_reserve == request.sale_reserve
-            && state.graduation_reserve == request.graduation_reserve
-            && state.graduation_policy == request.graduation_policy
-            && state.creator_allocation == request.creator_allocation
-            && state.virtual_token_reserve == request.virtual_token_reserve
-            && state.virtual_collateral_reserve == request.virtual_collateral_reserve
-            && state.end_timestamp == request.end_timestamp
-            && state.name == request.name
-            && state.uri == request.uri)
-        {
-            return Err(ClientError::LaunchParametersMismatch);
-        }
-        if state.creation_stage == CreationStage::Active {
-            return Ok(None);
-        }
+        validate_completed_creation(sale, &request, state)?;
+        return Ok(None);
     }
-    let now = request.now;
-    let mut call = build_curve_sale_invocation(sale, holder, request, state.is_some())?;
-    if state.is_some() {
-        call.instruction = FactoryInstruction::ContinueCreation {
-            creator: holder,
-            now,
-        };
+    build_create_sale_invocation(sale, holder, request).map(Some)
+}
+
+fn validate_completed_creation(
+    sale: FactorySale,
+    request: &CreateSaleRequest,
+    state: &FactoryState,
+) -> Result<()> {
+    validate_factory_state(sale, state)?;
+    if state.creation_stage != CreationStage::Active {
+        return Err(ClientError::CreationIncomplete);
     }
-    Ok(Some(call))
+    if !(state.buy_policy == request.buy_policy
+        && state.pause_policy == request.pause_policy
+        && state.ending_policy == request.ending_policy
+        && state.trade_mode == request.trade_mode
+        && state.sell_fee_bps == request.sell_fee_bps
+        && state.per_block_token_limit == request.per_block_token_limit
+        && state.graduation_hook == request.graduation_hook
+        && state.sale_reserve == request.sale_reserve
+        && state.graduation_reserve == request.graduation_reserve
+        && state.graduation_policy == request.graduation_policy
+        && state.creator_allocation == request.creator_allocation
+        && state.virtual_token_reserve == request.virtual_token_reserve
+        && state.virtual_collateral_reserve == request.virtual_collateral_reserve
+        && state.end_timestamp == request.end_timestamp
+        && state.name == request.name
+        && state.uri == request.uri)
+    {
+        return Err(ClientError::LaunchParametersMismatch);
+    }
+    Ok(())
 }

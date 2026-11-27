@@ -397,17 +397,11 @@ fn sale_with_pause(
             },
         )
         .unwrap();
-    for _ in 0..3 {
-        fixture
-            .call(
-                &creator,
-                factory_core::Message::ContinueCreation {
-                    creator: id(&creator),
-                    now: 1,
-                },
-            )
-            .unwrap();
-    }
+    assert!(saved_pool(&fixture).funded);
+    assert_eq!(
+        balance(&fixture.state, fixture.pool, fixture.definition),
+        400
+    );
     execute(
         &mut fixture.state,
         Actor::new(fixture.definition, TOKEN),

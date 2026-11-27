@@ -96,17 +96,11 @@ fn closed_sale(
             },
         )
         .unwrap();
-    for _ in 0..3 {
-        fixture
-            .call(
-                &creator,
-                factory_core::Message::ContinueCreation {
-                    creator: id(&creator),
-                    now: 1,
-                },
-            )
-            .unwrap();
-    }
+    assert!(pool_state(&fixture).funded);
+    assert_eq!(
+        balance(&fixture.state, fixture.pool, fixture.definition),
+        400
+    );
     for owner in [id(&creator), id(&key(49))] {
         execute(
             &mut fixture.state,
@@ -624,102 +618,78 @@ fn settlement_graduation_resolves_transferred_creator_and_rejects_old_hint() {
 
 #[test]
 #[ignore = "requires fresh application and compatibility ELFs and the pinned clock ELF"]
-fn curve_late_activation_failure_restores_funding_and_continuation_activates_once() {
+fn curve_funding_failure_rolls_back_creation_and_allows_same_create_retry() {
     let mut fixture = factory_fixture();
     let creator = key(48);
-    fixture
-        .call(
-            &creator,
-            factory_core::Message::CreateFactoryPool {
-                buy_policy: curve_core::BuyPolicy::Open,
-                pause_policy: curve_core::PausePolicy::Disabled,
-                ending_policy: curve_core::EndingPolicy::Either,
-                trade_mode: 0,
-                sell_fee_bps: 0,
-                per_block_token_limit: None,
-                graduation_hook_program_id: None,
-                graduation_hook_configuration: vec![],
-                namespace: fixture.namespace,
-                launch_salt: SALT,
-                name: "Recovery".into(),
-                uri: "ipfs://recovery".into(),
-                graduation_reserve: 0,
-                sale_reserve: 400,
-                graduation_policy: launchpad_client::GraduationPolicy::default(),
-                creator_allocation: 50,
-                virtual_token_reserve: 1_000,
-                virtual_collateral_reserve: 1_000,
-                end_timestamp: Some(301),
-                curve_program_id: CURVE,
-                collateral_definition_id: COLLATERAL,
-                creator: id(&creator),
-                now: 1,
-            },
-        )
-        .unwrap();
-    let continuation = factory_core::Message::ContinueCreation {
+    let create = factory_core::Message::CreateFactoryPool {
+        buy_policy: curve_core::BuyPolicy::Open,
+        pause_policy: curve_core::PausePolicy::Disabled,
+        ending_policy: curve_core::EndingPolicy::Either,
+        trade_mode: 0,
+        sell_fee_bps: 0,
+        per_block_token_limit: None,
+        graduation_hook_program_id: None,
+        graduation_hook_configuration: vec![],
+        namespace: fixture.namespace,
+        launch_salt: SALT,
+        name: "Recovery".into(),
+        uri: "ipfs://recovery".into(),
+        graduation_reserve: 25,
+        sale_reserve: 400,
+        graduation_policy: launchpad_client::GraduationPolicy::default(),
+        creator_allocation: 50,
+        virtual_token_reserve: 1_000,
+        virtual_collateral_reserve: 1_000,
+        end_timestamp: Some(301),
+        curve_program_id: CURVE,
+        collateral_definition_id: COLLATERAL,
         creator: id(&creator),
         now: 1,
     };
-    for stage in [
-        factory_core::CreationStage::Allocated,
-        factory_core::CreationStage::PoolPrepared,
-    ] {
-        fixture.call(&creator, continuation.clone()).unwrap();
-        assert_eq!(saved(&fixture).creation_stage, stage);
-    }
     let pool = fixture.pool;
-    set_holding(&mut fixture, pool, COLLATERAL, LAUNCH, 0);
+    let definition = fixture.definition;
+    // The pool ATA can initialize, but funding requires an empty launch-token balance.
+    set_holding(&mut fixture, pool, definition, definition, 1);
     rejected(
         &mut fixture,
-        |fixture| fixture.call(&creator, continuation.clone()),
-        "InvalidToken",
+        |fixture| fixture.call(&creator, create.clone()),
+        "InvalidCustody",
     );
-    assert_eq!(
-        saved(&fixture).creation_stage,
-        factory_core::CreationStage::PoolPrepared
+    rejected(
+        &mut fixture,
+        |fixture| {
+            fixture.call(
+                &creator,
+                factory_core::Message::ContinueCreation {
+                    creator: id(&creator),
+                    now: 1,
+                },
+            )
+        },
+        "Unauthorized",
     );
-    assert!(!pool_state(&fixture).funded);
-    assert_eq!(
-        balance(&fixture.state, fixture.factory, fixture.definition),
-        400
-    );
-    assert_eq!(balance(&fixture.state, pool, fixture.definition), 0);
-    assert_eq!(
-        balance(
-            &fixture.state,
-            saved(&fixture).creator_escrow_id,
-            fixture.definition
-        ),
-        50
-    );
-    assert_eq!(supply(&fixture), 450);
-    set_holding(&mut fixture, pool, COLLATERAL, COLLATERAL, 0);
-    fixture.call(&creator, continuation.clone()).unwrap();
-    assert_eq!(
-        saved(&fixture).creation_stage,
-        factory_core::CreationStage::Active
-    );
+
+    set_holding(&mut fixture, pool, definition, definition, 0);
+    fixture.call(&creator, create).unwrap();
+    let sale = saved(&fixture);
+    assert_eq!(sale.creation_stage, factory_core::CreationStage::Active);
     assert!(pool_state(&fixture).funded);
+    assert_eq!(balance(&fixture.state, fixture.factory, definition), 0);
+    assert_eq!(balance(&fixture.state, pool, definition), 400);
+    assert_eq!(balance(&fixture.state, pool, COLLATERAL), 0);
     assert_eq!(
-        balance(&fixture.state, fixture.factory, fixture.definition),
-        0
+        balance(&fixture.state, sale.creator_escrow_id, definition),
+        50
     );
-    assert_eq!(balance(&fixture.state, pool, fixture.definition), 400);
     assert_eq!(
         balance(
             &fixture.state,
-            saved(&fixture).creator_escrow_id,
-            fixture.definition
+            factory_core::compute_mint_pda(fixture.namespace, FACTORY, SALT),
+            definition
         ),
-        50
+        25
     );
-    assert_eq!(supply(&fixture), 450);
-    rejected(
-        &mut fixture,
-        |fixture| fixture.call(&creator, continuation),
-        "StaleStage",
-    );
+    assert_eq!(supply(&fixture), 475);
 }
 
 #[test]

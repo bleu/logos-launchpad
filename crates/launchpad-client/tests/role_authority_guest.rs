@@ -10,6 +10,8 @@ use lez_compat_core::{
 };
 use std::{borrow::Cow, collections::BTreeMap};
 
+#[path = "role_authority_guest/atomic_creation.rs"]
+mod atomic_creation;
 #[path = "role_authority_guest/controls.rs"]
 mod controls;
 #[path = "role_authority_guest/settlement.rs"]
@@ -460,7 +462,7 @@ fn program_controlled_admin_accepts_and_updates_namespace_fee() {
 
 #[test]
 #[ignore = "requires fresh application and compatibility ELFs and the pinned clock ELF"]
-fn transferred_curve_creator_funds_and_settles_without_pool_custody() {
+fn transferred_curve_creator_claims_allocation_and_settles_without_pool_custody() {
     let mut fixture = factory_fixture();
     let creator = key(48);
     let successor = key(49);
@@ -493,62 +495,7 @@ fn transferred_curve_creator_funds_and_settles_without_pool_custody() {
                 now: 1,
             },
         )
-        .expect("mint stage");
-    fixture
-        .call(
-            &creator,
-            factory_core::Message::ContinueCreation {
-                creator: id(&creator),
-                now: 1,
-            },
-        )
-        .expect("allocation stage");
-    fixture
-        .call(
-            &creator,
-            factory_core::Message::ContinueCreation {
-                creator: id(&creator),
-                now: 1,
-            },
-        )
-        .expect("pool preparation stage");
-    let role = factory_core::compute_curve_creator_role_pda(fixture.namespace, FACTORY, SALT);
-    execute(
-        &mut fixture.state,
-        Actor::new(id(&creator), AUTHORITY),
-        fixture.actors.clone(),
-        authority::Message::Transfer {
-            role,
-            successor: id(&successor),
-        },
-        &[&creator, &successor],
-    )
-    .unwrap();
-    let before = fixture.state.clone();
-    let rejected = fixture.call(
-        &creator,
-        factory_core::Message::ContinueCreation {
-            creator: id(&creator),
-            now: 1,
-        },
-    );
-    assert!(
-        matches!(&rejected, Err(lee::error::LeeError::ProgramExecutionFailed(reason)) if reason.contains("Unauthorized")),
-        "{rejected:?}"
-    );
-    assert!(
-        fixture.state == before,
-        "former creator changed pending sale"
-    );
-    fixture
-        .call(
-            &successor,
-            factory_core::Message::ContinueCreation {
-                creator: id(&successor),
-                now: 1,
-            },
-        )
-        .expect("funding stage");
+        .expect("create and fund curve sale");
     let saved = curve_core::PoolAccount::decode(
         fixture
             .state
@@ -574,6 +521,18 @@ fn transferred_curve_creator_funds_and_settles_without_pool_custody() {
         balance(&fixture.state, fixture.factory, fixture.definition),
         0
     );
+    let role = factory_core::compute_curve_creator_role_pda(fixture.namespace, FACTORY, SALT);
+    execute(
+        &mut fixture.state,
+        Actor::new(id(&creator), AUTHORITY),
+        fixture.actors.clone(),
+        authority::Message::Transfer {
+            role,
+            successor: id(&successor),
+        },
+        &[&creator, &successor],
+    )
+    .unwrap();
     rejected_without_changes(
         &mut fixture.state,
         |state| {
@@ -710,6 +669,22 @@ fn transferred_curve_creator_funds_and_settles_without_pool_custody() {
         )
         .unwrap();
         assert_eq!(saved.settlement_stage, expected_stage);
+        if expected_stage == factory_core::SettlementStage::Ready {
+            rejected_without_changes(
+                &mut fixture.state,
+                |state| {
+                    curve_call_at(
+                        state,
+                        &fixture.actors,
+                        fixture.pool,
+                        &successor,
+                        curve_core::Message::WithdrawReserves { now: 301 },
+                        301_000,
+                    )
+                },
+                "Unauthorized",
+            );
+        }
     }
     assert_eq!(
         balance(&fixture.state, id(&successor), fixture.definition),

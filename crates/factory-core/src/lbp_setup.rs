@@ -198,7 +198,8 @@ pub(super) fn create_fixed(
     let command = Message::CreateFixedPriceLbp {
         inputs: inputs.clone(),
     };
-    create(
+    let (creator, now) = (inputs.creator, inputs.now);
+    let mut response = create(
         input,
         SetupInputs {
             per_block_token_limit: inputs.per_block_token_limit,
@@ -227,7 +228,22 @@ pub(super) fn create_fixed(
             mode: LbpSetupMode::FixedPrice,
         },
         command,
-    )
+    )?;
+    for expected_stage in [
+        LbpCreationStage::Minted,
+        LbpCreationStage::Allocated,
+        LbpCreationStage::PoolPrepared,
+    ] {
+        response = response.send_sync(
+            input.receiver,
+            &Message::ContinueFixedPriceCreation {
+                expected_stage,
+                creator,
+                now,
+            },
+        );
+    }
+    Ok(response)
 }
 pub(super) fn create_weighted(
     input: &ReceiveInput,
@@ -241,7 +257,8 @@ pub(super) fn create_weighted(
     let command = Message::CreateWeightedLbp {
         inputs: inputs.clone(),
     };
-    create(
+    let creator = inputs.creator;
+    let mut response = create(
         input,
         SetupInputs {
             per_block_token_limit: inputs.per_block_token_limit,
@@ -279,7 +296,21 @@ pub(super) fn create_weighted(
             },
         },
         command,
-    )
+    )?;
+    for expected_stage in [
+        LbpCreationStage::Minted,
+        LbpCreationStage::Allocated,
+        LbpCreationStage::PoolPrepared,
+    ] {
+        response = response.send_sync(
+            input.receiver,
+            &Message::ContinueWeightedCreation {
+                expected_stage,
+                creator,
+            },
+        );
+    }
+    Ok(response)
 }
 fn validate_lbp_policies(
     mode: LbpSetupMode,

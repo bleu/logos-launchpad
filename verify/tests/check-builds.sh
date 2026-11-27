@@ -29,6 +29,7 @@ if [[ "${NO_ARTIFACTS:-}" != 1 && "$*" == *"build --manifest-path methods/Cargo.
   mkdir -p methods/target/riscv-guest/fixture/release
   printf binary > methods/target/riscv-guest/fixture/release/curve.bin
   printf binary > methods/target/riscv-guest/fixture/release/factory.bin
+  printf binary > methods/target/riscv-guest/fixture/release/lbp.bin
   printf binary > methods/target/riscv-guest/fixture/release/graduation_adapter.bin
   printf binary > methods/target/riscv-guest/fixture/release/graduation_fault_adapter.bin
 fi

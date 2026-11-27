@@ -1,4 +1,4 @@
-//! Transaction builders, quotes and resumable launch workflows for LEZ actors.
+//! Transaction builders, quotes and launch workflows for LEZ actors.
 //! Public timestamps use Unix seconds; native clock conversion belongs to program handlers.
 #![cfg_attr(not(test), warn(unused_crate_dependencies))]
 
@@ -497,15 +497,6 @@ pub fn build_create_sale_invocation(
     creator: AccountId,
     request: CreateSaleRequest,
 ) -> Result<PublicInvocation<FactoryInstruction>> {
-    build_curve_sale_invocation(sale, creator, request, false)
-}
-
-fn build_curve_sale_invocation(
-    sale: FactorySale,
-    creator: AccountId,
-    request: CreateSaleRequest,
-    continuation: bool,
-) -> Result<PublicInvocation<FactoryInstruction>> {
     request.total_supply()?;
     if request.per_block_token_limit == Some(0) {
         return Err(factory_core::Error::InvalidTerms.into());
@@ -516,9 +507,7 @@ fn build_curve_sale_invocation(
         request.virtual_collateral_reserve,
     )?;
     factory_core::validate_curve_policies(request.ending_policy, request.end_timestamp)?;
-    if !continuation {
-        factory_core::validate_curve_expiry(request.end_timestamp, request.now)?;
-    }
+    factory_core::validate_curve_expiry(request.end_timestamp, request.now)?;
     curve_core::SellFeeRate::new(request.sell_fee_bps)
         .map_err(|_| ClientError::FactoryPolicy(factory_core::Error::InvalidTerms))?;
     request
@@ -1068,38 +1057,6 @@ pub fn build_create_weighted_invocation(
         sale,
         inputs.creator,
         FactoryInstruction::CreateWeightedLbp { inputs },
-    )
-}
-
-pub fn build_continue_fixed_price_invocation(
-    sale: LbpSale,
-    creator: AccountId,
-    expected_stage: factory_core::LbpCreationStage,
-    now: u64,
-) -> PublicInvocation<FactoryInstruction> {
-    lbp_setup_invocation(
-        sale,
-        creator,
-        FactoryInstruction::ContinueFixedPriceCreation {
-            expected_stage,
-            creator,
-            now,
-        },
-    )
-}
-
-pub fn build_continue_weighted_invocation(
-    sale: LbpSale,
-    creator: AccountId,
-    expected_stage: factory_core::LbpCreationStage,
-) -> PublicInvocation<FactoryInstruction> {
-    lbp_setup_invocation(
-        sale,
-        creator,
-        FactoryInstruction::ContinueWeightedCreation {
-            expected_stage,
-            creator,
-        },
     )
 }
 

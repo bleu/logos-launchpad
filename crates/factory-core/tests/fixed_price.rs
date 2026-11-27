@@ -1,6 +1,9 @@
+#[path = "support/creation.rs"]
+mod creation_fixture;
 #[path = "support/lbp_pause_forwarding.rs"]
 mod lbp_pause_forwarding;
 
+use creation_fixture::Creation;
 use factory_core::events::*;
 use factory_core::{
     CreatorAllocationRelease, Error, FixedPrice, FixedPriceInputs, Message, SaleStart,
@@ -8,7 +11,7 @@ use factory_core::{
 };
 use lee_core::{
     account::{AccountId, Actor},
-    program::ReceiveInput,
+    program::{ReceiveInput, Response},
 };
 fn id(n: u8) -> AccountId {
     AccountId::new([n; 32])
@@ -114,15 +117,8 @@ fn creation_rejects_invalid_or_reused_sale_terms() {
 
 #[test]
 fn allocation_checks_creator_role_and_splits_the_exact_mint() {
-    let (mut input, mint) = minted();
-    input.pre_state = mint.post_state.unwrap();
-    input.from = None;
-    input.message = borsh::to_vec(&Message::ContinueFixedPriceCreation {
-        expected_stage: factory_core::FixedPriceCreationStage::Minted,
-        creator: id(42),
-        now: 100,
-    })
-    .unwrap();
+    let (_, mint, setup) = minted();
+    let mut input = setup.continuation(&mint, factory_core::FixedPriceCreationStage::Minted);
     let mut response = handle(&input).unwrap();
     assert_eq!(
         response.sync_messages[0].to,
@@ -205,11 +201,7 @@ fn scheduled_creation_allows_inclusion_at_the_saved_start_millisecond() {
     let mut value = inputs();
     value.start = SaleStart::At { timestamp: 150 };
     input.message = borsh::to_vec(&Message::CreateFixedPriceLbp { inputs: value }).unwrap();
-    let mut response = handle(&input).unwrap();
-    for bytes in [namespace_state(), collateral()] {
-        input = reply(&input, &response, bytes);
-        response = handle(&input).unwrap()
-    }
+    let (_, response, _) = mint_from(&input);
     assert_eq!(response.validity.timestamps.start(), None);
     assert_eq!(response.validity.timestamps.end(), Some(150_001));
     assert!(response.validity.timestamps.is_valid_for(150_000));
@@ -251,11 +243,7 @@ fn creation_intersects_saved_start_with_optional_setup_end() {
             factory_core::EndingPolicy::Depletion
         };
         input.message = borsh::to_vec(&Message::CreateFixedPriceLbp { inputs: terms }).unwrap();
-        let mut response = handle(&input).unwrap();
-        for bytes in [namespace_state(), collateral()] {
-            input = reply(&input, &response, bytes);
-            response = handle(&input).unwrap();
-        }
+        let (_, response, _) = mint_from(&input);
         assert_eq!(response.validity.timestamps.start(), lower);
         assert_eq!(response.validity.timestamps.end(), upper);
     }
@@ -293,22 +281,14 @@ fn creation_rejects_timestamp_conversion_overflow_before_minting() {
 }
 
 fn continue_sale(
-    input: &ReceiveInput,
-    previous: &lee_core::program::Response,
+    setup: &Creation,
+    previous: &Response,
     stage: factory_core::FixedPriceCreationStage,
     source: u128,
     inventory: u128,
     escrow: u128,
-) -> (ReceiveInput, lee_core::program::Response) {
-    let mut input = input.clone();
-    input.pre_state = previous.post_state.clone().unwrap();
-    input.from = None;
-    input.message = borsh::to_vec(&Message::ContinueFixedPriceCreation {
-        expected_stage: stage,
-        creator: id(42),
-        now: 100,
-    })
-    .unwrap();
+) -> (ReceiveInput, Response) {
+    let mut input = setup.continuation(previous, stage);
     let mut response = handle(&input).unwrap();
     let state =
         factory_core::FixedPriceLaunchState::decode(response.post_state.as_ref().unwrap()).unwrap();
@@ -354,9 +334,9 @@ fn continue_sale(
 }
 #[test]
 fn pool_preparation_uses_saved_terms_and_separate_setup_stage() {
-    let (input, mint) = minted();
-    let (input, allocated) = continue_sale(
-        &input,
+    let (_, mint, setup) = minted();
+    let (_, allocated) = continue_sale(
+        &setup,
         &mint,
         factory_core::FixedPriceCreationStage::Minted,
         1000,
@@ -364,7 +344,7 @@ fn pool_preparation_uses_saved_terms_and_separate_setup_stage() {
         0,
     );
     let (input, response) = continue_sale(
-        &input,
+        &setup,
         &allocated,
         factory_core::FixedPriceCreationStage::Allocated,
         0,
@@ -447,17 +427,17 @@ fn prepared_pool(state: &factory_core::FixedPriceLaunchState, factory: Actor) ->
 }
 #[test]
 fn final_setup_funds_inventory_and_keeps_after_end_allocation_locked() {
-    let (input, mint) = minted();
-    let (input, allocated) = continue_sale(
-        &input,
+    let (_, mint, setup) = minted();
+    let (_, allocated) = continue_sale(
+        &setup,
         &mint,
         factory_core::FixedPriceCreationStage::Minted,
         1000,
         0,
         0,
     );
-    let (input, prepared) = continue_sale(
-        &input,
+    let (_, prepared) = continue_sale(
+        &setup,
         &allocated,
         factory_core::FixedPriceCreationStage::Allocated,
         0,
@@ -465,7 +445,7 @@ fn final_setup_funds_inventory_and_keeps_after_end_allocation_locked() {
         200,
     );
     let (mut input, mut response) = continue_sale(
-        &input,
+        &setup,
         &prepared,
         factory_core::FixedPriceCreationStage::PoolPrepared,
         0,
@@ -529,21 +509,17 @@ fn final_setup_releases_after_setup_allocation_to_the_current_creator() {
     let mut terms = inputs();
     terms.allocation_release = CreatorAllocationRelease::AfterSetup;
     input.message = borsh::to_vec(&Message::CreateFixedPriceLbp { inputs: terms }).unwrap();
-    let mut response = handle(&input).unwrap();
-    for bytes in [namespace_state(), collateral()] {
-        input = reply(&input, &response, bytes);
-        response = handle(&input).unwrap()
-    }
-    let (input, allocated) = continue_sale(
-        &input,
+    let (_, response, setup) = mint_from(&input);
+    let (_, allocated) = continue_sale(
+        &setup,
         &response,
         factory_core::FixedPriceCreationStage::Minted,
         1000,
         0,
         0,
     );
-    let (input, prepared) = continue_sale(
-        &input,
+    let (_, prepared) = continue_sale(
+        &setup,
         &allocated,
         factory_core::FixedPriceCreationStage::Allocated,
         0,
@@ -551,7 +527,7 @@ fn final_setup_releases_after_setup_allocation_to_the_current_creator() {
         200,
     );
     let (mut input, mut response) = continue_sale(
-        &input,
+        &setup,
         &prepared,
         factory_core::FixedPriceCreationStage::PoolPrepared,
         0,
@@ -609,21 +585,17 @@ fn setup_checks_optional_expiry_at_every_stage_and_callback() {
         };
         terms.now = 1_000;
         input.message = borsh::to_vec(&Message::CreateFixedPriceLbp { inputs: terms }).unwrap();
-        let mut mint = handle(&input).unwrap();
-        for bytes in [namespace_state(), collateral()] {
-            input = reply(&input, &mint, bytes);
-            mint = handle(&input).unwrap();
-        }
-        let (input, allocated) = continue_sale(
-            &input,
+        let (_, mint, setup) = mint_from(&input);
+        let (_, allocated) = continue_sale(
+            &setup,
             &mint,
             factory_core::FixedPriceCreationStage::Minted,
             1000,
             0,
             0,
         );
-        let (input, prepared) = continue_sale(
-            &input,
+        let (_, prepared) = continue_sale(
+            &setup,
             &allocated,
             factory_core::FixedPriceCreationStage::Allocated,
             0,
@@ -645,7 +617,7 @@ fn setup_checks_optional_expiry_at_every_stage_and_callback() {
         };
         assert_eq!(inputs.end_timestamp, end_timestamp);
         let (mut input, mut complete) = continue_sale(
-            &input,
+            &setup,
             &prepared,
             factory_core::FixedPriceCreationStage::PoolPrepared,
             0,
@@ -729,7 +701,7 @@ fn optional_end_must_be_strictly_after_the_saved_start() {
 
 #[test]
 fn fixed_price_state_read_returns_raw_state_only_from_the_canonical_sale_actor() {
-    let (mut input, mint) = minted();
+    let (mut input, mint, _) = minted();
     input.pre_state = mint.post_state.unwrap();
     input.from = Some(Actor::new(id(90), id(91)));
     input.message = borsh::to_vec(&Message::ReadState).unwrap();
@@ -744,21 +716,12 @@ fn fixed_price_state_read_returns_raw_state_only_from_the_canonical_sale_actor()
 
 #[test]
 fn continuation_rejects_forged_creator_role_proofs_and_stale_stage_requests() {
-    let (mut input, mint) = minted();
-    input.pre_state = mint.post_state.unwrap();
-    input.message = borsh::to_vec(&Message::ContinueFixedPriceCreation {
-        expected_stage: factory_core::FixedPriceCreationStage::Allocated,
-        creator: id(42),
-        now: 0,
-    })
-    .unwrap();
-    assert!(matches!(handle(&input), Err(Error::StaleStage)));
-    input.message = borsh::to_vec(&Message::ContinueFixedPriceCreation {
-        expected_stage: factory_core::FixedPriceCreationStage::Minted,
-        creator: id(42),
-        now: 0,
-    })
-    .unwrap();
+    use factory_core::FixedPriceCreationStage::{Allocated, Minted};
+    let (_, mint, setup) = minted();
+    setup.assert_rejects_external_continuation(&mint);
+    let stale = setup.continuation(&mint, Allocated);
+    assert!(matches!(handle(&stale), Err(Error::StaleStage)));
+    let mut input = setup.continuation(&mint, Minted);
     let response = handle(&input).unwrap();
     let state =
         factory_core::FixedPriceLaunchState::decode(response.post_state.as_ref().unwrap()).unwrap();
@@ -794,14 +757,8 @@ fn continuation_rejects_forged_creator_role_proofs_and_stale_stage_requests() {
 #[test]
 fn allocation_rejects_changed_supply_metadata_or_credited_setup_balances() {
     for case in 0..5 {
-        let (mut input, mint) = minted();
-        input.pre_state = mint.post_state.unwrap();
-        input.message = borsh::to_vec(&Message::ContinueFixedPriceCreation {
-            expected_stage: factory_core::FixedPriceCreationStage::Minted,
-            creator: id(42),
-            now: 0,
-        })
-        .unwrap();
+        let (_, mint, setup) = minted();
+        let mut input = setup.continuation(&mint, factory_core::FixedPriceCreationStage::Minted);
         let response = handle(&input).unwrap();
         let state =
             factory_core::FixedPriceLaunchState::decode(response.post_state.as_ref().unwrap())
@@ -864,7 +821,7 @@ fn allocation_rejects_changed_supply_metadata_or_credited_setup_balances() {
 }
 
 fn completed() -> (ReceiveInput, factory_core::FixedPriceLaunchState) {
-    let (input, response) = minted();
+    let (input, response, _) = minted();
     let mut state =
         factory_core::FixedPriceLaunchState::decode(response.post_state.as_ref().unwrap()).unwrap();
     state.creation_stage = factory_core::FixedPriceCreationStage::Complete;
@@ -1341,18 +1298,21 @@ fn collateral() -> Vec<u8> {
     })
     .unwrap()
 }
-fn minted() -> (ReceiveInput, lee_core::program::Response) {
-    let mut input = creation();
-    let mut response = handle(&input).unwrap();
-    for bytes in [namespace_state(), collateral()] {
-        input = reply(&input, &response, bytes);
-        response = handle(&input).unwrap()
-    }
-    (input, response)
+fn minted() -> (ReceiveInput, Response, Creation) {
+    mint_from(&creation())
+}
+fn mint_from(input: &ReceiveInput) -> (ReceiveInput, Response, Creation) {
+    let response = handle(input).unwrap();
+    let setup = Creation::new(input, &response);
+    let input = setup.namespace_reply(&response, namespace_state());
+    let response = handle(&input).unwrap();
+    let input = reply(&input, &response, collateral());
+    let response = handle(&input).unwrap();
+    (input, response, setup)
 }
 #[test]
 fn creation_mints_exact_supply_with_metadata_and_a_separate_creator_role() {
-    let (input, response) = minted();
+    let (input, response, _) = minted();
     let state =
         factory_core::FixedPriceLaunchState::decode(response.post_state.as_ref().unwrap()).unwrap();
     assert_eq!(state.total_supply, 1000);
@@ -1459,7 +1419,7 @@ fn fixed_price_creation_rejects_unbound_or_unsupported_buy_policy() {
     }
 }
 
-fn allowlisted_prepared() -> (ReceiveInput, lee_core::program::Response) {
+fn allowlisted_prepared() -> (ReceiveInput, Response, Creation) {
     let mut input = creation();
     let mut terms = inputs();
     let pool = lbp_core::compute_pool_pda(
@@ -1477,10 +1437,12 @@ fn allowlisted_prepared() -> (ReceiveInput, lee_core::program::Response) {
     });
     terms.buy_policy = policy.clone();
     input.message = borsh::to_vec(&Message::CreateFixedPriceLbp { inputs: terms }).unwrap();
-    let mut response = handle(&input).unwrap();
-    for bytes in [namespace_state(), collateral()] {
-        input = reply(&input, &response, bytes);
-        response = handle(&input).unwrap();
+    let initial = handle(&input).unwrap();
+    let setup = Creation::new(&input, &initial);
+    let namespace_reply = setup.namespace_reply(&initial, namespace_state());
+    let checked = handle(&namespace_reply).unwrap();
+    let mut response = handle(&reply(&namespace_reply, &checked, collateral())).unwrap();
+    for response in [&checked, &response] {
         assert_eq!(
             factory_core::FixedPriceLaunchState::decode(response.post_state.as_ref().unwrap())
                 .unwrap()
@@ -1497,7 +1459,7 @@ fn allowlisted_prepared() -> (ReceiveInput, lee_core::program::Response) {
             200,
         ),
     ] {
-        (input, response) = continue_sale(&input, &response, stage, source, inventory, escrow);
+        (_, response) = continue_sale(&setup, &response, stage, source, inventory, escrow);
         assert_eq!(
             factory_core::FixedPriceLaunchState::decode(response.post_state.as_ref().unwrap())
                 .unwrap()
@@ -1515,15 +1477,15 @@ fn allowlisted_prepared() -> (ReceiveInput, lee_core::program::Response) {
         unreachable!()
     };
     assert_eq!(inputs.buy_policy, policy);
-    (input, response)
+    (input, response, setup)
 }
 
 #[test]
-fn fixed_price_setup_rejects_policy_downgrades_and_replacements_on_every_retry() {
-    let (input, prepared) = allowlisted_prepared();
+fn fixed_price_setup_rejects_policy_downgrades_and_replacements() {
+    let (_, prepared, setup) = allowlisted_prepared();
     for case in 0..3 {
         let (mut input, mut response) = continue_sale(
-            &input,
+            &setup,
             &prepared,
             factory_core::FixedPriceCreationStage::PoolPrepared,
             0,
@@ -1574,7 +1536,7 @@ fn fixed_price_setup_rejects_policy_downgrades_and_replacements_on_every_retry()
 
 #[test]
 fn fixed_price_allocation_rejects_a_different_pool_buy_policy() {
-    let (input, prepared) = allowlisted_prepared();
+    let (input, prepared, _) = allowlisted_prepared();
     let mut state =
         factory_core::FixedPriceLaunchState::decode(prepared.post_state.as_ref().unwrap()).unwrap();
     state.creation_stage = factory_core::FixedPriceCreationStage::Complete;
@@ -1596,19 +1558,21 @@ fn fixed_price_pause_policy_survives_every_setup_stage_and_rejects_substitution(
         let mut terms = inputs();
         terms.pause_policy = policy;
         input.message = borsh::to_vec(&Message::CreateFixedPriceLbp { inputs: terms }).unwrap();
-        let mut mint = handle(&input).unwrap();
-        for bytes in [namespace_state(), collateral()] {
+        let initial = handle(&input).unwrap();
+        let setup = Creation::new(&input, &initial);
+        let input = setup.namespace_reply(&initial, namespace_state());
+        let checked = handle(&input).unwrap();
+        let mint = handle(&reply(&input, &checked, collateral())).unwrap();
+        for response in [&initial, &checked, &mint] {
             assert_eq!(
-                factory_core::LbpLaunchState::decode(mint.post_state.as_ref().unwrap())
+                factory_core::LbpLaunchState::decode(response.post_state.as_ref().unwrap())
                     .unwrap()
                     .pause_policy,
                 policy
             );
-            input = reply(&input, &mint, bytes);
-            mint = handle(&input).unwrap();
         }
-        let (input, allocated) = continue_sale(
-            &input,
+        let (_, allocated) = continue_sale(
+            &setup,
             &mint,
             factory_core::LbpCreationStage::Minted,
             1000,
@@ -1621,8 +1585,8 @@ fn fixed_price_pause_policy_survives_every_setup_stage_and_rejects_substitution(
                 .pause_policy,
             policy
         );
-        let (input, prepared) = continue_sale(
-            &input,
+        let (_, prepared) = continue_sale(
+            &setup,
             &allocated,
             factory_core::LbpCreationStage::Allocated,
             0,
@@ -1649,7 +1613,7 @@ fn fixed_price_pause_policy_survives_every_setup_stage_and_rejects_substitution(
             curve_core::TradeControl::Paused,
         ] {
             let (mut input, mut response) = continue_sale(
-                &input,
+                &setup,
                 &prepared,
                 factory_core::LbpCreationStage::PoolPrepared,
                 0,
@@ -1756,7 +1720,7 @@ fn fixed_price_creation_checks_every_ending_and_deadline_combination() {
 
 #[test]
 fn fixed_price_rejects_malformed_saved_terms_and_the_old_record_version() {
-    let (input, response) = minted();
+    let (_, response, setup) = minted();
     let state =
         factory_core::LbpLaunchState::decode(response.post_state.as_ref().unwrap()).unwrap();
     for case in 0..4 {
@@ -1767,14 +1731,8 @@ fn fixed_price_rejects_malformed_saved_terms_and_the_old_record_version() {
             2 => changed.end_timestamp = Some(u64::MAX),
             _ => changed.start_timestamp = u64::MAX,
         }
-        let mut request = input.clone();
+        let mut request = setup.continuation(&response, factory_core::LbpCreationStage::Minted);
         request.pre_state = borsh::to_vec(&changed).unwrap().into();
-        request.message = borsh::to_vec(&Message::ContinueFixedPriceCreation {
-            expected_stage: factory_core::LbpCreationStage::Minted,
-            creator: id(42),
-            now: 0,
-        })
-        .unwrap();
         assert_eq!(
             factory_core::LbpLaunchState::decode(&request.pre_state).err(),
             Some(Error::InvalidState)
@@ -1815,19 +1773,20 @@ fn fixed_price_pending_callbacks_reject_malformed_saved_policies() {
     let mut state =
         factory_core::LbpLaunchState::decode(response.post_state.as_ref().unwrap()).unwrap();
     state.ending_policy = factory_core::EndingPolicy::Manual;
-    let mut next = reply(&input, &response, namespace_state());
+    let setup = Creation::new(&input, &response);
+    let mut next = setup.namespace_reply(&response, namespace_state());
     next.pre_state = borsh::to_vec(&state).unwrap().into();
     assert_eq!(handle(&next).err(), Some(Error::InvalidState));
 }
 
 #[test]
 fn fixed_price_setup_and_allocation_reject_changed_pool_policies() {
-    let (input, prepared) = allowlisted_prepared();
+    let (input, prepared, setup) = allowlisted_prepared();
     let state =
         factory_core::LbpLaunchState::decode(prepared.post_state.as_ref().unwrap()).unwrap();
     for case in 0..2 {
         let (mut next, mut response) = continue_sale(
-            &input,
+            &setup,
             &prepared,
             factory_core::LbpCreationStage::PoolPrepared,
             0,
@@ -2492,27 +2451,23 @@ fn fixed_price_hook_terms_survive_pool_preparation_and_reject_adapter_substituti
         inputs: value.clone(),
     })
     .unwrap();
-    let mut response = handle(&input).unwrap();
-    for bytes in [namespace_state(), collateral()] {
-        input = reply(&input, &response, bytes);
-        response = handle(&input).unwrap();
-    }
+    let (_, response, setup) = mint_from(&input);
     assert_eq!(
         factory_core::LbpLaunchState::decode(response.post_state.as_ref().unwrap())
             .unwrap()
             .graduation_hook,
         value.graduation_hook
     );
-    let (input, allocated) = continue_sale(
-        &input,
+    let (_, allocated) = continue_sale(
+        &setup,
         &response,
         factory_core::LbpCreationStage::Minted,
         1000,
         0,
         0,
     );
-    let (input, prepared) = continue_sale(
-        &input,
+    let (_, prepared) = continue_sale(
+        &setup,
         &allocated,
         factory_core::LbpCreationStage::Allocated,
         0,
@@ -2520,7 +2475,7 @@ fn fixed_price_hook_terms_survive_pool_preparation_and_reject_adapter_substituti
         200,
     );
     let (mut input, mut response) = continue_sale(
-        &input,
+        &setup,
         &prepared,
         factory_core::LbpCreationStage::PoolPrepared,
         0,
@@ -2672,7 +2627,7 @@ fn fixed_created_event_names_the_launch_and_saved_terms_once() {
             }
         )]
     );
-    let (_, minted) = minted();
+    let (_, minted, _) = minted();
     assert!(minted.events.is_empty());
     let mut replay = input;
     replay.pre_state = minted.post_state.unwrap();
@@ -2689,19 +2644,21 @@ fn fixed_price_trade_mode_survives_every_setup_stage_and_rejects_substitution() 
         let mut terms = inputs();
         terms.trade_mode = mode;
         input.message = borsh::to_vec(&Message::CreateFixedPriceLbp { inputs: terms }).unwrap();
-        let mut mint = handle(&input).unwrap();
-        for bytes in [namespace_state(), collateral()] {
+        let initial = handle(&input).unwrap();
+        let setup = Creation::new(&input, &initial);
+        let input = setup.namespace_reply(&initial, namespace_state());
+        let checked = handle(&input).unwrap();
+        let mint = handle(&reply(&input, &checked, collateral())).unwrap();
+        for response in [&initial, &checked, &mint] {
             assert_eq!(
-                factory_core::LbpLaunchState::decode(mint.post_state.as_ref().unwrap())
+                factory_core::LbpLaunchState::decode(response.post_state.as_ref().unwrap())
                     .unwrap()
                     .trade_mode,
                 mode
             );
-            input = reply(&input, &mint, bytes);
-            mint = handle(&input).unwrap();
         }
-        let (input, allocated) = continue_sale(
-            &input,
+        let (_, allocated) = continue_sale(
+            &setup,
             &mint,
             factory_core::LbpCreationStage::Minted,
             1000,
@@ -2714,8 +2671,8 @@ fn fixed_price_trade_mode_survives_every_setup_stage_and_rejects_substitution() 
                 .trade_mode,
             mode
         );
-        let (input, prepared) = continue_sale(
-            &input,
+        let (_, prepared) = continue_sale(
+            &setup,
             &allocated,
             factory_core::LbpCreationStage::Allocated,
             0,
@@ -2741,7 +2698,7 @@ fn fixed_price_trade_mode_survives_every_setup_stage_and_rejects_substitution() 
             factory_core::TradeMode::BuyAndSell,
         ] {
             let (mut input, mut response) = continue_sale(
-                &input,
+                &setup,
                 &prepared,
                 factory_core::LbpCreationStage::PoolPrepared,
                 0,
@@ -2786,19 +2743,21 @@ fn fixed_price_sell_fee_survives_every_setup_stage_and_rejects_substitution() {
         let mut terms = inputs();
         terms.sell_fee_bps = rate;
         input.message = borsh::to_vec(&Message::CreateFixedPriceLbp { inputs: terms }).unwrap();
-        let mut mint = handle(&input).unwrap();
-        for bytes in [namespace_state(), collateral()] {
+        let initial = handle(&input).unwrap();
+        let setup = Creation::new(&input, &initial);
+        let input = setup.namespace_reply(&initial, namespace_state());
+        let checked = handle(&input).unwrap();
+        let mint = handle(&reply(&input, &checked, collateral())).unwrap();
+        for response in [&initial, &checked, &mint] {
             assert_eq!(
-                factory_core::LbpLaunchState::decode(mint.post_state.as_ref().unwrap())
+                factory_core::LbpLaunchState::decode(response.post_state.as_ref().unwrap())
                     .unwrap()
                     .sell_fee_bps,
                 rate
             );
-            input = reply(&input, &mint, bytes);
-            mint = handle(&input).unwrap();
         }
-        let (input, allocated) = continue_sale(
-            &input,
+        let (_, allocated) = continue_sale(
+            &setup,
             &mint,
             factory_core::LbpCreationStage::Minted,
             1000,
@@ -2811,8 +2770,8 @@ fn fixed_price_sell_fee_survives_every_setup_stage_and_rejects_substitution() {
                 .sell_fee_bps,
             rate
         );
-        let (input, prepared) = continue_sale(
-            &input,
+        let (_, prepared) = continue_sale(
+            &setup,
             &allocated,
             factory_core::LbpCreationStage::Allocated,
             0,
@@ -2835,7 +2794,7 @@ fn fixed_price_sell_fee_survives_every_setup_stage_and_rejects_substitution() {
         assert_eq!(inputs.sell_fee_bps, rate);
         for pool_rate in [0, 125, 9999] {
             let (mut input, mut response) = continue_sale(
-                &input,
+                &setup,
                 &prepared,
                 factory_core::LbpCreationStage::PoolPrepared,
                 0,

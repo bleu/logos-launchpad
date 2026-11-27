@@ -16,9 +16,9 @@ Attach immutable sale start and end as inclusion-time bounds. Saved clock time c
 
 Store immutable linear endpoints as normalized integer weights with fixed total `10^18`. Each side must be in `10^16..=99 * 10^16` (1% through 99%). Do not store whole percentages. Math scales remain `2^52` and `2^62` under [ADR 0011](0011-weighted-precision.md); this does not adopt Balancer's power implementation.
 
-Require an explicit scheduled start and a later schedule end. At creation, read canonical clock time and require it to be at or before start. Also require inclusion at or before start. Convert the inclusive millisecond limit to an exclusive upper bound with checked addition. There is no weighted start-now option. Every incomplete setup stage and activation must enter before end, even if saved clock time is stale. Convert with checked arithmetic and intersect response windows; never erase an earlier bound.
+Require an explicit scheduled start and a later schedule end. At creation, read canonical clock time and require it to be at or before start. The creation transaction must enter at or before start and before end. There is no weighted start-now option. Convert the inclusive millisecond start limit to an exclusive upper bound with checked addition. Use checked arithmetic and intersect response windows so added bounds cannot erase earlier bounds.
 
-Factory setup and pool activation use authenticated timestamp replies with inclusive saved-time comparisons. The clock adapter defers setup effects until those comparisons pass. Keep inclusion-time bounds on the resumed response.
+Factory setup and pool activation use authenticated timestamp replies with inclusive saved-time comparisons. The clock adapter defers setup effects until those comparisons pass. Keep the inclusion-time bounds through the clock callbacks in the same transaction.
 
 ### Observer checkpoints
 

@@ -22,7 +22,7 @@ Each buy proves membership and control of the actual approved trader, bound to s
 
 The wallet prefers an unused approved address per attempt. On-chain approval permits repeated and independent concurrent purchases across funding routes when native state permits. There is no spending cap, purchase counter or consumed allowance. Normal balance, inventory, reserve, slippage, fee, direction, pause and ending rules still apply. An approved account can buy all available inventory.
 
-Lock all batch addresses, context and root at initial creation. No setup stage can replace them. No list update or replenishment is supported. Capacity counts addresses, not people. When unused addresses run out, the wallet must report the limit rather than silently reuse or select an unapproved address. Deliberate reuse requires a privacy warning.
+Lock all batch addresses, context and root in the creation transaction. No list update or replenishment is supported. Capacity counts addresses, not people. When unused addresses run out, the wallet must report the limit rather than silently reuse or select an unapproved address. Deliberate reuse requires a privacy warning.
 
 Do not publish the full roster. Used addresses and trade effects are public. The creator can link batch addresses; public reuse links purchases. Fresh addresses do not guarantee unlinkability from amounts, timing or other data. Keep private funding/return IDs private; require no persistent cross-sale participant ID. Account control does not prove human uniqueness or prevent full-key sharing.
 
