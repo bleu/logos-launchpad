@@ -14,8 +14,6 @@ Key successors must consent in the same transaction. A PDA successor requires it
 
 Fee-rate and treasury updates are separate explicit operations. Each preserves the other setting and administrator. Neither transfers administration. See the [namespace contract](../product/namespace-fee-contract.md).
 
-A creator signs one transaction to [create and fund a fresh public sale](0031-shared-launch-factory.md#shared-setup). There is no partial setup to resume. Curve settlement remains resumable across transactions. Each settlement stage rechecks authority and commits atomically with its child calls.
-
 ## Reason and limits
 
 Separate roles prevent namespace administration from granting sale custody rights. Current support uses the [temporary actor development base](0034-lez-v04-migration.md), not an embedded upstream authority library. Source similarity and host checks do not prove signed runtime or PDA-owner integration. See [current execution evidence](../architecture/workspace-guide.md#execution-and-evidence-limits). No deployed state needs migration or backward compatibility.
