@@ -216,6 +216,301 @@ async fn run_configure(
     (code, serde_json::from_slice(&output).unwrap())
 }
 
+async fn run_namespace_write(
+    mut transport: FixtureTransport,
+    command: &str,
+    args: &[&str],
+    successor_key: Option<lee::PrivateKey>,
+) -> (u8, Value) {
+    let program = programs::clock();
+    let program_account = id(7);
+    let home = tempfile::tempdir().unwrap();
+    let path = home.path().join("curve.elf");
+    std::fs::write(&path, program.elf()).unwrap();
+    transport.deploy(program_account, program.id());
+    let (mut wallet, admin) =
+        launchpad_transport::write_wallet(home.path(), transport, WriteTransport::new);
+    if let Some(key) = successor_key {
+        wallet
+            .storage_mut()
+            .key_chain_mut()
+            .add_imported_public_account(key);
+    }
+    let cli = Cli::try_parse_from(
+        [
+            "launchpad",
+            "--namespace",
+            &id(8).to_string(),
+            "--json",
+            command,
+            "--admin",
+            &admin.to_string(),
+            "--curve-program-path",
+            path.to_str().unwrap(),
+            "--curve-program-account",
+            &program_account.to_string(),
+        ]
+        .into_iter()
+        .chain(args.iter().copied()),
+    )
+    .unwrap();
+    let mut output = Vec::new();
+    let code = run_cli(
+        cli,
+        || -> eyre::Result<FixtureTransport> { panic!("namespace writes use the wallet") },
+        || Ok(wallet),
+        &mut output,
+        &mut Vec::new(),
+    )
+    .await
+    .unwrap();
+    (code, serde_json::from_slice(&output).unwrap())
+}
+
+#[tokio::test]
+async fn namespace_info_shows_only_the_selected_namespaces_saved_settings() {
+    let home = tempfile::tempdir().unwrap();
+    let path = home.path().join("curve.elf");
+    std::fs::write(&path, programs::clock().elf()).unwrap();
+    let (namespace, curve, treasury, other_namespace) = (id(8), id(7), id(4), id(9));
+    let mut transport = FixtureTransport::default();
+    let state = borsh::to_vec(&(
+        *b"LZNSCONF",
+        3_u16,
+        namespace,
+        175_u16,
+        treasury,
+        id(6),
+        false,
+    ))
+    .unwrap();
+    for account_namespace in [namespace, other_namespace] {
+        transport.save(
+            Actor::new(
+                curve_core::compute_config_pda(account_namespace, curve),
+                curve,
+            ),
+            state.clone(),
+        );
+    }
+    for selected in [namespace, other_namespace] {
+        let cli = Cli::try_parse_from([
+            "launchpad",
+            "--namespace",
+            &selected.to_string(),
+            "--json",
+            "namespace-info",
+            "--curve-program-path",
+            path.to_str().unwrap(),
+            "--curve-program-account",
+            &curve.to_string(),
+        ])
+        .unwrap();
+        let wallet_home = tempfile::tempdir().unwrap();
+        let (wallet, _) = launchpad_transport::write_wallet(
+            wallet_home.path(),
+            transport.clone(),
+            WriteTransport::new,
+        );
+        let mut output = Vec::new();
+        let code = run_cli(
+            cli,
+            || -> eyre::Result<FixtureTransport> { panic!("namespace-info uses the wallet") },
+            || Ok(wallet),
+            &mut output,
+            &mut Vec::new(),
+        )
+        .await
+        .unwrap();
+        let result: Value = serde_json::from_slice(&output).unwrap();
+        if selected == namespace {
+            assert_eq!(code, 0, "{result}");
+            assert_eq!(
+                result,
+                serde_json::json!({
+                    "namespace": namespace.to_string(),
+                    "protocol_fee_bps": 175,
+                    "treasury": treasury.to_string(),
+                })
+            );
+        } else {
+            assert_eq!(code, 1, "{result}");
+            assert_eq!(result["status"], "error");
+            assert_eq!(result["error"]["category"], "pool_selection_mismatch");
+        }
+    }
+    assert_eq!(transport.sent_count(), 0);
+}
+
+#[tokio::test]
+async fn update_fee_accepts_a_rate_without_a_treasury() {
+    use common::block::TransactionReceipt;
+
+    let hash = common::HashType([25; 32]);
+    let mut transport = FixtureTransport::default();
+    transport.acknowledge(hash, Some(TransactionReceipt::EXEMPT));
+    let (code, result) = run_namespace_write(
+        transport,
+        "update-fee",
+        &["--protocol-fee-bps", "125"],
+        None,
+    )
+    .await;
+
+    assert_eq!(code, 0, "{result}");
+    assert_eq!(result["status"], "executed");
+    assert_eq!(result["transaction_hash"], hex::encode(hash));
+}
+
+#[tokio::test]
+async fn update_treasury_accepts_an_account_without_a_fee_rate() {
+    use common::block::TransactionReceipt;
+
+    let hash = common::HashType([26; 32]);
+    let mut transport = FixtureTransport::default();
+    transport.acknowledge(hash, Some(TransactionReceipt::EXEMPT));
+    let (code, result) = run_namespace_write(
+        transport,
+        "update-treasury",
+        &["--treasury", &id(4).to_string()],
+        None,
+    )
+    .await;
+
+    assert_eq!(code, 0, "{result}");
+    assert_eq!(result["status"], "executed");
+    assert_eq!(result["transaction_hash"], hex::encode(hash));
+}
+
+#[tokio::test(start_paused = true)]
+async fn transfer_admin_names_the_successor_only_after_execution() {
+    use common::block::TransactionReceipt;
+
+    let hash = common::HashType([27; 32]);
+    let reverted = TransactionReceipt {
+        success: false,
+        ..TransactionReceipt::EXEMPT
+    };
+    for (receipt, status, exit) in [
+        (None, "pending", 3),
+        (Some(reverted), "reverted", 1),
+        (Some(TransactionReceipt::EXEMPT), "executed", 0),
+    ] {
+        let mut transport = FixtureTransport::default();
+        transport.acknowledge(hash, receipt);
+        let key = lee::PrivateKey::try_new([2; 32]).unwrap();
+        let new_admin = AccountId::from(&lee::PublicKey::new_from_private_key(&key)).to_string();
+        let (code, result) = run_namespace_write(
+            transport.clone(),
+            "transfer-admin",
+            &["--new-admin", &new_admin],
+            Some(key),
+        )
+        .await;
+
+        assert_eq!(code, exit, "{result}");
+        assert_eq!(result["status"], status);
+        assert_eq!(result["transaction_hash"], hex::encode(hash));
+        if exit == 0 {
+            assert_eq!(result["authority_holders"], serde_json::json!([new_admin]));
+        } else {
+            assert!(result.get("authority_holders").is_none(), "{result}");
+        }
+        assert_eq!(transport.sent_count(), 1);
+    }
+}
+
+#[tokio::test]
+async fn transfer_admin_without_the_successor_key_sends_nothing() {
+    let transport = FixtureTransport::default();
+    let (code, result) = run_namespace_write(
+        transport.clone(),
+        "transfer-admin",
+        &["--new-admin", &id(9).to_string()],
+        None,
+    )
+    .await;
+
+    assert_eq!(code, 1, "{result}");
+    assert_eq!(result["status"], "preparation_failed");
+    assert_eq!(result["submission"], "not_sent");
+    assert_eq!(
+        result["error"]["category"],
+        "public_signing_key_unavailable"
+    );
+    assert_eq!(transport.sent_count(), 0);
+}
+
+#[tokio::test]
+async fn renounce_admin_requires_confirmation_before_opening_the_wallet() {
+    let home = tempfile::tempdir().unwrap();
+    let missing = home.path().join("missing.elf");
+    let cli = Cli::try_parse_from([
+        "launchpad",
+        "--namespace",
+        &id(8).to_string(),
+        "--json",
+        "renounce-admin",
+        "--admin",
+        &id(1).to_string(),
+        "--curve-program-path",
+        missing.to_str().unwrap(),
+        "--curve-program-account",
+        &id(7).to_string(),
+    ])
+    .unwrap();
+    let mut output = Vec::new();
+    let code = run_cli(
+        cli,
+        || -> eyre::Result<FixtureTransport> { panic!("must not connect without confirmation") },
+        || -> eyre::Result<PublicWriteWallet<FixtureTransport>> {
+            panic!("must not open a wallet without confirmation")
+        },
+        &mut output,
+        &mut Vec::new(),
+    )
+    .await
+    .unwrap();
+
+    let result: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(code, 1, "{result}");
+    assert_eq!(result["status"], "preparation_failed");
+    assert_eq!(result["submission"], "not_sent");
+    let message = result["error"]["message"].as_str().unwrap();
+    assert!(message.contains("permanently"), "{message}");
+    assert!(message.contains("--confirm-renounce"), "{message}");
+}
+
+#[tokio::test]
+async fn confirmed_renunciation_reports_the_execution_result_on_each_call() {
+    use common::{HashType, block::TransactionReceipt};
+
+    let mut transport = FixtureTransport::default();
+    let reverted = TransactionReceipt {
+        success: false,
+        ..TransactionReceipt::EXEMPT
+    };
+    for (index, receipt, status, exit) in [
+        (28, TransactionReceipt::EXEMPT, "executed", 0),
+        (29, reverted, "reverted", 1),
+    ] {
+        let hash = HashType([index; 32]);
+        transport.acknowledge(hash, Some(receipt));
+        let (code, result) = run_namespace_write(
+            transport.clone(),
+            "renounce-admin",
+            &["--confirm-renounce"],
+            None,
+        )
+        .await;
+
+        assert_eq!(code, exit, "{result}");
+        assert_eq!(result["status"], status);
+        assert_eq!(result["transaction_hash"], hex::encode(hash));
+    }
+    assert_eq!(transport.sent_count(), 2);
+}
+
 #[tokio::test(start_paused = true)]
 async fn collect_fees_stops_on_pending_and_reports_the_executed_step() {
     use common::{HashType, block::TransactionReceipt};
