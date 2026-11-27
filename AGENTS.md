@@ -6,6 +6,8 @@ Read [CONTEXT.md](CONTEXT.md) and the relevant [ADRs](docs/adr/README.md) before
 
 Keep pricing-engine state, custody and lifecycle code separate. Share helpers only where behavior matches. Weighted math is an independent, unaudited package. GUI and CLI code must not copy protocol logic. Do not replace working code with scaffolding.
 
+Review hand-written files when they reach 1,000 lines. Split code that changes for different reasons. Name each module for what it does. Keep its interface small and test through that interface. Preserve public interfaces, wire formats and behavior during a file split. Keep checks and state changes together when a split would make their order harder to follow.
+
 Preserve third-party licenses and copyright notices. Do not copy private tracker metadata into public docs or source comments.
 
 ## Documentation and comments
