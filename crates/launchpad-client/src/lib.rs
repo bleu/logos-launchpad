@@ -492,6 +492,19 @@ fn admit_factory_accounts<I>(
     call
 }
 
+/// Bind an existing allowlist root to the canonical curve pool for this sale.
+pub fn curve_buy_policy(sale: FactorySale, allowlist_root: Option<[u8; 32]>) -> BuyPolicy {
+    match allowlist_root {
+        Some(root) => BuyPolicy::Allowlist(AllowlistPolicy {
+            version: 1,
+            namespace: *sale.namespace.value(),
+            sale_policy_id: *factory_pool_addresses(sale).pool.value(),
+            root,
+        }),
+        None => BuyPolicy::Open,
+    }
+}
+
 pub fn build_create_sale_invocation(
     sale: FactorySale,
     creator: AccountId,
@@ -515,6 +528,10 @@ pub fn build_create_sale_invocation(
         .validate(request.graduation_hook.is_some())
         .map_err(|_| ClientError::FactoryPolicy(factory_core::Error::InvalidTerms))?;
     let a = factory_pool_addresses(sale);
+    request
+        .buy_policy
+        .validate_binding(sale.namespace.value(), a.pool.value())
+        .map_err(|_| ClientError::FactoryPolicy(factory_core::Error::InvalidTerms))?;
     Ok(admit_factory_accounts(
         invocation(
             Actor::new(a.factory, sale.factory_program_id),

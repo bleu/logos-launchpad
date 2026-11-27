@@ -10,6 +10,7 @@ pub(super) struct WriteSuccess {
     hashes: Vec<HashType>,
     launch_salt: Option<[u8; 32]>,
     authority_holders: Vec<AccountId>,
+    creation_verified: bool,
 }
 
 impl WriteSuccess {
@@ -18,6 +19,7 @@ impl WriteSuccess {
             hashes,
             launch_salt: None,
             authority_holders: Vec::new(),
+            creation_verified: false,
         }
     }
 
@@ -37,9 +39,16 @@ impl WriteSuccess {
 
     pub(super) fn lifecycle(receipt: LifecycleReceipt, launch_salt: [u8; 32]) -> Self {
         Self {
-            hashes: receipt.transaction_hashes,
             launch_salt: Some(launch_salt),
             authority_holders: receipt.authority_holders,
+            ..Self::new(receipt.transaction_hashes)
+        }
+    }
+
+    pub(super) fn creation(receipt: LifecycleReceipt, launch_salt: [u8; 32]) -> Self {
+        Self {
+            creation_verified: true,
+            ..Self::lifecycle(receipt, launch_salt)
         }
     }
 
@@ -57,7 +66,7 @@ impl WriteSuccess {
             ("executed", "acknowledged")
         };
         if json_output {
-            let view = json!({
+            let mut view = json!({
                 "status": status,
                 "submission": submission,
                 "transaction_hash": hashes.last(),
@@ -65,11 +74,18 @@ impl WriteSuccess {
                 "launch_salt": salt,
                 "authority_holders": holders,
             });
+            if self.creation_verified {
+                view["setup_stage"] = json!("active");
+                view["funded"] = json!(true);
+            }
             return writeln!(output, "{view}");
         }
         write!(output, "{status}: submission={submission}")?;
         if let Some(salt) = salt {
             write!(output, " launch_salt={salt}")?;
+        }
+        if self.creation_verified {
+            write!(output, " setup_stage=active funded=true")?;
         }
         writeln!(output)?;
         for (index, hash) in hashes.iter().enumerate() {

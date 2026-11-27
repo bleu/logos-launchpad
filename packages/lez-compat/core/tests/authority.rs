@@ -388,14 +388,17 @@ fn resolve(state: ActorState) -> ReceiveInput {
 #[test]
 fn unsigned_resolution_returns_the_current_holder_to_the_calling_actor() {
     let expected = Actor::new(ROLE, PROGRAM);
+    let initial = bootstrap();
+    assert_eq!(authority::current_holder(&initial), Ok(ALICE));
     assert_eq!(
-        authority::verify_resolved(&resolve(bootstrap()), expected),
+        authority::verify_resolved(&resolve(initial), expected),
         Ok(ALICE)
     );
     let transferred = transfer_with_consent(bootstrap_with(Message::BootstrapTransferOnly {
         authority: ALICE,
     }));
     let bob = AccountId::new([3; 32]);
+    assert_eq!(authority::current_holder(&transferred), Ok(bob));
     assert_eq!(
         authority::verify_resolved(&resolve(transferred), expected),
         Ok(bob)
@@ -484,6 +487,14 @@ fn resolution_requires_a_caller_and_valid_role_state() {
         authority::handle(&malformed),
         Err(lez_compat_core::Error::InvalidState)
     ));
+    let mut trailing = bootstrap().into_inner();
+    trailing.push(0);
+    for malformed in [Vec::new(), trailing] {
+        assert_eq!(
+            authority::current_holder(&malformed),
+            Err(lez_compat_core::Error::InvalidState)
+        );
+    }
     let creation = input(
         ROLE,
         ActorState::empty(),
@@ -491,6 +502,10 @@ fn resolution_requires_a_caller_and_valid_role_state() {
         Message::Bootstrap { authority: ALICE },
     );
     let pending = authority::handle(&creation).unwrap().post_state.unwrap();
+    assert_eq!(
+        authority::current_holder(&pending),
+        Err(lez_compat_core::Error::Renounced)
+    );
     let request = ReceiveInput {
         pre_state: pending,
         ..malformed
@@ -520,6 +535,10 @@ fn a_renounced_role_cannot_resolve_a_holder() {
     .unwrap()
     .post_state
     .unwrap();
+    assert_eq!(
+        authority::current_holder(&state),
+        Err(lez_compat_core::Error::Renounced)
+    );
     let request = ReceiveInput {
         from: Some(Actor::new(ALICE, PROGRAM)),
         ..input(ROLE, state, false, Message::Resolve)

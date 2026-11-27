@@ -93,43 +93,66 @@ impl<'a, C: WalletSequencerClient> FactorySession<'a, C> {
         Ok(())
     }
 
-    /// Create and verify a funded sale. A matching active sale is a no-op.
+    /// Create and verify a funded sale. A matching sale is a no-op for its current creator.
     pub async fn create_sale(
         &self,
         sale: FactorySale,
         request: CreateSaleRequest,
     ) -> Result<LifecycleReceipt> {
-        let mut receipt = LifecycleReceipt::default();
-        let result = self.create_once(sale, request, &mut receipt).await;
-        finish(result, receipt)
+        let AccountLocation::Public(creator) = self.authority else {
+            return Err(ClientError::UnsupportedPrivateAuthority);
+        };
+        if let Some(state) = self.state(sale).await? {
+            validate_completed_creation(sale, &request, &state)?;
+            self.validate_creator(state.creator_role_id, creator)
+                .await?;
+            return Ok(LifecycleReceipt::default());
+        }
+
+        let call = build_create_sale_invocation(sale, creator, request.clone())?;
+        let hash = submit_public_invocation(self.wallet, self.factory, call).await?;
+        self.verify_creation(sale, &request)
+            .await
+            .map_err(|source| ClientError::CreationVerificationFailed {
+                hash,
+                source: Box::new(source),
+            })?;
+        Ok(LifecycleReceipt {
+            transaction_hashes: vec![hash],
+            authority_holders: vec![creator],
+        })
     }
 
-    async fn create_once(
-        &self,
-        sale: FactorySale,
-        request: CreateSaleRequest,
-        receipt: &mut LifecycleReceipt,
-    ) -> Result<()> {
-        self.validate_sale(sale)?;
-        if self.authority.is_private() {
-            return Err(ClientError::UnsupportedPrivateAuthority);
+    async fn validate_creator(&self, role: AccountId, creator: AccountId) -> Result<()> {
+        let account = self
+            .wallet
+            .get_account_public(role)
+            .await
+            .map_err(|source| ClientError::ReadCreatorRole(source.into_boxed_dyn_error()))?
+            .ok_or(ClientError::CreatorRoleMissing)?;
+        let state = account
+            .data
+            .actor_state(curve_core::AUTHORITY_PROGRAM_ACCOUNT_ID);
+        if state.is_empty() {
+            return Err(ClientError::CreatorRoleMissing);
         }
-        let state = self.state(sale).await?;
-        let Some(call) = next_creation_invocation(
-            sale,
-            self.authority.account_id(),
-            request.clone(),
-            state.as_ref(),
-        )?
-        else {
-            return Ok(());
-        };
-        self.submit(|_| Ok(call), receipt).await?;
+        let holder = lez_compat_core::authority::current_holder(state.as_ref())
+            .map_err(ClientError::DecodeCreatorRole)?;
+        if holder != creator {
+            return Err(ClientError::CreatorAuthorityMismatch);
+        }
+        self.wallet
+            .get_account_public_signing_key(creator)
+            .ok_or(ClientError::PublicSigningKeyUnavailable(creator))?;
+        Ok(())
+    }
+
+    async fn verify_creation(&self, sale: FactorySale, request: &CreateSaleRequest) -> Result<()> {
         let state = self
             .state(sale)
             .await?
             .ok_or(ClientError::CreationIncomplete)?;
-        validate_completed_creation(sale, &request, &state)
+        validate_completed_creation(sale, request, &state)
     }
 
     /// Resume the exact withdrawal and payout sequence without paying a stage twice.

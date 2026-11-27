@@ -1,6 +1,11 @@
+use std::path::Path;
+
 use clap::Parser;
-use factory_core::{CreationStage, GraduationPolicy, SettlementStage, TradeMode};
-use launchpad_client::{BuyPolicy, EndingPolicy, PausePolicy, PublicWriteWallet, WriteTransport};
+use common::{HashType, block::TransactionReceipt};
+use factory_core::{CreationStage, FactoryState, GraduationPolicy, SettlementStage, TradeMode};
+use launchpad_client::{
+    BuyPolicy, EndingPolicy, FactorySale, PausePolicy, PublicWriteWallet, WriteTransport,
+};
 use lee::AccountId;
 use lee_core::account::Actor;
 use serde_json::Value;
@@ -660,50 +665,20 @@ async fn collect_fees_stops_on_pending_and_reports_the_executed_step() {
 
 #[tokio::test]
 async fn completed_withdrawal_reports_no_new_execution() {
-    use wallet::WalletSequencerClient;
-
-    let (namespace, factory, curve, collateral) = (id(1), id(2), id(3), id(4));
-    let factory_account = factory_core::compute_factory_pda(namespace, factory, SALT);
-    let actor = Actor::new(factory_account, factory);
-    let mut transport = curve_transport();
-    let account = transport.get_account_view(actor).await.unwrap().unwrap();
-    let mut state =
-        factory_core::FactoryState::decode(account.data.actor_state(factory).as_ref()).unwrap();
+    let sale = curve_sale();
+    let factory_account =
+        factory_core::compute_factory_pda(sale.namespace, sale.factory_program_id, SALT);
+    let actor = Actor::new(factory_account, sale.factory_program_id);
+    let mut transport = FixtureTransport::default();
+    let mut state = curve_state(sale);
     state.creation_stage = CreationStage::Active;
     state.settlement_stage = SettlementStage::Complete;
     transport.save(actor, borsh::to_vec(&state).unwrap());
-    let pool = curve_core::PoolAccount {
-        buy_policy: BuyPolicy::Open,
-        trade_control: curve_core::TradeControl::Unrestricted,
-        allowed_input_token: None,
-        funded: true,
-        closure_observed: true,
-        namespace,
-        token0_definition_id: state.token_definition_id,
-        token1_definition_id: collateral,
-        owner: factory_account,
-        owner_program: Some((
-            factory,
-            *factory_core::compute_factory_seed(namespace, SALT).as_bytes(),
-        )),
-        pool: pool::Pool {
-            lifecycle: pool::PoolLifecycle::Withdrawn,
-            ..pool::Pool::create(pool::PoolCreateParams {
-                token0_amount: 800,
-                token1_amount: 0,
-                virtual_reserve0: 2_000,
-                virtual_reserve1: 100,
-                ending_policy: EndingPolicy::Depletion,
-                sell_fee_bps: 0,
-                close_timestamp: None,
-                close_on_depletion: Some(pool::TokenSide::Token0),
-            })
-            .unwrap()
-        },
-        block_allocation: Default::default(),
-    };
+    let mut pool = funded_curve_pool(&state, actor);
+    pool.closure_observed = true;
+    pool.pool.lifecycle = pool::PoolLifecycle::Withdrawn;
     transport.save(
-        Actor::new(state.pool_id, curve),
+        Actor::new(state.pool_id, sale.curve_program_id),
         borsh::to_vec(&pool).unwrap(),
     );
     let home = tempfile::tempdir().unwrap();
@@ -711,28 +686,7 @@ async fn completed_withdrawal_reports_no_new_execution() {
     std::fs::write(&path, programs::clock().elf()).unwrap();
     let (wallet, signer) =
         launchpad_transport::write_wallet(home.path(), transport.clone(), WriteTransport::new);
-    let cli = Cli::try_parse_from([
-        "launchpad",
-        "--namespace",
-        &namespace.to_string(),
-        "--json",
-        "withdraw",
-        "--launch-salt",
-        &hex::encode(SALT),
-        "--creator",
-        &signer.to_string(),
-        "--collateral-definition",
-        &collateral.to_string(),
-        "--curve-program-path",
-        path.to_str().unwrap(),
-        "--curve-program-account",
-        &curve.to_string(),
-        "--factory-program-path",
-        path.to_str().unwrap(),
-        "--factory-program-account",
-        &factory.to_string(),
-    ])
-    .unwrap();
+    let cli = Cli::try_parse_from(curve_write_args("withdraw", &path, signer)).unwrap();
     let mut output = Vec::new();
     let code = run_cli(
         cli,
@@ -748,6 +702,8 @@ async fn completed_withdrawal_reports_no_new_execution() {
     assert_eq!(result["status"], "no_change");
     assert_eq!(result["submission"], "not_sent");
     assert!(result["transaction_hash"].is_null());
+    assert!(result.get("setup_stage").is_none());
+    assert!(result.get("funded").is_none());
     assert_eq!(transport.sent_count(), 0);
 }
 
@@ -778,10 +734,96 @@ fn sale_args(engine: &str) -> Vec<String> {
     .into()
 }
 
-fn curve_transport() -> FixtureTransport {
-    let (namespace, factory_program, curve_program, collateral) = (id(1), id(2), id(3), id(4));
-    let factory = factory_core::compute_factory_pda(namespace, factory_program, SALT);
-    let definition = factory_core::compute_definition_pda(namespace, factory_program, SALT);
+fn curve_write_args(command: &str, path: &Path, creator: AccountId) -> Vec<String> {
+    let sale = curve_sale();
+    let path = path.to_str().unwrap();
+    [
+        "launchpad",
+        "--json",
+        command,
+        "--namespace",
+        &sale.namespace.to_string(),
+        "--launch-salt",
+        &hex::encode(sale.launch_salt),
+        "--creator",
+        &creator.to_string(),
+        "--collateral-definition",
+        &sale.collateral_definition.to_string(),
+        "--factory-program-path",
+        path,
+        "--factory-program-account",
+        &sale.factory_program_id.to_string(),
+        "--curve-program-path",
+        path,
+        "--curve-program-account",
+        &sale.curve_program_id.to_string(),
+    ]
+    .map(str::to_owned)
+    .into()
+}
+
+fn create_sale_args(path: &Path, creator: AccountId, root: Option<&str>) -> Vec<String> {
+    let mut args = curve_write_args("create-sale", path, creator);
+    args.extend(
+        [
+            "--trade-mode",
+            "buy-and-sell",
+            "--name",
+            "Fixture",
+            "--uri",
+            "ipfs://fixture",
+            "--sale-reserve",
+            "800",
+            "--creator-allocation",
+            "50",
+            "--virtual-token-reserve",
+            "2000",
+            "--virtual-collateral-reserve",
+            "100",
+        ]
+        .map(str::to_owned),
+    );
+    if let Some(root) = root {
+        args.extend(["--allowlist-root".into(), root.into()]);
+    }
+    args
+}
+
+#[test]
+fn create_sale_requires_exactly_64_hex_characters_for_an_allowlist_root() {
+    for root in ["a".repeat(63), "a".repeat(66), "g".repeat(64)] {
+        let error = Cli::try_parse_from(create_sale_args(
+            Path::new("unused.elf"),
+            id(8),
+            Some(&root),
+        ))
+        .unwrap_err();
+        assert_eq!(error.kind(), clap::error::ErrorKind::ValueValidation);
+        assert_eq!(error.exit_code(), 2);
+        assert!(error.to_string().contains("--allowlist-root"));
+    }
+}
+
+fn curve_sale() -> FactorySale {
+    FactorySale {
+        namespace: id(1),
+        factory_program_id: id(2),
+        curve_program_id: id(3),
+        launch_salt: SALT,
+        collateral_definition: id(4),
+    }
+}
+
+fn curve_state(sale: FactorySale) -> FactoryState {
+    let FactorySale {
+        namespace,
+        factory_program_id: factory_program,
+        curve_program_id: curve_program,
+        launch_salt,
+        collateral_definition: collateral,
+    } = sale;
+    let factory = factory_core::compute_factory_pda(namespace, factory_program, launch_salt);
+    let definition = factory_core::compute_definition_pda(namespace, factory_program, launch_salt);
     let bytes = borsh::to_vec(&(
         (
             BuyPolicy::Open,
@@ -797,7 +839,7 @@ fn curve_transport() -> FixtureTransport {
         ),
         (
             namespace,
-            SALT,
+            launch_salt,
             definition,
             collateral,
             800_u128,
@@ -810,19 +852,219 @@ fn curve_transport() -> FixtureTransport {
         ),
         (
             curve_program,
-            factory_core::compute_curve_creator_role_pda(namespace, factory_program, SALT),
+            factory_core::compute_curve_creator_role_pda(namespace, factory_program, launch_salt),
             "Fixture",
             "ipfs://fixture",
-            factory_core::compute_escrow_pda(namespace, factory_program, SALT),
+            factory_core::compute_escrow_pda(namespace, factory_program, launch_salt),
             curve_core::compute_pool_pda(namespace, curve_program, definition, collateral, factory),
             false,
             None::<u8>,
         ),
     ))
     .unwrap();
+    FactoryState::decode(&bytes).unwrap()
+}
+
+fn curve_transport() -> FixtureTransport {
+    let sale = curve_sale();
+    let factory = factory_core::compute_factory_pda(sale.namespace, sale.factory_program_id, SALT);
     let mut transport = FixtureTransport::default();
-    transport.save(Actor::new(factory, factory_program), bytes);
+    transport.save(
+        Actor::new(factory, sale.factory_program_id),
+        borsh::to_vec(&curve_state(sale)).unwrap(),
+    );
     transport
+}
+
+fn funded_curve_pool(state: &FactoryState, factory: Actor) -> curve_core::PoolAccount {
+    curve_core::PoolAccount {
+        buy_policy: state.buy_policy.clone(),
+        trade_control: curve_core::TradeControl::Unrestricted,
+        allowed_input_token: None,
+        funded: true,
+        closure_observed: false,
+        namespace: state.namespace,
+        token0_definition_id: state.token_definition_id,
+        token1_definition_id: state.collateral_definition_id,
+        owner: factory.account_id,
+        owner_program: Some((
+            factory.program_account_id,
+            *factory_core::compute_factory_seed(state.namespace, state.launch_salt).as_bytes(),
+        )),
+        pool: pool::Pool::create(pool::PoolCreateParams {
+            token0_amount: state.sale_reserve,
+            token1_amount: 0,
+            virtual_reserve0: state.virtual_token_reserve,
+            virtual_reserve1: state.virtual_collateral_reserve,
+            ending_policy: state.ending_policy,
+            sell_fee_bps: state.sell_fee_bps,
+            close_timestamp: state.end_timestamp,
+            close_on_depletion: Some(pool::TokenSide::Token0),
+        })
+        .unwrap(),
+        block_allocation: Default::default(),
+    }
+}
+
+async fn run_create_sale(
+    mut transport: FixtureTransport,
+    root: Option<&str>,
+    after_open: impl FnOnce(&mut FixtureTransport, AccountId),
+) -> (u8, Value) {
+    let program = programs::clock();
+    let sale = curve_sale();
+    let home = tempfile::tempdir().unwrap();
+    let path = home.path().join("guest.elf");
+    std::fs::write(&path, program.elf()).unwrap();
+    transport.deploy(sale.factory_program_id, program.id());
+    let (wallet, signer) =
+        launchpad_transport::write_wallet(home.path(), transport.clone(), WriteTransport::new);
+    after_open(&mut transport, signer);
+    let cli = Cli::try_parse_from(create_sale_args(&path, signer, root)).unwrap();
+    let mut output = Vec::new();
+    let mut errors = Vec::new();
+    let code = run_cli(
+        cli,
+        || -> eyre::Result<FixtureTransport> { panic!("create-sale uses the wallet") },
+        || Ok(wallet),
+        &mut output,
+        &mut errors,
+    )
+    .await
+    .unwrap();
+    assert!(errors.is_empty());
+    (code, serde_json::from_slice(&output).unwrap())
+}
+
+#[tokio::test]
+async fn create_sale_exposes_funded_state_and_only_retries_the_same_allowlist() {
+    use wallet::WalletSequencerClient;
+
+    let sale = curve_sale();
+    let root = [0xab; 32];
+    let root_arg = hex::encode_upper(root);
+    let hash = HashType([33; 32]);
+    let mut transport = FixtureTransport::default();
+    transport.acknowledge(hash, Some(TransactionReceipt::EXEMPT));
+    let (code, result) =
+        run_create_sale(transport.clone(), Some(&root_arg), |transport, signer| {
+            let factory = Actor::new(
+                factory_core::compute_factory_pda(sale.namespace, sale.factory_program_id, SALT),
+                sale.factory_program_id,
+            );
+            let mut state = curve_state(sale);
+            state.buy_policy = launchpad_client::curve_buy_policy(sale, Some(root));
+            state.creation_stage = CreationStage::Active;
+            let role = Actor::new(
+                state.creator_role_id,
+                curve_core::AUTHORITY_PROGRAM_ACCOUNT_ID,
+            );
+            for (actor, bytes) in [
+                (factory, borsh::to_vec(&state).unwrap()),
+                (
+                    Actor::new(state.pool_id, sale.curve_program_id),
+                    borsh::to_vec(&funded_curve_pool(&state, factory)).unwrap(),
+                ),
+                (
+                    role,
+                    launchpad_transport::creator_role_state(role, factory, signer),
+                ),
+            ] {
+                transport.save_after_receipt(hash, actor, bytes);
+            }
+        })
+        .await;
+    assert_eq!(code, 0, "{result}");
+    assert_eq!(result["status"], "executed");
+    assert_eq!(result["submission"], "acknowledged");
+    assert_eq!(result["transaction_hash"], hex::encode(hash));
+    assert_eq!(
+        result["executed_transaction_hashes"],
+        serde_json::json!([hex::encode(hash)])
+    );
+    assert_eq!(result["launch_salt"], hex::encode(SALT));
+    assert_eq!(result["setup_stage"], "active");
+    assert_eq!(result["funded"], true);
+    assert_eq!(transport.sent_count(), 1);
+
+    let (tx, _) = transport.get_transaction(hash).await.unwrap().unwrap();
+    let (_, message) = tx.public_call().unwrap();
+    assert!(matches!(
+        borsh::from_slice(message).unwrap(),
+        factory_core::Message::CreateFactoryPool { buy_policy: BuyPolicy::Allowlist(policy), .. }
+            if policy.root == root
+    ));
+
+    let cli = Cli::try_parse_from(sale_args("bonding-curve")).unwrap();
+    let mut output = Vec::new();
+    let code = run_command(cli, || Ok(transport.clone()), &mut output, &mut Vec::new())
+        .await
+        .unwrap();
+    let result: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(code, 0, "{result}");
+    assert_eq!(result["setup_stage"], "active");
+    assert_eq!(
+        result["terms"]["buy_policy"]["Allowlist"]["root"],
+        serde_json::json!(root)
+    );
+    assert_eq!(result["pool_observation"]["funded"], true);
+
+    let (code, result) = run_create_sale(transport.clone(), Some(&root_arg), |_, _| {}).await;
+    assert_eq!(code, 0, "{result}");
+    assert_eq!(result["status"], "no_change");
+    assert_eq!(result["submission"], "not_sent");
+    assert!(result["transaction_hash"].is_null());
+    assert_eq!(result["executed_transaction_hashes"], serde_json::json!([]));
+    assert_eq!(result["setup_stage"], "active");
+    assert_eq!(result["funded"], true);
+    assert_eq!(transport.sent_count(), 1);
+
+    let other_root = hex::encode([0xcd; 32]);
+    for root in [Some(other_root.as_str()), None] {
+        let (code, result) = run_create_sale(transport.clone(), root, |_, _| {}).await;
+        assert_eq!(code, 1, "{result}");
+        assert_eq!(result["status"], "preparation_failed");
+        assert_eq!(result["submission"], "not_sent");
+        assert_eq!(result["error"]["category"], "launch_parameters_mismatch");
+        assert_eq!(transport.sent_count(), 1);
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn create_sale_preserves_the_acknowledged_hash_without_verified_state() {
+    let hash = HashType([34; 32]);
+    for (receipt, status, exit) in [
+        (None, "pending", 3),
+        (
+            Some(TransactionReceipt {
+                success: false,
+                ..TransactionReceipt::EXEMPT
+            }),
+            "reverted",
+            1,
+        ),
+        (Some(TransactionReceipt::EXEMPT), "verification_failed", 1),
+    ] {
+        let mut transport = FixtureTransport::default();
+        transport.acknowledge(hash, receipt);
+        let (code, result) = run_create_sale(transport.clone(), None, |_, _| {}).await;
+        assert_eq!(code, exit, "{result}");
+        assert_eq!(result["status"], status);
+        assert_eq!(result["submission"], "acknowledged");
+        assert_eq!(result["transaction_hash"], hex::encode(hash));
+        assert!(result.get("setup_stage").is_none());
+        assert!(result.get("funded").is_none());
+        if status == "verification_failed" {
+            assert_eq!(result["error"]["category"], "creation_verification_failed");
+            assert_eq!(
+                result["executed_transaction_hashes"],
+                serde_json::json!([hex::encode(hash)])
+            );
+        } else {
+            assert_eq!(result["executed_transaction_hashes"], serde_json::json!([]));
+        }
+        assert_eq!(transport.sent_count(), 1);
+    }
 }
 
 #[tokio::test]

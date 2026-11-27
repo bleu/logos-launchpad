@@ -160,7 +160,7 @@ impl Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Create a factory-owned launch and its neutral curve pool.
+    /// Create and fund a factory bonding-curve sale.
     #[command(alias = "launch")]
     CreateSale(CreateSaleArgs),
     Withdraw(FactoryLifecycleArgs),
@@ -364,6 +364,9 @@ impl From<EndingPolicyArg> for launchpad_client::EndingPolicy {
 struct CreateSaleArgs {
     #[arg(long, value_enum)]
     trade_mode: TradeModeArg,
+    /// Optional sale allowlist root (64 hexadecimal characters).
+    #[arg(long, value_parser = parse_allowlist_root)]
+    allowlist_root: Option<[u8; 32]>,
     /// Collateral retained by the sale on sells, in basis points.
     #[arg(long, default_value_t = 0, value_parser = clap::value_parser!(u16).range(0..10_000))]
     sell_fee_bps: u16,
@@ -436,8 +439,19 @@ struct CreateSaleArgs {
 }
 
 impl CreateSaleArgs {
-    fn prepared_sale_request(&self, namespace: lee::AccountId) -> Result<CreateSaleRequest> {
+    fn sale(&self, namespace: lee::AccountId) -> FactorySale {
+        FactorySale {
+            namespace,
+            factory_program_id: self.factory_program_account,
+            curve_program_id: self.curve_program_account,
+            launch_salt: self.launch.launch_salt,
+            collateral_definition: self.collateral_definition.account_id(),
+        }
+    }
+
+    fn prepared_sale_request(&self, sale: FactorySale) -> Result<CreateSaleRequest> {
         let mut request = self.sale_request();
+        request.buy_policy = launchpad_client::curve_buy_policy(sale, self.allowlist_root);
         request.total_supply()?;
         if let Some(file) = &self.distribution_configuration {
             let configuration = read_distribution_configuration(file)?;
@@ -446,9 +460,9 @@ impl CreateSaleArgs {
                 self.graduation_hook_program_id.ok_or_else(|| {
                     eyre::eyre!("distribution requires --graduation-hook-program-id")
                 })?,
-                self.factory_program_account,
-                namespace,
-                self.launch.launch_salt,
+                sale.factory_program_id,
+                sale.namespace,
+                sale.launch_salt,
             )?);
         }
         Ok(request)
@@ -746,6 +760,13 @@ fn parse_hook_configuration(raw: &str) -> Result<HookConfiguration, String> {
         .map_err(|_| "hook configuration must be hexadecimal bytes".to_owned())
 }
 
+fn parse_allowlist_root(raw: &str) -> Result<[u8; 32], String> {
+    let mut root = [0; 32];
+    hex::decode_to_slice(raw, &mut root)
+        .map_err(|_| "allowlist root must contain exactly 64 hexadecimal characters".to_owned())?;
+    Ok(root)
+}
+
 fn parse_launch_salt(raw: &str) -> Result<[u8; 32], String> {
     let bytes = hex::decode(raw).map_err(|_| "launch salt must be hexadecimal".to_owned())?;
     bytes
@@ -852,6 +873,9 @@ async fn run_command<R: WalletSequencerClient, C: WalletSequencerClient>(
                     executed_hashes,
                     source,
                 }) => (Some(source.as_ref()), executed_hashes.as_slice()),
+                Some(source @ ClientError::CreationVerificationFailed { hash, .. }) => {
+                    (Some(source), std::slice::from_ref(hash))
+                }
                 source => (source, &[][..]),
             };
             let write_failure = match source {
@@ -865,6 +889,9 @@ async fn run_command<R: WalletSequencerClient, C: WalletSequencerClient>(
                 }
                 Some(ClientError::PublicWriteReverted { hash }) => {
                     Some(("reverted", "acknowledged", Some(*hash), 1))
+                }
+                Some(ClientError::CreationVerificationFailed { hash, .. }) => {
+                    Some(("verification_failed", "acknowledged", Some(*hash), 1))
                 }
                 Some(ClientError::PublicWriteRejected(_)) => {
                     Some(("rejected", "not_sent", None, 1))
@@ -1552,17 +1579,11 @@ async fn create_sale<C: WalletSequencerClient>(
     router: Option<&Path>,
     open_wallet: impl FnOnce() -> Result<PublicWriteWallet<C>>,
 ) -> Result<WriteSuccess> {
-    let request = args.prepared_sale_request(namespace)?;
+    let sale = args.sale(namespace);
+    let request = args.prepared_sale_request(sale)?;
     let factory_program =
         load_deployment(&args.factory_program_path, args.factory_program_account)?;
     let curve_program = load_deployment(&args.curve_program_path, args.curve_program_account)?;
-    let sale = factory_sale(
-        namespace,
-        &factory_program,
-        &curve_program,
-        args.launch.launch_salt,
-        args.collateral_definition.account_id(),
-    );
     let wallet = open_wallet()?;
     if router.is_some() {
         return Err(launchpad_client::ClientError::UnsupportedPrivateAuthority.into());
@@ -1577,7 +1598,7 @@ async fn create_sale<C: WalletSequencerClient>(
     )
     .create_sale(sale, request)
     .await?;
-    Ok(WriteSuccess::lifecycle(receipt, args.launch.launch_salt))
+    Ok(WriteSuccess::creation(receipt, sale.launch_salt))
 }
 
 #[cfg(test)]
@@ -2705,7 +2726,7 @@ mod distribution_tests {
         let Command::CreateSale(args) = cli.command else {
             panic!("create sale")
         };
-        let request = args.prepared_sale_request(lee::AccountId::new([40; 32]));
+        let request = args.prepared_sale_request(args.sale(lee::AccountId::new([40; 32])));
         std::fs::remove_file(file).unwrap();
         let saved = request.unwrap().graduation_hook.unwrap();
         assert_eq!(saved.program_id, lee::AccountId::new([9; 32]));

@@ -3706,6 +3706,7 @@ dependencies = [
  "lbp-core",
  "lee",
  "lee_core",
+ "lez-compat-core",
  "pool",
  "program_loader_core",
  "programs",
