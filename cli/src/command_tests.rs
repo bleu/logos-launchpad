@@ -402,6 +402,32 @@ async fn update_treasury_accepts_an_account_without_a_fee_rate() {
     ));
 }
 
+#[tokio::test]
+async fn fee_and_treasury_updates_report_reverted_receipts_as_failure() {
+    use common::{HashType, block::TransactionReceipt};
+
+    let treasury = id(4).to_string();
+    let hash = HashType([30; 32]);
+    let reverted = TransactionReceipt {
+        success: false,
+        ..TransactionReceipt::EXEMPT
+    };
+    for (command, args) in [
+        ("update-fee", ["--protocol-fee-bps", "125"]),
+        ("update-treasury", ["--treasury", treasury.as_str()]),
+    ] {
+        let mut transport = FixtureTransport::default();
+        transport.acknowledge(hash, Some(reverted));
+        let (code, result) = run_namespace_write(transport.clone(), command, &args, None).await;
+
+        assert_eq!(code, 1, "{command}: {result}");
+        assert_eq!(result["status"], "reverted");
+        assert_eq!(result["submission"], "acknowledged");
+        assert_eq!(result["transaction_hash"], hex::encode(hash));
+        assert_eq!(transport.sent_count(), 1);
+    }
+}
+
 #[tokio::test(start_paused = true)]
 async fn transfer_admin_names_the_successor_only_after_execution() {
     use common::block::TransactionReceipt;
