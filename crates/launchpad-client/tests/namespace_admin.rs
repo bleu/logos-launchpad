@@ -171,6 +171,43 @@ async fn treasury_updates_send_only_the_requested_destination() {
 }
 
 #[tokio::test]
+async fn fee_and_treasury_updates_return_an_error_for_reverted_receipts() {
+    let mut transport = FixtureTransport::default();
+    let curve = deployment(&mut transport);
+    let home = tempfile::tempdir().unwrap();
+    let (wallet, admin) = write_wallet(home.path(), transport.clone(), WriteTransport::new);
+    let namespace = AccountId::new([5; 32]);
+    let reverted = TransactionReceipt {
+        success: false,
+        ..TransactionReceipt::EXEMPT
+    };
+    for (hash, action) in [
+        (
+            HashType([17; 32]),
+            NamespaceAction::UpdateFee {
+                admin,
+                protocol_fee_bps: 175,
+            },
+        ),
+        (
+            HashType([18; 32]),
+            NamespaceAction::UpdateTreasury {
+                admin,
+                treasury: AccountId::new([6; 32]),
+            },
+        ),
+    ] {
+        transport.acknowledge(hash, Some(reverted));
+        let result = submit_namespace_action(&wallet, &curve, namespace, action).await;
+        assert!(
+            matches!(result, Err(ClientError::PublicWriteReverted { hash: actual }) if actual == hash),
+            "{action:?}: {result:?}"
+        );
+    }
+    assert_eq!(transport.sent_count(), 2);
+}
+
+#[tokio::test]
 async fn renunciation_sends_the_selected_namespace_with_the_admin_signature() {
     let mut transport = FixtureTransport::default();
     let curve = deployment(&mut transport);
