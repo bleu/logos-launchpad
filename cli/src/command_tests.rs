@@ -342,6 +342,17 @@ async fn namespace_info_shows_only_the_selected_namespaces_saved_settings() {
     assert_eq!(transport.sent_count(), 0);
 }
 
+async fn submitted_namespace_message(
+    transport: &FixtureTransport,
+    hash: common::HashType,
+) -> curve_core::Message {
+    use wallet::WalletSequencerClient;
+
+    let (tx, _) = transport.get_transaction(hash).await.unwrap().unwrap();
+    let (_, bytes) = tx.public_call().unwrap();
+    borsh::from_slice(bytes).unwrap()
+}
+
 #[tokio::test]
 async fn update_fee_accepts_a_rate_without_a_treasury() {
     use common::block::TransactionReceipt;
@@ -350,7 +361,7 @@ async fn update_fee_accepts_a_rate_without_a_treasury() {
     let mut transport = FixtureTransport::default();
     transport.acknowledge(hash, Some(TransactionReceipt::EXEMPT));
     let (code, result) = run_namespace_write(
-        transport,
+        transport.clone(),
         "update-fee",
         &["--protocol-fee-bps", "125"],
         None,
@@ -360,6 +371,10 @@ async fn update_fee_accepts_a_rate_without_a_treasury() {
     assert_eq!(code, 0, "{result}");
     assert_eq!(result["status"], "executed");
     assert_eq!(result["transaction_hash"], hex::encode(hash));
+    assert!(matches!(
+        submitted_namespace_message(&transport, hash).await,
+        curve_core::Message::UpdateFee { namespace, protocol_fee_bps: 125 } if namespace == id(8)
+    ));
 }
 
 #[tokio::test]
@@ -370,7 +385,7 @@ async fn update_treasury_accepts_an_account_without_a_fee_rate() {
     let mut transport = FixtureTransport::default();
     transport.acknowledge(hash, Some(TransactionReceipt::EXEMPT));
     let (code, result) = run_namespace_write(
-        transport,
+        transport.clone(),
         "update-treasury",
         &["--treasury", &id(4).to_string()],
         None,
@@ -380,6 +395,11 @@ async fn update_treasury_accepts_an_account_without_a_fee_rate() {
     assert_eq!(code, 0, "{result}");
     assert_eq!(result["status"], "executed");
     assert_eq!(result["transaction_hash"], hex::encode(hash));
+    assert!(matches!(
+        submitted_namespace_message(&transport, hash).await,
+        curve_core::Message::UpdateTreasury { namespace, treasury }
+            if namespace == id(8) && treasury == id(4)
+    ));
 }
 
 #[tokio::test(start_paused = true)]
