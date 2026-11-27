@@ -70,11 +70,9 @@ For other messages, serialize the public Rust message type with `borsh::to_vec`.
 
 ## Evidence and limits
 
-Local checks on 20 October 2026 used macOS on Apple silicon, the selected host toolchain and `r0vm` 3.0.5. Host tests cover creation, metadata, exact supply, minting, transfer, burn, canonical holdings, legacy NFT holder changes, role consent, transfer, renunciation, PDA approval and role/program isolation. Both guest entry points passed a locked release build.
+Host tests cover creation, metadata, exact supply, minting, transfer, burn, canonical holdings, legacy NFT holder changes, role consent, transfer, renunciation, PDA approval and role/program isolation.
 
-The node-free test uses the upstream `V03State` executor. It creates 100 tokens, transfers 30, rejects a transfer of 71 from the remaining 70, and checks unchanged balances and nonce. It also rejects a transfer after the source debit when the destination is absent from the declared actors; the debit and nonce are rolled back. This is execution evidence for that disposable token fixture. It is not evidence for sale flows, authority guest execution, wallet submission or proofs.
-
-With existing Cargo source and RISC0 tool caches, the first guest-workspace build took 43.9 seconds. The first execution-workspace compilation took 55.7 seconds. A warm execution test took about 0.7 seconds. These are local observations, not performance limits. The small executor setup was practical, so it is retained as an optional lane. Broader actor execution, service integration, wallet/module builds, private-route recovery and real proofs remain outside this foundation's evidence.
+The node-free token test uses the upstream executor. It checks transfers and confirms that failed transfers leave balances and nonce unchanged. This includes a failure after the source debit. It does not check sale flows, authority guest execution, service integration, wallet or module builds, private-route recovery or real proofs.
 
 ## Sources and replacement
 

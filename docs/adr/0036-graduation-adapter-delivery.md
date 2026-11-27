@@ -8,7 +8,7 @@ Date: 2026-11-18
 
 The graduation hook permits adapter programs. It does not create a DEX pool. Distribution uses the current token program. Liquidity creation needs a compatible DEX, token program and oracle. Build distribution first without changing the upstream dependency pin. Keep liquidity in a later change.
 
-This work builds on [PR 49](https://github.com/bleu/logos-launchpad/pull/49), branch `yvesfracari/shared-graduation-payouts`, reviewed at `e315593ea1f07eb05229e0a1fd5a851c0604e554`. [ADR 0020](0020-settlement-and-graduation.md) owns factory payouts and required routing. The adapter does not change those rules.
+[ADR 0020](0020-settlement-and-graduation.md) owns factory payouts and required routing. The adapter does not change those rules.
 
 ## Decision
 

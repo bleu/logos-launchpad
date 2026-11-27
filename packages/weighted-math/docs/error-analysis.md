@@ -1,6 +1,6 @@
 # Weighted-math error bounds
 
-Status: hand-derived bounds and finite test evidence for the unaudited kernel at public `SCALE = 52` and internal `LN_SCALE = 62`. This is not a machine-checked proof or an audit. A compiled scale sweep does not establish the same accuracy at another scale. Current measured results are in [qualification evidence](qualification.md).
+Status: hand-derived bounds and finite test evidence for the unaudited kernel at public `SCALE = 52` and internal `LN_SCALE = 62`. This is not a machine-checked proof or an audit. A compiled scale sweep does not establish the same accuracy at another scale. See [qualification checks and limits](qualification.md).
 
 ## Units and rounding
 

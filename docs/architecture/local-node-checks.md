@@ -44,7 +44,7 @@ export LAUNCHPAD_LOCAL_RECIPIENT=7wHg9sbJwc6h3NP1S9bekfAzB8CHifEcxKswCKUt3YQo
 cargo +1.98.1 test --locked -p launchpad-cli --test local_node wallet_ -- --ignored --nocapture --test-threads=1
 ```
 
-A send response gives the admission hash. The transaction lookup gives the inclusion block; the receipt gives the execution result. A failed receipt can still cost a fee. A missing lookup or timeout leaves the outcome unknown. The CLI reports an unresolved write as `pending` and exits with code `3`. Check the receipt before submitting again if the CLI gives a transaction hash. See the [public CLI write result rules](workspace-guide.md#cli-sale-reads-and-public-write-results). The standalone node simulates Bedrock, so its block status does not prove base-chain finality. These checks use the Rust wallet only.
+A send response gives the admission hash. The transaction lookup gives the inclusion block; the receipt gives the execution result. A failed receipt can still cost a fee. A missing lookup or timeout leaves the outcome unknown. The CLI reports an unresolved write as `pending` and exits with code `3`. Check the receipt before submitting again if the CLI gives a transaction hash. See the [public CLI write result rules](workspace-guide.md#cli-sale-creation-reads-and-public-write-results). The standalone node simulates Bedrock, so its block status does not prove base-chain finality. These checks use the Rust wallet only.
 
 ## Configure a namespace
 
