@@ -10,17 +10,19 @@ Use the launch factory for common new-token creation, allocation, namespace bind
 
 Keep each engine's pricing, pool state, custody and lifecycle effects separate. The neutral ordered-pair curve pool owns pricing, real-reserve solvency, trading, custody and neutral lifecycle operations. The curve factory owns launch supply, allocations, creator rights and settlement policy. Product curve sales use the factory; direct curve pools are internal primitives and test surfaces. Keep launch vocabulary outside pure curve math and neutral APIs.
 
-Reuse libraries, platform adapters, serialization and errors only where behavior matches. Do not force engines into a generic pool-state model. Curve staged creation, pending guards and factory custody do not define fixed-price or weighted setup. Each engine must enforce its own backing and account checks.
+Reuse libraries, platform adapters, serialization and errors only where behavior matches. Do not force engines into a generic pool-state model. Each engine keeps its own custody, backing and account checks.
 
 ### Shared setup
 
-Fixed-price and weighted setup use four stages: claim the exact mint and creator role; split sale inventory and creator allocation; prepare the pool and vaults; then fund and activate. Use a setup record with an explicit sale mode and separate typed messages. [ADR 0032](0032-fixed-price-lbp-setup.md) defines fixed-price setup.
+Each fresh public sale uses one creator-signed transaction. Minting, role initialization, allocation, pool preparation and funding are internal stages. Success leaves a funded sale, subject to its trading schedule. Failure rolls back sale state, token changes and sale events. No partial setup persists, and the creator cannot resume creation across transactions.
 
-The final weighted stage transfers the full saved collateral seed from the current creator and inventory from factory custody. A vault donation cannot replace the seed. Check creator balance and vault capacity before transfer. Activate only with backed inventory and seed. Pay an `AfterSetup` allocation in the same transaction; keep `AfterEnd` allocation in escrow. Any failed operation rolls back all effects. [ADR 0026](0026-lbp-clock-and-poke.md) defines weighted start and weights; the factory does not share weighted pricing with fixed-price pools.
+Curve setup transfers `D` from factory custody to the pool, keeps `R` in mint custody and keeps the separate creator allocation in escrow. See [curve allocations](0008-curve-allocation-and-close.md) and [fixed-price setup](0032-fixed-price-lbp-setup.md) for their custody rules.
+
+Weighted setup transfers inventory from factory custody and the full collateral seed from the creator. A vault donation cannot replace the seed. Check creator balance and vault capacity before transfer. Activate only with backed inventory and seed. Pay an `AfterSetup` allocation in the same transaction; keep an `AfterEnd` allocation in escrow. [ADR 0026](0026-lbp-clock-and-poke.md) defines weighted start and weights.
 
 ## Policy contract
 
-Treat the calculations as pricing engines. Share ending, fee and optional eligibility policies through small typed configurations, not a runtime plugin system. `crates/sale-policy` owns common decisions; each caller owns custody accounting. Creation saves supported choices. Pool entry, setup and resumed clients reject substitutions. Policies must hold at the pool boundary even when callers bypass the factory or SDK. Direct pools can use explicit open defaults.
+Treat the calculations as pricing engines. Share ending, fee and optional eligibility policies through small typed configurations, not a runtime plugin system. `crates/sale-policy` owns common decisions; each caller owns custody accounting. Creation saves supported choices. Setup and pool entry reject substitutions. Policies must hold at the pool boundary even when callers bypass the factory or SDK. Direct pools can use explicit open defaults.
 
 Separate permission to trade from permission to settle. Preserve authority, freeze, inclusion-time bounds, allocations, seed backing, vault coverage and retries. Shared [ending rules](0025-sale-closing.md) keep inclusive starts and exclusive ends. Selected depletion is final and needs no scheduled-end payout bound; `Scheduled` ignores depletion for payouts. Empty inventory blocks buys. Settlement payouts cannot create depletion evidence. Direct curve `Manual` pools retain owner close rights and their supported depletion-side choices.
 

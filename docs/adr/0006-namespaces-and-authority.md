@@ -10,11 +10,11 @@ Use separate role actors from `lez-compat-core::authority` for each namespace ad
 
 Initialize each role with its creation signer in the creation transaction. Leave no public claim window. Keep authority data behind its API; do not decode private role bytes or store a second administrator field. Readonly namespace data exposes a format version, not role bytes.
 
-Key successors must consent in the same transaction. A PDA successor requires its owner program's approval and runtime seed grant. Role identity stays fixed across transfer. Curve creator and direct pool-owner transfers move all remaining rights, including allocation and manual settlement, without changing sale terms or custody. Those roles cannot renounce because setup, settlement and recovery need an authorized caller. Namespace administrator renunciation is terminal and has no fee, active-pool or freeze guard. It preserves the separate emergency role.
+Key successors must consent in the same transaction. A PDA successor requires its owner program's approval and runtime seed grant. Role identity stays fixed across transfer. Curve creator and direct pool-owner transfers move all remaining rights, including allocation and manual settlement, without changing sale terms or custody. Those roles cannot renounce because lifecycle operations such as settlement need an authorized caller. Namespace administrator renunciation is terminal and has no fee, active-pool or freeze guard. It preserves the separate emergency role.
 
 Fee-rate and treasury updates are separate explicit operations. Each preserves the other setting and administrator. Neither transfers administration. See the [namespace contract](../product/namespace-fee-contract.md).
 
-Curve creation and settlement are resumable. Pending pools cannot trade before funding completes. Each stage rechecks authority and commits atomically with its child calls; the workflow can span transactions. Fixed-price and weighted setup have their own [four stages](0032-fixed-price-lbp-setup.md).
+A creator signs one transaction to [create and fund a fresh public sale](0031-shared-launch-factory.md#shared-setup). There is no partial setup to resume. Curve settlement remains resumable across transactions. Each settlement stage rechecks authority and commits atomically with its child calls.
 
 ## Reason and limits
 

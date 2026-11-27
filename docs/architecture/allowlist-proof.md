@@ -10,7 +10,7 @@ The creator approves public trading account addresses. Participants keep their k
 
 This applies to bonding-curve, fixed-price and weighted buys. The approved public account is the account that trades. There is no separate approval-only or private checking account. This replaces the earlier proposal to approve private accounts directly.
 
-The full list is not published. The public address used for a purchase is visible, as are the trade amounts and timing. Its membership path is public too. The creator locks the final list commitment in the initial sale terms, before staged setup; it cannot change during setup or trading.
+The full list is not published. The public address used for a purchase is visible, as are the trade amounts and timing. Its membership path is public too. The creator locks the list commitment in the creation transaction. It cannot change after creation.
 
 ## Example: Alex prepares three accounts
 

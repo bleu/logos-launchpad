@@ -1,3 +1,7 @@
+#[path = "support/creation.rs"]
+mod creation_fixture;
+
+use creation_fixture::Creation;
 use factory_core::events::*;
 use factory_core::*;
 use lee_core::{
@@ -139,13 +143,16 @@ fn resolved(input: &ReceiveInput, response: &Response, creator: AccountId) -> Re
         .unwrap(),
     }
 }
-fn minted() -> (ReceiveInput, Response) {
+fn minted() -> (ReceiveInput, Response, Creation) {
     minted_with_policy(curve_core::BuyPolicy::Open)
 }
-fn minted_with_policy(policy: curve_core::BuyPolicy) -> (ReceiveInput, Response) {
+fn minted_with_policy(policy: curve_core::BuyPolicy) -> (ReceiveInput, Response, Creation) {
     minted_with_terms(policy, false)
 }
-fn minted_with_terms(policy: curve_core::BuyPolicy, hook: bool) -> (ReceiveInput, Response) {
+fn minted_with_terms(
+    policy: curve_core::BuyPolicy,
+    hook: bool,
+) -> (ReceiveInput, Response, Creation) {
     let mut input = creation();
     let mut message: Message = borsh::from_slice(&input.message).unwrap();
     if let Message::CreateFactoryPool {
@@ -167,12 +174,16 @@ fn minted_with_terms(policy: curve_core::BuyPolicy, hook: bool) -> (ReceiveInput
         }
     }
     input.message = borsh::to_vec(&message).unwrap();
-    let mut response = handle(&input).unwrap();
-    for bytes in [config(), definition()] {
-        input = reply(&input, &response, bytes);
-        response = handle(&input).unwrap()
-    }
-    (input, response)
+    mint_from(&input)
+}
+fn mint_from(input: &ReceiveInput) -> (ReceiveInput, Response, Creation) {
+    let response = handle(input).unwrap();
+    let setup = Creation::new(input, &response);
+    let input = setup.namespace_reply(&response, config());
+    let response = handle(&input).unwrap();
+    let input = reply(&input, &response, definition());
+    let response = handle(&input).unwrap();
+    (input, response, setup)
 }
 fn holding(owner: AccountId, definition: AccountId, balance: u128) -> Vec<u8> {
     borsh::to_vec(&TokenState::Holding {
@@ -197,21 +208,20 @@ fn launch_definition(state: &FactoryState) -> Vec<u8> {
     .unwrap()
 }
 fn continued(
-    input: &ReceiveInput,
+    setup: &Creation,
     previous: &Response,
     source: u128,
     inventory: u128,
     escrow: u128,
 ) -> (ReceiveInput, Response) {
     let state = FactoryState::decode(previous.post_state.as_ref().unwrap()).unwrap();
-    let mut input = input.clone();
-    input.pre_state = previous.post_state.clone().unwrap();
-    input.from = None;
-    input.message = borsh::to_vec(&Message::ContinueCreation {
-        creator: id(42),
-        now: 100,
-    })
-    .unwrap();
+    let stage = match state.creation_stage {
+        CreationStage::Minted => LbpCreationStage::Minted,
+        CreationStage::Allocated => LbpCreationStage::Allocated,
+        CreationStage::PoolPrepared => LbpCreationStage::PoolPrepared,
+        CreationStage::Active => unreachable!(),
+    };
+    let mut input = setup.continuation(previous, stage);
     let mut response = handle(&input).unwrap();
     input = proof(&input, &response, id(42));
     response = handle(&input).unwrap();
@@ -236,8 +246,8 @@ fn continued(
 }
 #[test]
 fn curve_allocation_funds_only_sale_inventory_and_locks_creator_tokens() {
-    let (input, mint) = minted();
-    let (input, response) = continued(&input, &mint, 900, 0, 0);
+    let (_, mint, setup) = minted();
+    let (input, response) = continued(&setup, &mint, 900, 0, 0);
     let state = FactoryState::decode(response.post_state.as_ref().unwrap()).unwrap();
     assert_eq!(state.creation_stage, CreationStage::Allocated);
     let transfers: Vec<_> = response
@@ -264,9 +274,9 @@ fn curve_allocation_funds_only_sale_inventory_and_locks_creator_tokens() {
 }
 #[test]
 fn curve_preparation_uses_neutral_restriction_and_defers_funding() {
-    let (input, mint) = minted();
-    let (input, allocated) = continued(&input, &mint, 900, 0, 0);
-    let (input, response) = continued(&input, &allocated, 0, 800, 100);
+    let (_, mint, setup) = minted();
+    let (_, allocated) = continued(&setup, &mint, 900, 0, 0);
+    let (input, response) = continued(&setup, &allocated, 0, 800, 100);
     let state = FactoryState::decode(response.post_state.as_ref().unwrap()).unwrap();
     assert_eq!(state.creation_stage, CreationStage::PoolPrepared);
     let call = response
@@ -353,10 +363,10 @@ fn allowlist_policy() -> curve_core::BuyPolicy {
 #[test]
 fn curve_activation_rejects_a_replaced_or_downgraded_pool_policy() {
     let policy = allowlist_policy();
-    let (input, mint) = minted_with_policy(policy.clone());
-    let (input, allocated) = continued(&input, &mint, 900, 0, 0);
-    let (input, prepared) = continued(&input, &allocated, 0, 800, 100);
-    let (input, response) = continued(&input, &prepared, 0, 800, 100);
+    let (_, mint, setup) = minted_with_policy(policy.clone());
+    let (_, allocated) = continued(&setup, &mint, 900, 0, 0);
+    let (_, prepared) = continued(&setup, &allocated, 0, 800, 100);
+    let (input, response) = continued(&setup, &prepared, 0, 800, 100);
     let state = FactoryState::decode(response.post_state.as_ref().unwrap()).unwrap();
     let curve_core::BuyPolicy::Allowlist(mut replacement) = policy else {
         unreachable!()
@@ -382,21 +392,21 @@ fn curve_activation_rejects_a_replaced_or_downgraded_pool_policy() {
 #[test]
 fn curve_allowlist_policy_is_unchanged_through_all_creation_stages() {
     let policy = allowlist_policy();
-    let (input, mint) = minted_with_policy(policy.clone());
+    let (_, mint, setup) = minted_with_policy(policy.clone());
     assert_eq!(
         FactoryState::decode(mint.post_state.as_ref().unwrap())
             .unwrap()
             .buy_policy,
         policy
     );
-    let (input, allocated) = continued(&input, &mint, 900, 0, 0);
+    let (_, allocated) = continued(&setup, &mint, 900, 0, 0);
     assert_eq!(
         FactoryState::decode(allocated.post_state.as_ref().unwrap())
             .unwrap()
             .buy_policy,
         policy
     );
-    let (input, prepared) = continued(&input, &allocated, 0, 800, 100);
+    let (_, prepared) = continued(&setup, &allocated, 0, 800, 100);
     assert_eq!(
         FactoryState::decode(prepared.post_state.as_ref().unwrap())
             .unwrap()
@@ -411,7 +421,7 @@ fn curve_allowlist_policy_is_unchanged_through_all_creation_stages() {
     assert!(
         matches!(create, curve_core::Message::CreatePool { buy_policy, .. } if buy_policy == policy)
     );
-    let (mut input, mut response) = continued(&input, &prepared, 0, 800, 100);
+    let (mut input, mut response) = continued(&setup, &prepared, 0, 800, 100);
     let state = FactoryState::decode(response.post_state.as_ref().unwrap()).unwrap();
     for bytes in [
         borsh::to_vec(&pool_state(&state, input.receiver, false)).unwrap(),
@@ -430,10 +440,10 @@ fn active() -> (ReceiveInput, Response) {
     active_for_route(false)
 }
 fn active_for_route(hook: bool) -> (ReceiveInput, Response) {
-    let (input, mint) = minted_with_terms(curve_core::BuyPolicy::Open, hook);
-    let (input, allocated) = continued(&input, &mint, 900, 0, 0);
-    let (input, prepared) = continued(&input, &allocated, 0, 800, 100);
-    let (mut input, mut response) = continued(&input, &prepared, 0, 800, 100);
+    let (_, mint, setup) = minted_with_terms(curve_core::BuyPolicy::Open, hook);
+    let (_, allocated) = continued(&setup, &mint, 900, 0, 0);
+    let (_, prepared) = continued(&setup, &allocated, 0, 800, 100);
+    let (mut input, mut response) = continued(&setup, &prepared, 0, 800, 100);
     let state = FactoryState::decode(response.post_state.as_ref().unwrap()).unwrap();
     for bytes in [
         borsh::to_vec(&pool_state(&state, input.receiver, false)).unwrap(),
@@ -1077,18 +1087,15 @@ fn expiry_is_proved_separately_from_the_supplied_zero_lower_bound() {
 }
 
 #[test]
-fn curve_creation_reads_namespace_before_bootstrapping_its_creator_role() {
+fn curve_creation_queues_the_namespace_read_before_its_continuations() {
     let input = creation();
     let response = handle(&input).unwrap();
-    assert_eq!(
-        response.sync_messages[0].to,
-        Actor::new(curve_core::compute_config_pda(id(40), id(6)), id(6))
-    );
+    Creation::new(&input, &response);
 }
 
 #[test]
 fn curve_creation_bootstraps_a_transfer_only_creator_role_with_the_mint() {
-    let (_, response) = minted();
+    let (_, response, _) = minted();
     assert_eq!(response.validity.timestamps.start(), None);
     assert_eq!(response.validity.timestamps.end(), Some(400_000));
     let call = response
@@ -1101,7 +1108,7 @@ fn curve_creation_bootstraps_a_transfer_only_creator_role_with_the_mint() {
         authority::Message::BootstrapTransferOnly { authority: id(42) }
     );
     assert_eq!(call.pda_seeds.len(), 1);
-    let (_, response) = minted();
+    let (_, response, _) = minted();
     let state = FactoryState::decode(response.post_state.as_ref().unwrap()).unwrap();
     assert_eq!(state.total_supply, 900);
     let call = response
@@ -1121,29 +1128,20 @@ fn curve_creation_bootstraps_a_transfer_only_creator_role_with_the_mint() {
 
 #[test]
 fn curve_rejects_a_creator_role_from_another_namespace() {
-    let (mut input, response) = minted();
-    let mut state = FactoryState::decode(response.post_state.as_ref().unwrap()).unwrap();
+    let (_, response, setup) = minted();
+    let mut input = setup.continuation(&response, LbpCreationStage::Minted);
+    let mut state = FactoryState::decode(&input.pre_state).unwrap();
     state.creator_role_id = compute_curve_creator_role_pda(id(41), id(7), [3; 32]);
     input.pre_state = borsh::to_vec(&state).unwrap().into();
-    input.from = None;
-    input.message = borsh::to_vec(&Message::ContinueCreation {
-        creator: id(42),
-        now: 100,
-    })
-    .unwrap();
     assert!(matches!(handle(&input), Err(Error::WrongAccount)));
 }
 
 #[test]
 fn continuation_checks_the_creator_before_any_custody_call() {
-    let (mut input, response) = minted();
-    let state = FactoryState::decode(response.post_state.as_ref().unwrap()).unwrap();
-    input.pre_state = response.post_state.unwrap();
-    input.message = borsh::to_vec(&Message::ContinueCreation {
-        creator: id(42),
-        now: 100,
-    })
-    .unwrap();
+    let (_, response, setup) = minted();
+    setup.assert_rejects_external_continuation(&response);
+    let input = setup.continuation(&response, LbpCreationStage::Minted);
+    let state = FactoryState::decode(&input.pre_state).unwrap();
     let response = handle(&input).unwrap();
     assert_eq!(response.sync_messages.len(), 1);
     assert_eq!(
@@ -1200,7 +1198,7 @@ fn role_route(
 
 #[test]
 fn creator_transfer_requires_consent_and_moves_all_remaining_factory_rights() {
-    let (input, minted) = minted();
+    let (input, minted, _) = minted();
     let original = FactoryState::decode(minted.post_state.as_ref().unwrap()).unwrap();
     let role = Actor::new(original.creator_role_id, AUTHORITY_PROGRAM_ACCOUNT_ID);
     let bootstrap = minted
@@ -1262,17 +1260,8 @@ fn creator_transfer_requires_consent_and_moves_all_remaining_factory_rights() {
     )
     .unwrap();
 
-    for (creation_stage, settlement_stage, command) in [
+    for (settlement_stage, command) in [
         (
-            CreationStage::Minted,
-            SettlementStage::Unstarted,
-            Message::ContinueCreation {
-                creator: id(99),
-                now: 100,
-            },
-        ),
-        (
-            CreationStage::Active,
             SettlementStage::Unstarted,
             Message::SetPaused {
                 creator: id(99),
@@ -1280,7 +1269,6 @@ fn creator_transfer_requires_consent_and_moves_all_remaining_factory_rights() {
             },
         ),
         (
-            CreationStage::Active,
             SettlementStage::Unstarted,
             Message::ClaimCreatorAllocation {
                 creator: id(99),
@@ -1288,7 +1276,6 @@ fn creator_transfer_requires_consent_and_moves_all_remaining_factory_rights() {
             },
         ),
         (
-            CreationStage::Active,
             SettlementStage::Withdrawn {
                 unsold: 100,
                 collateral_due: 50,
@@ -1300,7 +1287,7 @@ fn creator_transfer_requires_consent_and_moves_all_remaining_factory_rights() {
         ),
     ] {
         let mut state = original.clone();
-        state.creation_stage = creation_stage;
+        state.creation_stage = CreationStage::Active;
         state.settlement_stage = settlement_stage;
         let mut request = input.clone();
         request.from = None;
@@ -1393,10 +1380,6 @@ fn creator_transfer_requires_consent_and_moves_all_remaining_factory_rights() {
                 creator: id(42),
                 paused,
             },
-            Message::ContinueCreation { now, .. } => Message::ContinueCreation {
-                creator: id(42),
-                now,
-            },
             Message::ClaimCreatorAllocation { now, .. } => Message::ClaimCreatorAllocation {
                 creator: id(42),
                 now,
@@ -1425,10 +1408,6 @@ fn creator_transfer_requires_consent_and_moves_all_remaining_factory_rights() {
             Message::SetPaused { paused, .. } => Message::SetPaused {
                 creator: id(40),
                 paused,
-            },
-            Message::ContinueCreation { now, .. } => Message::ContinueCreation {
-                creator: id(40),
-                now,
             },
             Message::ClaimCreatorAllocation { now, .. } => Message::ClaimCreatorAllocation {
                 creator: id(40),
@@ -1459,7 +1438,7 @@ fn creator_transfer_requires_consent_and_moves_all_remaining_factory_rights() {
 
 #[test]
 fn creator_callbacks_reject_wrong_program_role_holder_and_legacy_nft_proofs() {
-    let (input, minted) = minted();
+    let (input, minted, setup) = minted();
     for command in [
         Message::SetPaused {
             creator: id(42),
@@ -1478,13 +1457,16 @@ fn creator_callbacks_reject_wrong_program_role_holder_and_legacy_nft_proofs() {
             now: 400,
         },
     ] {
-        let mut request = input.clone();
         let mut state = FactoryState::decode(minted.post_state.as_ref().unwrap()).unwrap();
-        if !matches!(command, Message::ContinueCreation { .. }) {
+        let request = if matches!(command, Message::ContinueCreation { .. }) {
+            setup.continuation(&minted, LbpCreationStage::Minted)
+        } else {
+            let mut request = input.clone();
             state.creation_stage = CreationStage::Active;
-        }
-        request.pre_state = borsh::to_vec(&state).unwrap().into();
-        request.message = borsh::to_vec(&command).unwrap();
+            request.pre_state = borsh::to_vec(&state).unwrap().into();
+            request.message = borsh::to_vec(&command).unwrap();
+            request
+        };
         let response = handle(&request).unwrap();
         let valid = proof(&request, &response, id(42));
         for (sender, role, holder) in [
@@ -1567,25 +1549,27 @@ fn curve_pause_policy_survives_setup_and_checks_policy_instead_of_pause_value() 
             *pause_policy = policy;
         }
         input.message = borsh::to_vec(&message).unwrap();
-        let mut mint = handle(&input).unwrap();
-        for bytes in [config(), definition()] {
+        let initial = handle(&input).unwrap();
+        let setup = Creation::new(&input, &initial);
+        let input = setup.namespace_reply(&initial, config());
+        let checked = handle(&input).unwrap();
+        let mint = handle(&reply(&input, &checked, definition())).unwrap();
+        for response in [&initial, &checked, &mint] {
             assert_eq!(
-                FactoryState::decode(mint.post_state.as_ref().unwrap())
+                FactoryState::decode(response.post_state.as_ref().unwrap())
                     .unwrap()
                     .pause_policy,
                 policy
             );
-            input = reply(&input, &mint, bytes);
-            mint = handle(&input).unwrap();
         }
-        let (input, allocated) = continued(&input, &mint, 900, 0, 0);
+        let (_, allocated) = continued(&setup, &mint, 900, 0, 0);
         assert_eq!(
             FactoryState::decode(allocated.post_state.as_ref().unwrap())
                 .unwrap()
                 .pause_policy,
             policy
         );
-        let (input, prepared) = continued(&input, &allocated, 0, 800, 100);
+        let (_, prepared) = continued(&setup, &allocated, 0, 800, 100);
         assert_eq!(
             FactoryState::decode(prepared.post_state.as_ref().unwrap())
                 .unwrap()
@@ -1605,7 +1589,7 @@ fn curve_pause_policy_survives_setup_and_checks_policy_instead_of_pause_value() 
             curve_core::TradeControl::Running,
             curve_core::TradeControl::Paused,
         ] {
-            let (mut input, mut response) = continued(&input, &prepared, 0, 800, 100);
+            let (mut input, mut response) = continued(&setup, &prepared, 0, 800, 100);
             let state = FactoryState::decode(response.post_state.as_ref().unwrap()).unwrap();
             let mut saved = pool_state(&state, input.receiver, false);
             saved.trade_control = control;
@@ -1738,8 +1722,9 @@ fn curve_timestamp_overflow_rejects_before_setup_reads_or_minting() {
 
 #[test]
 fn curve_rejects_malformed_saved_policies_before_resuming_setup() {
-    let mut input = creation();
+    let input = creation();
     let response = handle(&input).unwrap();
+    let setup = Creation::new(&input, &response);
     let state = FactoryState::decode(response.post_state.as_ref().unwrap()).unwrap();
     for case in 0..3 {
         let mut changed = state.clone();
@@ -1753,7 +1738,7 @@ fn curve_rejects_malformed_saved_policies_before_resuming_setup() {
             FactoryState::decode(&bytes).err(),
             Some(Error::InvalidState)
         );
-        input = reply(&input, &response, config());
+        let mut input = setup.namespace_reply(&response, config());
         input.pre_state = bytes.into();
         assert_eq!(handle(&input).err(), Some(Error::InvalidState));
     }
@@ -1761,10 +1746,10 @@ fn curve_rejects_malformed_saved_policies_before_resuming_setup() {
 
 #[test]
 fn curve_activation_rejects_a_valid_direct_pool_ending_policy() {
-    let (input, mint) = minted();
-    let (input, allocated) = continued(&input, &mint, 900, 0, 0);
-    let (input, prepared) = continued(&input, &allocated, 0, 800, 100);
-    let (mut input, mut response) = continued(&input, &prepared, 0, 800, 100);
+    let (_, mint, setup) = minted();
+    let (_, allocated) = continued(&setup, &mint, 900, 0, 0);
+    let (_, prepared) = continued(&setup, &allocated, 0, 800, 100);
+    let (mut input, mut response) = continued(&setup, &prepared, 0, 800, 100);
     let state = FactoryState::decode(response.post_state.as_ref().unwrap()).unwrap();
     let mut saved = pool_state(&state, input.receiver, false);
     saved.pool.ending_policy = EndingPolicy::Manual;
@@ -1921,17 +1906,13 @@ fn curve_setup_keeps_each_selected_ending_and_its_depletion_side() {
             *end_timestamp = end;
         }
         input.message = borsh::to_vec(&command).unwrap();
-        let mut response = handle(&input).unwrap();
-        for bytes in [config(), definition()] {
-            input = reply(&input, &response, bytes);
-            response = handle(&input).unwrap();
-        }
+        let (_, response, setup) = mint_from(&input);
         assert_eq!(
             response.validity.timestamps.end(),
             end.map(|end| end * 1000)
         );
-        let (input, allocated) = continued(&input, &response, 900, 0, 0);
-        let (input, prepared) = continued(&input, &allocated, 0, 800, 100);
+        let (_, allocated) = continued(&setup, &response, 900, 0, 0);
+        let (_, prepared) = continued(&setup, &allocated, 0, 800, 100);
         let message: curve_core::Message =
             borsh::from_slice(&prepared.sync_messages[0].message).unwrap();
         let expected_side = if ending == EndingPolicy::Scheduled {
@@ -1942,7 +1923,7 @@ fn curve_setup_keeps_each_selected_ending_and_its_depletion_side() {
         assert!(matches!(message, curve_core::Message::CreatePool {
             ending_policy, close_timestamp, close_on_depletion, token0_amount: 800, token1_amount: 0, ..
         } if ending_policy == ending && close_timestamp == end && close_on_depletion == expected_side));
-        let (mut input, mut response) = continued(&input, &prepared, 0, 800, 100);
+        let (mut input, mut response) = continued(&setup, &prepared, 0, 800, 100);
         let state = FactoryState::decode(response.post_state.as_ref().unwrap()).unwrap();
         for bytes in [
             borsh::to_vec(&pool_state(&state, input.receiver, false)).unwrap(),
@@ -2135,7 +2116,7 @@ fn curve_created_event_names_the_launch_and_immutable_terms_once() {
             }
         )]
     );
-    let (_, minted) = minted();
+    let (_, minted, _) = minted();
     assert!(minted.events.is_empty());
     let mut replay = input;
     replay.pre_state = minted.post_state.unwrap();
@@ -2353,19 +2334,21 @@ fn curve_forwards_the_retained_fee_and_purchase_limit() {
             *per_block_token_limit = Some(500);
         }
         input.message = borsh::to_vec(&command).unwrap();
-        let mut mint = handle(&input).unwrap();
-        for bytes in [config(), definition()] {
-            input = reply(&input, &mint, bytes);
-            mint = handle(&input).unwrap();
+        let initial = handle(&input).unwrap();
+        let setup = Creation::new(&input, &initial);
+        let input = setup.namespace_reply(&initial, config());
+        let checked = handle(&input).unwrap();
+        let mint = handle(&reply(&input, &checked, definition())).unwrap();
+        for response in [&checked, &mint] {
             assert_eq!(
-                FactoryState::decode(mint.post_state.as_ref().unwrap())
+                FactoryState::decode(response.post_state.as_ref().unwrap())
                     .unwrap()
                     .sell_fee_bps,
                 rate
             );
         }
-        let (input, allocated) = continued(&input, &mint, 900, 0, 0);
-        let (input, prepared) = continued(&input, &allocated, 0, 800, 100);
+        let (_, allocated) = continued(&setup, &mint, 900, 0, 0);
+        let (_, prepared) = continued(&setup, &allocated, 0, 800, 100);
         let state = FactoryState::decode(prepared.post_state.as_ref().unwrap()).unwrap();
         assert_eq!(state.sell_fee_bps, rate);
         assert_eq!(state.per_block_token_limit, Some(500));
@@ -2378,8 +2361,8 @@ fn curve_forwards_the_retained_fee_and_purchase_limit() {
             matches!(borsh::from_slice::<curve_core::Message>(&prepare.message).unwrap(), curve_core::Message::CreatePool { sell_fee_bps, per_block_token_limit: Some(500), .. } if sell_fee_bps == rate)
         );
         for case in 0..5 {
-            let (mut request, response) = continued(&input, &prepared, 0, 800, 100);
-            let mut saved = pool_state(&state, input.receiver, false);
+            let (mut request, response) = continued(&setup, &prepared, 0, 800, 100);
+            let mut saved = pool_state(&state, request.receiver, false);
             match case {
                 0 => {}
                 1 => saved.pool.sell_fee_bps = if rate == 0 { 1 } else { 0 },
@@ -2795,20 +2778,64 @@ fn short_curve_sale_still_requires_inclusion_before_expiry() {
 }
 
 #[test]
-fn every_curve_setup_reply_keeps_the_expiry_window() {
-    let mut input = creation();
-    let mut response = handle(&input).unwrap();
-    for bytes in [config(), definition()] {
-        input = reply(&input, &response, bytes);
-        response = handle(&input).unwrap();
-        assert_eq!(response.validity.timestamps.end(), Some(400_000));
+fn internal_curve_continuation_rejects_a_hint_at_or_after_expiry() {
+    let (_, mint, setup) = minted();
+    let mut input = setup.continuation(&mint, LbpCreationStage::Minted);
+    for now in [399, 400, u64::MAX] {
+        input.message = borsh::to_vec(&Message::ContinueCreation {
+            creator: id(42),
+            now,
+        })
+        .unwrap();
+        let result = handle(&input);
+        if now < 400 {
+            assert_eq!(result.unwrap().validity.timestamps.end(), Some(400_000));
+        } else {
+            assert_eq!(result.err(), Some(Error::InvalidTerms));
+        }
     }
-    let (input, allocated) = continued(&input, &response, 900, 0, 0);
-    assert_eq!(allocated.validity.timestamps.end(), Some(400_000));
-    let (input, prepared) = continued(&input, &allocated, 0, 800, 100);
-    assert_eq!(prepared.validity.timestamps.end(), Some(400_000));
-    let (_, activated) = continued(&input, &prepared, 0, 800, 100);
-    assert_eq!(activated.validity.timestamps.end(), Some(400_000));
+}
+
+#[test]
+fn curve_setup_keeps_an_exclusive_expiry_and_no_lower_bound() {
+    let input = creation();
+    let initial = handle(&input).unwrap();
+    let setup = Creation::new(&input, &initial);
+    let input = setup.namespace_reply(&initial, config());
+    let checked = handle(&input).unwrap();
+    let mint = handle(&reply(&input, &checked, definition())).unwrap();
+    let (_, allocated) = continued(&setup, &mint, 900, 0, 0);
+    let (_, prepared) = continued(&setup, &allocated, 0, 800, 100);
+    let (mut input, funding) = continued(&setup, &prepared, 0, 800, 100);
+    let state = FactoryState::decode(funding.post_state.as_ref().unwrap()).unwrap();
+    input = reply(
+        &input,
+        &funding,
+        borsh::to_vec(&pool_state(&state, input.receiver, false)).unwrap(),
+    );
+    let checked_pool = handle(&input).unwrap();
+    let active = handle(&reply(
+        &input,
+        &checked_pool,
+        holding(state.pool_id, state.token_definition_id, 0),
+    ))
+    .unwrap();
+    for response in [
+        initial,
+        checked,
+        mint,
+        allocated,
+        prepared,
+        funding,
+        checked_pool,
+        active,
+    ] {
+        let window = response.validity.timestamps;
+        assert_eq!(window.start(), None);
+        assert_eq!(window.end(), Some(400_000));
+        assert!(window.is_valid_for(399_999));
+        assert!(!window.is_valid_for(400_000));
+    }
 }
 
 #[test]

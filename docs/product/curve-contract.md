@@ -26,6 +26,6 @@ The workspace guide is the current evidence record. Host tests alone do not prov
 
 See [ADR 0036](../adr/0036-graduation-adapter-delivery.md) for the plain-transfer distribution adapter and later deposits.
 
-Configured expiry sets the last time trading can open. An existing setup can finish after expiry into a closed pool for settlement. The minimum curve duration awaits private-route latency evidence and Logos review. See [ending policy](../adr/0025-sale-closing.md).
+The creator creates and funds a fresh public sale in one transaction before any configured expiry. The minimum curve duration awaits private-route latency evidence and Logos review. See [ending policy](../adr/0025-sale-closing.md).
 
 Factory curve sales support an optional retained sell fee and an optional aggregate token purchase limit per block. See [curve pricing](../adr/0009-curve-arithmetic.md) and [sale limits](../adr/0021-modes-and-open-limits.md).

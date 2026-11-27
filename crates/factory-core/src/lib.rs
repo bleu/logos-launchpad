@@ -666,7 +666,7 @@ fn create_curve(input: &ReceiveInput, command: Message) -> Result<Response, Erro
         curve_program_id,
         collateral_definition_id,
         creator,
-        now: _,
+        now,
     } = command.clone()
     else {
         return Err(Error::InvalidMessage);
@@ -773,7 +773,7 @@ fn create_curve(input: &ReceiveInput, command: Message) -> Result<Response, Erro
         .buy_policy
         .validate_binding(state.namespace.value(), state.pool_id.value())
         .map_err(|_| Error::InvalidTerms)?;
-    Ok(state.next().event(state.event(
+    let response = state.next().event(state.event(
         input.receiver.account_id,
         SaleEventKindV1::Created {
             creator: *creator.value(),
@@ -793,7 +793,12 @@ fn create_curve(input: &ReceiveInput, command: Message) -> Result<Response, Erro
                 sell_fee_bps: state.sell_fee_bps,
             },
         },
-    )))
+    ));
+    let advance = Message::ContinueCreation { creator, now };
+    Ok(response
+        .send_sync(input.receiver, &advance)
+        .send_sync(input.receiver, &advance)
+        .send_sync(input.receiver, &advance))
 }
 fn validate_pool(
     state: &FactoryState,
@@ -1652,36 +1657,22 @@ pub fn handle(input: &ReceiveInput) -> Result<Response, Error> {
                 .map(|pending| pending.command.clone())
         })
         .or_else(|| borsh::from_slice::<Message>(&input.message).ok());
-    let (expiry, recovery) = match command {
+    let expiry = match command {
         Some(Message::CreateFactoryPool {
             end_timestamp, now, ..
         }) => {
             validate_curve_expiry(end_timestamp, now)?;
-            (end_timestamp, false)
+            end_timestamp
         }
         Some(Message::ContinueCreation { now, .. }) => {
-            let end = saved.as_ref().ok_or(Error::InvalidState)?.end_timestamp;
-            (end, end.is_some_and(|end| now >= end))
+            let end = saved.as_ref().and_then(|state| state.end_timestamp);
+            validate_curve_expiry(end, now)?;
+            end
         }
-        _ => (None, false),
+        _ => None,
     };
     let mut response = handle_inner(input)?;
     if let Some(end) = expiry {
-        if recovery {
-            let lower = curve_core::timestamp_millis(end).map_err(|_| Error::InvalidTerms)?;
-            let lower = response
-                .validity
-                .timestamps
-                .start()
-                .map_or(lower, |existing| existing.max(lower));
-            response = match response.validity.timestamps.end() {
-                Some(upper) => response
-                    .try_timestamp_window(lower..upper)
-                    .map_err(|_| Error::InvalidTerms)?,
-                None => response.timestamp_window(lower..),
-            };
-            return Ok(response);
-        }
         let upper = curve_core::timestamp_millis(end).map_err(|_| Error::InvalidTerms)?;
         let upper = response
             .validity
@@ -1715,6 +1706,15 @@ fn handle_inner(input: &ReceiveInput) -> Result<Response, Error> {
         return result;
     }
     let message: Message = borsh::from_slice(&input.message).map_err(|_| Error::InvalidMessage)?;
+    if matches!(
+        message,
+        Message::ContinueCreation { .. }
+            | Message::ContinueFixedPriceCreation { .. }
+            | Message::ContinueWeightedCreation { .. }
+    ) && input.from != Some(input.receiver)
+    {
+        return Err(Error::Unauthorized);
+    }
     match message {
         command @ Message::SetPaused { .. } => {
             if LbpLaunchState::decode(&input.pre_state).is_ok() {

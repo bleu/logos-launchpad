@@ -1,16 +1,16 @@
 # Fixed-price and weighted sale overview
 
-Fixed-price and weighted sales use four-stage setup on the actor interface. They support public trades, fee collection, creator payouts and optional graduation. Their pricing and custody stay separate. See [ADR 0031](../adr/0031-shared-launch-factory.md) for shared policies and the [workspace guide](../architecture/workspace-guide.md#execution-and-evidence-limits) for current checks and limits.
+A fresh public fixed-price or weighted sale is created and funded in one creator-signed transaction. They support public trades, fee collection, creator payouts and optional graduation. Their pricing and custody stay separate. See [ADR 0031](../adr/0031-shared-launch-factory.md) for shared policies and the [workspace guide](../architecture/workspace-guide.md#execution-and-evidence-limits) for current checks and limits.
 
 ## Fixed-price sale
 
-The creator supplies inventory, a positive exact price in smallest units and an optional creator allocation. All three sale types also support a protected [graduation reserve `R`](../adr/0020-settlement-and-graduation.md#graduation-reserve). Setup binds the sale to its namespace and initializes a separate creator role. It funds inventory and releases an `AfterSetup` allocation in the final stage; an `AfterEnd` allocation stays in escrow. Recorded collateral starts at zero. Donations remain surplus. See [setup](../adr/0032-fixed-price-lbp-setup.md), [recorded collateral](../adr/0033-fixed-price-lbp-recorded-collateral.md) and the [setup sequence](../architecture/sequence-diagrams/create-lbp-pool.md).
+The creator supplies inventory, a positive exact price in smallest units and an optional creator allocation. All three sale types also support a protected [graduation reserve `R`](../adr/0020-settlement-and-graduation.md#graduation-reserve). The creation transaction binds the sale to its namespace, initializes a separate creator role, funds inventory and pays an `AfterSetup` allocation. An `AfterEnd` allocation stays in escrow. Recorded collateral starts at zero. Donations remain surplus. See [setup](../adr/0032-fixed-price-lbp-setup.md), [recorded collateral](../adr/0033-fixed-price-lbp-recorded-collateral.md) and the [setup sequence](../architecture/sequence-diagrams/create-lbp-pool.md).
 
 The selected ending policy controls settlement and the separate `AfterEnd` claim. Unsold inventory and recorded collateral follow the shared [payout route](../adr/0020-settlement-and-graduation.md). Manual settlement requires no configured adapter. See [ADR 0025](../adr/0025-sale-closing.md) for ending rules.
 
 ## Weighted sale
 
-Weighted setup also requires a positive collateral seed, normalized weight endpoints and an explicit start and end. Final setup transfers the full seed from the creator; a donation cannot replace it. Pricing collateral includes the seed and excludes accrued namespace fees and surplus. See [ADR 0030](../adr/0030-lbp-pricing-collateral.md).
+Weighted setup also requires a positive collateral seed, normalized weight endpoints and an explicit start and end. Creation transfers the full seed from the creator; a donation cannot replace it. Pricing collateral includes the seed and excludes accrued namespace fees and surplus. See [ADR 0030](../adr/0030-lbp-pricing-collateral.md).
 
 Each weighted trade and `poke` read one saved previous-block timestamp from the pinned upstream clock. Normal builds use this provider. Inclusion-time bounds separately enforce the sale start and end. Observer checkpoints do not select prices or affect settlement. See [ADR 0026](../adr/0026-lbp-clock-and-poke.md).
 

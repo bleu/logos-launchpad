@@ -1,6 +1,6 @@
 # Sequence diagrams
 
-Creation pages show implemented program stages, with local evidence limits. The private-purchase page shows a required but unsupported route. QML, wallet-provider and indexer integration remain planned; these diagrams do not prove app or platform readiness.
+Each creation diagram shows one creator-signed transaction. The private-purchase page shows a required but unsupported route. QML, wallet-provider and indexer integration remain planned; these diagrams do not prove app or platform readiness.
 
 - [Create a curve pool](create-curve-pool.md)
 - [Create a fixed-price or weighted sale pool](create-lbp-pool.md)

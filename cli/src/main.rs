@@ -1013,7 +1013,13 @@ async fn withdraw_factory_proceeds(
     )
     .withdraw(sale, current_time()?)
     .await?;
-    print_lifecycle(json, "factory withdrawal", args.launch.launch_salt, receipt)
+    print_lifecycle(
+        json,
+        "factory withdrawal",
+        "stages",
+        args.launch.launch_salt,
+        receipt,
+    )
 }
 
 async fn graduate(namespace: lee::AccountId, json: bool, args: GraduationArgs) -> Result<()> {
@@ -1596,12 +1602,24 @@ async fn create_sale(
     )
     .create_sale(sale, request)
     .await?;
-    print_lifecycle(json, "factory launch", args.launch.launch_salt, receipt)
+    let count_unit = if receipt.transaction_hashes.len() == 1 {
+        "transaction"
+    } else {
+        "transactions"
+    };
+    print_lifecycle(
+        json,
+        "factory launch",
+        count_unit,
+        args.launch.launch_salt,
+        receipt,
+    )
 }
 
 fn print_lifecycle(
     json: bool,
     label: &str,
+    count_unit: &str,
     salt: [u8; 32],
     receipt: launchpad_client::LifecycleReceipt,
 ) -> Result<()> {
@@ -1618,7 +1636,7 @@ fn print_lifecycle(
         );
     } else {
         println!(
-            "completed {label}: {} confirmed stages; launch_salt={}",
+            "completed {label}: {} confirmed {count_unit}; launch_salt={}",
             hashes.len(),
             hex::encode(salt)
         );

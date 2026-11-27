@@ -1,6 +1,9 @@
+#[path = "support/creation.rs"]
+mod creation_fixture;
 #[path = "support/lbp_pause_forwarding.rs"]
 mod lbp_pause_forwarding;
 
+use creation_fixture::Creation;
 use factory_core::events::*;
 use factory_core::{
     CreatorAllocationRelease, Error, LbpCreationStage, LbpLaunchState, LbpSetupMode, Message,
@@ -131,35 +134,24 @@ fn finish_clock(input: &ReceiveInput, mut response: Response) -> Result<Response
     }
     Ok(response)
 }
-fn minted(release: CreatorAllocationRelease) -> (ReceiveInput, Response) {
+fn minted(release: CreatorAllocationRelease) -> (ReceiveInput, Response, Creation) {
     let mut value = inputs();
     value.allocation_release = release;
     minted_with_terms(value)
 }
-fn minted_with_terms(value: WeightedInputs) -> (ReceiveInput, Response) {
-    let mut input = creation(value);
-    let mut response = handle(&input).unwrap();
-    for bytes in [config(), definition()] {
-        input = reply(&input, &response, bytes);
-        response = handle(&input).unwrap();
-    }
-    let response = finish_clock(&input, response).unwrap();
-    (input, response)
+fn minted_with_terms(value: WeightedInputs) -> (ReceiveInput, Response, Creation) {
+    let input = creation(value);
+    let response = handle(&input).unwrap();
+    let setup = Creation::new(&input, &response);
+    let input = setup.namespace_reply(&response, config());
+    let response = handle(&input).unwrap();
+    let input = reply(&input, &response, definition());
+    let response = finish_clock(&input, handle(&input).unwrap()).unwrap();
+    (input, response, setup)
 }
-fn advance(
-    input: &ReceiveInput,
-    previous: &Response,
-    extra: Vec<Vec<u8>>,
-) -> Result<Response, Error> {
+fn advance(setup: &Creation, previous: &Response, extra: Vec<Vec<u8>>) -> Result<Response, Error> {
     let state = LbpLaunchState::decode(previous.post_state.as_ref().unwrap()).unwrap();
-    let mut input = input.clone();
-    input.pre_state = previous.post_state.clone().unwrap();
-    input.from = None;
-    input.message = borsh::to_vec(&Message::ContinueWeightedCreation {
-        expected_stage: state.creation_stage,
-        creator: id(42),
-    })
-    .unwrap();
+    let mut input = setup.continuation(previous, state.creation_stage);
     let response = handle(&input)?;
     input.pre_state = response.post_state.unwrap();
     input.from = Some(Actor::new(
@@ -203,18 +195,18 @@ fn advance(
     }
     finish_clock(&input, response)
 }
-fn prepared(release: CreatorAllocationRelease) -> (ReceiveInput, Response, Vec<u8>) {
+fn prepared(release: CreatorAllocationRelease) -> (ReceiveInput, Response, Vec<u8>, Creation) {
     let mut terms = inputs();
     terms.allocation_release = release;
     prepared_with_terms(terms)
 }
-fn prepared_with_terms(terms: WeightedInputs) -> (ReceiveInput, Response, Vec<u8>) {
+fn prepared_with_terms(terms: WeightedInputs) -> (ReceiveInput, Response, Vec<u8>, Creation) {
     let policy = terms.buy_policy.clone();
     let pause_policy = terms.pause_policy;
     let policies = terms.ending_policy;
     let trade_mode = terms.trade_mode;
     let sell_fee_bps = terms.sell_fee_bps;
-    let (input, response) = minted_with_terms(terms);
+    let (input, response, setup) = minted_with_terms(terms);
     assert_eq!(
         LbpLaunchState::decode(response.post_state.as_ref().unwrap())
             .unwrap()
@@ -227,7 +219,7 @@ fn prepared_with_terms(terms: WeightedInputs) -> (ReceiveInput, Response, Vec<u8
             .buy_policy,
         policy
     );
-    let allocated = advance(&input, &response, vec![]).unwrap();
+    let allocated = advance(&setup, &response, vec![]).unwrap();
     assert_eq!(
         LbpLaunchState::decode(allocated.post_state.as_ref().unwrap())
             .unwrap()
@@ -240,7 +232,7 @@ fn prepared_with_terms(terms: WeightedInputs) -> (ReceiveInput, Response, Vec<u8
             .buy_policy,
         policy
     );
-    let prepared = advance(&input, &allocated, vec![]).unwrap();
+    let prepared = advance(&setup, &allocated, vec![]).unwrap();
     assert_eq!(
         LbpLaunchState::decode(prepared.post_state.as_ref().unwrap())
             .unwrap()
@@ -286,7 +278,7 @@ fn prepared_with_terms(terms: WeightedInputs) -> (ReceiveInput, Response, Vec<u8
         message: borsh::to_vec(&clock_core::Reply::Timestamp(100_000)).unwrap(),
     };
     let pool = lbp_core::handle(&pool_input).unwrap();
-    (input, prepared, pool.post_state.unwrap().to_vec())
+    (input, prepared, pool.post_state.unwrap().to_vec(), setup)
 }
 
 #[test]
@@ -316,7 +308,7 @@ fn weighted_creation_validates_terms_and_keeps_a_separate_mode() {
             })
         );
     }
-    let (input, response) = minted(CreatorAllocationRelease::AfterEnd);
+    let (_, response, setup) = minted(CreatorAllocationRelease::AfterEnd);
     let state = LbpLaunchState::decode(response.post_state.as_ref().unwrap()).unwrap();
     assert!(matches!(
         state.mode,
@@ -326,8 +318,10 @@ fn weighted_creation_validates_terms_and_keeps_a_separate_mode() {
         }
     ));
     assert_eq!(state.total_supply, 1000);
-    let mut request = input.clone();
-    request.pre_state = response.post_state.unwrap();
+    setup.assert_rejects_external_continuation(&response);
+    let stale = setup.continuation(&response, LbpCreationStage::Allocated);
+    assert_eq!(handle(&stale).err(), Some(Error::StaleStage));
+    let mut request = setup.continuation(&response, LbpCreationStage::Minted);
     request.message = borsh::to_vec(&Message::ContinueFixedPriceCreation {
         expected_stage: LbpCreationStage::Minted,
         creator: id(42),
@@ -343,7 +337,7 @@ fn weighted_final_setup_requires_creator_seed_and_keeps_surplus_separate() {
         CreatorAllocationRelease::AfterEnd,
         CreatorAllocationRelease::AfterSetup,
     ] {
-        let (input, previous, pool) = prepared(release);
+        let (_, previous, pool, setup) = prepared(release);
         let state = LbpLaunchState::decode(previous.post_state.as_ref().unwrap()).unwrap();
         let extra = |seed_balance, vault_balance| {
             vec![
@@ -354,14 +348,14 @@ fn weighted_final_setup_requires_creator_seed_and_keeps_surplus_separate() {
             ]
         };
         assert_eq!(
-            advance(&input, &previous, extra(99, 41)).err(),
+            advance(&setup, &previous, extra(99, 41)).err(),
             Some(Error::InvalidCustody)
         );
         assert_eq!(
-            advance(&input, &previous, extra(100, u128::MAX)).err(),
+            advance(&setup, &previous, extra(100, u128::MAX)).err(),
             Some(Error::Overflow)
         );
-        let response = advance(&input, &previous, extra(100, 41)).unwrap();
+        let response = advance(&setup, &previous, extra(100, 41)).unwrap();
         if release == CreatorAllocationRelease::AfterEnd {
             assert!(response.events.is_empty());
         } else {
@@ -405,7 +399,7 @@ fn weighted_final_setup_requires_creator_seed_and_keeps_surplus_separate() {
         let mut wrong = extra(100, 41);
         wrong[0] = borsh::to_vec(&changed).unwrap();
         assert_eq!(
-            advance(&input, &previous, wrong).err(),
+            advance(&setup, &previous, wrong).err(),
             Some(Error::InvalidState)
         );
     }
@@ -413,7 +407,7 @@ fn weighted_final_setup_requires_creator_seed_and_keeps_surplus_separate() {
 
 #[test]
 fn fixed_price_payout_commands_cannot_release_weighted_sale_funds() {
-    let (mut input, response) = minted(CreatorAllocationRelease::AfterEnd);
+    let (mut input, response, _) = minted(CreatorAllocationRelease::AfterEnd);
     let mut state = LbpLaunchState::decode(response.post_state.as_ref().unwrap()).unwrap();
     state.creation_stage = LbpCreationStage::Complete;
     input.pre_state = borsh::to_vec(&state).unwrap().into();
@@ -464,10 +458,10 @@ fn weighted_creation_saves_the_initial_bound_buy_policy() {
 }
 
 #[test]
-fn weighted_policy_is_immutable_through_setup_funding_and_retry() {
+fn weighted_policy_is_immutable_through_setup_funding() {
     let terms = allowlisted_inputs();
     let policy = terms.buy_policy.clone();
-    let (input, prepared, bytes) = prepared_with_terms(terms);
+    let (_, prepared, bytes, setup) = prepared_with_terms(terms);
     let state = LbpLaunchState::decode(prepared.post_state.as_ref().unwrap()).unwrap();
     let pool = lbp_core::PoolAccount::decode(&bytes).unwrap();
     assert_eq!(pool.buy_policy, policy);
@@ -484,7 +478,7 @@ fn weighted_policy_is_immutable_through_setup_funding_and_retry() {
             _ => {}
         }
         let result = advance(
-            &input,
+            &setup,
             &prepared,
             vec![
                 borsh::to_vec(&changed).unwrap(),
@@ -532,7 +526,7 @@ fn weighted_pause_policy_survives_setup_and_rejects_substitution() {
     ] {
         let mut terms = inputs();
         terms.pause_policy = policy;
-        let (input, prepared, bytes) = prepared_with_terms(terms);
+        let (_, prepared, bytes, setup) = prepared_with_terms(terms);
         let state = LbpLaunchState::decode(prepared.post_state.as_ref().unwrap()).unwrap();
         assert_eq!(state.pause_policy, policy);
         let pool = lbp_core::PoolAccount::decode(&bytes).unwrap();
@@ -545,7 +539,7 @@ fn weighted_pause_policy_survives_setup_and_rejects_substitution() {
             let mut pool = pool.clone();
             pool.trade_control = control;
             let result = advance(
-                &input,
+                &setup,
                 &prepared,
                 vec![
                     borsh::to_vec(&pool).unwrap(),
@@ -568,7 +562,7 @@ fn weighted_pause_policy_survives_setup_and_rejects_substitution() {
 
 #[test]
 fn shared_pause_requires_the_sale_creator_on_every_call_before_pool_forwarding() {
-    let (input, response) = minted(CreatorAllocationRelease::AfterEnd);
+    let (input, response, _) = minted(CreatorAllocationRelease::AfterEnd);
     let mut state = LbpLaunchState::decode(response.post_state.as_ref().unwrap()).unwrap();
     state.creation_stage = LbpCreationStage::Complete;
     state.pause_policy = curve_core::PausePolicy::AuthorityControlled;
@@ -581,7 +575,7 @@ fn shared_pause_requires_the_sale_creator_on_every_call_before_pool_forwarding()
 
 #[test]
 fn legacy_weighted_pause_keeps_its_weighted_pool_alias() {
-    let (mut input, response) = minted(CreatorAllocationRelease::AfterEnd);
+    let (mut input, response, _) = minted(CreatorAllocationRelease::AfterEnd);
     let mut state = LbpLaunchState::decode(response.post_state.as_ref().unwrap()).unwrap();
     state.creation_stage = LbpCreationStage::Complete;
     input.pre_state = borsh::to_vec(&state).unwrap().into();
@@ -645,7 +639,7 @@ fn weighted_creation_requires_a_supported_ending_and_a_valid_schedule() {
 
 #[test]
 fn weighted_policy_choices_survive_setup_and_pool_mismatches_reject_funding() {
-    let (input, prepared, bytes) = prepared(CreatorAllocationRelease::AfterEnd);
+    let (_, prepared, bytes, setup) = prepared(CreatorAllocationRelease::AfterEnd);
     let state = LbpLaunchState::decode(prepared.post_state.as_ref().unwrap()).unwrap();
     let pool = lbp_core::PoolAccount::decode(&bytes).unwrap();
     assert_eq!(state.ending_policy, factory_core::EndingPolicy::Scheduled);
@@ -658,7 +652,7 @@ fn weighted_policy_choices_survive_setup_and_pool_mismatches_reject_funding() {
             _ => {}
         }
         let result = advance(
-            &input,
+            &setup,
             &prepared,
             vec![
                 borsh::to_vec(&changed).unwrap(),
@@ -698,7 +692,7 @@ fn weighted_authorized(input: &ReceiveInput, response: &Response) -> ReceiveInpu
 
 #[test]
 fn scheduled_weighted_allocation_keeps_deadline_and_settlement_delegates_to_pool() {
-    let (input, prepared, bytes) = prepared(CreatorAllocationRelease::AfterEnd);
+    let (input, prepared, bytes, _) = prepared(CreatorAllocationRelease::AfterEnd);
     let mut state = LbpLaunchState::decode(prepared.post_state.as_ref().unwrap()).unwrap();
     state.creation_stage = LbpCreationStage::Complete;
     let mut pool = lbp_core::PoolAccount::decode(&bytes).unwrap();
@@ -783,6 +777,7 @@ fn scheduled_weighted_allocation_keeps_deadline_and_settlement_delegates_to_pool
 fn weighted_malformed_saved_policies_cannot_resume_or_forward_payouts() {
     let input = creation(inputs());
     let response = handle(&input).unwrap();
+    let setup = Creation::new(&input, &response);
     let state = LbpLaunchState::decode(response.post_state.as_ref().unwrap()).unwrap();
     for case in 0..3 {
         let mut changed = state.clone();
@@ -796,7 +791,7 @@ fn weighted_malformed_saved_policies_cannot_resume_or_forward_payouts() {
             LbpLaunchState::decode(&bytes).err(),
             Some(Error::InvalidState)
         );
-        let mut next = reply(&input, &response, config());
+        let mut next = setup.namespace_reply(&response, config());
         next.pre_state = bytes.into();
         assert_eq!(handle(&next).err(), Some(Error::InvalidState));
         changed.creation_stage = LbpCreationStage::Complete;
@@ -836,7 +831,7 @@ fn weighted_hook_binds_both_assets_and_includes_seed_in_the_split() {
         launch_bps: 2500,
         collateral_bps: 6000,
     };
-    let (mut input, prepared, bytes) = prepared_with_terms(terms.clone());
+    let (mut input, prepared, bytes, setup) = prepared_with_terms(terms.clone());
     let mut state = LbpLaunchState::decode(prepared.post_state.as_ref().unwrap()).unwrap();
     assert_eq!(state.graduation_hook, terms.graduation_hook);
     let mut pool = lbp_core::PoolAccount::decode(&bytes).unwrap();
@@ -849,7 +844,7 @@ fn weighted_hook_binds_both_assets_and_includes_seed_in_the_split() {
     changed.graduation_adapter = None;
     assert_eq!(
         advance(
-            &input,
+            &setup,
             &prepared,
             vec![
                 borsh::to_vec(&changed).unwrap(),
@@ -1059,7 +1054,7 @@ fn weighted_hook_binds_both_assets_and_includes_seed_in_the_split() {
 #[test]
 fn weighted_no_buyer_manual_completion_pays_inventory_and_seed_once() {
     use factory_core::{SettlementProgress, SettlementReceipt, SettlementReply, SettlementRoute};
-    let (mut input, prepared, bytes) = prepared(CreatorAllocationRelease::AfterEnd);
+    let (mut input, prepared, bytes, _) = prepared(CreatorAllocationRelease::AfterEnd);
     let mut state = LbpLaunchState::decode(prepared.post_state.as_ref().unwrap()).unwrap();
     state.creation_stage = LbpCreationStage::Complete;
     let mut pool = lbp_core::PoolAccount::decode(&bytes).unwrap();
@@ -1150,7 +1145,7 @@ fn weighted_allocation_and_retries_use_selected_close_without_releasing_schedule
     ] {
         let mut terms = inputs();
         terms.ending_policy = ending;
-        let (input, prepared, bytes) = prepared_with_terms(terms);
+        let (input, prepared, bytes, _) = prepared_with_terms(terms);
         let mut state = LbpLaunchState::decode(prepared.post_state.as_ref().unwrap()).unwrap();
         state.creation_stage = LbpCreationStage::Complete;
         let original = lbp_core::PoolAccount::decode(&bytes).unwrap();
@@ -1205,7 +1200,7 @@ fn weighted_allocation_and_retries_use_selected_close_without_releasing_schedule
 
 #[test]
 fn released_after_setup_allocation_retry_stays_available_while_weighted_sale_is_open() {
-    let (input, prepared, bytes) = prepared(CreatorAllocationRelease::AfterSetup);
+    let (input, prepared, bytes, _) = prepared(CreatorAllocationRelease::AfterSetup);
     let mut state = LbpLaunchState::decode(prepared.post_state.as_ref().unwrap()).unwrap();
     state.creation_stage = LbpCreationStage::Complete;
     state.creator_allocation_released = true;
@@ -1278,7 +1273,7 @@ fn weighted_created_event_names_the_launch_and_original_seed_once() {
             }
         )]
     );
-    let (_, minted) = minted(CreatorAllocationRelease::AfterEnd);
+    let (_, minted, _) = minted(CreatorAllocationRelease::AfterEnd);
     assert!(minted.events.is_empty());
     let mut replay = input;
     replay.pre_state = minted.post_state.unwrap();
@@ -1293,7 +1288,7 @@ fn weighted_trade_mode_survives_setup_and_rejects_substitution() {
     ] {
         let mut terms = inputs();
         terms.trade_mode = mode;
-        let (input, prepared, bytes) = prepared_with_terms(terms);
+        let (_, prepared, bytes, setup) = prepared_with_terms(terms);
         let state = LbpLaunchState::decode(prepared.post_state.as_ref().unwrap()).unwrap();
         assert_eq!(state.trade_mode, mode);
         let pool = lbp_core::PoolAccount::decode(&bytes).unwrap();
@@ -1305,7 +1300,7 @@ fn weighted_trade_mode_survives_setup_and_rejects_substitution() {
             let mut pool = pool.clone();
             pool.trade_mode = pool_mode;
             let result = advance(
-                &input,
+                &setup,
                 &prepared,
                 vec![
                     borsh::to_vec(&pool).unwrap(),
@@ -1333,7 +1328,7 @@ fn weighted_payouts_and_hook_reject_a_substituted_trade_mode() {
         program_id: id(9),
         configuration: vec![],
     });
-    let (input, prepared, bytes) = prepared_with_terms(terms);
+    let (input, prepared, bytes, _) = prepared_with_terms(terms);
     let mut state = LbpLaunchState::decode(prepared.post_state.as_ref().unwrap()).unwrap();
     state.creation_stage = LbpCreationStage::Complete;
     let mut pool = lbp_core::PoolAccount::decode(&bytes).unwrap();
@@ -1379,7 +1374,7 @@ fn weighted_sell_fee_survives_setup_and_rejects_substitution() {
     for rate in [0, 125, 9999] {
         let mut terms = inputs();
         terms.sell_fee_bps = rate;
-        let (input, prepared, bytes) = prepared_with_terms(terms);
+        let (_, prepared, bytes, setup) = prepared_with_terms(terms);
         let state = LbpLaunchState::decode(prepared.post_state.as_ref().unwrap()).unwrap();
         assert_eq!(state.sell_fee_bps, rate);
         let pool = lbp_core::PoolAccount::decode(&bytes).unwrap();
@@ -1388,7 +1383,7 @@ fn weighted_sell_fee_survives_setup_and_rejects_substitution() {
             let mut pool = pool.clone();
             pool.sell_fee_bps = pool_rate;
             let result = advance(
-                &input,
+                &setup,
                 &prepared,
                 vec![
                     borsh::to_vec(&pool).unwrap(),
@@ -1416,7 +1411,7 @@ fn weighted_payouts_and_hook_reject_a_substituted_sell_fee() {
         program_id: id(9),
         configuration: vec![],
     });
-    let (input, prepared, bytes) = prepared_with_terms(terms);
+    let (input, prepared, bytes, _) = prepared_with_terms(terms);
     let mut state = LbpLaunchState::decode(prepared.post_state.as_ref().unwrap()).unwrap();
     state.creation_stage = LbpCreationStage::Complete;
     let mut pool = lbp_core::PoolAccount::decode(&bytes).unwrap();
@@ -1502,7 +1497,7 @@ fn weighted_graduation_policy_validates_creation_and_forbids_manual_even_after_c
             }
         }
     }
-    let (mut input, prepared, _) = prepared(CreatorAllocationRelease::AfterEnd);
+    let (mut input, prepared, _, _) = prepared(CreatorAllocationRelease::AfterEnd);
     let mut state = LbpLaunchState::decode(prepared.post_state.as_ref().unwrap()).unwrap();
     state.creation_stage = LbpCreationStage::Complete;
     state.graduation_hook = Some(GraduationHook {
@@ -1533,7 +1528,7 @@ fn weighted_funding_rejects_either_substituted_graduation_percentage() {
         launch_bps: 2500,
         collateral_bps: 6000,
     };
-    let (input, prepared, bytes) = prepared_with_terms(terms.clone());
+    let (_, prepared, bytes, setup) = prepared_with_terms(terms.clone());
     let state = LbpLaunchState::decode(prepared.post_state.as_ref().unwrap()).unwrap();
     let pool = lbp_core::PoolAccount::decode(&bytes).unwrap();
     assert_eq!(pool.graduation_policy, terms.graduation_policy);
@@ -1546,7 +1541,7 @@ fn weighted_funding_rejects_either_substituted_graduation_percentage() {
         }
         assert_eq!(
             advance(
-                &input,
+                &setup,
                 &prepared,
                 vec![
                     borsh::to_vec(&changed).unwrap(),

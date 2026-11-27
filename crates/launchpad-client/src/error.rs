@@ -234,9 +234,7 @@ pub enum ClientError {
     FactorySaleMismatch,
     #[error("private authority router is required")]
     PrivateAuthorityRouterRequired,
-    #[error("creation already completed")]
-    CreationAlreadyComplete,
-    #[error("creation did not complete; retry with the same launch salt")]
+    #[error("sale creation did not produce a funded pool")]
     CreationIncomplete,
     #[error("factory launch does not exist")]
     FactoryLaunchMissing,
@@ -248,7 +246,7 @@ pub enum ClientError {
     TooManyGraduationAccounts,
     #[error("settlement did not complete; retry with the same launch salt")]
     SettlementIncomplete,
-    #[error("existing launch parameters differ; resume with the original parameters")]
+    #[error("the existing sale has different launch parameters")]
     LaunchParametersMismatch,
 }
 

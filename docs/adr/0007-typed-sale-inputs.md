@@ -4,7 +4,7 @@ Status: Accepted internally; To be reviewed by Logos team
 
 ## Decision
 
-Use separate typed creation inputs for bonding-curve, fixed-price and weighted sales. Validate them before creation and keep them immutable, including during resumed setup. Reserves, fees and lifecycle state can change only through permitted operations.
+Use separate typed creation inputs for bonding-curve, fixed-price and weighted sales. Validate them at creation and keep them immutable. Reserves, fees and lifecycle state can change only through permitted operations.
 
 ## Reason and limits
 
