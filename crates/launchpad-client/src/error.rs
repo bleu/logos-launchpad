@@ -233,6 +233,20 @@ pub enum ClientError {
     PrivateAuthorityRouterRequired,
     #[error("sale creation did not produce a funded pool")]
     CreationIncomplete,
+    #[error("sale creation executed, but funded setup could not be verified: {source}")]
+    CreationVerificationFailed {
+        hash: common::HashType,
+        #[source]
+        source: Box<ClientError>,
+    },
+    #[error("reading the sale creator role")]
+    ReadCreatorRole(#[source] Box<dyn Error + Send + Sync>),
+    #[error("sale creator role state is missing")]
+    CreatorRoleMissing,
+    #[error("decoding the sale creator role: {0:?}")]
+    DecodeCreatorRole(lez_compat_core::Error),
+    #[error("the selected creator does not hold this sale's creator role")]
+    CreatorAuthorityMismatch,
     #[error("factory launch does not exist")]
     FactoryLaunchMissing,
     #[error("launch does not match the selected collateral or curve")]

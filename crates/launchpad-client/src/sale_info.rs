@@ -63,6 +63,7 @@ pub struct CurveSaleInfo {
 #[derive(Debug)]
 pub struct CurvePoolObservation {
     pub state: pool::Pool,
+    pub funded: bool,
     /// Net tokens sold, when the pool still holds its reserves.
     pub tokens_sold: Option<u128>,
 }
@@ -196,6 +197,7 @@ async fn curve_sale_info(
         };
         Some(Box::new(CurvePoolObservation {
             state: saved.pool,
+            funded: saved.funded,
             tokens_sold,
         }))
     } else {

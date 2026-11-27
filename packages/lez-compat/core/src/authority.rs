@@ -148,18 +148,23 @@ impl Role {
     }
 }
 
+/// Reads the current holder from role state. This does not authorize an action.
+pub fn current_holder(state: &[u8]) -> Result<AccountId, Error> {
+    let role: Role = borsh::from_slice(state).map_err(|_| Error::InvalidState)?;
+    let authority = role.holder.ok_or(Error::Renounced)?;
+    if authority == AccountId::default() {
+        return Err(Error::Unauthorized);
+    }
+    Ok(authority)
+}
+
 pub fn handle(input: &ReceiveInput) -> Result<Response, Error> {
     let message: Message = borsh::from_slice(&input.message).map_err(|_| Error::InvalidMessage)?;
     let program = input.receiver.program_account_id;
     match message {
         Message::Resolve => {
             let caller = input.from.ok_or(Error::Unauthorized)?;
-            let role: Role =
-                borsh::from_slice(&input.pre_state).map_err(|_| Error::InvalidState)?;
-            let authority = role.holder.ok_or(Error::Renounced)?;
-            if authority == AccountId::default() {
-                return Err(Error::Unauthorized);
-            }
+            let authority = current_holder(&input.pre_state)?;
             Ok(Response::keep_state().send_sync(
                 caller,
                 &CurrentAuthority {
@@ -368,5 +373,22 @@ pub fn handle(input: &ReceiveInput) -> Result<Response, Error> {
                 },
             ))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_default_holder_in_stored_state_is_unauthorized() {
+        let role = Role {
+            holder: Some(AccountId::default()),
+            pending: None,
+            epoch: 1,
+            can_renounce: false,
+        };
+        let state = borsh::to_vec(&role).unwrap();
+        assert_eq!(current_holder(&state), Err(Error::Unauthorized));
     }
 }

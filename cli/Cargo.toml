@@ -33,6 +33,7 @@ curve-core.workspace = true
 factory-core.workspace = true
 lbp-core.workspace = true
 lee_core.workspace = true
+lez-compat-core.workspace = true
 program_loader_core.workspace = true
 programs.workspace = true
 risc0-binfmt = "3.0.6"

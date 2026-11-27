@@ -60,7 +60,9 @@ Curve `create-sale` uses `--graduation-launch-bps` and `--graduation-collateral-
 
 ## CLI sale reads and public write results
 
-`sale-info` requires `--engine bonding-curve`, `--engine fixed-price` or `--engine weighted`. Use deployed program account IDs. The command reads the saved terms and setup stage without opening a wallet. The saved stage does not tell you whether trading is open now.
+Use `create-sale` in an existing namespace. Buys are open by default. To require an allowlist, pass an existing 64-character hex root with `--allowlist-root`. After creation, use `sale-info --engine bonding-curve` to check the saved setup stage and `pool_observation.funded`. If creation reports `verification_failed`, use the acknowledged transaction hash to check its result before you retry.
+
+`sale-info` requires `--engine bonding-curve`, `--engine fixed-price` or `--engine weighted`. Use deployed program account IDs. The command reads the saved terms and setup stage without opening a wallet. Saved setup does not tell you whether trading is open now.
 
 A public write reports `executed` only after a successful receipt. An already-complete command can report `no_change`. Both exit `0`. Preparation failure, rejection before send and a reverted receipt exit `1`. Invalid command arguments exit `2`. A write with an unknown outcome reports `pending` and exits `3`. It includes the transaction hash if the sequencer acknowledged the send. A pending stage stops later writes. The result keeps hashes of earlier steps with successful receipts. Check the pending result before you retry.
 

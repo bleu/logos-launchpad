@@ -92,6 +92,7 @@ pub(crate) async fn show(
             "initial_virtual_token_reserve": info.initial_virtual_token_reserve,
             "initial_virtual_collateral_reserve": info.initial_virtual_collateral_reserve,
             "pool_observation": info.pool.map(|pool| json!({
+                "funded": pool.funded,
                 "saved_lifecycle": match pool.state.lifecycle {
                     pool::PoolLifecycle::Open => "open",
                     pool::PoolLifecycle::Closed => "closed",
