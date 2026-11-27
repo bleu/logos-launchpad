@@ -13,7 +13,7 @@ use wallet::WalletSequencerClient;
 use super::args::{LaunchArgs, TradeModeArg, parse_public_account_id};
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
-enum Engine {
+pub(super) enum Engine {
     BondingCurve,
     FixedPrice,
     Weighted,
@@ -159,6 +159,15 @@ fn terms(terms: &SavedSaleTerms) -> Value {
     })
 }
 
+fn settlement_progress(progress: LbpSettlementProgress) -> &'static str {
+    match progress {
+        LbpSettlementProgress::Unselected => "unselected",
+        LbpSettlementProgress::ManualStarted => "manual_started",
+        LbpSettlementProgress::ManualComplete => "manual_complete",
+        LbpSettlementProgress::Graduated => "graduated",
+    }
+}
+
 fn lbp_view(engine: &str, sale: &LbpSaleInfo) -> Value {
     json!({
         "engine": engine,
@@ -169,12 +178,13 @@ fn lbp_view(engine: &str, sale: &LbpSaleInfo) -> Value {
             LbpCreationStage::Complete => "complete",
         },
         "terms": terms(&sale.terms),
-        "settlement_progress": match sale.settlement_progress {
-            LbpSettlementProgress::Unselected => "unselected",
-            LbpSettlementProgress::ManualStarted => "manual_started",
-            LbpSettlementProgress::ManualComplete => "manual_complete",
-            LbpSettlementProgress::Graduated => "graduated",
-        },
+        "settlement_progress": settlement_progress(sale.settlement_progress),
+        "pool_observation": sale.pool.as_ref().map(|pool| json!({
+            "funded": pool.funded,
+            "paused": pool.paused,
+            "closure_observed": pool.closure_observed,
+            "settlement_progress": settlement_progress(pool.settlement_progress),
+        })),
         "start_timestamp": sale.start_timestamp,
         "allocation_release": sale.allocation_release,
         "creator_allocation_released": sale.creator_allocation_released,

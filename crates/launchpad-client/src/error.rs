@@ -114,12 +114,14 @@ pub enum ClientError {
     #[error("decoding the factory launch state")]
     #[strum(serialize = "decode_factory_state")]
     DecodeFactoryState(#[source] factory_core::Error),
-    #[error("reading the factory curve pool")]
+    #[error("reading the factory pool")]
     #[strum(serialize = "read_factory_pool")]
     ReadFactoryPool(#[source] Box<dyn Error + Send + Sync>),
     #[error("decoding the factory curve pool")]
     #[strum(serialize = "decode_factory_pool")]
     DecodeFactoryPool(#[source] curve_core::Error),
+    #[error("decoding the factory LBP pool")]
+    DecodeLbpPool(#[source] lbp_core::Error),
     #[error("program binary does not match the invocation program ID")]
     InvocationProgramMismatch,
     #[error("wallet has no public signing key for {0}")]

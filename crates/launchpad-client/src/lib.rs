@@ -35,8 +35,11 @@ pub use curve_core::{
     TOKEN_PROGRAM_ACCOUNT_ID, TradeControl,
 };
 pub use error::{ClientError, Result};
-pub use factory_core::{CreationStage, GraduationHook, SettlementStage, TradeMode};
-pub use factory_core::{GraduationPolicy, LbpCreationStage, SettlementPayouts};
+pub use factory_core::{
+    CreationStage, CreatorAllocationRelease, FixedPrice, FixedPriceInputs, GraduationHook,
+    GraduationPolicy, LbpCreationStage, SaleStart, SettlementPayouts, SettlementStage, TradeMode,
+    WeightedInputs,
+};
 pub use lbp_core::{
     QuoteRequest as LbpQuoteRequest, SettlementProgress as LbpSettlementProgress,
     TradeQuote as LbpTradeQuote,
@@ -49,9 +52,11 @@ pub use lbp::{
     build_fixed_price_buy_invocation, build_fixed_price_buy_with_collateral_invocation,
     build_fixed_price_sell_invocation, build_set_lbp_paused_invocation,
     build_weighted_buy_invocation, build_weighted_buy_with_collateral_invocation,
-    build_weighted_sell_invocation,
+    build_weighted_sell_invocation, lbp_buy_policy,
 };
-pub use lifecycle::{FactorySession, LifecycleReceipt, next_creation_invocation};
+pub use lifecycle::{
+    FactorySession, LbpCreateRequest, LifecycleReceipt, create_lbp_sale, next_creation_invocation,
+};
 pub use namespace::{NamespaceAction, NamespaceReceipt, submit_namespace_action};
 pub use namespace_builders::{
     build_initialize_namespace_invocation, build_renounce_admin_invocation,
@@ -59,8 +64,8 @@ pub use namespace_builders::{
 };
 pub use quotes::{quote_buy, quote_buy_with_collateral, quote_lbp_trade, quote_sell};
 pub use sale_info::{
-    CurvePoolObservation, CurveSaleInfo, FixedPriceSaleInfo, LbpSaleInfo, SaleInfo, SaleSelection,
-    SavedSaleTerms, WeightedSaleInfo, load_sale_info,
+    CurvePoolObservation, CurveSaleInfo, FixedPriceSaleInfo, LbpPoolObservation, LbpSaleInfo,
+    SaleInfo, SaleSelection, SavedSaleTerms, WeightedSaleInfo, load_sale_info,
 };
 pub use types::{
     AccountLocation, ExactInputTradeTerms, ExactOutputTradeTerms, FactorySale, LbpSale,
@@ -79,6 +84,22 @@ pub use write_transport::{PublicWriteWallet, WriteTransport};
 use lee::{AccountId, program::Program};
 use lee_core::program::ProgramId;
 use std::path::Path;
+
+fn sale_buy_policy(
+    namespace: AccountId,
+    allowlist_root: Option<[u8; 32]>,
+    pool: impl FnOnce() -> AccountId,
+) -> BuyPolicy {
+    match allowlist_root {
+        Some(root) => BuyPolicy::Allowlist(AllowlistPolicy {
+            version: 1,
+            namespace: *namespace.value(),
+            sale_policy_id: *pool().value(),
+            root,
+        }),
+        None => BuyPolicy::Open,
+    }
+}
 
 /// A deployed program address and its expected binary image. PDAs use `account_id`.
 #[derive(Debug, Clone)]

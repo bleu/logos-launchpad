@@ -2,10 +2,13 @@ use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand, builder::Styles};
 use eyre::Result;
-use launchpad_client::{AccountLocation, CreateSaleRequest, PrivateAccountId};
+use launchpad_client::{
+    AccountLocation, CreateSaleRequest, CreatorAllocationRelease, FixedPrice, FixedPriceInputs,
+    LbpSale, PrivateAccountId, SaleStart, WeightedInputs,
+};
 use serde::Serialize;
 
-use super::sale_info;
+use super::sale_info::{self, Engine};
 
 #[cfg(test)]
 mod tests;
@@ -30,16 +33,21 @@ pub(super) struct Cli {
 impl Cli {
     pub(super) fn validate_route(&self) -> Result<()> {
         if let Command::CreateSale(args) = &self.command {
-            let request = args.sale_request();
+            args.validate_engine_flags()?;
+            let graduation = args.graduation_policy();
             if args.graduation_hook_program_id.is_none()
-                && (request.graduation_policy.launch_bps != 0
-                    || request.graduation_policy.collateral_bps != 0)
+                && (graduation.launch_bps != 0 || graduation.collateral_bps != 0)
             {
                 eyre::bail!("nonzero graduation percentages require --graduation-hook-program-id");
             }
-            request
-                .ending_policy
-                .validate(None, request.end_timestamp)?;
+            let start = match args.engine {
+                Engine::BondingCurve => None,
+                Engine::Weighted => args.start_at,
+                Engine::FixedPrice => Some(args.start_now.or(args.start_at).ok_or_else(|| {
+                    eyre::eyre!("fixed-price sales require --start-now or --start-at")
+                })?),
+            };
+            args.ending_policy().validate(start, args.end_timestamp)?;
         }
         if let Command::TransferAuthority(args) = &self.command
             && (args.from.is_private() || args.to.is_private())
@@ -125,7 +133,7 @@ impl Cli {
 
 #[derive(Debug, Subcommand)]
 pub(super) enum Command {
-    /// Create and fund a factory bonding-curve sale.
+    /// Create and fund a factory sale.
     #[command(alias = "launch")]
     CreateSale(Box<CreateSaleArgs>),
     Withdraw(FactoryLifecycleArgs),
@@ -325,8 +333,25 @@ impl From<EndingPolicyArg> for launchpad_client::EndingPolicy {
     }
 }
 
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+enum AllocationReleaseArg {
+    AfterSetup,
+    AfterEnd,
+}
+
+impl From<AllocationReleaseArg> for CreatorAllocationRelease {
+    fn from(release: AllocationReleaseArg) -> Self {
+        match release {
+            AllocationReleaseArg::AfterSetup => Self::AfterSetup,
+            AllocationReleaseArg::AfterEnd => Self::AfterEnd,
+        }
+    }
+}
+
 #[derive(Debug, Args)]
 pub(super) struct CreateSaleArgs {
+    #[arg(long, value_enum)]
+    pub(super) engine: Engine,
     #[arg(long, value_enum)]
     trade_mode: TradeModeArg,
     /// Optional sale allowlist root (64 hexadecimal characters).
@@ -373,77 +398,283 @@ pub(super) struct CreateSaleArgs {
     graduation_collateral_bps: Option<u16>,
     #[arg(long = "creator-allocation")]
     creator_allocation: u128,
-    #[arg(long = "virtual-token-reserve", alias = "vt")]
-    virtual_token_reserve: u128,
-    #[arg(long = "virtual-collateral-reserve", alias = "vc")]
-    virtual_collateral_reserve: u128,
+    /// Initial virtual launch tokens (bonding-curve only).
+    #[arg(
+        long = "virtual-token-reserve",
+        alias = "vt",
+        required_if_eq("engine", "bonding-curve")
+    )]
+    virtual_token_reserve: Option<u128>,
+    /// Initial virtual collateral (bonding-curve only).
+    #[arg(
+        long = "virtual-collateral-reserve",
+        alias = "vc",
+        required_if_eq("engine", "bonding-curve")
+    )]
+    virtual_collateral_reserve: Option<u128>,
+    /// Collateral amount in the fixed-price ratio, in smallest units.
+    #[arg(long, required_if_eq("engine", "fixed-price"), value_parser = parse_positive_amount)]
+    price_collateral_units: Option<u128>,
+    /// Launch token amount in the fixed-price ratio, in smallest units.
+    #[arg(long, required_if_eq("engine", "fixed-price"), value_parser = parse_positive_amount)]
+    price_token_units: Option<u128>,
+    /// Fixed-price start in Unix seconds. Inclusion must be at or after this time.
+    #[arg(long, conflicts_with = "start_at")]
+    start_now: Option<u64>,
+    /// Scheduled start in Unix seconds. Inclusion must be at or before this time.
+    #[arg(long, required_if_eq("engine", "weighted"))]
+    start_at: Option<u64>,
+    /// Creator-funded collateral seed in smallest units (weighted only).
+    #[arg(long, required_if_eq("engine", "weighted"), value_parser = parse_positive_amount)]
+    collateral_seed: Option<u128>,
+    /// Start weight of the launch token on a 10^18 scale (weighted only).
+    #[arg(long, required_if_eq("engine", "weighted"), value_parser = parse_positive_amount)]
+    token_weight_start: Option<u128>,
+    /// End weight of the launch token on a 10^18 scale (weighted only).
+    #[arg(long, required_if_eq("engine", "weighted"), value_parser = parse_positive_amount)]
+    token_weight_end: Option<u128>,
+    /// Creator allocation release for LBP sales. Defaults to after-end.
+    #[arg(long, value_enum)]
+    allocation_release: Option<AllocationReleaseArg>,
     /// Ending rule; defaults to depletion without an end, or either with an end.
     #[arg(long, value_enum)]
     ending_policy: Option<EndingPolicyArg>,
     /// Sale end time in Unix seconds; required for scheduled or either ending.
-    #[arg(long = "end-timestamp", required_if_eq_any = [("ending_policy", "scheduled"), ("ending_policy", "either")])]
+    #[arg(long = "end-timestamp", required_if_eq_any = [("engine", "weighted"), ("ending_policy", "scheduled"), ("ending_policy", "either")])]
     end_timestamp: Option<u64>,
     #[arg(long = "collateral-definition", value_parser = parse_account_location)]
     pub(super) collateral_definition: AccountLocation,
     /// Account that authorizes the factory launch.
     #[arg(long, value_parser = parse_account_location)]
     pub(super) creator: AccountLocation,
-    /// Clock lower bound in Unix seconds, preserved as supplied, including zero.
-    #[arg(long, default_value_t = 0)]
-    now: u64,
+    /// Clock lower bound in Unix seconds (bonding-curve only; defaults to zero).
+    #[arg(long)]
+    now: Option<u64>,
     /// Compiled factory guest binary deployed for this walkthrough.
     #[arg(long = "factory-program-path")]
     pub(super) factory_program_path: PathBuf,
     #[arg(long, value_parser = parse_public_account_id)]
     pub(super) factory_program_account: lee::AccountId,
     /// Compiled curve guest binary paired with the factory launch.
-    #[arg(long = "curve-program-path")]
-    pub(super) curve_program_path: PathBuf,
+    #[arg(long = "curve-program-path", required_if_eq("engine", "bonding-curve"))]
+    pub(super) curve_program_path: Option<PathBuf>,
+    /// Deployed curve or LBP program account, for the selected engine.
     #[arg(long, value_parser = parse_public_account_id)]
-    pub(super) curve_program_account: lee::AccountId,
+    pub(super) engine_program_account: lee::AccountId,
+    /// Deployed namespace program account for LBP sales.
+    #[arg(long, value_parser = parse_public_account_id, required_if_eq_any([("engine", "fixed-price"), ("engine", "weighted")]))]
+    pub(super) namespace_program_account: Option<lee::AccountId>,
 }
 
 impl CreateSaleArgs {
-    pub(super) fn sale_request(&self) -> CreateSaleRequest {
-        CreateSaleRequest {
-            buy_policy: launchpad_client::BuyPolicy::Open,
-            pause_policy: if self.pausable {
-                launchpad_client::PausePolicy::AuthorityControlled
-            } else {
-                launchpad_client::PausePolicy::Disabled
-            },
-            ending_policy: self.ending_policy.map(Into::into).unwrap_or_else(|| {
-                if self.end_timestamp.is_some() {
-                    launchpad_client::EndingPolicy::Either
-                } else {
-                    launchpad_client::EndingPolicy::Depletion
-                }
-            }),
+    fn validate_engine_flags(&self) -> Result<()> {
+        let curve = matches!(self.engine, Engine::BondingCurve);
+        let fixed = matches!(self.engine, Engine::FixedPrice);
+        let weighted = matches!(self.engine, Engine::Weighted);
+        for (flag, present, allowed) in [
+            (
+                "--curve-program-path",
+                self.curve_program_path.is_some(),
+                curve,
+            ),
+            (
+                "--virtual-token-reserve",
+                self.virtual_token_reserve.is_some(),
+                curve,
+            ),
+            (
+                "--virtual-collateral-reserve",
+                self.virtual_collateral_reserve.is_some(),
+                curve,
+            ),
+            ("--now", self.now.is_some(), curve),
+            (
+                "--namespace-program-account",
+                self.namespace_program_account.is_some(),
+                !curve,
+            ),
+            (
+                "--allocation-release",
+                self.allocation_release.is_some(),
+                !curve,
+            ),
+            ("--start-at", self.start_at.is_some(), !curve),
+            ("--start-now", self.start_now.is_some(), fixed),
+            (
+                "--price-collateral-units",
+                self.price_collateral_units.is_some(),
+                fixed,
+            ),
+            (
+                "--price-token-units",
+                self.price_token_units.is_some(),
+                fixed,
+            ),
+            (
+                "--collateral-seed",
+                self.collateral_seed.is_some(),
+                weighted,
+            ),
+            (
+                "--token-weight-start",
+                self.token_weight_start.is_some(),
+                weighted,
+            ),
+            (
+                "--token-weight-end",
+                self.token_weight_end.is_some(),
+                weighted,
+            ),
+        ] {
+            if present && !allowed {
+                eyre::bail!("{flag} does not apply to the selected engine");
+            }
+        }
+        Ok(())
+    }
+
+    pub(super) fn fixed_price_request(
+        &self,
+        sale: LbpSale,
+        creator: lee::AccountId,
+    ) -> Result<FixedPriceInputs> {
+        let start = match (self.start_now, self.start_at) {
+            (Some(timestamp), None) => SaleStart::Now { timestamp },
+            (None, Some(timestamp)) => SaleStart::At { timestamp },
+            _ => eyre::bail!("fixed-price sales require --start-now or --start-at"),
+        };
+        Ok(FixedPriceInputs {
+            buy_policy: launchpad_client::lbp_buy_policy(sale, self.allowlist_root),
+            pause_policy: self.pause_policy(),
+            ending_policy: self.ending_policy(),
             trade_mode: self.trade_mode.into(),
             sell_fee_bps: self.sell_fee_bps,
             per_block_token_limit: self.per_block_token_limit,
-            graduation_hook: self.graduation_hook_program_id.map(|program_id| {
-                launchpad_client::GraduationHook {
-                    program_id,
-                    configuration: self
-                        .graduation_hook_configuration
-                        .as_ref()
-                        .map_or_else(Vec::new, |configuration| configuration.0.clone()),
-                }
-            }),
+            graduation_hook: self.prepared_graduation_hook(sale.namespace)?,
+            graduation_policy: self.graduation_policy(),
+            namespace: sale.namespace,
+            launch_salt: sale.launch_salt,
+            name: self.name.clone(),
+            uri: self.uri.clone(),
+            sale_inventory: self.sale_reserve,
+            graduation_reserve: self.graduation_reserve,
+            creator_allocation: self.creator_allocation,
+            price: FixedPrice {
+                collateral_units: self
+                    .price_collateral_units
+                    .expect("required for fixed-price"),
+                token_units: self.price_token_units.expect("required for fixed-price"),
+            },
+            start,
+            end_timestamp: self.end_timestamp,
+            allocation_release: self.allocation_release(),
+            namespace_program_id: sale.namespace_program_id,
+            lbp_program_id: sale.lbp_program_id,
+            collateral_definition_id: sale.collateral_definition,
+            creator,
+            now: 0,
+        })
+    }
+
+    pub(super) fn weighted_request(
+        &self,
+        sale: LbpSale,
+        creator: lee::AccountId,
+    ) -> Result<WeightedInputs> {
+        Ok(WeightedInputs {
+            buy_policy: launchpad_client::lbp_buy_policy(sale, self.allowlist_root),
+            pause_policy: self.pause_policy(),
+            ending_policy: self.ending_policy(),
+            trade_mode: self.trade_mode.into(),
+            sell_fee_bps: self.sell_fee_bps,
+            per_block_token_limit: self.per_block_token_limit,
+            graduation_hook: self.prepared_graduation_hook(sale.namespace)?,
+            graduation_policy: self.graduation_policy(),
+            namespace: sale.namespace,
+            launch_salt: sale.launch_salt,
+            name: self.name.clone(),
+            uri: self.uri.clone(),
+            sale_inventory: self.sale_reserve,
+            graduation_reserve: self.graduation_reserve,
+            creator_allocation: self.creator_allocation,
+            collateral_seed: self.collateral_seed.expect("required for weighted"),
+            token_weight_start: self.token_weight_start.expect("required for weighted"),
+            token_weight_end: self.token_weight_end.expect("required for weighted"),
+            start_timestamp: self.start_at.expect("required for weighted"),
+            end_timestamp: self.end_timestamp.expect("required for weighted"),
+            allocation_release: self.allocation_release(),
+            namespace_program_id: sale.namespace_program_id,
+            lbp_program_id: sale.lbp_program_id,
+            collateral_definition_id: sale.collateral_definition,
+            creator,
+        })
+    }
+
+    fn allocation_release(&self) -> CreatorAllocationRelease {
+        self.allocation_release
+            .unwrap_or(AllocationReleaseArg::AfterEnd)
+            .into()
+    }
+
+    fn pause_policy(&self) -> launchpad_client::PausePolicy {
+        if self.pausable {
+            launchpad_client::PausePolicy::AuthorityControlled
+        } else {
+            launchpad_client::PausePolicy::Disabled
+        }
+    }
+
+    fn ending_policy(&self) -> launchpad_client::EndingPolicy {
+        self.ending_policy.map(Into::into).unwrap_or_else(|| {
+            if self.end_timestamp.is_some() {
+                launchpad_client::EndingPolicy::Either
+            } else {
+                launchpad_client::EndingPolicy::Depletion
+            }
+        })
+    }
+
+    fn graduation_policy(&self) -> launchpad_client::GraduationPolicy {
+        launchpad_client::GraduationPolicy {
+            launch_bps: self.graduation_launch_bps.unwrap_or(0),
+            collateral_bps: self.graduation_collateral_bps.unwrap_or(0),
+        }
+    }
+
+    pub(super) fn raw_graduation_hook(&self) -> Option<launchpad_client::GraduationHook> {
+        self.graduation_hook_program_id
+            .map(|program_id| launchpad_client::GraduationHook {
+                program_id,
+                configuration: self
+                    .graduation_hook_configuration
+                    .as_ref()
+                    .map_or_else(Vec::new, |configuration| configuration.0.clone()),
+            })
+    }
+
+    pub(super) fn sale_request(&self) -> CreateSaleRequest {
+        CreateSaleRequest {
+            buy_policy: launchpad_client::BuyPolicy::Open,
+            pause_policy: self.pause_policy(),
+            ending_policy: self.ending_policy(),
+            trade_mode: self.trade_mode.into(),
+            sell_fee_bps: self.sell_fee_bps,
+            per_block_token_limit: self.per_block_token_limit,
+            graduation_hook: self.raw_graduation_hook(),
             name: self.name.clone(),
             uri: self.uri.clone(),
             sale_reserve: self.sale_reserve,
             graduation_reserve: self.graduation_reserve,
-            graduation_policy: launchpad_client::GraduationPolicy {
-                launch_bps: self.graduation_launch_bps.unwrap_or(0),
-                collateral_bps: self.graduation_collateral_bps.unwrap_or(0),
-            },
+            graduation_policy: self.graduation_policy(),
             creator_allocation: self.creator_allocation,
-            virtual_token_reserve: self.virtual_token_reserve,
-            virtual_collateral_reserve: self.virtual_collateral_reserve,
+            virtual_token_reserve: self
+                .virtual_token_reserve
+                .expect("required for bonding-curve"),
+            virtual_collateral_reserve: self
+                .virtual_collateral_reserve
+                .expect("required for bonding-curve"),
             end_timestamp: self.end_timestamp,
-            now: self.now,
+            now: self.now.unwrap_or(0),
         }
     }
 }
@@ -661,6 +892,12 @@ fn parse_hook_configuration(raw: &str) -> Result<HookConfiguration, String> {
     hex::decode(raw)
         .map(HookConfiguration)
         .map_err(|_| "hook configuration must be hexadecimal bytes".to_owned())
+}
+
+fn parse_positive_amount(raw: &str) -> Result<u128, String> {
+    raw.parse::<std::num::NonZeroU128>()
+        .map(std::num::NonZeroU128::get)
+        .map_err(|_| "expected a positive integer".into())
 }
 
 fn parse_allowlist_root(raw: &str) -> Result<[u8; 32], String> {

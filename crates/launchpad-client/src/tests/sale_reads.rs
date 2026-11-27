@@ -8,7 +8,7 @@ use crate::{ClientError, SaleInfo, SaleSelection, load_sale_info};
 use super::fixtures::{
     lbp_sale, matching_factory_pool, sale, valid_factory_state, valid_lbp_factory_state,
 };
-use super::launchpad_transport;
+use super::{launchpad_transport, lbp_fixture};
 
 #[tokio::test]
 async fn reads_saved_curve_terms_before_the_pool_exists() {
@@ -88,6 +88,55 @@ async fn reads_saved_weighted_seed_and_schedule() {
     assert_eq!(info.collateral_seed, 100);
     assert_eq!(info.token_weight_start, 500_000_000_000_000_001);
     assert_eq!(info.token_weight_end, 499_999_999_999_999_999);
+}
+
+#[tokio::test]
+async fn completed_lbp_reads_require_the_canonical_pool() {
+    let sale = lbp_sale();
+    for (weighted, selection) in [
+        (false, SaleSelection::FixedPrice(sale)),
+        (true, SaleSelection::Weighted(sale)),
+    ] {
+        let mut transport = launchpad_transport::FixtureTransport::default();
+        let state = valid_lbp_factory_state(weighted);
+        assert_eq!(
+            state.creation_stage,
+            factory_core::LbpCreationStage::Complete
+        );
+        transport.save(
+            Actor::new(lbp_addresses(sale).factory, sale.factory_program_id),
+            borsh::to_vec(&state).unwrap(),
+        );
+        assert!(matches!(
+            load_sale_info(&transport, selection).await,
+            Err(ClientError::ReadFactoryPool(_))
+        ));
+    }
+}
+
+#[tokio::test]
+async fn completed_lbp_reads_reject_substituted_pool_terms() {
+    let sale = lbp_sale();
+    let factory = Actor::new(lbp_addresses(sale).factory, sale.factory_program_id);
+    let state = valid_lbp_factory_state(true);
+    let mut pool = lbp_fixture::funded_pool(factory, &state);
+    let mut transport = launchpad_transport::FixtureTransport::default();
+    transport.save(factory, borsh::to_vec(&state).unwrap());
+    let pool_actor = Actor::new(state.pool_id, sale.lbp_program_id);
+    transport.save(pool_actor, borsh::to_vec(&pool).unwrap());
+
+    let selection = SaleSelection::Weighted(sale);
+    let SaleInfo::Weighted(info) = load_sale_info(&transport, selection).await.unwrap() else {
+        panic!("expected weighted terms");
+    };
+    assert!(info.sale.pool.unwrap().funded);
+
+    pool.start_timestamp = 11;
+    transport.save(pool_actor, borsh::to_vec(&pool).unwrap());
+    assert!(matches!(
+        load_sale_info(&transport, selection).await,
+        Err(ClientError::FactorySaleMismatch)
+    ));
 }
 
 #[tokio::test]

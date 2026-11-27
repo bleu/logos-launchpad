@@ -13,11 +13,10 @@ use crate::invocation::{
 };
 use crate::wallet_ops::read_actor;
 use crate::{
-    AllowlistPolicy, BuyPolicy, ClientError, EndingPolicy, ExactInputTradeTerms,
-    ExactOutputTradeTerms, FactorySale, GraduationHook, GraduationPolicy, MembershipPath,
-    PausePolicy, PoolFeeTarget, ProgramHandle, PublicInvocation, PublicWriteWallet, Result,
-    TOKEN_PROGRAM_ACCOUNT_ID, TradeMode, quote_buy, quote_buy_with_collateral, quote_sell,
-    submit_public_invocation,
+    BuyPolicy, ClientError, EndingPolicy, ExactInputTradeTerms, ExactOutputTradeTerms, FactorySale,
+    GraduationHook, GraduationPolicy, MembershipPath, PausePolicy, PoolFeeTarget, ProgramHandle,
+    PublicInvocation, PublicWriteWallet, Result, TOKEN_PROGRAM_ACCOUNT_ID, TradeMode, quote_buy,
+    quote_buy_with_collateral, quote_sell, sale_buy_policy, submit_public_invocation,
 };
 
 /// All creation terms are immutable. `now` is a clock lower bound, not a saved sale term.
@@ -177,15 +176,9 @@ pub(super) fn admit_factory_accounts<I>(
 
 /// Bind an existing allowlist root to the canonical curve pool for this sale.
 pub fn curve_buy_policy(sale: FactorySale, allowlist_root: Option<[u8; 32]>) -> BuyPolicy {
-    match allowlist_root {
-        Some(root) => BuyPolicy::Allowlist(AllowlistPolicy {
-            version: 1,
-            namespace: *sale.namespace.value(),
-            sale_policy_id: *factory_pool_addresses(sale).pool.value(),
-            root,
-        }),
-        None => BuyPolicy::Open,
-    }
+    sale_buy_policy(sale.namespace, allowlist_root, || {
+        factory_pool_addresses(sale).pool
+    })
 }
 
 pub fn build_create_sale_invocation(
