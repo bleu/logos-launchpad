@@ -95,10 +95,15 @@ async fn configure_namespace_on_standalone_lez() -> Result<()> {
         "--curve-program-account",
         &curve_account,
     ])?;
-    assert_eq!(result["status"], "submitted");
+    assert_eq!(result["status"], "executed");
+    assert_eq!(result["submission"], "acknowledged");
     let raw_hash = result["transaction_hash"]
         .as_str()
         .ok_or_else(|| eyre!("CLI did not return a transaction hash"))?;
+    assert_eq!(
+        result["executed_transaction_hashes"],
+        serde_json::json!([raw_hash])
+    );
     let mut bytes = [0; 32];
     hex::decode_to_slice(raw_hash, &mut bytes)?;
     let hash = HashType(bytes);

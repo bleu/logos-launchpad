@@ -9,17 +9,17 @@ pub struct LifecycleReceipt {
 }
 
 /// A factory workflow bound to one namespace and creator role holder.
-pub struct FactorySession<'a> {
-    wallet: &'a mut LaunchpadWallet,
+pub struct FactorySession<'a, C: WalletSequencerClient> {
+    wallet: &'a PublicWriteWallet<C>,
     factory: &'a ProgramHandle,
     curve: &'a ProgramHandle,
     namespace: AccountId,
     authority: AccountLocation,
 }
 
-impl<'a> FactorySession<'a> {
+impl<'a, C: WalletSequencerClient> FactorySession<'a, C> {
     pub fn new(
-        wallet: &'a mut LaunchpadWallet,
+        wallet: &'a PublicWriteWallet<C>,
         factory: &'a ProgramHandle,
         curve: &'a ProgramHandle,
         _router: Option<&'a ProgramHandle>,
@@ -77,7 +77,7 @@ impl<'a> FactorySession<'a> {
     }
 
     async fn submit(
-        &mut self,
+        &self,
         build: impl FnOnce(AccountId) -> Result<PublicInvocation<FactoryInstruction>>,
         receipt: &mut LifecycleReceipt,
     ) -> Result<()> {
@@ -95,15 +95,25 @@ impl<'a> FactorySession<'a> {
 
     /// Create and verify a funded sale. A matching active sale is a no-op.
     pub async fn create_sale(
-        &mut self,
+        &self,
         sale: FactorySale,
         request: CreateSaleRequest,
     ) -> Result<LifecycleReceipt> {
+        let mut receipt = LifecycleReceipt::default();
+        let result = self.create_once(sale, request, &mut receipt).await;
+        finish(result, receipt)
+    }
+
+    async fn create_once(
+        &self,
+        sale: FactorySale,
+        request: CreateSaleRequest,
+        receipt: &mut LifecycleReceipt,
+    ) -> Result<()> {
         self.validate_sale(sale)?;
         if self.authority.is_private() {
             return Err(ClientError::UnsupportedPrivateAuthority);
         }
-        let mut receipt = LifecycleReceipt::default();
         let state = self.state(sale).await?;
         let Some(call) = next_creation_invocation(
             sale,
@@ -112,24 +122,33 @@ impl<'a> FactorySession<'a> {
             state.as_ref(),
         )?
         else {
-            return Ok(receipt);
+            return Ok(());
         };
-        self.submit(|_| Ok(call), &mut receipt).await?;
+        self.submit(|_| Ok(call), receipt).await?;
         let state = self
             .state(sale)
             .await?
             .ok_or(ClientError::CreationIncomplete)?;
-        validate_completed_creation(sale, &request, &state)?;
-        Ok(receipt)
+        validate_completed_creation(sale, &request, &state)
     }
 
     /// Resume the exact withdrawal and payout sequence without paying a stage twice.
-    pub async fn withdraw(&mut self, sale: FactorySale, now: u64) -> Result<LifecycleReceipt> {
+    pub async fn withdraw(&self, sale: FactorySale, now: u64) -> Result<LifecycleReceipt> {
+        let mut receipt = LifecycleReceipt::default();
+        let result = self.withdraw_steps(sale, now, &mut receipt).await;
+        finish(result, receipt)
+    }
+
+    async fn withdraw_steps(
+        &self,
+        sale: FactorySale,
+        now: u64,
+        receipt: &mut LifecycleReceipt,
+    ) -> Result<()> {
         self.validate_sale(sale)?;
         if self.authority.is_private() {
             return Err(ClientError::UnsupportedPrivateAuthority);
         }
-        let mut receipt = LifecycleReceipt::default();
         for _ in 0..5 {
             let state = self
                 .state(sale)
@@ -141,7 +160,7 @@ impl<'a> FactorySession<'a> {
                 ));
             }
             if state.settlement_stage.is_manual_settlement_complete() {
-                return Ok(receipt);
+                return Ok(());
             }
             let treasury = prepare_fee_collection(
                 self.wallet,
@@ -156,7 +175,7 @@ impl<'a> FactorySession<'a> {
                         sale, holder, treasury, now,
                     ))
                 },
-                &mut receipt,
+                receipt,
             )
             .await?;
         }
@@ -167,7 +186,14 @@ impl<'a> FactorySession<'a> {
         {
             return Err(ClientError::SettlementIncomplete);
         }
-        Ok(receipt)
+        Ok(())
+    }
+}
+
+fn finish(result: Result<()>, receipt: LifecycleReceipt) -> Result<LifecycleReceipt> {
+    match result {
+        Ok(()) => Ok(receipt),
+        Err(error) => Err(error.after_execution(receipt.transaction_hashes)),
     }
 }
 

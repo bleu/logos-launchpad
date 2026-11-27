@@ -56,7 +56,15 @@ Run upstream private-route probes by hand only when evaluating a candidate depen
 
 ## CLI payout terms
 
-Curve `create-sale` uses `--graduation-launch-bps` and `--graduation-collateral-bps`. Both must be explicit with `--graduation-hook-program-id`, including zero values. `status` and `sale-info` show saved terms. Permissionless `graduate` requires `--creator-hint`. [ADR 0020](../adr/0020-settlement-and-graduation.md) defines validation, recipients, required routing and adapter initialization. Fixed-price and weighted CLI creation flows remain unsupported.
+Curve `create-sale` uses `--graduation-launch-bps` and `--graduation-collateral-bps`. Both must be explicit with `--graduation-hook-program-id`, including zero values. Permissionless `graduate` requires `--creator-hint`. [ADR 0020](../adr/0020-settlement-and-graduation.md) defines validation, recipients, required routing and adapter initialization. Fixed-price and weighted CLI creation flows remain unsupported.
+
+## CLI sale reads and public write results
+
+`sale-info` requires `--engine bonding-curve`, `--engine fixed-price` or `--engine weighted`. Use deployed program account IDs. The command reads the saved terms and setup stage without opening a wallet. The saved stage does not tell you whether trading is open now.
+
+A public write reports `executed` only after a successful receipt. An already-complete command can report `no_change`. Both exit `0`. Preparation failure, rejection before send and a reverted receipt exit `1`. Invalid command arguments exit `2`. A write with an unknown outcome reports `pending` and exits `3`. It includes the transaction hash if the sequencer acknowledged the send. A pending stage stops later writes. The result keeps hashes of earlier steps with successful receipts. Check the pending result before you retry.
+
+Workspace checks passed 748 tests. The SDK and CLI fixtures check saved-state validation and public write results. The IDL check passed 74 tests and found no schema drift. These checks do not prove live sequencer behavior or transaction finality.
 
 ## CI
 
