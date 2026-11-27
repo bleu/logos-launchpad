@@ -10,7 +10,7 @@ use lee::AccountId;
 use serde_json::{Value, json};
 use wallet::WalletSequencerClient;
 
-use super::{LaunchArgs, TradeModeArg, parse_public_account_id};
+use super::args::{LaunchArgs, TradeModeArg, parse_public_account_id};
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum Engine {

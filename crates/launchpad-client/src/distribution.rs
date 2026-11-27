@@ -1,5 +1,16 @@
 //! Transaction construction for the immutable distribution adapter.
-use super::*;
+use factory_core::Message as FactoryInstruction;
+use lee::AccountId;
+use lee_core::account::Actor;
+use wallet::{WalletCore, WalletSequencerClient};
+
+use crate::curve::factory_pool_addresses;
+use crate::invocation::{associated_token_account, invocation, token_actor};
+use crate::lbp::lbp_addresses;
+use crate::{
+    ClientError, GraduationHook, GraduationTarget, PublicInvocation, Result,
+    build_graduation_invocation,
+};
 pub use distribution_adapter::{
     Configuration, Error as DistributionError, Message, Payout, Rule, State, VERSION,
 };
