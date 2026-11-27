@@ -1,6 +1,6 @@
 use curve_core::Config;
 
-use crate::lbp::lbp_addresses;
+use crate::lbp::validate_lbp_pool_binding;
 use crate::{ClientError, LbpQuoteRequest, LbpSale, LbpTradeQuote, Result};
 
 /// Quotes use the live namespace rate and freeze state. Weighted pricing time is not inclusion proof.
@@ -14,21 +14,10 @@ pub fn quote_lbp_trade(
     pricing_time: u64,
     observed_block: Option<u64>,
 ) -> Result<LbpTradeQuote> {
-    let addresses = lbp_addresses(sale);
     if config.namespace != sale.namespace {
         return Err(ClientError::PoolSelectionMismatch);
     }
-    if pool_account.namespace != sale.namespace
-        || pool_account.namespace_program_id != sale.namespace_program_id
-        || pool_account.factory_owner != addresses.factory
-        || pool_account.factory_program_id != sale.factory_program_id
-        || pool_account.factory_seed
-            != *factory_core::compute_factory_seed(sale.namespace, sale.launch_salt).as_bytes()
-        || pool_account.token_definition_id != addresses.token_definition
-        || pool_account.collateral_definition_id != sale.collateral_definition
-    {
-        return Err(ClientError::FactorySaleMismatch);
-    }
+    validate_lbp_pool_binding(sale, pool_account)?;
     if config.emergency.is_frozen {
         return Err(ClientError::NamespaceFrozen);
     }

@@ -12,6 +12,8 @@ fn creation_arguments(file: &Path) -> Vec<String> {
     let mut args: Vec<String> = [
         "launchpad",
         "create-sale",
+        "--engine",
+        "bonding-curve",
         "--trade-mode",
         "buy-only",
         "--name",
@@ -34,7 +36,7 @@ fn creation_arguments(file: &Path) -> Vec<String> {
         "missing-factory.bin",
         "--curve-program-path",
         "missing-curve.bin",
-        "--curve-program-account",
+        "--engine-program-account",
         "11111111111111111111111111111111",
         "--graduation-launch-bps",
         "5000",

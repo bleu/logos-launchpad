@@ -10,7 +10,7 @@ pub(super) struct WriteSuccess {
     hashes: Vec<HashType>,
     launch_salt: Option<[u8; 32]>,
     authority_holders: Vec<AccountId>,
-    creation_verified: bool,
+    creation_stage: Option<&'static str>,
 }
 
 impl WriteSuccess {
@@ -19,7 +19,7 @@ impl WriteSuccess {
             hashes,
             launch_salt: None,
             authority_holders: Vec::new(),
-            creation_verified: false,
+            creation_stage: None,
         }
     }
 
@@ -45,9 +45,13 @@ impl WriteSuccess {
         }
     }
 
-    pub(super) fn creation(receipt: LifecycleReceipt, launch_salt: [u8; 32]) -> Self {
+    pub(super) fn creation(
+        receipt: LifecycleReceipt,
+        launch_salt: [u8; 32],
+        stage: &'static str,
+    ) -> Self {
         Self {
-            creation_verified: true,
+            creation_stage: Some(stage),
             ..Self::lifecycle(receipt, launch_salt)
         }
     }
@@ -74,8 +78,8 @@ impl WriteSuccess {
                 "launch_salt": salt,
                 "authority_holders": holders,
             });
-            if self.creation_verified {
-                view["setup_stage"] = json!("active");
+            if let Some(stage) = self.creation_stage {
+                view["setup_stage"] = json!(stage);
                 view["funded"] = json!(true);
             }
             return writeln!(output, "{view}");
@@ -84,8 +88,8 @@ impl WriteSuccess {
         if let Some(salt) = salt {
             write!(output, " launch_salt={salt}")?;
         }
-        if self.creation_verified {
-            write!(output, " setup_stage=active funded=true")?;
+        if let Some(stage) = self.creation_stage {
+            write!(output, " setup_stage={stage} funded=true")?;
         }
         writeln!(output)?;
         for (index, hash) in hashes.iter().enumerate() {

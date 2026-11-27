@@ -4,11 +4,11 @@ use lee_core::account::Actor;
 use crate::invocation::{associated_token_account, token_actor};
 use crate::lbp::lbp_addresses;
 use crate::{
-    ExactInputTradeTerms, ExactOutputTradeTerms, build_create_fixed_price_invocation,
+    BuyPolicy, ExactInputTradeTerms, ExactOutputTradeTerms, build_create_fixed_price_invocation,
     build_create_weighted_invocation, build_fixed_price_buy_invocation,
     build_fixed_price_buy_with_collateral_invocation, build_fixed_price_sell_invocation,
     build_weighted_buy_invocation, build_weighted_buy_with_collateral_invocation,
-    build_weighted_sell_invocation,
+    build_weighted_sell_invocation, lbp_buy_policy,
 };
 
 use super::fixtures::{fixed_creation, lbp_sale, weighted_creation};
@@ -109,6 +109,16 @@ fn fixed_price_exact_output_builder_keeps_membership_and_cap() {
             now: 9
         }
     );
+}
+
+#[test]
+fn lbp_buy_policy_binds_the_root_to_the_canonical_pool_or_opens_the_sale() {
+    let sale = lbp_sale();
+    assert_eq!(
+        lbp_buy_policy(sale, Some([42; 32])),
+        fixed_creation().buy_policy
+    );
+    assert_eq!(lbp_buy_policy(sale, None), BuyPolicy::Open);
 }
 
 #[test]

@@ -572,6 +572,8 @@ fn create_sale_accepts_the_program_binaries_and_creator_account() {
     let cli = Cli::try_parse_from([
         "launchpad",
         "create-sale",
+        "--engine",
+        "bonding-curve",
         "--trade-mode",
         "buy-and-sell",
         "--launch-salt",
@@ -598,7 +600,7 @@ fn create_sale_accepts_the_program_binaries_and_creator_account() {
         "11111111111111111111111111111111",
         "--curve-program-path",
         "curve.bin",
-        "--curve-program-account",
+        "--engine-program-account",
         "11111111111111111111111111111111",
     ])
     .expect("create sale command should parse");
@@ -612,6 +614,8 @@ fn create_sale_saves_optional_hook_program_and_hex_configuration() {
     let mut arguments = vec![
         "launchpad",
         "create-sale",
+        "--engine",
+        "bonding-curve",
         "--trade-mode",
         "buy-only",
         "--launch-salt",
@@ -638,7 +642,7 @@ fn create_sale_saves_optional_hook_program_and_hex_configuration() {
         "11111111111111111111111111111111",
         "--curve-program-path",
         "curve.bin",
-        "--curve-program-account",
+        "--engine-program-account",
         "11111111111111111111111111111111",
     ];
     let without_hook = Cli::try_parse_from(&arguments).unwrap();

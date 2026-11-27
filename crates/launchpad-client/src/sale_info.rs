@@ -7,7 +7,7 @@ use lee_core::account::Actor;
 use wallet::WalletSequencerClient;
 
 use crate::curve::{validate_factory_pool, validate_factory_state};
-use crate::lbp::validate_lbp_factory_state;
+use crate::lbp::{validate_lbp_factory_state, validate_lbp_pool_binding};
 use crate::{
     BuyPolicy, ClientError, CreationStage, EndingPolicy, FactorySale, GraduationHook,
     GraduationPolicy, LbpSale, PausePolicy, Result, SettlementStage, TradeMode,
@@ -80,6 +80,15 @@ pub struct LbpSaleInfo {
     pub start_timestamp: u64,
     pub allocation_release: CreatorAllocationRelease,
     pub creator_allocation_released: bool,
+    pub pool: Option<LbpPoolObservation>,
+}
+
+#[derive(Debug)]
+pub struct LbpPoolObservation {
+    pub funded: bool,
+    pub paused: bool,
+    pub closure_observed: bool,
+    pub settlement_progress: SettlementProgress,
 }
 
 #[derive(Debug)]
@@ -134,27 +143,31 @@ pub async fn load_sale_info(
             })?;
             validate_lbp_factory_state(sale, &state)?;
             match (selection, state.mode) {
-                (SaleSelection::FixedPrice(_), LbpSetupMode::FixedPrice) => {
-                    Ok(SaleInfo::FixedPrice(FixedPriceSaleInfo {
-                        price: state.price,
-                        sale: lbp_sale_info(factory, state),
-                    }))
-                }
-                (
-                    SaleSelection::Weighted(_),
-                    LbpSetupMode::Weighted {
-                        collateral_seed,
-                        token_weight_start,
-                        token_weight_end,
-                    },
-                ) => Ok(SaleInfo::Weighted(WeightedSaleInfo {
-                    sale: lbp_sale_info(factory, state),
+                (SaleSelection::FixedPrice(_), LbpSetupMode::FixedPrice)
+                | (SaleSelection::Weighted(_), LbpSetupMode::Weighted { .. }) => {}
+                _ => return Err(ClientError::SaleEngineMismatch),
+            }
+            let pool = if state.creation_stage == LbpCreationStage::Complete {
+                Some(load_lbp_pool(transport, sale, &state, factory).await?)
+            } else {
+                None
+            };
+            Ok(match state.mode {
+                LbpSetupMode::FixedPrice => SaleInfo::FixedPrice(FixedPriceSaleInfo {
+                    price: state.price,
+                    sale: lbp_sale_info(factory, state, pool),
+                }),
+                LbpSetupMode::Weighted {
                     collateral_seed,
                     token_weight_start,
                     token_weight_end,
-                })),
-                _ => Err(ClientError::SaleEngineMismatch),
-            }
+                } => SaleInfo::Weighted(WeightedSaleInfo {
+                    sale: lbp_sale_info(factory, state, pool),
+                    collateral_seed,
+                    token_weight_start,
+                    token_weight_end,
+                }),
+            })
         }
     }
 }
@@ -241,7 +254,80 @@ async fn curve_sale_info(
     }))
 }
 
-fn lbp_sale_info(factory: AccountId, state: LbpLaunchState) -> LbpSaleInfo {
+async fn load_lbp_pool(
+    transport: &impl WalletSequencerClient,
+    sale: LbpSale,
+    launch: &LbpLaunchState,
+    factory: AccountId,
+) -> Result<LbpPoolObservation> {
+    let account = transport
+        .get_account_view(Actor::new(launch.pool_id, sale.lbp_program_id))
+        .await
+        .map_err(|error| ClientError::ReadFactoryPool(Box::new(error)))?
+        .ok_or_else(|| {
+            ClientError::ReadFactoryPool(Box::new(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "actor state is missing",
+            )))
+        })?;
+    let state =
+        lbp_core::PoolAccount::decode(account.data.actor_state(sale.lbp_program_id).as_ref())
+            .map_err(ClientError::DecodeLbpPool)?;
+    validate_lbp_pool_binding(sale, &state)?;
+    let mode_matches = match (launch.mode, state.mode) {
+        (LbpSetupMode::FixedPrice, lbp_core::PoolMode::FixedPrice) => true,
+        (
+            LbpSetupMode::Weighted {
+                collateral_seed,
+                token_weight_start,
+                token_weight_end,
+            },
+            lbp_core::PoolMode::Weighted {
+                collateral_seed: seed,
+                token_weight_start: start,
+                token_weight_end: end,
+                ..
+            },
+        ) => (collateral_seed, token_weight_start, token_weight_end) == (seed, start, end),
+        _ => false,
+    };
+    let adapter = launch.graduation_hook.as_ref().map(|hook| {
+        Actor::new(
+            factory_core::compute_graduation_pda(hook.program_id, factory),
+            hook.program_id,
+        )
+    });
+    if !mode_matches
+        || state.price != launch.price
+        || state.start_timestamp != launch.start_timestamp
+        || state.end_timestamp != launch.end_timestamp
+        || state.sale_inventory != launch.sale_inventory
+        || state.creator_allocation != launch.creator_allocation
+        || state.creator_allocation_release != launch.allocation_release
+        || state.buy_policy != launch.buy_policy
+        || state.trade_control.policy() != launch.pause_policy
+        || state.ending_policy != launch.ending_policy
+        || state.trade_mode != launch.trade_mode
+        || state.sell_fee_bps != launch.sell_fee_bps
+        || state.block_allocation.limit != launch.per_block_token_limit
+        || state.graduation_adapter != adapter
+        || state.graduation_policy != launch.graduation_policy
+    {
+        return Err(ClientError::FactorySaleMismatch);
+    }
+    Ok(LbpPoolObservation {
+        funded: state.funded,
+        paused: state.trade_control.is_paused(),
+        closure_observed: state.closure_observed,
+        settlement_progress: state.settlement_progress,
+    })
+}
+
+fn lbp_sale_info(
+    factory: AccountId,
+    state: LbpLaunchState,
+    pool: Option<LbpPoolObservation>,
+) -> LbpSaleInfo {
     LbpSaleInfo {
         terms: SavedSaleTerms {
             namespace: state.namespace,
@@ -272,5 +358,6 @@ fn lbp_sale_info(factory: AccountId, state: LbpLaunchState) -> LbpSaleInfo {
         start_timestamp: state.start_timestamp,
         allocation_release: state.allocation_release,
         creator_allocation_released: state.creator_allocation_released,
+        pool,
     }
 }

@@ -3,7 +3,7 @@ use std::path::Path;
 use clap::Parser;
 use common::{HashType, block::TransactionReceipt};
 use factory_core::CreationStage;
-use launchpad_client::{BuyPolicy, WriteTransport};
+use launchpad_client::{BuyPolicy, PausePolicy, PublicWriteWallet, WriteTransport};
 use lee::AccountId;
 use lee_core::account::Actor;
 use serde_json::Value;
@@ -13,14 +13,23 @@ use super::{
     curve_fixture::{curve_sale, curve_state, curve_write_args, funded_curve_pool},
     id,
     launchpad_transport::{self, FixtureTransport},
+    lbp_sale,
+    reads::lbp_state,
     run_sale_info, sale_args,
 };
 use crate::{args::Cli, run_command as run_cli};
 
 fn create_sale_args(path: &Path, creator: AccountId, root: Option<&str>) -> Vec<String> {
     let mut args = curve_write_args("create-sale", path, creator);
+    let account_arg = args
+        .iter_mut()
+        .find(|arg| *arg == "--curve-program-account")
+        .unwrap();
+    *account_arg = "--engine-program-account".into();
     args.extend(
         [
+            "--engine",
+            "bonding-curve",
             "--trade-mode",
             "buy-and-sell",
             "--name",
@@ -42,6 +51,18 @@ fn create_sale_args(path: &Path, creator: AccountId, root: Option<&str>) -> Vec<
         args.extend(["--allowlist-root".into(), root.into()]);
     }
     args
+}
+
+#[test]
+fn create_sale_requires_an_explicit_engine() {
+    let mut args = create_sale_args(Path::new("unused.elf"), id(8), None);
+    args.retain(|arg| arg != "--engine" && arg != "bonding-curve");
+    let error = Cli::try_parse_from(args).unwrap_err();
+    assert_eq!(
+        error.kind(),
+        clap::error::ErrorKind::MissingRequiredArgument
+    );
+    assert!(error.to_string().contains("--engine"));
 }
 
 #[test]
@@ -217,5 +238,309 @@ async fn create_sale_preserves_the_acknowledged_hash_without_verified_state() {
             assert_eq!(result["executed_transaction_hashes"], serde_json::json!([]));
         }
         assert_eq!(transport.sent_count(), 1);
+    }
+}
+
+fn lbp_create_args(engine: &str, path: &Path, creator: AccountId) -> Vec<String> {
+    [
+        "launchpad",
+        "create-sale",
+        "--json",
+        "--namespace",
+        &id(1).to_string(),
+        "--engine",
+        engine,
+        "--launch-salt",
+        &hex::encode(SALT),
+        "--creator",
+        &creator.to_string(),
+        "--collateral-definition",
+        &id(4).to_string(),
+        "--factory-program-path",
+        path.to_str().unwrap(),
+        "--factory-program-account",
+        &id(2).to_string(),
+        "--engine-program-account",
+        &id(3).to_string(),
+        "--namespace-program-account",
+        &id(5).to_string(),
+        "--trade-mode",
+        "buy-only",
+        "--name",
+        "Fixture",
+        "--uri",
+        "ipfs://fixture",
+        "--sale-reserve",
+        "800",
+        "--creator-allocation",
+        "200",
+        "--end-timestamp",
+        "100",
+    ]
+    .map(str::to_owned)
+    .into()
+}
+
+const FIXED_PRICE_ARGS: &[&str] = &[
+    "--price-collateral-units",
+    "25",
+    "--price-token-units",
+    "10",
+    "--start-now",
+    "0",
+];
+
+async fn run_lbp_creation(
+    transport: FixtureTransport,
+    engine: &str,
+    extra_args: &[&str],
+    after_open: impl FnOnce(&mut FixtureTransport, AccountId),
+) -> (u8, Value) {
+    let (code, output) =
+        run_lbp_creation_command(transport, engine, extra_args, true, after_open).await;
+    (code, serde_json::from_slice(&output).unwrap())
+}
+
+async fn run_lbp_creation_command(
+    mut transport: FixtureTransport,
+    engine: &str,
+    extra_args: &[&str],
+    json: bool,
+    after_open: impl FnOnce(&mut FixtureTransport, AccountId),
+) -> (u8, Vec<u8>) {
+    let program = programs::clock();
+    let home = tempfile::tempdir().unwrap();
+    let path = home.path().join("guest.elf");
+    std::fs::write(&path, program.elf()).unwrap();
+    transport.deploy(id(2), program.id());
+    let (wallet, signer) =
+        launchpad_transport::write_wallet(home.path(), transport.clone(), WriteTransport::new);
+    after_open(&mut transport, signer);
+    let mut args = lbp_create_args(engine, &path, signer);
+    if !json {
+        args.retain(|arg| arg != "--json");
+    }
+    args.extend(extra_args.iter().map(|arg| (*arg).to_owned()));
+    let cli = Cli::try_parse_from(args).unwrap();
+    let mut output = Vec::new();
+    let mut errors = Vec::new();
+    let code = run_cli(
+        cli,
+        || -> eyre::Result<FixtureTransport> { panic!("create-sale uses the wallet") },
+        || Ok(wallet),
+        &mut output,
+        &mut errors,
+    )
+    .await
+    .unwrap();
+    assert!(errors.is_empty(), "{}", String::from_utf8_lossy(&errors));
+    (code, output)
+}
+
+fn save_lbp_after_receipt(
+    transport: &mut FixtureTransport,
+    hash: HashType,
+    actor: Actor,
+    state: &factory_core::LbpLaunchState,
+    signer: AccountId,
+) {
+    let role = Actor::new(
+        state.creator_role_id,
+        curve_core::AUTHORITY_PROGRAM_ACCOUNT_ID,
+    );
+    for (account, bytes) in [
+        (actor, borsh::to_vec(state).unwrap()),
+        (
+            Actor::new(state.pool_id, state.lbp_program_id),
+            borsh::to_vec(&lbp_sale::funded_pool(actor, state)).unwrap(),
+        ),
+        (
+            role,
+            launchpad_transport::creator_role_state(role, actor, signer),
+        ),
+    ] {
+        transport.save_after_receipt(hash, account, bytes);
+    }
+}
+
+#[tokio::test]
+async fn create_sale_verifies_a_fixed_price_start_now_and_its_allowlist() {
+    use wallet::WalletSequencerClient;
+
+    let hash = HashType([41; 32]);
+    let root = [0xab; 32];
+    let (actor, mut state) = lbp_state(false);
+    state.creation_stage = factory_core::LbpCreationStage::Complete;
+    state.start_timestamp = 0;
+    state.buy_policy = BuyPolicy::Allowlist(curve_core::AllowlistPolicy {
+        version: 1,
+        namespace: *state.namespace.value(),
+        sale_policy_id: *state.pool_id.value(),
+        root,
+    });
+    let mut transport = FixtureTransport::default();
+    transport.acknowledge(hash, Some(TransactionReceipt::EXEMPT));
+    let mut args = FIXED_PRICE_ARGS.to_vec();
+    let root_arg = hex::encode(root);
+    args.extend(["--allowlist-root", &root_arg]);
+    let (code, result) = run_lbp_creation(
+        transport.clone(),
+        "fixed-price",
+        &args,
+        |transport, signer| {
+            save_lbp_after_receipt(transport, hash, actor, &state, signer);
+        },
+    )
+    .await;
+    assert_eq!(code, 0, "{result}");
+    assert_eq!(result["status"], "executed");
+    assert_eq!(result["transaction_hash"], hex::encode(hash));
+    assert_eq!(result["setup_stage"], "complete");
+    assert_eq!(result["funded"], true);
+    assert_eq!(transport.sent_count(), 1);
+
+    let (tx, _) = transport.get_transaction(hash).await.unwrap().unwrap();
+    let (_, bytes) = tx.public_call().unwrap();
+    let factory_core::Message::CreateFixedPriceLbp { inputs } = borsh::from_slice(bytes).unwrap()
+    else {
+        panic!("expected fixed-price creation")
+    };
+    assert_eq!(
+        inputs.start,
+        launchpad_client::SaleStart::Now { timestamp: 0 }
+    );
+    assert_eq!(inputs.buy_policy, state.buy_policy);
+
+    let (code, result) = run_lbp_creation(transport.clone(), "fixed-price", &args, |_, _| {}).await;
+    assert_eq!(code, 0, "{result}");
+    assert_eq!(result["status"], "no_change");
+    assert_eq!(result["setup_stage"], "complete");
+    assert_eq!(result["funded"], true);
+    assert_eq!(transport.sent_count(), 1);
+}
+
+const WEIGHTED_ARGS: &[&str] = &[
+    "--start-at",
+    "9",
+    "--ending-policy",
+    "scheduled",
+    "--collateral-seed",
+    "100",
+    "--token-weight-start",
+    "600000000000000000",
+    "--token-weight-end",
+    "400000000000000000",
+];
+
+#[tokio::test]
+async fn create_sale_uses_the_explicit_weighted_schedule_and_seed() {
+    use wallet::WalletSequencerClient;
+
+    let hash = HashType([42; 32]);
+    let (actor, mut state) = lbp_state(true);
+    state.creation_stage = factory_core::LbpCreationStage::Complete;
+    state.pause_policy = PausePolicy::AuthorityControlled;
+    state.allocation_release = factory_core::CreatorAllocationRelease::AfterSetup;
+    state.creator_allocation_released = true;
+    let mut transport = FixtureTransport::default();
+    transport.acknowledge(hash, Some(TransactionReceipt::EXEMPT));
+    let mut args = WEIGHTED_ARGS.to_vec();
+    args.extend(["--pausable", "--allocation-release", "after-setup"]);
+    let (code, result) = run_lbp_creation_command(
+        transport.clone(),
+        "weighted",
+        &args,
+        false,
+        |transport, signer| {
+            save_lbp_after_receipt(transport, hash, actor, &state, signer);
+        },
+    )
+    .await;
+    let result = String::from_utf8(result).unwrap();
+    assert_eq!(code, 0, "{result}");
+    assert!(result.starts_with("executed: submission=acknowledged"));
+    assert!(result.contains("setup_stage=complete funded=true"));
+    assert!(result.contains(&format!("tx_hash={}", hex::encode(hash))));
+    assert_eq!(transport.sent_count(), 1);
+
+    let (tx, _) = transport.get_transaction(hash).await.unwrap().unwrap();
+    let (_, bytes) = tx.public_call().unwrap();
+    let factory_core::Message::CreateWeightedLbp { inputs } = borsh::from_slice(bytes).unwrap()
+    else {
+        panic!("expected weighted creation")
+    };
+    assert_eq!((inputs.start_timestamp, inputs.end_timestamp), (9, 100));
+    assert_eq!(inputs.collateral_seed, 100);
+    assert_eq!(inputs.pause_policy, PausePolicy::AuthorityControlled);
+    assert_eq!(
+        inputs.allocation_release,
+        factory_core::CreatorAllocationRelease::AfterSetup
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn create_sale_does_not_report_lbp_funding_without_verified_state() {
+    let hash = HashType([43; 32]);
+    for (receipt, status, exit) in [
+        (None, "pending", 3),
+        (
+            Some(TransactionReceipt {
+                success: false,
+                ..TransactionReceipt::EXEMPT
+            }),
+            "reverted",
+            1,
+        ),
+        (Some(TransactionReceipt::EXEMPT), "verification_failed", 1),
+    ] {
+        let mut transport = FixtureTransport::default();
+        transport.acknowledge(hash, receipt);
+        let (code, result) =
+            run_lbp_creation(transport.clone(), "weighted", WEIGHTED_ARGS, |_, _| {}).await;
+        assert_eq!(code, exit, "{result}");
+        assert_eq!(result["status"], status);
+        assert_eq!(result["submission"], "acknowledged");
+        assert_eq!(result["transaction_hash"], hex::encode(hash));
+        assert!(result.get("setup_stage").is_none());
+        assert!(result.get("funded").is_none());
+        assert_eq!(transport.sent_count(), 1);
+    }
+}
+
+#[tokio::test]
+async fn create_sale_rejects_flags_for_a_different_engine_before_opening_a_wallet() {
+    let path = Path::new("unused.elf");
+    let mut curve = create_sale_args(path, id(8), None);
+    curve.extend(["--start-at".into(), "9".into()]);
+    let mut fixed = lbp_create_args("fixed-price", path, id(8));
+    fixed.extend(FIXED_PRICE_ARGS.iter().map(|arg| (*arg).into()));
+    fixed.extend(["--virtual-token-reserve".into(), "100".into()]);
+    let mut weighted = lbp_create_args("weighted", path, id(8));
+    weighted.extend(WEIGHTED_ARGS.iter().map(|arg| (*arg).into()));
+    weighted.extend(["--price-token-units".into(), "10".into()]);
+    for (args, flag) in [
+        (curve, "--start-at"),
+        (fixed, "--virtual-token-reserve"),
+        (weighted, "--price-token-units"),
+    ] {
+        let mut output = Vec::new();
+        let code = run_cli(
+            Cli::try_parse_from(args).unwrap(),
+            || -> eyre::Result<FixtureTransport> { panic!("invalid options must not connect") },
+            || -> eyre::Result<PublicWriteWallet<FixtureTransport>> {
+                panic!("invalid options must not open a wallet")
+            },
+            &mut output,
+            &mut Vec::new(),
+        )
+        .await
+        .unwrap();
+        let result: Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(code, 1, "{result}");
+        assert_eq!(result["submission"], "not_sent");
+        assert!(
+            result["error"]["message"].as_str().unwrap().contains(flag),
+            "{result}"
+        );
     }
 }

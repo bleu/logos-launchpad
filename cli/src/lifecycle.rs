@@ -2,8 +2,9 @@ use std::path::Path;
 
 use eyre::Result;
 use launchpad_client::{
-    AccountLocation, CreateSaleRequest, FactorySale, PoolFeeTarget, PublicWriteWallet,
-    build_claim_creator_allocation_invocation, load_factory_state, submit_public_invocation,
+    AccountLocation, CreateSaleRequest, FactorySale, LbpCreateRequest, LbpSale, PoolFeeTarget,
+    PublicWriteWallet, build_claim_creator_allocation_invocation, load_factory_state,
+    submit_public_invocation,
 };
 use wallet::WalletSequencerClient;
 
@@ -12,6 +13,7 @@ use super::{
     current_time,
     distribution::read_distribution_configuration,
     factory_sale, load_deployment,
+    sale_info::Engine,
     write_result::WriteSuccess,
 };
 
@@ -23,7 +25,7 @@ impl CreateSaleArgs {
         FactorySale {
             namespace,
             factory_program_id: self.factory_program_account,
-            curve_program_id: self.curve_program_account,
+            curve_program_id: self.engine_program_account,
             launch_salt: self.launch.launch_salt,
             collateral_definition: self.collateral_definition.account_id(),
         }
@@ -33,19 +35,39 @@ impl CreateSaleArgs {
         let mut request = self.sale_request();
         request.buy_policy = launchpad_client::curve_buy_policy(sale, self.allowlist_root);
         request.total_supply()?;
-        if let Some(file) = &self.distribution_configuration {
-            let configuration = read_distribution_configuration(file)?;
-            request.graduation_hook = Some(launchpad_client::distribution::hook(
-                &configuration,
-                self.graduation_hook_program_id.ok_or_else(|| {
-                    eyre::eyre!("distribution requires --graduation-hook-program-id")
-                })?,
-                sale.factory_program_id,
-                sale.namespace,
-                sale.launch_salt,
-            )?);
-        }
+        request.graduation_hook = self.prepared_graduation_hook(sale.namespace)?;
         Ok(request)
+    }
+
+    fn lbp_sale(&self, namespace: lee::AccountId) -> Result<LbpSale> {
+        Ok(LbpSale {
+            namespace,
+            factory_program_id: self.factory_program_account,
+            namespace_program_id: self.namespace_program_account.ok_or_else(|| {
+                eyre::eyre!("--namespace-program-account is required for LBP sales")
+            })?,
+            lbp_program_id: self.engine_program_account,
+            launch_salt: self.launch.launch_salt,
+            collateral_definition: self.collateral_definition.account_id(),
+        })
+    }
+
+    pub(super) fn prepared_graduation_hook(
+        &self,
+        namespace: lee::AccountId,
+    ) -> Result<Option<launchpad_client::GraduationHook>> {
+        let Some(file) = &self.distribution_configuration else {
+            return Ok(self.raw_graduation_hook());
+        };
+        let configuration = read_distribution_configuration(file)?;
+        Ok(Some(launchpad_client::distribution::hook(
+            &configuration,
+            self.graduation_hook_program_id
+                .ok_or_else(|| eyre::eyre!("distribution requires --graduation-hook-program-id"))?,
+            self.factory_program_account,
+            namespace,
+            self.launch.launch_salt,
+        )?))
     }
 }
 
@@ -55,26 +77,57 @@ pub(super) async fn create_sale<C: WalletSequencerClient>(
     router: Option<&Path>,
     open_wallet: impl FnOnce() -> Result<PublicWriteWallet<C>>,
 ) -> Result<WriteSuccess> {
-    let sale = args.sale(namespace);
-    let request = args.prepared_sale_request(sale)?;
-    let factory_program =
-        load_deployment(&args.factory_program_path, args.factory_program_account)?;
-    let curve_program = load_deployment(&args.curve_program_path, args.curve_program_account)?;
-    let wallet = open_wallet()?;
-    if router.is_some() {
+    if router.is_some() || args.creator.is_private() {
         return Err(launchpad_client::ClientError::UnsupportedPrivateAuthority.into());
     }
-    let receipt = launchpad_client::FactorySession::new(
-        &wallet,
-        &factory_program,
-        &curve_program,
-        None,
-        namespace,
-        args.creator,
-    )
-    .create_sale(sale, request)
-    .await?;
-    Ok(WriteSuccess::creation(receipt, sale.launch_salt))
+    match args.engine {
+        Engine::BondingCurve => {
+            let sale = args.sale(namespace);
+            let request = args.prepared_sale_request(sale)?;
+            let factory_program =
+                load_deployment(&args.factory_program_path, args.factory_program_account)?;
+            let curve_program = load_deployment(
+                args.curve_program_path
+                    .as_deref()
+                    .expect("required for bonding-curve"),
+                args.engine_program_account,
+            )?;
+            let wallet = open_wallet()?;
+            let receipt = launchpad_client::FactorySession::new(
+                &wallet,
+                &factory_program,
+                &curve_program,
+                None,
+                namespace,
+                args.creator,
+            )
+            .create_sale(sale, request)
+            .await?;
+            Ok(WriteSuccess::creation(receipt, sale.launch_salt, "active"))
+        }
+        Engine::FixedPrice | Engine::Weighted => {
+            let sale = args.lbp_sale(namespace)?;
+            let creator = args.creator.account_id();
+            let request = match args.engine {
+                Engine::FixedPrice => {
+                    LbpCreateRequest::FixedPrice(args.fixed_price_request(sale, creator)?)
+                }
+                Engine::Weighted => {
+                    LbpCreateRequest::Weighted(args.weighted_request(sale, creator)?)
+                }
+                Engine::BondingCurve => unreachable!(),
+            };
+            let factory =
+                load_deployment(&args.factory_program_path, args.factory_program_account)?;
+            let wallet = open_wallet()?;
+            let receipt = launchpad_client::create_lbp_sale(&wallet, &factory, request).await?;
+            Ok(WriteSuccess::creation(
+                receipt,
+                sale.launch_salt,
+                "complete",
+            ))
+        }
+    }
 }
 
 pub(super) async fn withdraw_factory_proceeds<C: WalletSequencerClient>(

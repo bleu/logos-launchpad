@@ -9,8 +9,8 @@ use crate::invocation::{
     FactoryPoolAddresses, associated_token_account, clock_actor, invocation, token_actor,
 };
 use crate::{
-    ClientError, ExactInputTradeTerms, ExactOutputTradeTerms, LbpSale, MembershipPath,
-    PublicInvocation, Result,
+    BuyPolicy, ClientError, ExactInputTradeTerms, ExactOutputTradeTerms, FixedPriceInputs, LbpSale,
+    MembershipPath, PublicInvocation, Result, WeightedInputs, sale_buy_policy,
 };
 
 pub(super) fn validate_lbp_factory_state(
@@ -38,6 +38,22 @@ pub(super) fn validate_lbp_factory_state(
     Ok(())
 }
 
+pub(super) fn validate_lbp_pool_binding(sale: LbpSale, pool: &lbp_core::PoolAccount) -> Result<()> {
+    let addresses = lbp_addresses(sale);
+    if pool.namespace != sale.namespace
+        || pool.namespace_program_id != sale.namespace_program_id
+        || pool.factory_owner != addresses.factory
+        || pool.factory_program_id != sale.factory_program_id
+        || pool.factory_seed
+            != *factory_core::compute_factory_seed(sale.namespace, sale.launch_salt).as_bytes()
+        || pool.token_definition_id != addresses.token_definition
+        || pool.collateral_definition_id != sale.collateral_definition
+    {
+        return Err(ClientError::FactorySaleMismatch);
+    }
+    Ok(())
+}
+
 pub(super) fn lbp_addresses(sale: LbpSale) -> FactoryPoolAddresses {
     let factory = compute_factory_pda(sale.namespace, sale.factory_program_id, sale.launch_salt);
     let token_definition =
@@ -58,6 +74,11 @@ pub(super) fn lbp_addresses(sale: LbpSale) -> FactoryPoolAddresses {
             factory,
         ),
     }
+}
+
+/// Bind an existing allowlist root to the canonical fixed-price or weighted pool.
+pub fn lbp_buy_policy(sale: LbpSale, allowlist_root: Option<[u8; 32]>) -> BuyPolicy {
+    sale_buy_policy(sale.namespace, allowlist_root, || lbp_addresses(sale).pool)
 }
 
 pub(super) fn lbp_setup_invocation(
@@ -139,18 +160,25 @@ pub fn build_set_lbp_paused_invocation(
     )
 }
 
-pub fn build_create_fixed_price_invocation(
+pub(super) fn fixed_price_sale(
     factory_program_id: AccountId,
-    inputs: factory_core::FixedPriceInputs,
-) -> PublicInvocation<FactoryInstruction> {
-    let sale = LbpSale {
+    inputs: &FixedPriceInputs,
+) -> LbpSale {
+    LbpSale {
         namespace: inputs.namespace,
         namespace_program_id: inputs.namespace_program_id,
         factory_program_id,
         lbp_program_id: inputs.lbp_program_id,
         launch_salt: inputs.launch_salt,
         collateral_definition: inputs.collateral_definition_id,
-    };
+    }
+}
+
+pub fn build_create_fixed_price_invocation(
+    factory_program_id: AccountId,
+    inputs: FixedPriceInputs,
+) -> PublicInvocation<FactoryInstruction> {
+    let sale = fixed_price_sale(factory_program_id, &inputs);
     lbp_setup_invocation(
         sale,
         inputs.creator,
@@ -158,18 +186,22 @@ pub fn build_create_fixed_price_invocation(
     )
 }
 
-pub fn build_create_weighted_invocation(
-    factory_program_id: AccountId,
-    inputs: factory_core::WeightedInputs,
-) -> PublicInvocation<FactoryInstruction> {
-    let sale = LbpSale {
+pub(super) fn weighted_sale(factory_program_id: AccountId, inputs: &WeightedInputs) -> LbpSale {
+    LbpSale {
         namespace: inputs.namespace,
         namespace_program_id: inputs.namespace_program_id,
         factory_program_id,
         lbp_program_id: inputs.lbp_program_id,
         launch_salt: inputs.launch_salt,
         collateral_definition: inputs.collateral_definition_id,
-    };
+    }
+}
+
+pub fn build_create_weighted_invocation(
+    factory_program_id: AccountId,
+    inputs: WeightedInputs,
+) -> PublicInvocation<FactoryInstruction> {
+    let sale = weighted_sale(factory_program_id, &inputs);
     lbp_setup_invocation(
         sale,
         inputs.creator,

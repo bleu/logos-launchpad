@@ -5,6 +5,8 @@ use crate::{args::Cli, run_command};
 
 #[path = "../../verify/fixtures/launchpad_transport.rs"]
 mod launchpad_transport;
+#[path = "../../verify/fixtures/lbp_sale.rs"]
+mod lbp_sale;
 
 mod creation;
 mod curve_fixture;

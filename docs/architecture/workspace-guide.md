@@ -56,13 +56,17 @@ Run upstream private-route probes by hand only when evaluating a candidate depen
 
 ## CLI payout terms
 
-Curve `create-sale` uses `--graduation-launch-bps` and `--graduation-collateral-bps`. Both must be explicit with `--graduation-hook-program-id`, including zero values. Permissionless `graduate` requires `--creator-hint`. [ADR 0020](../adr/0020-settlement-and-graduation.md) defines validation, recipients, required routing and adapter initialization. Fixed-price and weighted CLI creation flows remain unsupported.
+`create-sale` uses `--graduation-launch-bps` and `--graduation-collateral-bps`. Both must be explicit with `--graduation-hook-program-id`, including zero values. Permissionless curve `graduate` requires `--creator-hint`. [ADR 0020](../adr/0020-settlement-and-graduation.md) defines validation, recipients, routing and adapter initialization.
 
-## CLI sale reads and public write results
+## CLI sale creation, reads and public write results
 
-Use `create-sale` in an existing namespace. Buys are open by default. To require an allowlist, pass an existing 64-character hex root with `--allowlist-root`. After creation, use `sale-info --engine bonding-curve` to check the saved setup stage and `pool_observation.funded`. If creation reports `verification_failed`, use the acknowledged transaction hash to check its result before you retry.
+`create-sale` and `sale-info` require `--engine bonding-curve`, `--engine fixed-price` or `--engine weighted`. Use an existing namespace and deployed program account IDs. Pass `--engine-program-account` for each engine and `--namespace-program-account` for fixed-price and weighted sales. `create-sale --help` lists the engine inputs.
 
-`sale-info` requires `--engine bonding-curve`, `--engine fixed-price` or `--engine weighted`. Use deployed program account IDs. The command reads the saved terms and setup stage without opening a wallet. Saved setup does not tell you whether trading is open now.
+For fixed-price creation, pass `--start-now` or `--start-at` with a Unix second and the price ratio in smallest units. For weighted creation, pass `--start-at`, `--end-timestamp`, the collateral seed and both weight endpoints on the `10^18` scale. The program checks chain time. See [fixed-price setup](../adr/0032-fixed-price-lbp-setup.md) and [weighted time and weight bounds](../adr/0026-lbp-clock-and-poke.md).
+
+Buys are open by default. Use `--allowlist-root` to bind an existing 64-character hex root to the sale's pool. Creation checks that setup finished and the pool is funded. A matching retry needs the current creator's signing key. If creation reports `verification_failed`, check the acknowledged transaction hash before you retry.
+
+Use `sale-info` with the same engine and deployment accounts to read the saved terms, setup stage and `pool_observation.funded` without opening a wallet. The command does not estimate whether trading is open.
 
 A public write reports `executed` only after a successful receipt. An already-complete command can report `no_change`. Both exit `0`. Preparation failure, rejection before send and a reverted receipt exit `1`. Invalid command arguments exit `2`. A write with an unknown outcome reports `pending` and exits `3`. It includes the transaction hash if the sequencer acknowledged the send. A pending stage stops later writes. The result keeps hashes of earlier steps with successful receipts. Check the pending result before you retry.
 
@@ -86,7 +90,7 @@ The three `.lgx` archives passed an earlier Nix build. Installation, loading and
 
 Host tests do not prove guest execution. Local guest execution does not establish real proofs, live sequencer timing, wallet/service integration, package loading or DEX liquidity. Adapter-initiated reentry lacks focused guest tests. General adapter size/cost and live DEX integration remain unverified. Private routes are unsupported because compatibility token holdings are public only. See the [private evidence requirements](private-participation.md#evidence-still-required) and [package requirements](../../packages/launchpad/README.md).
 
-Ordinary post-close settlement has local execution coverage. The separate delayed-settlement scope item remains unresolved. Complete fixed-price and weighted SDK/CLI flows remain unverified.
+Ordinary post-close settlement has local execution coverage. The separate delayed-settlement scope item remains unresolved. SDK and CLI creation tests use scripted receipts and saved state. The live CLI-to-sequencer creation path remains unverified.
 
 For stable release image IDs, the build script requires `/tmp/logos-launchpad-release/source` with `--release`. Build paths can change guest binaries and IDs; cross-OS identity remains unverified. See [verification boundaries](../adr/0022-verification-boundaries.md).
 
@@ -138,11 +142,11 @@ The CLI accepts `distribution encode --file rules.json` and `distribution previe
 
 For distribution sale creation, use `create-sale --distribution-configuration rules.json` with `--graduation-hook-program-id` and both graduation percentages. This option replaces `--graduation-hook-configuration`. Before it opens the wallet or submits creation, the CLI checks the recipients against custody for the selected namespace, factory deployment, adapter deployment and launch salt. SDK callers use `distribution::hook` and place its result in the typed sale inputs. Raw opaque configuration does not perform this sale-specific check.
 
-Use `distribution initialize` with the adapter deployment, factory deployment, launch salt, sale kind and fee payer in the selected namespace. It reads configuration from the factory. Use `graduate --distribution` to admit saved recipient accounts for curve graduation. Use `distribution remaining` with the same identity after graduation. Run `--help` for exact flags. The SDK supports all three sale kinds; complete fixed-price and weighted CLI journeys remain outside this change.
+Use `distribution initialize` with the adapter deployment, factory deployment, launch salt, sale kind and fee payer in the selected namespace. It reads configuration from the factory. Use `graduate --distribution` to admit saved recipient accounts for curve graduation. Use `distribution remaining` with the same identity after graduation. Run `--help` for exact flags.
 
 ## Graduation reserve checks
 
-Creation accepts `graduation_reserve` for each sale type. Curve CLI creation uses `--graduation-reserve`, with zero as the default. Status output includes the saved reserve. The reserve remains in the existing mint custody after allocation. It does not enter the pool or change prices. ADR 0020 owns the [reserve rules](../adr/0020-settlement-and-graduation.md#graduation-reserve).
+Creation accepts `graduation_reserve` for each sale type. CLI creation uses `--graduation-reserve`, with zero as the default. Status output includes the saved reserve. The reserve remains in the existing mint custody after allocation. It does not enter the pool or change prices. ADR 0020 owns the [reserve rules](../adr/0020-settlement-and-graduation.md#graduation-reserve).
 
 Run the distribution guest command above to include reserve setup, sellout, manual payouts, surplus, pricing isolation and callback rollback checks. Rebuild all guests and SDK clients after the changed creation, factory-state, event and request encoding. Existing local state must be recreated; no deployed-state migration is required.
 
@@ -150,4 +154,4 @@ On 2026-11-18, all ten focused distribution and reserve guest tests passed with 
 
 On 2026-11-19, merge checks against main `fec1885` passed with the upstream clock. The development gate passed 641 host tests. Workspace tests passed 717 tests, including client and CLI checks. IDL and wire checks passed 74 tests. Fresh application and compatibility guests passed all 98 signed sale tests and 37 client and role-authority execution tests. These include the ten distribution and reserve tests. Formatting, dependency pins, shell checks and strict host and execution-test lints passed. The methods lint skipped guest rebuilding; execution used the guests built before that lint. These runs used development receipts. The full release gate, real proofs and service integration were not run for this merge.
 
-All sale types use the live namespace fee and can set `per_block_token_limit`. Curve CLI creation uses `--per-block-token-limit` in the smallest launch-token units. Capped buys require a canonical block-ID reply and an exact following-block inclusion window. The LBP launch-state format is version 8. Recreate local sale state and rebuild guests and clients after the wire changes. Private-route proof validity and live inclusion success remain unverified.
+All sale types use the live namespace fee and can set `per_block_token_limit`. CLI creation uses `--per-block-token-limit` in the smallest launch-token units. Capped buys require a canonical block-ID reply and an exact following-block inclusion window. The LBP launch-state format is version 8. Recreate local sale state and rebuild guests and clients after the wire changes. Private-route proof validity and live inclusion success remain unverified.

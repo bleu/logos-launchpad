@@ -9,7 +9,7 @@ use super::{
     curve_fixture::curve_transport,
     id,
     launchpad_transport::{self, FixtureTransport},
-    run_sale_info, sale_args,
+    lbp_sale, run_sale_info, sale_args,
 };
 use crate::{args::Cli, run_command as run_cli};
 
@@ -115,7 +115,7 @@ fn lbp_args(engine: &str) -> Vec<String> {
     args
 }
 
-fn lbp_transport(weighted: bool) -> FixtureTransport {
+pub(super) fn lbp_state(weighted: bool) -> (Actor, factory_core::LbpLaunchState) {
     use factory_core::{CreatorAllocationRelease, FixedPrice, LbpCreationStage, LbpSetupMode};
     let (namespace, factory_program, lbp_program, collateral) = (id(1), id(2), id(3), id(4));
     let factory = factory_core::compute_factory_pda(namespace, factory_program, SALT);
@@ -189,8 +189,16 @@ fn lbp_transport(weighted: bool) -> FixtureTransport {
         ),
     ))
     .unwrap();
+    (
+        Actor::new(factory, factory_program),
+        factory_core::LbpLaunchState::decode(&bytes).unwrap(),
+    )
+}
+
+fn lbp_transport(weighted: bool) -> FixtureTransport {
+    let (actor, state) = lbp_state(weighted);
     let mut transport = FixtureTransport::default();
-    transport.save(Actor::new(factory, factory_program), bytes);
+    transport.save(actor, borsh::to_vec(&state).unwrap());
     transport
 }
 
@@ -215,6 +223,52 @@ async fn sale_info_shows_the_exact_saved_fixed_price() {
         view["price"],
         serde_json::json!({"collateral_units": 25, "token_units": 10})
     );
+}
+
+#[tokio::test]
+async fn sale_info_shows_funded_pool_observations_without_a_trading_estimate() {
+    let (actor, mut state) = lbp_state(false);
+    state.creation_stage = factory_core::LbpCreationStage::Complete;
+    state.pause_policy = PausePolicy::AuthorityControlled;
+    let mut pool = lbp_sale::funded_pool(actor, &state);
+    pool.trade_control.set_paused(true).unwrap();
+    pool.closure_observed = true;
+    pool.settlement_progress = lbp_core::SettlementProgress::ManualComplete;
+    let mut transport = FixtureTransport::default();
+    transport.save(actor, borsh::to_vec(&state).unwrap());
+    transport.save(
+        Actor::new(state.pool_id, state.lbp_program_id),
+        borsh::to_vec(&pool).unwrap(),
+    );
+    for json in [false, true] {
+        let mut args = lbp_args("fixed-price");
+        if !json {
+            args.retain(|arg| arg != "--json");
+        }
+        let mut output = Vec::new();
+        let code = run_sale_info(
+            Cli::try_parse_from(args).unwrap(),
+            || Ok(transport.clone()),
+            &mut output,
+            &mut Vec::new(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(code, 0, "{}", String::from_utf8_lossy(&output));
+        let view: Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(view["setup_stage"], "complete");
+        assert_eq!(view["settlement_progress"], "unselected");
+        assert_eq!(
+            view["pool_observation"],
+            serde_json::json!({
+                "funded": true,
+                "paused": true,
+                "closure_observed": true,
+                "settlement_progress": "manual_complete",
+            })
+        );
+        assert!(view.get("trading_open").is_none());
+    }
 }
 
 #[tokio::test]
