@@ -5,22 +5,31 @@
 #![cfg_attr(not(test), warn(unused_crate_dependencies))]
 
 use std::{
+    io::{self, Write},
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
 
 use clap::{Args, Parser, Subcommand, builder::Styles};
-use eyre::{Context, ContextCompat, Result};
+use eyre::{Context, Result};
 use launchpad_client::{
     AccountLocation, CreateSaleRequest, ExactInputTradeTerms, ExactOutputTradeTerms, FactorySale,
-    PoolFeeTarget, PrivateAccountId, PrivateBuyRequest, ProgramHandle,
-    build_claim_creator_allocation_invocation, load_clock_block_id, load_curve_config,
-    load_factory_pool, load_factory_state, prepare_buy_invocation,
+    PoolFeeTarget, PrivateAccountId, PrivateBuyRequest, ProgramHandle, PublicWriteWallet,
+    WriteTransport, build_claim_creator_allocation_invocation, load_clock_block_id,
+    load_curve_config, load_factory_pool, load_factory_state, prepare_buy_invocation,
     prepare_buy_with_collateral_invocation, prepare_sell_invocation, quote_buy,
     quote_buy_with_collateral, quote_sell, submit_public_invocation,
 };
 use serde::Serialize;
-use wallet::WalletCore;
+use wallet::{WalletCore, WalletSequencerClient};
+
+mod sale_info;
+mod write_result;
+
+use write_result::WriteSuccess;
+
+#[cfg(test)]
+mod command_tests;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error, strum::IntoStaticStr)]
 #[strum(serialize_all = "snake_case")]
@@ -31,14 +40,12 @@ enum ErrorCategory {
     SaleReserveOvershoot,
     #[error("collateral_reserve_overshoot")]
     CollateralReserveOvershoot,
-    #[error("outcome_unknown")]
-    OutcomeUnknown(common::HashType),
     #[error("general")]
     General,
 }
 
 #[derive(Debug, Parser)]
-#[command(name = "launchpad", version, about = "Bonding curve launchpad on the Logos Execution Zone", styles = Styles::styled())]
+#[command(name = "launchpad", version, about = "Launchpad on the Logos Execution Zone", styles = Styles::styled())]
 struct Cli {
     /// Emit stable machine-readable output.
     #[arg(long, global = true)]
@@ -98,7 +105,6 @@ impl Cli {
             Command::BuyWithCollateral(args) => Some(args.trade.collateral_definition),
             Command::Sell(args) => Some(args.trade.collateral_definition),
             Command::Price(args) => Some(args.launch.collateral_definition),
-            Command::Status(args) | Command::SaleInfo(args) => Some(args.collateral_definition),
             Command::CollectFees(args) => Some(args.collateral_definition),
             _ => None,
         };
@@ -167,8 +173,8 @@ enum Command {
     PrivateBuy(PrivateBuyArgs),
     Sell(SellArgs),
     Price(PriceArgs),
-    Status(LaunchReadArgs),
-    SaleInfo(LaunchReadArgs),
+    /// Read saved sale terms and setup progress.
+    SaleInfo(sale_info::SaleInfoArgs),
     /// Collect one or more pools in this namespace (sequential, resumable).
     CollectFees(CollectFeesArgs),
     /// Initialize a namespace once, using its signing AccountId as administrator.
@@ -700,86 +706,11 @@ fn parse_launch_salt(raw: &str) -> Result<[u8; 32], String> {
         .map_err(|_| "launch salt must contain exactly 32 bytes (64 hex characters)".to_owned())
 }
 
-#[derive(Serialize)]
-struct SubmittedLaunch {
-    status: &'static str,
-    transaction_hash: String,
-    launch_salt: String,
-}
-
-#[derive(Clone, Copy, Serialize)]
-#[serde(rename_all = "snake_case")]
-enum SaleStatus {
-    Preparing,
-    Open,
-    Closed,
-    Withdrawn,
-    Graduated,
-}
-
-fn settlement_stage_name(stage: launchpad_client::SettlementStage) -> &'static str {
-    use launchpad_client::SettlementStage;
-    match stage {
-        SettlementStage::Unstarted => "unstarted",
-        SettlementStage::Ready => "ready",
-        SettlementStage::Withdrawn { .. } => "withdrawn",
-        SettlementStage::Complete => "complete",
-        SettlementStage::HookReady { .. } => "hook_ready",
-        SettlementStage::Graduated => "graduated",
-    }
-}
-
-#[derive(Serialize)]
-struct HookSnapshot {
-    program_id: String,
-    configuration: String,
-}
-
-impl From<&launchpad_client::GraduationHook> for HookSnapshot {
-    fn from(hook: &launchpad_client::GraduationHook) -> Self {
-        Self {
-            program_id: hook.program_id.to_string(),
-            configuration: hex::encode(&hook.configuration),
-        }
-    }
-}
-
 #[derive(Clone, Copy, Serialize)]
 #[serde(rename_all = "snake_case")]
 enum QuoteMode {
     Buy,
     Sell,
-}
-
-#[derive(Serialize)]
-struct SaleSnapshot {
-    sell_fee_bps: u16,
-    per_block_token_limit: Option<u128>,
-    graduation_reserve: u128,
-    trade_mode: TradeModeArg,
-    graduation_hook: Option<HookSnapshot>,
-    graduation_launch_bps: u16,
-    graduation_collateral_bps: u16,
-    settlement_stage: &'static str,
-    namespace: String,
-    protocol_fee_bps: u16,
-    treasury: String,
-    launch_salt: String,
-    factory_program: String,
-    pool: String,
-    token_definition: String,
-    collateral_definition: String,
-    status: SaleStatus,
-    creator_allocation_claimed: bool,
-    sale_quantity: u128,
-    tokens_sold: u128,
-    real_token_reserve: u128,
-    real_collateral_reserve: u128,
-    fees_accrued: u128,
-    fees_collected: u128,
-    virtual_token_reserve: u128,
-    virtual_collateral_reserve: u128,
-    close_timestamp: Option<u64>,
 }
 
 #[derive(Serialize)]
@@ -795,20 +726,156 @@ struct PriceQuote {
 }
 
 #[tokio::main]
-async fn main() {
-    let cli = Cli::parse();
-    let json = cli.json;
-    if let Err(error) = run(json, cli).await {
-        if json {
-            println!("{}", json_error(&error));
-        } else {
-            eprintln!("Error: {error:#}");
+async fn main() -> std::process::ExitCode {
+    let result = run_command(
+        Cli::parse(),
+        read_client,
+        open_wallet,
+        &mut io::stdout(),
+        &mut io::stderr(),
+    )
+    .await;
+    match result {
+        Ok(code) => std::process::ExitCode::from(code),
+        Err(error) => {
+            eprintln!("Error writing command result: {error}");
+            std::process::ExitCode::FAILURE
         }
-        std::process::exit(1);
     }
 }
 
-async fn run(json: bool, cli: Cli) -> Result<()> {
+fn read_client() -> Result<impl WalletSequencerClient> {
+    use wallet::{config::WalletConfig, utils::fetch_config_path};
+    let path = fetch_config_path().map_err(|error| eyre::eyre!(error.into_boxed_dyn_error()))?;
+    let config = match std::fs::File::open(&path) {
+        Ok(file) => serde_json::from_reader::<_, WalletConfig>(io::BufReader::new(file)),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(WalletConfig::default()),
+        Err(error) => return Err(error).wrap_err_with(|| format!("opening {}", path.display())),
+    }
+    .wrap_err_with(|| format!("reading {}", path.display()))?;
+    WalletCore::client_from_config(&config)
+        .map_err(|error| eyre::eyre!(error.into_boxed_dyn_error()))
+}
+
+fn open_wallet() -> Result<PublicWriteWallet<impl WalletSequencerClient>> {
+    WalletCore::from_env_with_client(WriteTransport::new(read_client()?))
+        .map_err(|error| eyre::eyre!(error.into_boxed_dyn_error()))
+        .context("opening the project wallet")
+}
+
+async fn run_command<R: WalletSequencerClient, C: WalletSequencerClient>(
+    cli: Cli,
+    read_client: impl FnOnce() -> Result<R>,
+    open_wallet: impl FnOnce() -> Result<PublicWriteWallet<C>>,
+    output: &mut impl Write,
+    errors: &mut impl Write,
+) -> io::Result<u8> {
+    let json = cli.json;
+    let public_write = matches!(
+        cli.command,
+        Command::Configure(_)
+            | Command::RenounceAdmin(_)
+            | Command::CreateSale(_)
+            | Command::Withdraw(_)
+            | Command::Graduate(_)
+            | Command::Claim(_)
+            | Command::CollectFees(_)
+            | Command::Buy(_)
+            | Command::BuyWithCollateral(_)
+            | Command::Sell(_)
+            | Command::Distribution {
+                command: DistributionCommand::Initialize { .. }
+                    | DistributionCommand::Remaining { .. },
+            }
+    );
+    match run(json, cli, read_client, open_wallet, output).await {
+        Ok(result) => {
+            if let Some(result) = result {
+                result.write(json, output)?;
+            }
+            Ok(0)
+        }
+        Err(error) => {
+            use launchpad_client::ClientError;
+            let (source, executed) = match error.downcast_ref::<ClientError>() {
+                Some(ClientError::WriteInterrupted {
+                    executed_hashes,
+                    source,
+                }) => (Some(source.as_ref()), executed_hashes.as_slice()),
+                source => (source, &[][..]),
+            };
+            let write_failure = match source {
+                Some(ClientError::PublicWritePending { hash, .. }) => {
+                    let submission = if hash.is_some() {
+                        "acknowledged"
+                    } else {
+                        "unknown"
+                    };
+                    Some(("pending", submission, *hash, 3))
+                }
+                Some(ClientError::PublicWriteReverted { hash }) => {
+                    Some(("reverted", "acknowledged", Some(*hash), 1))
+                }
+                Some(ClientError::PublicWriteRejected(_)) => {
+                    Some(("rejected", "not_sent", None, 1))
+                }
+                _ if public_write => Some(("preparation_failed", "not_sent", None, 1)),
+                _ => None,
+            };
+            if let Some((status, submission, hash, code)) = write_failure {
+                let hash = hash.map(hex::encode);
+                let executed = executed.iter().map(hex::encode).collect::<Vec<_>>();
+                if json {
+                    let (category, message) = if executed.is_empty() {
+                        (command_error_category(&error), error.to_string())
+                    } else {
+                        let cause = source.expect("interrupted write has a cause");
+                        (cause.into(), cause.to_string())
+                    };
+                    let view = serde_json::json!({
+                        "status": status,
+                        "submission": submission,
+                        "transaction_hash": hash,
+                        "executed_transaction_hashes": executed,
+                        "error": { "category": category, "message": message },
+                    });
+                    writeln!(output, "{view}")?;
+                } else {
+                    write!(errors, "{status}: submission={submission}")?;
+                    if let Some(hash) = hash {
+                        write!(errors, " tx_hash={hash}")?;
+                    }
+                    writeln!(errors, ": {error:#}")?;
+                    for executed_hash in executed {
+                        writeln!(errors, "executed tx_hash={executed_hash}")?;
+                    }
+                }
+                return Ok(code);
+            }
+            if json {
+                let view = serde_json::json!({
+                    "status": "error",
+                    "error": {
+                        "category": command_error_category(&error),
+                        "message": error.to_string(),
+                    },
+                });
+                writeln!(output, "{view}")?;
+            } else {
+                writeln!(errors, "Error: {error:#}")?;
+            }
+            Ok(1)
+        }
+    }
+}
+
+async fn run<R: WalletSequencerClient, C: WalletSequencerClient>(
+    json: bool,
+    cli: Cli,
+    read_client: impl FnOnce() -> Result<R>,
+    open_wallet: impl FnOnce() -> Result<PublicWriteWallet<C>>,
+    output: &mut impl Write,
+) -> Result<Option<WriteSuccess>> {
     cli.validate_route()?;
     let router = cli.authority_router_path.as_deref();
     if let Command::Distribution { command } = &cli.command {
@@ -818,11 +885,15 @@ async fn run(json: bool, cli: Cli) -> Result<()> {
                 let bytes = launchpad_client::distribution::encode_configuration(&config)?;
                 let encoded = hex::encode(bytes);
                 if json {
-                    println!("{}", serde_json::json!({ "configuration": encoded }));
+                    writeln!(
+                        output,
+                        "{}",
+                        serde_json::json!({ "configuration": encoded })
+                    )?;
                 } else {
-                    println!("{encoded}");
+                    writeln!(output, "{encoded}")?;
                 }
-                return Ok(());
+                return Ok(None);
             }
             DistributionCommand::Preview {
                 file,
@@ -833,8 +904,8 @@ async fn run(json: bool, cli: Cli) -> Result<()> {
                 let plan = config
                     .plan([*launch_balance, *collateral_balance])
                     .map_err(|error| eyre::eyre!("{error:?}"))?;
-                println!("{}", serde_json::to_string_pretty(&plan)?);
-                return Ok(());
+                writeln!(output, "{}", serde_json::to_string_pretty(&plan)?)?;
+                return Ok(None);
             }
             _ => {}
         }
@@ -843,12 +914,13 @@ async fn run(json: bool, cli: Cli) -> Result<()> {
         .namespace
         .ok_or_else(|| eyre::eyre!("--namespace is required; use the stable namespace AccountId"))?
         .account_id();
-    match cli.command {
-        Command::Distribution { command } => run_distribution(namespace, json, command).await,
-        Command::CreateSale(args) => create_sale(namespace, json, args, router).await,
+    let receipt = match cli.command {
+        Command::Distribution { command } => {
+            run_distribution(namespace, command, open_wallet).await?
+        }
+        Command::CreateSale(args) => create_sale(namespace, args, router, open_wallet).await?,
         Command::CollectFees(args) => {
-            let wallet = WalletCore::from_env()
-                .map_err(|error| eyre::eyre!(error.into_boxed_dyn_error()))?;
+            let wallet = open_wallet()?;
             let curve = load_deployment(&args.curve_program_path, args.curve_program_account)?;
             let collateral_definition = args.collateral_definition.account_id();
             let pools = args
@@ -867,63 +939,61 @@ async fn run(json: bool, cli: Cli) -> Result<()> {
                 args.fee_payer,
             )
             .await?;
-            println!(
-                "{}",
-                serde_json::json!({"transaction_hashes": hashes.into_iter().map(hex::encode).collect::<Vec<_>>()})
-            );
-            Ok(())
+            WriteSuccess::new(hashes)
         }
-        Command::Withdraw(args) => withdraw_factory_proceeds(namespace, json, args, router).await,
-        Command::Graduate(args) => graduate(namespace, json, args).await,
-        Command::Claim(args) => claim_creator_allocation(namespace, json, args, router).await,
-        Command::Buy(args) => buy(namespace, json, args).await,
-        Command::BuyWithCollateral(args) => buy_with_collateral(namespace, json, args).await,
-        Command::PrivateBuy(args) => private_buy(namespace, args).await,
-        Command::Sell(args) => sell(namespace, json, args).await,
-        Command::Price(args) => price(namespace, json, args).await,
-        Command::Status(args) | Command::SaleInfo(args) => {
-            sale_snapshot(namespace, json, args).await
+        Command::Withdraw(args) => {
+            withdraw_factory_proceeds(namespace, args, router, open_wallet).await?
         }
-        Command::Configure(args) => configure(namespace, json, args).await,
+        Command::Graduate(args) => graduate(namespace, args, open_wallet).await?,
+        Command::Claim(args) => claim_creator_allocation(namespace, args, open_wallet).await?,
+        Command::Buy(args) => buy(namespace, args, open_wallet).await?,
+        Command::BuyWithCollateral(args) => {
+            buy_with_collateral(namespace, args, open_wallet).await?
+        }
+        Command::PrivateBuy(args) => return private_buy(namespace, args).await.map(|()| None),
+        Command::Sell(args) => sell(namespace, args, open_wallet).await?,
+        Command::Price(args) => return price(namespace, json, args).await.map(|()| None),
+        Command::SaleInfo(args) => {
+            sale_info::show(namespace, args, &read_client()?, json, output).await?;
+            return Ok(None);
+        }
+        Command::Configure(args) => configure(namespace, args, open_wallet).await?,
         Command::CreateAuthority(_) | Command::TransferAuthority(_) => unreachable!(),
         Command::NamespaceInfo(args) => {
             let program = load_deployment(&args.curve_program_path, args.curve_program_account)?;
-            let wallet = WalletCore::from_env()
-                .map_err(|error| eyre::eyre!(error.into_boxed_dyn_error()))?;
+            let wallet = open_wallet()?;
             let config = load_curve_config(namespace, &wallet, program.account_id).await?;
-            println!(
+            writeln!(
+                output,
                 "{}",
                 serde_json::json!({"namespace": namespace.to_string(), "protocol_fee_bps": config.protocol_fee_bps, "treasury": config.treasury.to_string()})
-            );
-            Ok(())
+            )?;
+            return Ok(None);
         }
         Command::RenounceAdmin(args) => {
             let program = load_deployment(&args.curve_program_path, args.curve_program_account)?;
-            let wallet = WalletCore::from_env()
-                .map_err(|error| eyre::eyre!(error.into_boxed_dyn_error()))?;
+            let wallet = open_wallet()?;
             let invocation = launchpad_client::build_renounce_admin_invocation(
                 namespace,
                 program.account_id,
                 args.admin,
             );
-            let hash = submit_public_invocation(&wallet, &program, invocation).await?;
-            println!(
-                "{}",
-                serde_json::json!({"namespace": namespace.to_string(), "transaction_hash": hex::encode(hash)})
-            );
-            Ok(())
+            WriteSuccess::single(
+                submit_public_invocation(&wallet, &program, invocation).await?,
+                None,
+            )
         }
-    }
+    };
+    Ok(Some(receipt))
 }
 
-fn json_error(error: &eyre::Report) -> serde_json::Value {
-    let category = error_category(error);
-    let mut details =
-        serde_json::json!({"category": category.to_string(), "message": error.to_string()});
-    if let ErrorCategory::OutcomeUnknown(hash) = category {
-        details["transaction_hash"] = hex::encode(hash).into();
+fn command_error_category(error: &eyre::Report) -> &'static str {
+    match error_category(error) {
+        ErrorCategory::General => error
+            .downcast_ref::<launchpad_client::ClientError>()
+            .map_or("general", Into::into),
+        category => category.into(),
     }
-    serde_json::json!({"status": "error", "error": details})
 }
 
 fn error_category(error: &eyre::Report) -> ErrorCategory {
@@ -936,8 +1006,6 @@ fn error_category(error: &eyre::Report) -> ErrorCategory {
     use launchpad_client::ClientError;
     use pool::SwapError;
     match error {
-        ClientError::ConfirmationTimeout { hash, .. }
-        | ClientError::ConfirmTransaction { hash, .. } => ErrorCategory::OutcomeUnknown(*hash),
         ClientError::QuoteBuy(SwapError::SlippageExceeded)
         | ClientError::QuoteBuyWithCollateral(SwapError::SlippageExceeded)
         | ClientError::QuoteSell(SwapError::SlippageExceeded) => ErrorCategory::SlippageFloor,
@@ -952,10 +1020,13 @@ fn error_category(error: &eyre::Report) -> ErrorCategory {
     }
 }
 
-async fn configure(namespace: lee::AccountId, json: bool, args: ConfigArgs) -> Result<()> {
+async fn configure<C: WalletSequencerClient>(
+    namespace: lee::AccountId,
+    args: ConfigArgs,
+    open_wallet: impl FnOnce() -> Result<PublicWriteWallet<C>>,
+) -> Result<WriteSuccess> {
     let curve_program = load_deployment(&args.curve_program_path, args.curve_program_account)?;
-    let wallet =
-        WalletCore::from_env().map_err(|error| eyre::eyre!(error.into_boxed_dyn_error()))?;
+    let wallet = open_wallet()?;
     let invocation = launchpad_client::build_initialize_namespace_invocation(
         namespace,
         curve_program.account_id,
@@ -963,29 +1034,15 @@ async fn configure(namespace: lee::AccountId, json: bool, args: ConfigArgs) -> R
         args.treasury,
     );
     let transaction_hash = submit_public_invocation(&wallet, &curve_program, invocation).await?;
-    if json {
-        println!(
-            "{}",
-            serde_json::json!({
-                "status": "submitted",
-                "transaction_hash": hex::encode(transaction_hash),
-            })
-        );
-    } else {
-        println!(
-            "submitted namespace initialization: tx_hash={}",
-            hex::encode(transaction_hash)
-        );
-    }
-    Ok(())
+    Ok(WriteSuccess::single(transaction_hash, None))
 }
 
-async fn withdraw_factory_proceeds(
+async fn withdraw_factory_proceeds<C: WalletSequencerClient>(
     namespace: lee::AccountId,
-    json: bool,
     args: FactoryLifecycleArgs,
     router: Option<&Path>,
-) -> Result<()> {
+    open_wallet: impl FnOnce() -> Result<PublicWriteWallet<C>>,
+) -> Result<WriteSuccess> {
     let factory_program =
         load_deployment(&args.factory_program_path, args.factory_program_account)?;
     let curve_program = load_deployment(&args.curve_program_path, args.curve_program_account)?;
@@ -996,27 +1053,28 @@ async fn withdraw_factory_proceeds(
         args.launch.launch_salt,
         args.collateral_definition.account_id(),
     );
-    let mut wallet = WalletCore::from_env()
-        .map_err(|error| eyre::eyre!(error.into_boxed_dyn_error()))
-        .context("opening the project wallet")?;
+    let wallet = open_wallet()?;
     if router.is_some() {
         return Err(launchpad_client::ClientError::UnsupportedPrivateAuthority.into());
     }
-    let router = None;
     let receipt = launchpad_client::FactorySession::new(
-        &mut wallet,
+        &wallet,
         &factory_program,
         &curve_program,
-        router.as_ref(),
+        None,
         namespace,
         args.creator,
     )
     .withdraw(sale, current_time()?)
     .await?;
-    print_lifecycle(json, "factory withdrawal", args.launch.launch_salt, receipt)
+    Ok(WriteSuccess::lifecycle(receipt, args.launch.launch_salt))
 }
 
-async fn graduate(namespace: lee::AccountId, json: bool, args: GraduationArgs) -> Result<()> {
+async fn graduate<C: WalletSequencerClient>(
+    namespace: lee::AccountId,
+    args: GraduationArgs,
+    open_wallet: impl FnOnce() -> Result<PublicWriteWallet<C>>,
+) -> Result<WriteSuccess> {
     let factory = load_deployment(&args.factory_program_path, args.factory_program_account)?;
     let curve = load_deployment(&args.curve_program_path, args.curve_program_account)?;
     let sale = factory_sale(
@@ -1026,9 +1084,7 @@ async fn graduate(namespace: lee::AccountId, json: bool, args: GraduationArgs) -
         args.launch.launch_salt,
         args.collateral_definition,
     );
-    let wallet = WalletCore::from_env()
-        .map_err(|error| eyre::eyre!(error.into_boxed_dyn_error()))
-        .context("opening the project wallet")?;
+    let wallet = open_wallet()?;
     let state = load_factory_state(&wallet, sale).await?;
     state
         .graduation_hook
@@ -1053,12 +1109,10 @@ async fn graduate(namespace: lee::AccountId, json: bool, args: GraduationArgs) -
     };
     invocation.fee_payer = Some(args.fee_payer);
     let transaction_hash = submit_public_invocation(&wallet, &factory, invocation).await?;
-    print_submission(
-        json,
-        "graduation stage",
+    Ok(WriteSuccess::single(
         transaction_hash,
-        args.launch.launch_salt,
-    )
+        Some(args.launch.launch_salt),
+    ))
 }
 
 fn read_distribution_configuration(
@@ -1069,11 +1123,11 @@ fn read_distribution_configuration(
     Ok(config)
 }
 
-async fn run_distribution(
+async fn run_distribution<C: WalletSequencerClient>(
     namespace: lee::AccountId,
-    json: bool,
     command: DistributionCommand,
-) -> Result<()> {
+    open_wallet: impl FnOnce() -> Result<PublicWriteWallet<C>>,
+) -> Result<WriteSuccess> {
     use launchpad_client::distribution;
     let (identity, kind) = match command {
         DistributionCommand::Initialize { adapter, kind } => (adapter, Some(kind)),
@@ -1084,8 +1138,7 @@ async fn run_distribution(
         &identity.adapter_program_path,
         identity.adapter_program_account,
     )?;
-    let wallet =
-        WalletCore::from_env().map_err(|error| eyre::eyre!(error.into_boxed_dyn_error()))?;
+    let wallet = open_wallet()?;
     let mut call = if let Some(kind) = kind {
         let kind = match kind {
             DistributionKind::Curve => distribution::GraduationIntentKind::Curve,
@@ -1113,12 +1166,10 @@ async fn run_distribution(
     };
     call.fee_payer = Some(identity.fee_payer);
     let transaction_hash = submit_public_invocation(&wallet, &adapter, call).await?;
-    print_submission(
-        json,
-        "distribution adapter",
+    Ok(WriteSuccess::single(
         transaction_hash,
-        identity.launch.launch_salt,
-    )
+        Some(identity.launch.launch_salt),
+    ))
 }
 
 async fn price(namespace: lee::AccountId, json: bool, args: PriceArgs) -> Result<()> {
@@ -1196,132 +1247,11 @@ async fn price(namespace: lee::AccountId, json: bool, args: PriceArgs) -> Result
     Ok(())
 }
 
-async fn sale_snapshot(namespace: lee::AccountId, json: bool, args: LaunchReadArgs) -> Result<()> {
-    let factory_program =
-        load_deployment(&args.factory_program_path, args.factory_program_account)?;
-    let curve_program = load_deployment(&args.curve_program_path, args.curve_program_account)?;
-    let sale = factory_sale(
-        namespace,
-        &factory_program,
-        &curve_program,
-        args.launch.launch_salt,
-        args.collateral_definition.account_id(),
-    );
-    let wallet = WalletCore::from_env()
-        .map_err(|error| eyre::eyre!(error.into_boxed_dyn_error()))
-        .context("opening the project wallet")?;
-    let factory = load_factory_state(&wallet, sale).await?;
-    let active = factory.creation_stage == launchpad_client::CreationStage::Active;
-    let pool = if active {
-        Some(load_factory_pool(&wallet, sale).await?.pool)
-    } else {
-        None
-    };
-    let status = if factory.settlement_stage == launchpad_client::SettlementStage::Graduated {
-        SaleStatus::Graduated
-    } else {
-        match pool.as_ref().map(|pool| pool.lifecycle) {
-            None => SaleStatus::Preparing,
-            Some(pool::PoolLifecycle::Open) => SaleStatus::Open,
-            Some(pool::PoolLifecycle::Closed) => SaleStatus::Closed,
-            Some(pool::PoolLifecycle::Withdrawn) => SaleStatus::Withdrawn,
-        }
-    };
-    let tokens_sold = if let Some(pool) = &pool {
-        factory
-            .sale_reserve
-            .checked_sub(pool.real_reserve0)
-            .context("factory pool token reserve exceeds its configured sale quantity")?
-    } else {
-        0
-    };
-    let config = load_curve_config(namespace, &wallet, curve_program.account_id).await?;
-    let snapshot = SaleSnapshot {
-        sell_fee_bps: factory.sell_fee_bps,
-        per_block_token_limit: factory.per_block_token_limit,
-        graduation_reserve: factory.graduation_reserve,
-        trade_mode: factory.trade_mode.into(),
-        graduation_hook: factory.graduation_hook.as_ref().map(HookSnapshot::from),
-        graduation_launch_bps: factory.graduation_policy.launch_bps,
-        graduation_collateral_bps: factory.graduation_policy.collateral_bps,
-        settlement_stage: settlement_stage_name(factory.settlement_stage),
-        namespace: namespace.to_string(),
-        protocol_fee_bps: config.protocol_fee_bps,
-        treasury: config.treasury.to_string(),
-        launch_salt: hex::encode(args.launch.launch_salt),
-        factory_program: factory_program.account_id.to_string(),
-        pool: factory.pool_id.to_string(),
-        token_definition: factory.token_definition_id.to_string(),
-        collateral_definition: factory.collateral_definition_id.to_string(),
-        status,
-        creator_allocation_claimed: factory.creator_allocation_claimed,
-        sale_quantity: factory.sale_reserve,
-        tokens_sold,
-        real_token_reserve: pool.as_ref().map_or(0, |p| p.real_reserve0),
-        real_collateral_reserve: pool.as_ref().map_or(0, |p| p.real_reserve1),
-        fees_accrued: pool.as_ref().map_or(0, |p| p.fees_accrued),
-        fees_collected: pool.as_ref().map_or(0, |p| p.fees_collected),
-        virtual_token_reserve: pool
-            .as_ref()
-            .map_or(factory.virtual_token_reserve, |p| p.virtual_reserve0),
-        virtual_collateral_reserve: pool
-            .as_ref()
-            .map_or(factory.virtual_collateral_reserve, |p| p.virtual_reserve1),
-        close_timestamp: pool
-            .as_ref()
-            .map_or(factory.end_timestamp, |p| p.close_timestamp),
-    };
-    if json {
-        println!("{}", serde_json::to_string(&snapshot)?);
-    } else {
-        let status = match snapshot.status {
-            SaleStatus::Preparing => "preparing",
-            SaleStatus::Open => "open",
-            SaleStatus::Closed => "closed",
-            SaleStatus::Withdrawn => "withdrawn",
-            SaleStatus::Graduated => "graduated",
-        };
-        let trade_mode = match snapshot.trade_mode {
-            TradeModeArg::BuyOnly => "buy-only",
-            TradeModeArg::BuyAndSell => "buy-and-sell",
-        };
-        println!(
-            "sale {status}: trade_mode={trade_mode} settlement_stage={} namespace={} fee_bps={} treasury={} pool={} sold={}/{} token_reserve={} collateral_reserve={} fees_accrued={} fees_collected={}",
-            snapshot.settlement_stage,
-            snapshot.namespace,
-            snapshot.protocol_fee_bps,
-            snapshot.treasury,
-            snapshot.pool,
-            snapshot.tokens_sold,
-            snapshot.sale_quantity,
-            snapshot.real_token_reserve,
-            snapshot.real_collateral_reserve,
-            snapshot.fees_accrued,
-            snapshot.fees_collected
-        );
-        println!(
-            "graduation split: launch_bps={} collateral_bps={} reserve={}",
-            snapshot.graduation_launch_bps,
-            snapshot.graduation_collateral_bps,
-            snapshot.graduation_reserve,
-        );
-        println!("retained sell fee: {} bps", snapshot.sell_fee_bps);
-        if let Some(limit) = snapshot.per_block_token_limit {
-            println!("purchase limit per block: {limit} launch-token units");
-        }
-        if let Some(hook) = &snapshot.graduation_hook {
-            println!(
-                "graduation hook: program_id={} configuration={}",
-                hook.program_id, hook.configuration,
-            );
-        } else {
-            println!("graduation hook: none");
-        }
-    }
-    Ok(())
-}
-
-async fn buy(namespace: lee::AccountId, json: bool, args: BuyArgs) -> Result<()> {
+async fn buy<C: WalletSequencerClient>(
+    namespace: lee::AccountId,
+    args: BuyArgs,
+    open_wallet: impl FnOnce() -> Result<PublicWriteWallet<C>>,
+) -> Result<WriteSuccess> {
     let factory_program = load_deployment(
         &args.trade.factory_program_path,
         args.trade.factory_program_account,
@@ -1338,9 +1268,7 @@ async fn buy(namespace: lee::AccountId, json: bool, args: BuyArgs) -> Result<()>
         args.trade.collateral_definition.account_id(),
     );
     let participant = args.trade.participant.account_id();
-    let wallet = WalletCore::from_env()
-        .map_err(|error| eyre::eyre!(error.into_boxed_dyn_error()))
-        .context("opening the project wallet")?;
+    let wallet = open_wallet()?;
     let config = load_curve_config(namespace, &wallet, curve_program.account_id).await?;
     let pool = load_factory_pool(&wallet, sale).await?;
     let now = SystemTime::now()
@@ -1366,19 +1294,17 @@ async fn buy(namespace: lee::AccountId, json: bool, args: BuyArgs) -> Result<()>
         observed_block,
     )?;
     let transaction_hash = submit_public_invocation(&wallet, &curve_program, invocation).await?;
-    print_submission(
-        json,
-        "purchase",
+    Ok(WriteSuccess::single(
         transaction_hash,
-        args.trade.launch.launch_salt,
-    )
+        Some(args.trade.launch.launch_salt),
+    ))
 }
 
-async fn buy_with_collateral(
+async fn buy_with_collateral<C: WalletSequencerClient>(
     namespace: lee::AccountId,
-    json: bool,
     args: BuyWithCollateralArgs,
-) -> Result<()> {
+    open_wallet: impl FnOnce() -> Result<PublicWriteWallet<C>>,
+) -> Result<WriteSuccess> {
     let factory_program = load_deployment(
         &args.trade.factory_program_path,
         args.trade.factory_program_account,
@@ -1395,9 +1321,7 @@ async fn buy_with_collateral(
         args.trade.collateral_definition.account_id(),
     );
     let participant = args.trade.participant.account_id();
-    let wallet = WalletCore::from_env()
-        .map_err(|error| eyre::eyre!(error.into_boxed_dyn_error()))
-        .context("opening the project wallet")?;
+    let wallet = open_wallet()?;
     let config = load_curve_config(namespace, &wallet, curve_program.account_id).await?;
     let pool = load_factory_pool(&wallet, sale).await?;
     let now = SystemTime::now()
@@ -1423,12 +1347,10 @@ async fn buy_with_collateral(
         observed_block,
     )?;
     let transaction_hash = submit_public_invocation(&wallet, &curve_program, invocation).await?;
-    print_submission(
-        json,
-        "collateral purchase",
+    Ok(WriteSuccess::single(
         transaction_hash,
-        args.trade.launch.launch_salt,
-    )
+        Some(args.trade.launch.launch_salt),
+    ))
 }
 
 async fn private_buy(_namespace: lee::AccountId, args: PrivateBuyArgs) -> Result<()> {
@@ -1442,7 +1364,11 @@ async fn private_buy(_namespace: lee::AccountId, args: PrivateBuyArgs) -> Result
     Err(launchpad_client::ClientError::UnsupportedPrivateRoute.into())
 }
 
-async fn sell(namespace: lee::AccountId, json: bool, args: SellArgs) -> Result<()> {
+async fn sell<C: WalletSequencerClient>(
+    namespace: lee::AccountId,
+    args: SellArgs,
+    open_wallet: impl FnOnce() -> Result<PublicWriteWallet<C>>,
+) -> Result<WriteSuccess> {
     let factory_program = load_deployment(
         &args.trade.factory_program_path,
         args.trade.factory_program_account,
@@ -1459,9 +1385,7 @@ async fn sell(namespace: lee::AccountId, json: bool, args: SellArgs) -> Result<(
         args.trade.collateral_definition.account_id(),
     );
     let participant = args.trade.participant.account_id();
-    let wallet = WalletCore::from_env()
-        .map_err(|error| eyre::eyre!(error.into_boxed_dyn_error()))
-        .context("opening the project wallet")?;
+    let wallet = open_wallet()?;
     let config = load_curve_config(namespace, &wallet, curve_program.account_id).await?;
     let pool = load_factory_pool(&wallet, sale).await?;
     let now = SystemTime::now()
@@ -1480,42 +1404,17 @@ async fn sell(namespace: lee::AccountId, json: bool, args: SellArgs) -> Result<(
         now,
     )?;
     let transaction_hash = submit_public_invocation(&wallet, &curve_program, invocation).await?;
-    print_submission(
-        json,
-        "sale",
+    Ok(WriteSuccess::single(
         transaction_hash,
-        args.trade.launch.launch_salt,
-    )
+        Some(args.trade.launch.launch_salt),
+    ))
 }
 
-fn print_submission(
-    json: bool,
-    action: &str,
-    transaction_hash: common::HashType,
-    launch_salt: [u8; 32],
-) -> Result<()> {
-    let output = SubmittedLaunch {
-        status: "submitted",
-        transaction_hash: hex::encode(transaction_hash),
-        launch_salt: hex::encode(launch_salt),
-    };
-    if json {
-        println!("{}", serde_json::to_string(&output)?);
-    } else {
-        println!(
-            "submitted {action}: tx_hash={} launch_salt={}",
-            output.transaction_hash, output.launch_salt
-        );
-    }
-    Ok(())
-}
-
-async fn claim_creator_allocation(
+async fn claim_creator_allocation<C: WalletSequencerClient>(
     namespace: lee::AccountId,
-    json: bool,
     args: FactoryLifecycleArgs,
-    router: Option<&Path>,
-) -> Result<()> {
+    open_wallet: impl FnOnce() -> Result<PublicWriteWallet<C>>,
+) -> Result<WriteSuccess> {
     let factory_program =
         load_deployment(&args.factory_program_path, args.factory_program_account)?;
     let curve_program = load_deployment(&args.curve_program_path, args.curve_program_account)?;
@@ -1527,47 +1426,25 @@ async fn claim_creator_allocation(
         args.collateral_definition.account_id(),
     );
 
-    let mut wallet = WalletCore::from_env()
-        .map_err(|error| eyre::eyre!(error.into_boxed_dyn_error()))
-        .context("opening the project wallet")?;
+    let AccountLocation::Public(creator) = args.creator else {
+        return Err(launchpad_client::ClientError::UnsupportedPrivateAuthority.into());
+    };
+    let wallet = open_wallet()?;
     load_factory_state(&wallet, sale).await?;
-    let now = current_time()?;
-    let build = |creator| {
-        Ok(build_claim_creator_allocation_invocation(
-            sale, creator, now,
-        ))
-    };
-    let transaction_hash = submit_role(
-        &mut wallet,
-        &factory_program,
-        vec![curve_program.clone()],
-        args.creator,
-        router,
-        build,
-    )
-    .await?;
-    let output = SubmittedLaunch {
-        status: "submitted",
-        transaction_hash: hex::encode(transaction_hash),
-        launch_salt: hex::encode(args.launch.launch_salt),
-    };
-    if json {
-        println!("{}", serde_json::to_string(&output)?);
-    } else {
-        println!(
-            "submitted creator allocation claim: tx_hash={} launch_salt={}",
-            output.transaction_hash, output.launch_salt
-        );
-    }
-    Ok(())
+    let call = build_claim_creator_allocation_invocation(sale, creator, current_time()?);
+    let transaction_hash = submit_public_invocation(&wallet, &factory_program, call).await?;
+    Ok(WriteSuccess::single(
+        transaction_hash,
+        Some(args.launch.launch_salt),
+    ))
 }
 
-async fn create_sale(
+async fn create_sale<C: WalletSequencerClient>(
     namespace: lee::AccountId,
-    json: bool,
     args: CreateSaleArgs,
     router: Option<&Path>,
-) -> Result<()> {
+    open_wallet: impl FnOnce() -> Result<PublicWriteWallet<C>>,
+) -> Result<WriteSuccess> {
     let request = args.prepared_sale_request(namespace)?;
     let factory_program =
         load_deployment(&args.factory_program_path, args.factory_program_account)?;
@@ -1579,74 +1456,21 @@ async fn create_sale(
         args.launch.launch_salt,
         args.collateral_definition.account_id(),
     );
-    let mut wallet = WalletCore::from_env()
-        .map_err(|error| eyre::eyre!(error.into_boxed_dyn_error()))
-        .context("opening the project wallet")?;
+    let wallet = open_wallet()?;
     if router.is_some() {
         return Err(launchpad_client::ClientError::UnsupportedPrivateAuthority.into());
     }
-    let router = None;
     let receipt = launchpad_client::FactorySession::new(
-        &mut wallet,
+        &wallet,
         &factory_program,
         &curve_program,
-        router.as_ref(),
+        None,
         namespace,
         args.creator,
     )
     .create_sale(sale, request)
     .await?;
-    print_lifecycle(json, "factory launch", args.launch.launch_salt, receipt)
-}
-
-fn print_lifecycle(
-    json: bool,
-    label: &str,
-    salt: [u8; 32],
-    receipt: launchpad_client::LifecycleReceipt,
-) -> Result<()> {
-    let hashes: Vec<_> = receipt.transaction_hashes.iter().map(hex::encode).collect();
-    let holders: Vec<_> = receipt
-        .authority_holders
-        .iter()
-        .map(ToString::to_string)
-        .collect();
-    if json {
-        println!(
-            "{}",
-            serde_json::json!({"status":"complete","launch_salt":hex::encode(salt),"transaction_hash":hashes.last(),"transaction_hashes":hashes,"authority_holders":holders})
-        );
-    } else {
-        println!(
-            "completed {label}: {} confirmed stages; launch_salt={}",
-            hashes.len(),
-            hex::encode(salt)
-        );
-        for (hash, holder) in hashes.iter().zip(holders) {
-            println!("tx_hash={hash} authority_holder=Public/{holder}");
-        }
-    }
-    Ok(())
-}
-
-async fn submit_role<I: launchpad_client::PrivateInstruction>(
-    wallet: &mut launchpad_client::LaunchpadWallet,
-    program: &ProgramHandle,
-    _dependencies: Vec<ProgramHandle>,
-    holder: AccountLocation,
-    _router: Option<&Path>,
-    build: impl FnOnce(
-        lee::AccountId,
-    ) -> launchpad_client::Result<launchpad_client::PublicInvocation<I>>,
-) -> Result<common::HashType> {
-    match holder {
-        AccountLocation::Private(_) => {
-            Err(launchpad_client::ClientError::UnsupportedPrivateAuthority.into())
-        }
-        AccountLocation::Public(holder) => {
-            Ok(submit_public_invocation(wallet, program, build(holder)?).await?)
-        }
-    }
+    Ok(WriteSuccess::lifecycle(receipt, args.launch.launch_salt))
 }
 
 #[cfg(test)]
@@ -1940,7 +1764,6 @@ mod tests {
             "buy",
             "sell",
             "price",
-            "status",
             "sale-info",
         ] {
             assert!(help.contains(command), "missing command: {command}");
@@ -2459,28 +2282,6 @@ mod tests {
     }
 
     #[test]
-    fn status_accepts_the_program_context_needed_to_read_live_pool_state() {
-        let cli = Cli::try_parse_from([
-            "launchpad",
-            "status",
-            "--launch-salt",
-            &"11".repeat(32),
-            "--collateral-definition",
-            "11111111111111111111111111111111",
-            "--factory-program-path",
-            "factory.bin",
-            "--factory-program-account",
-            "11111111111111111111111111111111",
-            "--curve-program-path",
-            "curve.bin",
-            "--curve-program-account",
-            "11111111111111111111111111111111",
-        ])
-        .expect("status command should parse");
-        assert!(matches!(cli.command, Command::Status(_)));
-    }
-
-    #[test]
     fn price_accepts_an_exact_output_buy_quote_with_live_program_context() {
         let cli = Cli::try_parse_from([
             "launchpad",
@@ -2524,7 +2325,7 @@ mod tests {
     }
 
     #[test]
-    fn quote_and_status_json_values_stay_stable() {
+    fn quote_json_values_stay_stable() {
         for (kind, expected) in [(QuoteMode::Buy, "buy"), (QuoteMode::Sell, "sell")] {
             let quote = PriceQuote {
                 namespace: "namespace".to_owned(),
@@ -2537,121 +2338,6 @@ mod tests {
                 protocol_fee: 1,
             };
             assert_eq!(serde_json::to_value(quote).unwrap()["kind"], expected);
-        }
-
-        for (status, expected) in [
-            (SaleStatus::Preparing, "preparing"),
-            (SaleStatus::Open, "open"),
-            (SaleStatus::Closed, "closed"),
-            (SaleStatus::Withdrawn, "withdrawn"),
-        ] {
-            let snapshot = SaleSnapshot {
-                sell_fee_bps: 0,
-                per_block_token_limit: None,
-                trade_mode: TradeModeArg::BuyOnly,
-                graduation_hook: None,
-                graduation_launch_bps: 0,
-                graduation_collateral_bps: 0,
-                settlement_stage: "unstarted",
-                namespace: "namespace".to_owned(),
-                protocol_fee_bps: 5,
-                treasury: "treasury".to_owned(),
-                launch_salt: "salt".to_owned(),
-                factory_program: "factory".to_owned(),
-                pool: "pool".to_owned(),
-                token_definition: "token".to_owned(),
-                collateral_definition: "collateral".to_owned(),
-                status,
-                creator_allocation_claimed: false,
-                graduation_reserve: 0,
-                sale_quantity: 0,
-                tokens_sold: 0,
-                real_token_reserve: 0,
-                real_collateral_reserve: 0,
-                fees_accrued: 0,
-                fees_collected: 0,
-                virtual_token_reserve: 0,
-                virtual_collateral_reserve: 0,
-                close_timestamp: None,
-            };
-            let output = serde_json::to_value(snapshot).unwrap();
-            assert_eq!(output["status"], expected);
-            assert_eq!(output["trade_mode"], "buy-only");
-        }
-    }
-
-    #[test]
-    fn saved_hook_and_settlement_json_values_are_explicit() {
-        let hook = launchpad_client::GraduationHook {
-            program_id: lee::AccountId::new([1; 32]),
-            configuration: vec![7, 11],
-        };
-        assert_eq!(
-            serde_json::to_value(HookSnapshot::from(&hook)).unwrap(),
-            serde_json::json!({
-                "program_id": lee::AccountId::new([1; 32]).to_string(),
-                "configuration": "070b",
-            })
-        );
-        use launchpad_client::SettlementStage;
-        for (stage, expected) in [
-            (SettlementStage::Unstarted, "unstarted"),
-            (SettlementStage::Ready, "ready"),
-            (
-                SettlementStage::Withdrawn {
-                    unsold: 600,
-                    collateral_due: 12,
-                },
-                "withdrawn",
-            ),
-            (SettlementStage::Complete, "complete"),
-            (
-                SettlementStage::HookReady {
-                    unsold: 600,
-                    collateral_due: 12,
-                },
-                "hook_ready",
-            ),
-            (SettlementStage::Graduated, "graduated"),
-        ] {
-            assert_eq!(
-                serde_json::to_value(settlement_stage_name(stage)).unwrap(),
-                expected
-            );
-        }
-        assert_eq!(
-            serde_json::to_value(SaleStatus::Graduated).unwrap(),
-            "graduated"
-        );
-    }
-
-    #[tokio::test]
-    async fn unconfirmed_submissions_report_unknown_outcome_and_hash() {
-        use launchpad_client::ClientError;
-
-        let hash = common::HashType([42; 32]);
-        let elapsed = tokio::time::timeout(std::time::Duration::ZERO, std::future::pending::<()>())
-            .await
-            .unwrap_err();
-        for error in [
-            ClientError::ConfirmationTimeout {
-                hash,
-                source: elapsed,
-            },
-            ClientError::ConfirmTransaction {
-                hash,
-                source: std::io::Error::other("transaction not found").into(),
-            },
-        ] {
-            let report = eyre::Report::new(error);
-            let output = json_error(&report);
-            assert_eq!(output["status"], "error");
-            assert_eq!(output["error"]["category"], "outcome_unknown");
-            assert_eq!(output["error"]["transaction_hash"], hex::encode(hash));
-            let message = report.to_string();
-            assert!(message.contains("outcome unknown"));
-            assert!(message.contains(&hex::encode(hash)));
-            assert_eq!(output["error"]["message"], message);
         }
     }
 
@@ -2748,8 +2434,22 @@ mod tests {
 
     #[test]
     fn launch_salt_must_be_exactly_32_bytes() {
-        let error = Cli::try_parse_from(["launchpad", "status", "--launch-salt", "00"])
-            .expect_err("short launch salts must be rejected");
+        let account = "11111111111111111111111111111111";
+        let error = Cli::try_parse_from([
+            "launchpad",
+            "sale-info",
+            "--engine",
+            "bonding-curve",
+            "--launch-salt",
+            "00",
+            "--collateral-definition",
+            account,
+            "--factory-program-account",
+            account,
+            "--engine-program-account",
+            account,
+        ])
+        .expect_err("short launch salts must be rejected");
         assert!(error.to_string().contains("exactly 32 bytes"));
     }
 }
@@ -2833,7 +2533,7 @@ mod distribution_tests {
         assert_eq!(request.graduation_reserve, 200);
         assert_eq!(request.total_supply().unwrap(), 1100);
         args.graduation_reserve = u128::MAX;
-        let error = create_sale(lee::AccountId::new([40; 32]), false, args, None)
+        let error = create_sale(lee::AccountId::new([40; 32]), args, None, open_wallet)
             .await
             .unwrap_err();
         assert!(matches!(
@@ -2872,7 +2572,7 @@ mod distribution_tests {
             let Command::CreateSale(args) = cli.command else {
                 panic!("create sale")
             };
-            let result = create_sale(namespace, false, args, None).await;
+            let result = create_sale(namespace, args, None, open_wallet).await;
             std::fs::remove_file(file).unwrap();
             assert!(matches!(
                 result

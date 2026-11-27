@@ -44,7 +44,7 @@ export LAUNCHPAD_LOCAL_RECIPIENT=7wHg9sbJwc6h3NP1S9bekfAzB8CHifEcxKswCKUt3YQo
 cargo +1.98.1 test --locked -p launchpad-cli --test local_node wallet_ -- --ignored --nocapture --test-threads=1
 ```
 
-A send response gives the admission hash. The transaction lookup gives the inclusion block; the receipt gives the execution result. A failed receipt can still cost a fee. A missing lookup or timeout leaves the outcome unknown. If the CLI cannot confirm inclusion after submission, `--json` returns `error.category` as `outcome_unknown` and keeps the hash in `error.transaction_hash`. Check the receipt for that hash before submitting again. The standalone node simulates Bedrock, so its block status does not prove base-chain finality. These checks use the Rust wallet, not the Wallet Provider SDK.
+A send response gives the admission hash. The transaction lookup gives the inclusion block; the receipt gives the execution result. A failed receipt can still cost a fee. A missing lookup or timeout leaves the outcome unknown. The CLI reports an unresolved write as `pending` and exits with code `3`. Check the receipt before submitting again if the CLI gives a transaction hash. See the [public CLI write result rules](workspace-guide.md#cli-sale-reads-and-public-write-results). The standalone node simulates Bedrock, so its block status does not prove base-chain finality. These checks use the Rust wallet only.
 
 ## Configure a namespace
 
@@ -68,7 +68,7 @@ export LAUNCHPAD_LOCAL_CURVE_ELF="$CARGO_TARGET_DIR/riscv-guest/launchpad_method
 cargo +1.98.1 run --locked -p launchpad-cli --example deploy_local_guest -- "$LAUNCHPAD_LOCAL_CURVE_ELF" --payer "$LAUNCHPAD_LOCAL_SENDER"
 ```
 
-Use the `program_account` value from the curve deployment. It is a base58 address. The test runs `launchpad configure`, checks the execution receipt, and reads the saved namespace, fee and treasury with `launchpad namespace-info`.
+Use the `program_account` value from the curve deployment. It is a base58 address. The test expects `launchpad configure` to report `executed`. It then checks the receipt and inclusion block independently and reads the saved settings with `launchpad namespace-info`.
 
 ```sh
 export LAUNCHPAD_LOCAL_CURVE_ACCOUNT='<program_account from the curve deployment>'

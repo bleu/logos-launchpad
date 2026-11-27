@@ -1,0 +1,706 @@
+use clap::Parser;
+use factory_core::{CreationStage, GraduationPolicy, SettlementStage, TradeMode};
+use launchpad_client::{BuyPolicy, EndingPolicy, PausePolicy, PublicWriteWallet, WriteTransport};
+use lee::AccountId;
+use lee_core::account::Actor;
+use serde_json::Value;
+
+use super::{Cli, run_command as run_cli};
+
+async fn run_command(
+    cli: Cli,
+    read_client: impl FnOnce() -> eyre::Result<FixtureTransport>,
+    output: &mut impl std::io::Write,
+    errors: &mut impl std::io::Write,
+) -> std::io::Result<u8> {
+    run_cli(
+        cli,
+        read_client,
+        || -> eyre::Result<PublicWriteWallet<FixtureTransport>> {
+            panic!("sale-info must not open a wallet")
+        },
+        output,
+        errors,
+    )
+    .await
+}
+
+#[path = "../../verify/fixtures/launchpad_transport.rs"]
+mod launchpad_transport;
+use launchpad_transport::FixtureTransport;
+
+use ConfigureDeployment::{Clock, HeaderOnly, Missing, MissingSegments};
+
+#[tokio::test(start_paused = true)]
+async fn configure_reports_pending_with_the_acknowledged_hash() {
+    let hash = common::HashType([21; 32]);
+    let mut transport = FixtureTransport::default();
+    transport.acknowledge(hash, None);
+    let (code, result) = run_configure(transport.clone(), HeaderOnly).await;
+    assert_eq!(code, 3, "{result}");
+    assert_eq!(result["status"], "pending");
+    assert_eq!(result["submission"], "acknowledged");
+    assert_eq!(result["transaction_hash"], hex::encode(hash));
+    assert_eq!(transport.sent_count(), 1);
+}
+
+#[tokio::test]
+async fn configure_reports_pending_when_receipt_lookup_fails() {
+    let hash = common::HashType([24; 32]);
+    let mut transport = FixtureTransport::default();
+    transport.acknowledge(hash, None);
+    transport.fail_receipt_lookup();
+    let (code, result) = run_configure(transport.clone(), HeaderOnly).await;
+    assert_eq!(code, 3, "{result}");
+    assert_eq!(result["status"], "pending");
+    assert_eq!(result["submission"], "acknowledged");
+    assert_eq!(result["transaction_hash"], hex::encode(hash));
+    assert_eq!(transport.sent_count(), 1);
+}
+
+#[tokio::test]
+async fn configure_reports_unknown_submission_without_a_hash() {
+    let mut transport = FixtureTransport::default();
+    transport.lose_send_response();
+    let (code, result) = run_configure(transport.clone(), HeaderOnly).await;
+    assert_eq!(code, 3, "{result}");
+    assert_eq!(result["status"], "pending");
+    assert_eq!(result["submission"], "unknown");
+    assert!(result["transaction_hash"].is_null());
+    assert_eq!(transport.sent_count(), 1);
+}
+
+#[tokio::test]
+async fn configure_reports_execution_after_a_successful_receipt() {
+    use common::block::TransactionReceipt;
+
+    let hash = common::HashType([22; 32]);
+    let mut transport = FixtureTransport::default();
+    transport.acknowledge(hash, Some(TransactionReceipt::EXEMPT));
+    let (code, result) = run_configure(transport, HeaderOnly).await;
+    assert_eq!(code, 0, "{result}");
+    assert_eq!(result["status"], "executed");
+    assert_eq!(result["submission"], "acknowledged");
+    assert_eq!(result["transaction_hash"], hex::encode(hash));
+}
+
+#[tokio::test]
+async fn configure_reports_a_reverted_receipt_as_failure() {
+    use common::block::TransactionReceipt;
+
+    let hash = common::HashType([23; 32]);
+    let mut transport = FixtureTransport::default();
+    transport.acknowledge(
+        hash,
+        Some(TransactionReceipt {
+            success: false,
+            ..TransactionReceipt::EXEMPT
+        }),
+    );
+    let (code, result) = run_configure(transport, HeaderOnly).await;
+    assert_eq!(code, 1);
+    assert_eq!(result["status"], "reverted");
+    assert_eq!(result["submission"], "acknowledged");
+    assert_eq!(result["transaction_hash"], hex::encode(hash));
+}
+
+#[tokio::test]
+async fn configure_reports_preparation_failure_without_sending() {
+    let transport = FixtureTransport::default();
+    let (code, result) = run_configure(transport.clone(), Missing).await;
+    assert_eq!(code, 1);
+    assert_eq!(result["status"], "preparation_failed");
+    assert_eq!(result["submission"], "not_sent");
+    assert!(result["transaction_hash"].is_null());
+    assert_eq!(result["error"]["category"], "read_program_header");
+    assert_eq!(transport.sent_count(), 0);
+}
+
+#[tokio::test]
+async fn configure_reports_preparation_failure_when_wallet_cannot_load_program() {
+    let transport = FixtureTransport::default();
+    let (code, result) = run_configure(transport.clone(), MissingSegments).await;
+    assert_eq!(transport.sent_count(), 0);
+    assert_eq!(code, 1, "{result}");
+    assert_eq!(result["status"], "preparation_failed");
+    assert_eq!(result["submission"], "not_sent");
+    assert!(result["transaction_hash"].is_null());
+}
+
+#[tokio::test]
+async fn configure_reports_simulation_rejection_without_sending() {
+    let transport = FixtureTransport::default();
+    let (code, result) = run_configure(transport.clone(), Clock).await;
+    assert_eq!(code, 1, "{result}");
+    assert_eq!(result["status"], "rejected");
+    assert_eq!(result["submission"], "not_sent");
+    assert!(result["transaction_hash"].is_null());
+    assert_eq!(transport.sent_count(), 0);
+}
+
+enum ConfigureDeployment {
+    Missing,
+    HeaderOnly,
+    MissingSegments,
+    Clock,
+}
+
+async fn run_configure(
+    mut transport: FixtureTransport,
+    deployment: ConfigureDeployment,
+) -> (u8, Value) {
+    let program = programs::clock();
+    let program_account = id(7);
+    let home = tempfile::tempdir().unwrap();
+    let path = home.path().join("curve.elf");
+    std::fs::write(&path, program.elf()).unwrap();
+    match deployment {
+        Missing => {}
+        HeaderOnly | MissingSegments => transport.deploy(program_account, program.id()),
+        Clock => {
+            use lee_core::program::PROGRAM_LOADER_ACCOUNT_ID;
+            use program_loader_core::{LoaderActorState, MAX_SEGMENT_DATA_LEN, ProgramSegment};
+
+            let elf = program.user_elf().unwrap();
+            let chunks = elf.chunks(MAX_SEGMENT_DATA_LEN);
+            let segment_id = |index: usize| id(77 + u8::try_from(index).unwrap());
+            let count = chunks.len();
+            for (index, bytes) in chunks.enumerate() {
+                transport.save(
+                    Actor::new(segment_id(index), PROGRAM_LOADER_ACCOUNT_ID),
+                    ProgramSegment {
+                        bytecode: bytes.to_vec(),
+                        next_segment: (index + 1 < count).then(|| segment_id(index + 1)),
+                    }
+                    .to_loader_actor_state(),
+                );
+            }
+            // The wallet loads all declared programs before it runs the root actor.
+            transport.deploy(curve_core::AUTHORITY_PROGRAM_ACCOUNT_ID, program.id());
+            transport.deploy(program_account, program.id());
+        }
+    }
+    let (mut wallet, signer) =
+        launchpad_transport::write_wallet(home.path(), transport, WriteTransport::new);
+    if matches!(deployment, Clock | MissingSegments) {
+        wallet.set_fee_params(wallet::FeeParams::default());
+    }
+    let cli = Cli::try_parse_from([
+        "launchpad",
+        "--namespace",
+        &signer.to_string(),
+        "--json",
+        "configure",
+        "--admin",
+        &signer.to_string(),
+        "--treasury",
+        &id(4).to_string(),
+        "--curve-program-path",
+        path.to_str().unwrap(),
+        "--curve-program-account",
+        &program_account.to_string(),
+    ])
+    .unwrap();
+    let mut output = Vec::new();
+    let mut errors = Vec::new();
+    let code = run_cli(
+        cli,
+        || -> eyre::Result<FixtureTransport> { panic!("configure uses the wallet") },
+        || Ok(wallet),
+        &mut output,
+        &mut errors,
+    )
+    .await
+    .unwrap();
+    assert!(errors.is_empty());
+    (code, serde_json::from_slice(&output).unwrap())
+}
+
+#[tokio::test(start_paused = true)]
+async fn collect_fees_stops_on_pending_and_reports_the_executed_step() {
+    use common::{HashType, block::TransactionReceipt};
+
+    let (namespace, curve, collateral, treasury) = (id(1), id(3), id(4), id(5));
+    let program = programs::clock();
+    let mut transport = FixtureTransport::default();
+    transport.deploy(curve, program.id());
+    transport.save(
+        Actor::new(curve_core::compute_config_pda(namespace, curve), curve),
+        borsh::to_vec(&(
+            *b"LZNSCONF",
+            3_u16,
+            namespace,
+            0_u16,
+            treasury,
+            id(6),
+            false,
+        ))
+        .unwrap(),
+    );
+    let pools = [id(11), id(12), id(13)].map(|definition| {
+        let pool = curve_core::PoolAccount {
+            buy_policy: BuyPolicy::Open,
+            trade_control: curve_core::TradeControl::Unrestricted,
+            allowed_input_token: None,
+            funded: true,
+            closure_observed: false,
+            namespace,
+            token0_definition_id: definition,
+            token1_definition_id: collateral,
+            owner: id(8),
+            owner_program: None,
+            pool: pool::Pool::create(pool::PoolCreateParams {
+                token0_amount: 800,
+                token1_amount: 100,
+                virtual_reserve0: 1_000,
+                virtual_reserve1: 100,
+                ending_policy: EndingPolicy::Manual,
+                sell_fee_bps: 0,
+                close_timestamp: None,
+                close_on_depletion: None,
+            })
+            .unwrap(),
+            block_allocation: Default::default(),
+        };
+        let address =
+            curve_core::compute_pool_pda(namespace, curve, definition, collateral, pool.owner);
+        transport.save(Actor::new(address, curve), borsh::to_vec(&pool).unwrap());
+        address.to_string()
+    });
+    let first = HashType([31; 32]);
+    let pending = HashType([32; 32]);
+    transport.acknowledge(first, Some(TransactionReceipt::EXEMPT));
+    transport.acknowledge(pending, None);
+    let home = tempfile::tempdir().unwrap();
+    let path = home.path().join("curve.elf");
+    std::fs::write(&path, program.elf()).unwrap();
+    let (wallet, signer) =
+        launchpad_transport::write_wallet(home.path(), transport.clone(), WriteTransport::new);
+    let cli = Cli::try_parse_from([
+        "launchpad",
+        "--namespace",
+        &namespace.to_string(),
+        "--json",
+        "collect-fees",
+        "--fee-payer",
+        &signer.to_string(),
+        "--collateral-definition",
+        &collateral.to_string(),
+        "--curve-program-path",
+        path.to_str().unwrap(),
+        "--curve-program-account",
+        &curve.to_string(),
+        "--pool",
+        &pools[0],
+        &pools[1],
+        &pools[2],
+    ])
+    .unwrap();
+    let mut output = Vec::new();
+    let code = run_cli(
+        cli,
+        || -> eyre::Result<FixtureTransport> { panic!("collect-fees uses the wallet") },
+        || Ok(wallet),
+        &mut output,
+        &mut Vec::new(),
+    )
+    .await
+    .unwrap();
+    let result: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(code, 3, "{result}");
+    assert_eq!(result["status"], "pending");
+    assert_eq!(result["transaction_hash"], hex::encode(pending));
+    assert_eq!(
+        result["executed_transaction_hashes"],
+        serde_json::json!([hex::encode(first)])
+    );
+    assert_eq!(transport.sent_count(), 2);
+}
+
+#[tokio::test]
+async fn completed_withdrawal_reports_no_new_execution() {
+    use wallet::WalletSequencerClient;
+
+    let (namespace, factory, curve, collateral) = (id(1), id(2), id(3), id(4));
+    let factory_account = factory_core::compute_factory_pda(namespace, factory, SALT);
+    let actor = Actor::new(factory_account, factory);
+    let mut transport = curve_transport();
+    let account = transport.get_account_view(actor).await.unwrap().unwrap();
+    let mut state =
+        factory_core::FactoryState::decode(account.data.actor_state(factory).as_ref()).unwrap();
+    state.creation_stage = CreationStage::Active;
+    state.settlement_stage = SettlementStage::Complete;
+    transport.save(actor, borsh::to_vec(&state).unwrap());
+    let pool = curve_core::PoolAccount {
+        buy_policy: BuyPolicy::Open,
+        trade_control: curve_core::TradeControl::Unrestricted,
+        allowed_input_token: None,
+        funded: true,
+        closure_observed: true,
+        namespace,
+        token0_definition_id: state.token_definition_id,
+        token1_definition_id: collateral,
+        owner: factory_account,
+        owner_program: Some((
+            factory,
+            *factory_core::compute_factory_seed(namespace, SALT).as_bytes(),
+        )),
+        pool: pool::Pool {
+            lifecycle: pool::PoolLifecycle::Withdrawn,
+            ..pool::Pool::create(pool::PoolCreateParams {
+                token0_amount: 800,
+                token1_amount: 0,
+                virtual_reserve0: 2_000,
+                virtual_reserve1: 100,
+                ending_policy: EndingPolicy::Depletion,
+                sell_fee_bps: 0,
+                close_timestamp: None,
+                close_on_depletion: Some(pool::TokenSide::Token0),
+            })
+            .unwrap()
+        },
+        block_allocation: Default::default(),
+    };
+    transport.save(
+        Actor::new(state.pool_id, curve),
+        borsh::to_vec(&pool).unwrap(),
+    );
+    let home = tempfile::tempdir().unwrap();
+    let path = home.path().join("guest.elf");
+    std::fs::write(&path, programs::clock().elf()).unwrap();
+    let (wallet, signer) =
+        launchpad_transport::write_wallet(home.path(), transport.clone(), WriteTransport::new);
+    let cli = Cli::try_parse_from([
+        "launchpad",
+        "--namespace",
+        &namespace.to_string(),
+        "--json",
+        "withdraw",
+        "--launch-salt",
+        &hex::encode(SALT),
+        "--creator",
+        &signer.to_string(),
+        "--collateral-definition",
+        &collateral.to_string(),
+        "--curve-program-path",
+        path.to_str().unwrap(),
+        "--curve-program-account",
+        &curve.to_string(),
+        "--factory-program-path",
+        path.to_str().unwrap(),
+        "--factory-program-account",
+        &factory.to_string(),
+    ])
+    .unwrap();
+    let mut output = Vec::new();
+    let code = run_cli(
+        cli,
+        || -> eyre::Result<FixtureTransport> { panic!("withdraw uses the wallet") },
+        || Ok(wallet),
+        &mut output,
+        &mut Vec::new(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(code, 0, "{}", String::from_utf8_lossy(&output));
+    let result: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(result["status"], "no_change");
+    assert_eq!(result["submission"], "not_sent");
+    assert!(result["transaction_hash"].is_null());
+    assert_eq!(transport.sent_count(), 0);
+}
+
+const SALT: [u8; 32] = [0x11; 32];
+
+fn id(byte: u8) -> AccountId {
+    AccountId::new([byte; 32])
+}
+
+fn sale_args(engine: &str) -> Vec<String> {
+    [
+        "launchpad".into(),
+        "--namespace".into(),
+        id(1).to_string(),
+        "--json".into(),
+        "sale-info".into(),
+        "--engine".into(),
+        engine.into(),
+        "--launch-salt".into(),
+        hex::encode(SALT),
+        "--collateral-definition".into(),
+        id(4).to_string(),
+        "--factory-program-account".into(),
+        id(2).to_string(),
+        "--engine-program-account".into(),
+        id(3).to_string(),
+    ]
+    .into()
+}
+
+fn curve_transport() -> FixtureTransport {
+    let (namespace, factory_program, curve_program, collateral) = (id(1), id(2), id(3), id(4));
+    let factory = factory_core::compute_factory_pda(namespace, factory_program, SALT);
+    let definition = factory_core::compute_definition_pda(namespace, factory_program, SALT);
+    let bytes = borsh::to_vec(&(
+        (
+            BuyPolicy::Open,
+            PausePolicy::Disabled,
+            EndingPolicy::Depletion,
+            TradeMode::BuyAndSell,
+            0_u16,
+            None::<u128>,
+            None::<factory_core::GraduationHook>,
+            CreationStage::Minted,
+            SettlementStage::Unstarted,
+            None::<u64>,
+        ),
+        (
+            namespace,
+            SALT,
+            definition,
+            collateral,
+            800_u128,
+            0_u128,
+            GraduationPolicy::default(),
+            50_u128,
+            850_u128,
+            2_000_u128,
+            100_u128,
+        ),
+        (
+            curve_program,
+            factory_core::compute_curve_creator_role_pda(namespace, factory_program, SALT),
+            "Fixture",
+            "ipfs://fixture",
+            factory_core::compute_escrow_pda(namespace, factory_program, SALT),
+            curve_core::compute_pool_pda(namespace, curve_program, definition, collateral, factory),
+            false,
+            None::<u8>,
+        ),
+    ))
+    .unwrap();
+    let mut transport = FixtureTransport::default();
+    transport.save(Actor::new(factory, factory_program), bytes);
+    transport
+}
+
+#[tokio::test]
+async fn sale_info_shows_saved_curve_terms_without_wallet_storage() {
+    let cli = Cli::try_parse_from(sale_args("bonding-curve")).unwrap();
+    let mut output = Vec::new();
+    let mut errors = Vec::new();
+    let code = run_command(cli, || Ok(curve_transport()), &mut output, &mut errors)
+        .await
+        .unwrap();
+    assert_eq!(code, 0);
+    assert!(errors.is_empty());
+    let view: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(view["engine"], "bonding-curve");
+    assert_eq!(view["setup_stage"], "minted");
+    assert_eq!(view["terms"]["sale_inventory"], 800);
+    assert_eq!(view["terms"]["name"], "Fixture");
+    assert_eq!(view["terms"]["uri"], "ipfs://fixture");
+    assert_eq!(view["initial_virtual_collateral_reserve"], 100);
+    assert!(view["pool_observation"].is_null());
+    assert!(view.get("status").is_none());
+}
+
+fn lbp_args(engine: &str) -> Vec<String> {
+    let mut args = sale_args(engine);
+    args.extend(["--namespace-program-account".into(), id(5).to_string()]);
+    args
+}
+
+fn lbp_transport(weighted: bool) -> FixtureTransport {
+    use factory_core::{CreatorAllocationRelease, FixedPrice, LbpCreationStage, LbpSetupMode};
+    let (namespace, factory_program, lbp_program, collateral) = (id(1), id(2), id(3), id(4));
+    let factory = factory_core::compute_factory_pda(namespace, factory_program, SALT);
+    let definition = factory_core::compute_definition_pda(namespace, factory_program, SALT);
+    let (format, ending, mode, price) = if weighted {
+        (
+            *b"LZWGLAUN",
+            EndingPolicy::Scheduled,
+            LbpSetupMode::Weighted {
+                collateral_seed: 100,
+                token_weight_start: 600_000_000_000_000_000,
+                token_weight_end: 400_000_000_000_000_000,
+            },
+            FixedPrice {
+                collateral_units: 0,
+                token_units: 0,
+            },
+        )
+    } else {
+        (
+            *b"LZFXLAUN",
+            EndingPolicy::Either,
+            LbpSetupMode::FixedPrice,
+            FixedPrice {
+                collateral_units: 25,
+                token_units: 10,
+            },
+        )
+    };
+    let bytes = borsh::to_vec(&(
+        (
+            None::<u128>,
+            BuyPolicy::Open,
+            PausePolicy::Disabled,
+            ending,
+            TradeMode::BuyOnly,
+            0_u16,
+            None::<factory_core::GraduationHook>,
+            GraduationPolicy::default(),
+            format,
+            8_u16,
+        ),
+        (
+            factory_core::compute_creator_role_pda(namespace, factory_program, SALT),
+            mode,
+            LbpCreationStage::Allocated,
+            lbp_core::SettlementProgress::Unselected,
+            namespace,
+            SALT,
+            definition,
+            collateral,
+            factory_core::compute_escrow_pda(namespace, factory_program, SALT),
+            lbp_core::compute_pool_pda(namespace, lbp_program, definition, collateral, factory),
+        ),
+        (
+            id(5),
+            lbp_program,
+            800_u128,
+            0_u128,
+            200_u128,
+            1_000_u128,
+            price,
+            9_u64,
+            Some(100_u64),
+            CreatorAllocationRelease::AfterEnd,
+            false,
+            "Fixture",
+            "ipfs://fixture",
+            None::<u8>,
+            None::<u8>,
+        ),
+    ))
+    .unwrap();
+    let mut transport = FixtureTransport::default();
+    transport.save(Actor::new(factory, factory_program), bytes);
+    transport
+}
+
+#[tokio::test]
+async fn sale_info_shows_the_exact_saved_fixed_price() {
+    let cli = Cli::try_parse_from(lbp_args("fixed-price")).unwrap();
+    let mut output = Vec::new();
+    let code = run_command(
+        cli,
+        || Ok(lbp_transport(false)),
+        &mut output,
+        &mut Vec::new(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(code, 0, "{}", String::from_utf8_lossy(&output));
+    let view: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(view["engine"], "fixed-price");
+    assert_eq!(view["setup_stage"], "allocated");
+    assert_eq!(view["terms"]["creator_allocation"], 200);
+    assert_eq!(
+        view["price"],
+        serde_json::json!({"collateral_units": 25, "token_units": 10})
+    );
+}
+
+#[tokio::test]
+async fn sale_info_shows_saved_weighted_schedule() {
+    let cli = Cli::try_parse_from(lbp_args("weighted")).unwrap();
+    let mut output = Vec::new();
+    let code = run_command(
+        cli,
+        || Ok(lbp_transport(true)),
+        &mut output,
+        &mut Vec::new(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(code, 0, "{}", String::from_utf8_lossy(&output));
+    let view: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(view["engine"], "weighted");
+    assert_eq!(view["collateral_seed"], 100);
+    assert_eq!(view["start_timestamp"], 9);
+    assert_eq!(view["terms"]["end_timestamp"], 100);
+    assert_eq!(view["token_weight_start"], 600_000_000_000_000_000_u64);
+    assert_eq!(view["token_weight_end"], 400_000_000_000_000_000_u64);
+}
+
+#[tokio::test]
+async fn sale_info_reports_the_wrong_saved_engine() {
+    let cli = Cli::try_parse_from(lbp_args("weighted")).unwrap();
+    let mut output = Vec::new();
+    let code = run_command(
+        cli,
+        || Ok(lbp_transport(false)),
+        &mut output,
+        &mut Vec::new(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(code, 1);
+    let result: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(result["status"], "error");
+    assert_eq!(result["error"]["category"], "sale_engine_mismatch");
+    assert_eq!(
+        result["error"]["message"],
+        "saved sale uses a different pricing engine"
+    );
+}
+
+#[test]
+fn sale_info_rejects_invalid_arguments_before_reading() {
+    use clap::error::ErrorKind;
+    let mut no_engine = sale_args("bonding-curve");
+    no_engine.drain(5..7);
+    let mut bad_account = sale_args("bonding-curve");
+    *bad_account.last_mut().unwrap() = "not-an-account".into();
+    for (args, kind) in [
+        (no_engine, ErrorKind::MissingRequiredArgument),
+        (bad_account, ErrorKind::ValueValidation),
+        (sale_args("weighted"), ErrorKind::MissingRequiredArgument),
+    ] {
+        let error = Cli::try_parse_from(args).unwrap_err();
+        assert_eq!(error.kind(), kind);
+        assert_eq!(error.exit_code(), 2);
+    }
+}
+
+#[tokio::test]
+async fn sale_info_rejects_malformed_and_mismatched_saved_accounts() {
+    use wallet::WalletSequencerClient;
+
+    let factory = factory_core::compute_factory_pda(id(1), id(2), SALT);
+    let actor = Actor::new(factory, id(2));
+    let mut transport = curve_transport();
+    let account = transport.get_account_view(actor).await.unwrap().unwrap();
+    let mut wrong_namespace =
+        factory_core::FactoryState::decode(account.data.actor_state(id(2)).as_ref()).unwrap();
+    wrong_namespace.namespace = id(6);
+    for (bytes, category) in [
+        (
+            borsh::to_vec(&wrong_namespace).unwrap(),
+            "factory_sale_mismatch",
+        ),
+        (vec![0xff], "decode_factory_state"),
+    ] {
+        transport.save(actor, bytes);
+        let cli = Cli::try_parse_from(sale_args("bonding-curve")).unwrap();
+        let mut output = Vec::new();
+        let code = run_command(cli, || Ok(transport.clone()), &mut output, &mut Vec::new())
+            .await
+            .unwrap();
+        assert_eq!(code, 1);
+        let result: Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(result["error"]["category"], category);
+    }
+}

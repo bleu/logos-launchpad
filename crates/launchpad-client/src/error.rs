@@ -130,9 +130,22 @@ pub enum ClientError {
     #[error("serializing launchpad instruction")]
     #[strum(serialize = "encode_instruction")]
     EncodeInstruction(#[source] Box<lee::error::LeeError>),
-    #[error("submitting public launchpad transaction")]
-    #[strum(serialize = "submit_public_transaction")]
-    SubmitPublicTransaction(#[source] Box<wallet::ExecutionFailureKind>),
+    #[error("preparing public launchpad transaction")]
+    PublicWritePreparation(#[source] Box<wallet::ExecutionFailureKind>),
+    #[error("public transaction was rejected by simulation before submission")]
+    PublicWriteRejected(#[source] Box<wallet::ExecutionFailureKind>),
+    #[error("public transaction outcome is not known")]
+    PublicWritePending {
+        hash: Option<common::HashType>,
+        #[source]
+        source: Box<dyn Error + Send + Sync>,
+    },
+    #[error("public write stopped after earlier transactions executed")]
+    WriteInterrupted {
+        executed_hashes: Vec<common::HashType>,
+        #[source]
+        source: Box<ClientError>,
+    },
     #[error("private authority action must use its authority holder as the only signer")]
     InvalidAuthoritySigners,
     #[error("action does not include the authority holder")]
@@ -170,26 +183,8 @@ pub enum ClientError {
     #[error("transferring private authority")]
     #[strum(serialize = "transfer_private_authority")]
     TransferPrivateAuthority(#[source] Box<wallet::ExecutionFailureKind>),
-    #[error(
-        "confirmation timed out; outcome unknown for transaction {}. Check its receipt before submitting again",
-        hex::encode(hash)
-    )]
-    #[strum(serialize = "confirmation_timeout")]
-    ConfirmationTimeout {
-        hash: common::HashType,
-        #[source]
-        source: tokio::time::error::Elapsed,
-    },
-    #[error(
-        "could not confirm inclusion; outcome unknown for transaction {}. Check its receipt before submitting again",
-        hex::encode(hash)
-    )]
-    #[strum(serialize = "confirm_transaction")]
-    ConfirmTransaction {
-        hash: common::HashType,
-        #[source]
-        source: Box<dyn Error + Send + Sync>,
-    },
+    #[error("public transaction {} reverted", hex::encode(hash))]
+    PublicWriteReverted { hash: common::HashType },
     #[error("expected a private transaction")]
     ExpectedPrivateTransaction,
     #[error("private result count mismatch")]
@@ -232,6 +227,8 @@ pub enum ClientError {
     DecodeResumableFactoryState(#[source] factory_core::Error),
     #[error("loaded factory state or pool does not match the selected sale")]
     FactorySaleMismatch,
+    #[error("saved sale uses a different pricing engine")]
+    SaleEngineMismatch,
     #[error("private authority router is required")]
     PrivateAuthorityRouterRequired,
     #[error("creation already completed")]
@@ -250,6 +247,19 @@ pub enum ClientError {
     SettlementIncomplete,
     #[error("existing launch parameters differ; resume with the original parameters")]
     LaunchParametersMismatch,
+}
+
+impl ClientError {
+    pub(crate) fn after_execution(self, executed_hashes: Vec<common::HashType>) -> Self {
+        if executed_hashes.is_empty() {
+            self
+        } else {
+            Self::WriteInterrupted {
+                executed_hashes,
+                source: Box::new(self),
+            }
+        }
+    }
 }
 
 /// The result of a client operation.
