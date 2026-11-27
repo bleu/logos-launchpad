@@ -30,7 +30,7 @@ No checkpoint or poke is needed for pricing or settlement. A checkpoint grants n
 
 One trusted timestamp removes trader choice of pricing time. Saved previous-block time differs from inclusion-block time and does not prove freshness or sequencer ordering. Normal builds use the upstream clock; there is no mock guest, mock build flag or clock-availability error. Exact pins, commands and execution evidence belong in the [workspace guide](../architecture/workspace-guide.md#weighted-pricing-clock).
 
-A prepared private proof can require an exact return message. A price limit does not permit a different private return: changed outputs can require a fresh proof. The earlier native-token probe and its limits are recorded in the workspace guide. It does not complete the launchpad private route. Live sequencer timing, full private routes and real proofs remain unverified.
+A prepared private proof can require an exact return message. A price limit does not permit a different private return: changed outputs can require a fresh proof. See the [private route requirements](../architecture/private-participation.md#evidence-still-required). Live sequencer timing, full private routes and real proofs remain unverified.
 
 ## Sources
 

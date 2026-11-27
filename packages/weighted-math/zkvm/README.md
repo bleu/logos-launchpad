@@ -2,7 +2,7 @@
 
 This is a separate Cargo workspace. The kernel and independent host harness use Rust 1.94.0 without RISC0 dependencies. This workspace builds the same kernel as a guest. It checks host/guest bit parity and guest cycles. These checks do not establish full weighted-sale program or LEZ compatibility. The kernel remains unaudited.
 
-The independent mpmath oracle and numerical checks are in `../crates/harness`. Matching host and guest results do not replace those checks. See the [qualification and historical proof evidence](../docs/qualification.md) and the [historical cycle measurements](../docs/zkvm-cycles.md).
+The independent mpmath oracle and numerical checks are in `../crates/harness`. Matching host and guest results do not replace those checks. See [qualification checks and limits](../docs/qualification.md) and the [historical cycle measurements](../docs/zkvm-cycles.md).
 
 ## Layout
 
@@ -14,7 +14,7 @@ The guest protocol is unchanged: input starts with the operation and case count,
 
 ## Tools
 
-The nested lockfiles select RISC0 3.0.5. The [qualification record](../docs/qualification.md) lists the historical proof toolchain. For current builds, use the selected tools in [`verify/build-tools.env`](../../../verify/build-tools.env) and the [workspace guide](../../../docs/architecture/workspace-guide.md#build-contexts). Historical proof results do not verify a rebuilt guest image.
+The nested lockfiles select RISC0 3.0.5. For current builds, use the selected tools in [`verify/build-tools.env`](../../../verify/build-tools.env) and the [workspace guide](../../../docs/architecture/workspace-guide.md#build-contexts).
 
 Install missing tools with the [RISC0 installation guide](https://dev.risczero.com/api/zkvm/install). Select the recorded versions rather than an unpinned latest release. Verify them before recording evidence:
 
@@ -57,5 +57,3 @@ RISC0_EXECUTOR=ipc "$CARGO_TARGET_DIR/release/zkvm-host"
 ```
 
 The default command executes each fixture in the guest and compares it with a host kernel call. It prints per-call and whole-session cycles. Padded executor segment cycles describe proof workload, not measured proof time. This command creates no proof.
-
-The [qualification record](../docs/qualification.md) retains the historical fixed-input proof result. It does not verify the current guest image and is not a supported proof workflow.

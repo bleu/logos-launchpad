@@ -1,8 +1,6 @@
 # Allowlist proof design
 
-Status: Public-account batch enrollment accepted under [ADR 0021](../adr/0021-modes-and-open-limits.md). Public buy admission is implemented for all three engines through the maintained `crates/eligibility-policy` module, with signed development-execution evidence. Wallet support and complete private execution remain unverified. Native private proving was not measured.
-
-Date: 2026-11-10
+Status: Public-account batch enrollment accepted under [ADR 0021](../adr/0021-modes-and-open-limits.md). Public buy admission is implemented for all three engines through the maintained `crates/eligibility-policy` module. Wallet support, full private execution and native private proving remain unverified.
 
 ## What goes on the list?
 
@@ -51,7 +49,7 @@ Start at the leaf. At each level, the low bit of the current index selects wheth
 
 ## Earlier measurements
 
-In the original experiment with 100,000 synthetic addresses, list construction took about 0.65 seconds and one path took about 0.14 ms to prepare. Signed local verification took about 41 ms and 260,365 cycles, below the unchanged 10,000,000-cycle gate. A later signed run using the maintained verifier adapter used 271,709 cycles; the original timings were not rerun. These were single self-execution measurements with cached local tools, not pool buys, native private proofs or latency guarantees. Guest time excluded compilation. The [research snapshot](https://github.com/bleu/logos-launchpad/blob/b17de27db81bf2f0acbae891580c8d230c9f56db/packages/eligibility-proof-lite/README.md#measured-results) preserves the full report; the experiment is not part of this program change.
+The [standalone verifier benchmark](https://github.com/bleu/logos-launchpad/blob/b17de27db81bf2f0acbae891580c8d230c9f56db/packages/eligibility-proof-lite/README.md#measured-results) measures local verification cost. It does not measure pool buys, native private proofs or live latency.
 
 ## Purchase authorization
 

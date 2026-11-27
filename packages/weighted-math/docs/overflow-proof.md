@@ -32,13 +32,13 @@ For `0 < shift < 128`, `hi >> shift == 0` proves only that the shifted floor fit
 
 At public scale 52, let `a = 2^90 - 1` and `b = 2^90 + 1`. Both are valid nonnegative `Fixed` representations. Their product is `2^180 - 1`. Its scale-52 floor is `2^128 - 1`, with discarded remainder `2^52 - 1`. Its ceiling is `2^128`.
 
-Before the fix, public `Fixed::mul_up` returned zero in unchecked release. The wrapped zero then passed the signed representation check. The regression `fixed_multiplication_rejects_an_unrepresentable_ceiling` first failed with that implementation and passes with checked carry.
+`Fixed::mul_up` rejects the unrepresentable ceiling before the signed representation check. The regression is `fixed_multiplication_rejects_an_unrepresentable_ceiling`.
 
 ### Public swap reproduction
 
 The same defect is reachable through public exact-output pricing at the selected scale. Use `balance_in = 326937960375019080809068952671530218863`, `weight_in = 1`, `balance_out = 10`, `weight_out = 2`, and `amount_out = 3`.
 
-The computed scale-62 payment ratio is `r62 = 4799918100812182583`. The final widened product divided by `2^62` has floor `340282366920938463463374607431768211455` and remainder `2366108921125422809`. Thus the floor fits, but the ceiling does not. With the old helper, the public call returned zero in unchecked release. With checked carry, it panics. The regression `exact_output_rejects_an_unrepresentable_ceiling` records both outcomes.
+The computed scale-62 payment ratio is `r62 = 4799918100812182583`. The final widened product divided by `2^62` has floor `340282366920938463463374607431768211455` and remainder `2366108921125422809`. Thus the floor fits, but the ceiling does not. The raw kernel panics on the checked carry. The regression is `exact_output_rejects_an_unrepresentable_ceiling`.
 
 This establishes raw-kernel reachability, not a valid settled weighted sale trade. The checked interface rejects this payment and its unrepresentable post-buy pricing balance. Sale host tests check rejection before transfers. Seeded guest tests cover arithmetic rejection and rollback.
 
@@ -122,7 +122,7 @@ cargo +1.94.0 test --workspace --locked --release --config 'profile.release.over
 cargo +1.94.0 test --workspace --locked --release --config 'profile.release.overflow-checks=false'
 ```
 
-The unchecked-release red/green carry results are recorded in the [qualification evidence](qualification.md). Host tests, guest execution, real proving and full platform-handler evidence are different checks.
+See [qualification](qualification.md) for the limits of host tests, guest execution and proofs.
 
 ## Checked quote arithmetic
 

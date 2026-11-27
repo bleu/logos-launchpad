@@ -25,7 +25,7 @@ The [workspace guide](../../docs/architecture/workspace-guide.md) lists fuzz and
 - [Balancer comparison and source notices](crates/harness/balancer-ref/README.md)
 - [Overflow analysis and checked-fit requirements](docs/overflow-proof.md)
 - [Error bounds and trade-relative guards](docs/error-analysis.md)
-- [Current qualification, guest parity and real-proof evidence](docs/qualification.md)
+- [Qualification checks and limits](docs/qualification.md)
 - [Historical guest cycle measurements](docs/zkvm-cycles.md)
 - [Guest-parity setup](zkvm/README.md)
 

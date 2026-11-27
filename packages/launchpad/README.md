@@ -22,9 +22,7 @@ One command builds all three `.lgx` archives:
 nix --extra-experimental-features 'nix-command flakes' build --no-update-lock-file path:./packages/launchpad --out-link packages/launchpad/result-packages
 ```
 
-## Verification status
-
-The command above built all three archives during the actor migration. Installation, loading and the `Test backend` action were not checked: the local environment lacked `lgpm` and a Basecamp executable. No `Backend OK` result is recorded. Archive builds do not prove module loading, wallet compatibility or sale execution. See the [workspace guide](../../docs/architecture/workspace-guide.md#execution-and-evidence-limits) for current project evidence.
+Building the archives does not check module loading, wallet compatibility or sale execution. See the [workspace guide](../../docs/architecture/workspace-guide.md#execution-and-evidence-limits) for what needs separate verification.
 
 ## Install
 

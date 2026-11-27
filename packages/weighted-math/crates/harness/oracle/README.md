@@ -11,7 +11,7 @@ pip install -r requirements.txt
 python3 gen.py
 ```
 
-The [current evidence](../../../docs/qualification.md) records repeat-generation and higher-precision checks. Finite high-precision agreement is evidence, not a universal proof of correct rounding.
+Finite high-precision agreement is evidence, not a universal proof of correct rounding.
 
 ## Fixtures
 

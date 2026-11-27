@@ -12,7 +12,7 @@ Use harness-only big integers for the invariant referee, independent of kernel a
 
 ## Reason and limits
 
-Independent calculations reduce the chance of repeating kernel errors. Parity proves deterministic execution, not numerical truth or sale integration. [Qualification](../../packages/weighted-math/docs/qualification.md) records scale-52 rational guards, rejection counts, expanded fixtures and one real standalone proof. That proof does not establish full weighted-sale or LEZ compatibility. Report new checks, ignored tests and fuzz runs separately. The kernel is unaudited.
+Independent calculations reduce the chance of repeating kernel errors. Parity proves deterministic execution, not numerical truth or sale integration. See [qualification](../../packages/weighted-math/docs/qualification.md) for check coverage and limits. Report new checks, ignored tests and fuzz runs separately. The kernel is unaudited.
 
 ## Sources
 
